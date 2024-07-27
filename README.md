@@ -1,6 +1,6 @@
 # Readme
 
-This is a simple demonstration project. More like this is possible at this point.
+This is a simple demonstration project. More like this is possible at this point. Use at your own risk. This code is ultimately non-deterministic and nobody knows what might happen.
 
 Importing this code will give a simple python script rudimentary way of fixing itself.
 This scripts registers itself as a global exception hook, retrieves the source code that failed, executes llm to fix the code, substitutes it back in and continues execution as if nothing happened.
