@@ -7,6 +7,39 @@ This scripts registers itself as a global exception hook, retrieves the source c
 
 Simple, eh?
 
+# Components
+
+## AI
+System of selecting and listing available models. To be expanded later. 
+Key functionality:
+- Assume that capability may change over time. There has to be a method of re-examining capabilities and adding to them.
+- Allow for models to be deleted, even if they were found before. 
+- Allow to handle models (at least try to), even if they are new.
+- Optionally allow to download models?
+
+## Prompts
+System of having and selecting one of multiple prompts. 
+Key Functionality:
+- Some prompts work with some models, and not others.
+- Some prompts may require different information. Thankfully we can try different prompts and get an error if information is not available.
+- Each prompt should have some way of deciding if a model can be used to evaluate it.
+
+## Decorators
+
+Currently only one decorator. Eventually others may be added.
+Decorator is capable of catching and monitoring a single function (for now), while recording information about that section of code. 
+
+
+## Necromancer
+
+Last ditch effort to respond to an unhandled exception. At this stage the program is effectively dead and the stack has unravelled. More testing is needed whether necromancer can restore a complex program, but should work for simple scripts.
+
+
+
+
+
+
+
 # Installation
 
 ## Ollama

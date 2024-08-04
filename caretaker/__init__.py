@@ -4,9 +4,14 @@
 #
 
 import caretaker.config as config
-import caretaker.master as master
-import sys
+#import caretaker.necromancer.master as master
+#from caretaker.decorators.decorators import ExceptionHandler
+#import sys
+
+
+
+
 
 # This setups up an audit hook 
-orig_exc = sys.excepthook
-sys.excepthook = master.exc
+#orig_exc = sys.excepthook
+#sys.excepthook = master.exc

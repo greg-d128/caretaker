@@ -5,7 +5,7 @@ import ollama
 import re
 import linecache
 
-DEBUG = False
+DEBUG = True
 
 def retrieve_fn_code(frames, frame):
     """Retrieves the source code of the function on the the stack.

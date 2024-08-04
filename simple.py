@@ -2,7 +2,9 @@
 
 
 import caretaker
+from caretaker import ExceptionHandler
 
+@ExceptionHandler
 def square_number(num):
     """Returns a square of a number and subtract 3."""
     raise Exception("This is an error")
