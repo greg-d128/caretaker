@@ -2,7 +2,7 @@
 import inspect
 import traceback
 import caretaker.config as config
-import caretaker.master as master
+import caretaker.necromancer.master as master
 import ollama
 import re
 import linecache
