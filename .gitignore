@@ -3,3 +3,4 @@ __pycache__/*
 build/*
 dist/*
 Caretaker.egg-info/
+llama_cpp_version.py
