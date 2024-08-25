@@ -1,10 +1,15 @@
-# This code is simply meant to illustrate how overseer
-# can run as a necromancer and fix code that has already failed
-#
+# This code is simply meant to illustrate how overseer can be run.
 
 
 import caretaker
+#from caretaker import ExceptionHandler
 
+#@ExceptionHandler
+#def square_number(num):
+#    """Returns a square of a number and subtract 3."""
+#    raise Exception("This is an error")
+
+    
 def square_number():
     raise Exception("This is an error")
 

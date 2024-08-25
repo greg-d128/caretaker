@@ -9,6 +9,14 @@ Simple, eh?
 
 # Components
 
+## Configuration
+
+Configuration area for the module. This is simply a python module that is loaded and referenced. Easy and flexible. Security is not a consideration since:
+
+A) This project is meant to be a library / agent that is included within another project, having complete and total control of that project.
+B) We are running AI within our code and allowing it to make decisions on the fly. 
+C) There is no end-user facing configuration planned at this point.
+
 ## AI
 System of selecting and listing available models. To be expanded later. 
 Key functionality:
@@ -33,11 +41,6 @@ Decorator is capable of catching and monitoring a single function (for now), whi
 ## Necromancer
 
 Last ditch effort to respond to an unhandled exception. At this stage the program is effectively dead and the stack has unravelled. More testing is needed whether necromancer can restore a complex program, but should work for simple scripts.
-
-
-
-
-
 
 
 # Installation
