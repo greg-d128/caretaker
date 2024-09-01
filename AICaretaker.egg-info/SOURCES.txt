@@ -1,0 +1,14 @@
+LICENSE
+README.md
+pyproject.toml
+setup.py
+AICaretaker.egg-info/PKG-INFO
+AICaretaker.egg-info/SOURCES.txt
+AICaretaker.egg-info/dependency_links.txt
+AICaretaker.egg-info/top_level.txt
+caretaker/__init__.py
+caretaker/config.py
+caretaker/ai/__init__.py
+caretaker/ai/ollama.py
+caretaker/prompts/__init__.py
+caretaker/prompts/prompts.py
