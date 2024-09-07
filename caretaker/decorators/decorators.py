@@ -2,12 +2,13 @@
 import inspect
 import traceback
 import caretaker.config as config
-import caretaker.necromancer.master as master
-import ollama
-import re
+import caretaker.ai as ai
 import linecache
+import logging
 
-DEBUG = True
+logger = logging.getLogger("decorators")
+
+
 
 def ExceptionHandler(description="", output="", unit_tests=True ):
     # what configuration object do we allow
@@ -16,15 +17,12 @@ def ExceptionHandler(description="", output="", unit_tests=True ):
     def decorator(func):
         def wrapper(*args, **kwargs):
             
-            if (DEBUG):
-                print(f"Wrapper before function {func}")
+            logger.debug(f"Wrapper before function {func}")
             try:
                 result = func(*args, **kwargs)
             except:
                 source_code = inspect.getsource(func)       
-                
-                if (DEBUG):
-                    print(f"Retrieved Source: \n{source_code}")
+                logger.debug(f"Retrieved Source: \n{source_code}")
 
             return result
         return wrapper

@@ -1,10 +1,10 @@
 
 import caretaker.config as config
 import caretaker.prompts as prompts
+import caretaker.ai as ai
+
 import inspect
 import traceback
-import caretaker.config as config
-import ollama
 import re
 import linecache
 import pprint
@@ -37,39 +37,6 @@ def retrieve_fn_code(frames, frame, logger=logger):
 
     return source_code
 
-
-def fix_function(orig_source_code, err_text, logger=logger):
-    "Generates a new version of the function."
-    request_dct = {"source_code":orig_source_code, "error_message":err_text }
-    logger.warning(f"fix_function - {pprint.pformat(request_dct)}")
-    prompt = prompts.get_prompt(request_dct)
-    
-    logger.debug(f"fix_function - using prompt:\n====\n{prompt}\n====\n\n")
-    
-    # TBI Change to dynamically adapt to what is available.
-    response = ollama.chat(model=config.model_preference[0], messages=[
-    {
-        'role':'user',
-        'content':prompt,
-    }, ])
-
-    logger.debug(f"fix_function, LLM response object\n\n====\n{pprint.pformat(response)}\n====\n\n")
-
-    output = response['message']['content']
-    start_marker="```python\n"
-    end_marker = "```"
-    pattern = re.compile(f'{start_marker}(.*?){end_marker}', re.DOTALL)
-    matches = pattern.findall(output)
-    if matches:
-        corrected = matches[0]
-        logging.debug(f"fix_function - Corrected function\n====\n{corrected}\n====\n\n")
-        return corrected
-    else:
-        # Possibly try again with a fallback LLM? 
-        # We do not have to give up
-        logging.warning("fix_function - unable to parse out a replacement function")
-        return ''
-    
 def continueExec(frame, f_globals, f_locals, logger=logger):
             
     # Now re-run the code that failed
@@ -96,7 +63,7 @@ def exc(exc_type, exc_value, exc_tb, logger=logger):
 
     source_code = retrieve_fn_code(frames, frame)
         
-    corrected = fix_function(source_code, exc_value)
+    corrected = ai.models.fixCode(source_code, exc_value)
     
     # Inject code
     if corrected:

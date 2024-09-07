@@ -12,6 +12,13 @@
 
 ## Lets start with functionality we need.
 import logging
+import caretaker.ai.ollama as module_ollama
+import caretaker.config as config
+import caretaker.prompts as prompts
+import pprint
+import re
+
+module_lst=[module_ollama]
 
 logger = logging.getLogger("ai")
 
@@ -39,7 +46,7 @@ class Models:
         model = self.get_model(model_id)
         if not model:
             raise ValueError(f"Model with ID {model_id} not found.")
-        return model.execute(prompt)
+        return model(prompt)
 
     def list_models(self):
         return list(self.models.keys())
@@ -50,7 +57,43 @@ class Models:
         del self.models[model_id]
         logger.debug(f"Successfully removed model_id {model_id}")
 
+    def fixCode(self, orig_code, error_text):
+        "This will return fixed code, if possible."
+
+        request_dct = {"source_code":orig_code, "error_message":error_text }
+        logger.warning(f"fix_function - {pprint.pformat(request_dct)}")
+        
+        # Get a better handle on prompts.
+        prompt = prompts.get_prompt(request_dct)
+        
+        logger.debug(f"fix_function - using prompt:\n====\n{prompt}\n====\n\n")
+        
+        # TBI Change to dynamically adapt to what is available.
+        # config?
+        response = self.models.execute_prompt(config.model_preference[0], prompt)
+
+        logger.debug(f"fix_function, LLM response object\n\n====\n{pprint.pformat(response)}\n====\n\n")
+
+        output = response['message']['content']
+        start_marker="```python\n"
+        end_marker = "```"
+        pattern = re.compile(f'{start_marker}(.*?){end_marker}', re.DOTALL)
+        matches = pattern.findall(output)
+        if matches:
+            corrected = matches[0]
+            logging.debug(f"fix_function - Corrected function\n====\n{corrected}\n====\n\n")
+            return corrected
+        else:
+            # Possibly try again with a fallback LLM? 
+            # We do not have to give up
+            logging.warning("fix_function - unable to parse out a replacement function")
+            return ''        
+
+
 
 models=Models()
 
+
+for m in module_lst:
+    m.init(models)
 
