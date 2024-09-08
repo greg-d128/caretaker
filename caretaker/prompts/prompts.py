@@ -5,6 +5,21 @@
 # In the future need a system of, hopefully selecting the appropriate prompt
 # for each model. 
 
+# Thinking logically:
+# Each prompt is likely to have following components. Which components 
+# get added to a prompt can be dependent on parameters? Context length, etc?
+# 1. Instruction
+# 2. Context
+# 3. Constraints (list of requirements, formatting rules, etc.)
+# 4. Examples
+# 5. Expected output format. 
+# 6. Tone and style
+# 
+
+
+
+
+
 import logging
 import pprint
 logger = logging.getLogger("prompts")

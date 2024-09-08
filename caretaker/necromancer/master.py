@@ -2,7 +2,7 @@
 import caretaker.config as config
 import caretaker.prompts as prompts
 import caretaker.ai as ai
-
+import caretaker.decorators.decorators.ExceptionHandler as ExceptionHandler
 import inspect
 import traceback
 import re
@@ -51,7 +51,7 @@ def continueExec(frame, f_globals, f_locals, logger=logger):
         exec(lines[i], f_globals, f_locals)
     logger.debug("continueExec - Should go up the stack here and continue")
 
-
+@ExceptionHandler
 def exc(exc_type, exc_value, exc_tb, logger=logger):
     "Global exception hook"
     logger.debug(f"exc - Global Exception Hook")
