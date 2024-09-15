@@ -34,13 +34,18 @@ Key Functionality:
 
 ## Decorators
 
-Currently only one decorator. Eventually others may be added.
-Decorator is capable of catching and monitoring a single function (for now), while recording information about that section of code. 
+Currently only one decorator. Others are in the planning stages. Please have a look at issues inside github if you are interested.
+
+Decorator is capable of catching and monitoring a single feature, while recording information about that section of code. 
 
 
 ## Necromancer
 
 Last ditch effort to respond to an unhandled exception. At this stage the program is effectively dead and the stack has unravelled. More testing is needed whether necromancer can restore a complex program, but should work for simple scripts.
+
+While this mode of running is simple and impressive, it is primairly included here as a demonstration. At the stage of life when necromancer is activated, the program is effectively dead. All the stack has been traversed up and the only remaining thing is to output the stack trace to screen or log. This code will attempt to ressurect and re-start the code execution, which is a very interesting concept.
+
+At this stage this will only work for simple scripts. If at any point in the stack we catch and then re-raise an exception, necromancer would likely be get very confused.
 
 
 # Installation
@@ -59,13 +64,12 @@ Need to download an appropriate model and set it inside caretaker/config.py. Whi
 
 There are several issues with this code. Some (most probably) are fixable.
 
-1. Simple scripts for now, cannot handle injecting into an object. Actually, I think it can, I just messed up with the stack and need to retrieve it properly.
+1. This package may not install properly at this time.  I am trying to resolve naming issues.
 
 2. It only modifies the code in memory, does not write it back out to the filesystem. 
 
-3. There needs to be a system to figure out which model from ollama to run, there may be prompts specific to models. We want this to figure out what to do even a year later, when models may be different. Could it download a model for itself and then run it?
+3. This code is currently working with ollama only, although it allows for capture of other models and methods of execution (not fully implemented yet). Need to create a process of selecting a best model.
 
-4. Catching it at global exception hook means the program is already dead. Restarting execution (if the failure happened in a loop, etc), is tricky.
+4. Catching it at global exception hook means the program is already dead. Restarting execution (if the failure happened in a loop, etc), is tricky. Necromancer is a pure demonstration of what might be possible. Decorators are the future.
 
-5. A lot of the above can be handled by introducing a decorator (coming next). That will allow me to catch errors at a specific section of a code, store and retrieve different versions of related code from a database, catch, re-run and return code as if nothing happened, store things like specific prompts and intents. Kind of like an advanced error handler.
-
+5. Several different decorators are in the design / partial implemntation stages. No guarantee any of them work. 
