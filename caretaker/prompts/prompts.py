@@ -67,6 +67,10 @@ instructions = {
     'timing' : [
         Prompt("A Python function has taken an exceptional amount of time to execute. Likely it has been paused while waiting for a timeout, or it was delayed for another reason. Please assist by generating a new version that can handle this situation better.\n")
     ],
+    'unit_tests' : [
+        Prompt("A Python function named {fn_name} has been created and now needs to be tested. Can you please generate PyUnit tests to verify that this function behaves correctly?")
+    ],
+
     '' : [
         Prompt("There was an unknown problem with the application under your care. Please use any and all information provided to create a python code that will replace this module that is capable of avoiding this error.\n")
     ]                 
