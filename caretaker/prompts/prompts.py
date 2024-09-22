@@ -73,39 +73,33 @@ instructions = {
                  
                  }
 
-contexts = {
-    '': [
+contexts = [
         Prompt("You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.\n")
-    ] }
+    ] 
 
-constraints = {
-    '' : [
+
+constraints = [
         Prompt("Do not change function names. You can assume that if a function calls other functions, then those functions exist.\n")
     ]
-}
 
-errors = {
-    '':[
-        Prompt("The code above has failed with the following error:\n{error_message}\n"),
-        Prompt("Unfortunately no error message is available. Can you still attempt to identify and fix what went wrong?")
+
+errors = [
+        Prompt("The code above has failed with the following error:\n{error_message}\n")
     ]
-}
 
-stacks = {
-    '':[
-        Prompt("The following stack trace was generated as part of the error.\n{traceback}\n"),
-        Prompt("Unfortunately traceback stack was unable to be collected. Can you do your best in creating a replacement code that addressses the issue based on information provided?\n")
+
+stacks = [
+        Prompt("The following stack trace was generated as part of the error.\n{traceback}\n")
     ]
-}
 
-outputs = {
-    '' : [
+
+outputs = [
         Prompt("""The expected output is a python code generated between start_marker and end_marker as below:
           start_marker = ```python\n 
           end_marker = ```
           """)
     ]
-}
+
 
 
 prompts=[]
@@ -135,8 +129,10 @@ def get_instruction(dct, logger=logger):
 
     for p in lst:
         # check if all variables are present 
+        print (f"{p.variables} => {dct}")
+        print (f"{all(var in dct for var in p.variables)}")
         if ( all(var in dct for var in p.variables)):
-            instruction = p.prompt.format(dct)
+            instruction = p.prompt.format(**dct)
 
     if not instruction:
         logger.error("This instruction should not ever be taken. Debugging only.")
@@ -147,25 +143,71 @@ def get_instruction(dct, logger=logger):
 
 
 def get_stacks(dct, logger=logger):
-    "This would be better as a list."
-    pass    
+    "If stack information is available - return that."
+    stack_prompt = ""
+    for p in stacks:
+        if ( all(var in dct for var in p.variables)):
+            stack_prompt = p.prompt.format(**dct)
+            break
+    return stack_prompt
 
+def get_errors(dct, logger=logger):
+    "If appropriate values are filled out to include error prompt, include it."
+    error_prompt = ""
+    for p in errors:
+        if ( all(var in dct for var in p.variables)):
+            error_prompt = p.prompt.format(**dct)
+            break
+    return error_prompt
+
+def get_outputs(dct, logger=logger):
+    """This output prompt should always be included, but we can generate more advanced ones 
+    that depend on input"""
+    output_prompt = ""
+    for p in outputs:
+        if ( all(var in dct for var in p.variables)):
+            output_prompt = p.prompt.format(**dct)
+            break
+    return output_prompt
+
+def get_contexts(dct, logger=logger):
+    """This output prompt should always be included, but we can generate more advanced ones 
+    that depend on input"""
+    context_prompt = ""
+    for p in contexts:
+        if ( all(var in dct for var in p.variables)):
+            context_prompt = p.prompt.format(**dct)
+            break
+    return context_prompt
+
+def get_constraints(dct, logger=logger):
+    """This output prompt should always be included, but we can generate more advanced ones 
+    that depend on input"""
+    constraint_prompt = ""
+    for p in constraints:
+        if ( all(var in dct for var in p.variables)):
+            constraint_prompt = p.prompt.format(**dct)
+            break
+    return constraint_prompt
 
 
 def generate_prompt(dct, logger=logger):
     """This is the more intelligent version. 
     A prompt needs to be assembled depending on what information is available."""
 
-    instruction = get_instruction(dct)
-    context = contexts.get("","")
-    stack = get_stacks(dct)
-    error = get_errors(dct)
-    output = get_outputs(dct)
+    prompt_dct = {}
 
-    prompt = prompts[0].format(locals())
+    prompt_dct["instruction"] = get_instruction(dct)
+    prompt_dct["context"] = get_contexts(dct)
+    prompt_dct["stack"] = get_stacks(dct)
+    prompt_dct["error"] = get_errors(dct)
+    prompt_dct["output"] = get_outputs(dct)
+    prompt_dct["constraints"] = get_constraints(dct)
+
+    prompt = prompts[0].format(**prompt_dct)
     logger.debug(f"generate_prompt called with {pprint.pformat(dct)}")
     logger.debug(f"generate_prompt generated output {prompt}")
-
+    return prompt
 
 def get_prompt(dct, logger=logger):
     """This will needs to be made more intelligent. We are just passing in a dictionary.
@@ -173,3 +215,37 @@ def get_prompt(dct, logger=logger):
     logger.debug(f"get_prompt called with {pprint.pformat(dct)}")
     return prompts[0].format(**dct)
 
+
+if __name__=='__main__':
+    print(f"prompts.py - This section is meant for debugging and examining.")
+    # We need to build a dictionary and then examine the output of generate_prompt
+    
+    while True:
+        # obtain task
+        print (f"Avaiable tasks: {instructions.keys()}")
+
+        task = input("task? > ")
+        if task not in instructions.keys():
+            print (f"Try again please.")
+            next
+        dct= {"task":task}
+        print (f"Assembling dictionary")
+
+        print(f"# task = What task are we trying to perform?")
+        print(f"# fn_name = name of the function that was called")
+        print(f"# fn_input = name and values of he input parameters")
+        print(f"# fn_output = output of the function ")
+        print(f"# traceback = output of traceback stack")
+        print(f"# calling_code = function or section of the function that was calling the function that failed")
+        print(f"# error_message = The error message")
+        print(f"# log_output = Sequence of log messages (future)")
+
+        while True:
+            key = input("Enter key (or '.' to stop): ").strip()
+            if key == '.':
+                break
+            value = f"<FAKE VALUE FOR {key}>"
+            dct[key.strip()] = value.strip()
+
+        print(f"Assembled dictionary: {dct}")
+        print(f"\n\n GENERATING PROMPT \n\n {generate_prompt(dct)}")
