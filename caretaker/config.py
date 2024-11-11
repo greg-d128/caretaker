@@ -60,6 +60,22 @@ logger = logging.getLogger("config")
 
 logger.info("logger instantiated")
 
+
+# Define configurable parameters for scoring Models
+AGE_POINT_LOSS_PER_DAY = 0.01
+SIZE_POINTS_PER_BILLION_PARAMETERS = 10
+FAILURE_PENALTY_PER_FAILURE = 1.0
+QUANTIZATION_LEVEL_PENALTY = {
+    'q4': -5,
+    'q8': 5,
+}
+SIZE_PENALTY_THRESHOLD = 30  # Billion parameters
+SIZE_PENALTY_FACTOR = 0.5  # Penalty per billion parameters above threshold
+
+
+
+
+
 model_preference = ["command-r:latest", "deepseek-coder-v2:latest", "llama3.1:latest", 
                     "llama3.1:70b", "mistral-nemo:latest"]
 

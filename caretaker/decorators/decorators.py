@@ -2,47 +2,63 @@
 import inspect
 import traceback
 import caretaker.config as config
-import caretaker.ai as ai
+from caretaker.ai import ai
+import caretaker.prompts as prompts
 import linecache
 import logging
+import functools
 
 logger = logging.getLogger("decorators")
 
+# In order to generate a prompt 
 
-
-def ExceptionHandler(description="", output="", unit_tests=True ):
-    # what configuration object do we allow
-    # I need unit test database
-
-    def decorator(func):
-        def fix_code(orig_source, error_text, env): 
-
-            # number of attempts before we give up.
-            for x in range(10):           
-                new_source = ai.models.fixCode(orig_source, error_text)
-                # Try to compile it?
-                new_fn = eval(new_source, env)
+# Convenience Function. These can pull information into standard dictionaries
+# 
 
 
 
-        def wrapper(*args, **kwargs):
+
+def ExceptionHandler(func):
+    
+    def fix_code(prompt):
+        logger.debug("Fixing code")
+        
+        new_code = ai.getCode(prompt)
+        logger.debug(f"Fixed Code {new_code}")
+        return None
+    
+    def wrapper(*args, **kwargs):
+        logger.debug(f"Wrapper before function {func.__name__}")
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            logger.debug(f"Decorator caught exception")
+            dct={
+                'task' : 'exception',
+                'fn_name': func.__name__,
+                'fn_input': {'args': args, 'kwargs': kwargs},
+                # 'fn_output': No output since we have an exception
+                'traceback': traceback.format_tb(e.__traceback__),
+                'calling_code' : inspect.getsource(func),
+                'error_message' : str(e),
+                # 'log_output': Do not have this yet
+            }
+     
+            logger.debug(f"Retrieved Source Dictionary: \n{dct}")
+            prompt = prompts.generate_prompt(dct)
+            logger.debug(f"Generated a prompt:\n\n {prompt}\n\n")
+            new_source = fix_code(prompt)
+            logger.debug(f"Retrieved Source: \n{prompt}")
             
-            logger.debug(f"Wrapper before function {func}")
-            try:
-                result = func(*args, **kwargs)
-            except:
-                logger.debug(f"Decorator caught exception")
-                source_code = inspect.getsource(func)       
-                logger.debug(f"Retrieved Source: \n{source_code}")
-                new_fn = fix_code(source_code, error_text, env)
-                # try to call it and see what happens
-                #new_fn = eval(new_code)
-                # verify that this will actually do what I want.
-                func = new_fn
-                
-            return result
-        return wrapper
-    return decorator
+            # fix_code(sourc)
+            #new_fn = fix_code(source_code, error_text, env)
+            return None
+
+
+    return wrapper
+
+
+
 
 
 def AssertVerifier(description="", output="", unit_tests=True ):

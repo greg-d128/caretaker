@@ -5,6 +5,8 @@
 
 import caretaker
 
+
+
 def square_number():
     raise Exception("This is an error")
 
