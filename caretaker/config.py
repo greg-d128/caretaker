@@ -12,40 +12,47 @@ logging_config = {
     },
     'handlers': {
         'console': {
-            'level': 'DEBUG',
+            'level': 'ERROR',
             'class': 'logging.StreamHandler',
             'formatter': 'standard',
         },
+        'file':{
+            'level': 'DEBUG',
+            'class': 'logging.FileHandler',
+            'filename':'logs/caretaker.log',
+            'formatter':'standard',
+            'mode':'a',
+        }
     },
     'loggers': {
         '': {  # root logger
-            'handlers': ['console'],
+            'handlers': ['console','file'],
             'level': 'DEBUG',
             'propagate': True,
         },
         'ai': {
-            'handlers': ['console'],
+            'handlers': ['console','file'],
             'level': 'DEBUG',
             'propagate': False,
         },
         'necromancer': {
-            'handlers': ['console'],
+            'handlers': ['console','file'],
             'level': 'DEBUG',
             'propagate': False,
         },
         'decorators': {
-            'handlers': ['console'],
+            'handlers': ['console','file'],
             'level': 'DEBUG',
             'propagate': False,
         },
         'prompts': {
-            'handlers': ['console'],
+            'handlers': ['console','file'],
             'level': 'DEBUG',
             'propagate': False,
         },
 
        'config': {
-            'handlers': ['console'],
+            'handlers': ['console','file'],
             'level': 'DEBUG',
             'propagate': False,
         },

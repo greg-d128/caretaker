@@ -2,18 +2,23 @@
 import re
 import datetime
 import logging
+import ollama
 
 # Assume the logger is set up at the top of the file
 logger = logging.getLogger("ai")
 
 class Model:
-    def __init__(self, model_info):
+    def __init__(self, model_info, client=None):
         """
         Initializes the Model instance.
 
         Args:
             model_info (dict): Dictionary containing model parameters and metadata.
         """
+        if client:
+            self.client=client
+        else:
+            self.client=ollama
         self.model_info = model_info
         self.score_adjustments = []
         self.failures = 0
@@ -22,6 +27,9 @@ class Model:
 
         self.base_score = self._calculate_base_score()
 
+    def get(self,x):
+        return self.model_info.get(x,'')
+    
     def _calculate_base_score(self):
         """
         Calculates the base score based on model parameters.
@@ -83,8 +91,10 @@ class Model:
         """
         logger.info(f"Executing prompt: {prompt}")
 
-        # Placeholder for actual LLM interaction
-        output = self._simulate_llm_response(prompt)
+        # Simulate response for debugging
+        #output = self._simulate_llm_response(prompt)
+        output = self._obtain_llm_response(prompt)
+
         logger.debug(f"Received output: {output}")
 
         return output
@@ -176,6 +186,23 @@ class Model:
         logger.info("Updating base score")
 
         self.base_score = self._calculate_base_score()
+
+    def _obtain_llm_response(self,prompt):
+        """
+        Executes LLM and parses the response.
+
+        Args:
+            prompt (str): The input prompt.
+
+        Returns:
+            str: LLM Output"""
+        logger.debug("Executing LLM.")
+
+        response = self.client.generate(model=self.model_info.get('name', 'Unknown'),
+                    prompt=prompt)
+
+        return response.get('response','')
+
 
     def _simulate_llm_response(self, prompt):
         """

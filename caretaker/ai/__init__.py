@@ -14,15 +14,21 @@ import caretaker.ai.master as master
 import caretaker.config as config
 import caretaker.prompts as prompts
 import ollama
+from ollama import Client
 import pprint
 import re
 
 logger = logging.getLogger("ai")
 
-# Load a list of models from ollama
-lst = ollama.list()['models']
 
-ai = master.AI()
-ai.update(lst)
+
+
+client=Client(host='http://192.168.2.122:11436')
+
+# Load a list of models from ollama
+lst = client.list()['models']
+
+ai = master.AI(models=lst, client=client)
+
 
 

@@ -48,7 +48,7 @@ def ExceptionHandler(func):
             prompt = prompts.generate_prompt(dct)
             logger.debug(f"Generated a prompt:\n\n {prompt}\n\n")
             new_source = fix_code(prompt)
-            logger.debug(f"Retrieved Source: \n{prompt}")
+            logger.debug(f"Retrieved Source: \n{new_source}")
             
             # fix_code(sourc)
             #new_fn = fix_code(source_code, error_text, env)

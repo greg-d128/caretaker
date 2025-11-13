@@ -1,5 +1,11 @@
 # Readme
 
+## Note
+Hi All. I have been busy with life and other things, but this project is a work of passion. I am currently working on building all of the machinery required for self adapting and self modifying code. What better way to demonstrate technology than to have it partially manage itself? All of that introspection, auto-building and adapting prompts, scoring models and their responses, figuring out how to evaluate responses and having it in a form that can be debugged is hard and time consuming.
+
+It is entirely possible that I bit off more than I can chew right now. I will get there eventually. 
+
+
 This is a simple demonstration project. More like this is possible at this point. Use at your own risk. This code is ultimately non-deterministic and nobody knows what might happen.
 
 Importing this code will give a simple python script rudimentary way of fixing itself.

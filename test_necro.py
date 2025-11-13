@@ -3,6 +3,7 @@
 
 import caretaker
 #from caretaker import ExceptionHandler
+caretaker.necromancer.master.activate_necromancer()
 
 #@ExceptionHandler
 #def square_number(num):

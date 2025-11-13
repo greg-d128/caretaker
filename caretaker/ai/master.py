@@ -5,17 +5,18 @@ from caretaker.ai.model import Model
 import code
 
 # Set up logger
-logger = logging.getLogger("ai")
+logger = logging.getLogger("ai") 
 
 class AI:
-    def __init__(self, models=None):
+    def __init__(self, models=[], client=None):
         """
         Initializes the AI instance with a list of models.
 
         Args:
             models (list, optional): A list of Model instances.
         """
-        self.models = Model(x) for x in models if models is not None else []
+        self.models = [Model(x, client=client) for x in models if models ]
+        self.client=client
         logger.info(f"AI initialized with models: {[model.get('name') for model in self.models]}")
 
     def update(self, models):
