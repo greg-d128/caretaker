@@ -1,0 +1,2499 @@
+2025-05-11 14:46:25,427 - config - INFO - logger instantiated
+2025-05-11 14:46:25,427 - config - INFO - models defined
+2025-05-11 14:46:25,495 - httpx - DEBUG - load_ssl_context verify=True cert=None trust_env=True http2=False
+2025-05-11 14:46:25,496 - httpx - DEBUG - load_verify_locations cafile='/home/grzegorz/miniconda3/lib/python3.12/site-packages/certifi/cacert.pem'
+2025-05-11 14:46:25,509 - httpcore.connection - DEBUG - connect_tcp.started host='127.0.0.1' port=11434 local_address=None timeout=None socket_options=None
+2025-05-11 14:46:25,510 - httpcore.connection - DEBUG - connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x7d630be868a0>
+2025-05-11 14:46:25,510 - httpcore.http11 - DEBUG - send_request_headers.started request=<Request [b'GET']>
+2025-05-11 14:46:25,510 - httpcore.http11 - DEBUG - send_request_headers.complete
+2025-05-11 14:46:25,510 - httpcore.http11 - DEBUG - send_request_body.started request=<Request [b'GET']>
+2025-05-11 14:46:25,510 - httpcore.http11 - DEBUG - send_request_body.complete
+2025-05-11 14:46:25,510 - httpcore.http11 - DEBUG - receive_response_headers.started request=<Request [b'GET']>
+2025-05-11 14:46:25,512 - httpcore.http11 - DEBUG - receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sun, 11 May 2025 18:46:25 GMT'), (b'Transfer-Encoding', b'chunked')])
+2025-05-11 14:46:25,512 - httpx - INFO - HTTP Request: GET http://127.0.0.1:11434/api/tags "HTTP/1.1 200 OK"
+2025-05-11 14:46:25,512 - httpcore.http11 - DEBUG - receive_response_body.started request=<Request [b'GET']>
+2025-05-11 14:46:25,512 - httpcore.http11 - DEBUG - receive_response_body.complete
+2025-05-11 14:46:25,512 - httpcore.http11 - DEBUG - response_closed.started
+2025-05-11 14:46:25,512 - httpcore.http11 - DEBUG - response_closed.complete
+2025-05-11 14:46:25,512 - ai - INFO - Initializing Model instance with model_info: {'name': 'phi4:latest', 'model': 'phi4:latest', 'modified_at': '2025-02-07T18:27:18.665316079-05:00', 'size': 9053116391, 'digest': 'ac896e5b8b34a1f4efa7b14d7520725140d5512484457fab45d2a4ea14c69dba', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'phi3', 'families': ['phi3'], 'parameter_size': '14.7B', 'quantization_level': 'Q4_K_M'}}
+2025-05-11 14:46:25,513 - ai - DEBUG - Calculating base score for model: phi4:latest
+2025-05-11 14:46:25,513 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:46:25,513 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:46:25,513 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:46:25,513 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:46:25,513 - ai - INFO - Calculated base score for model phi4:latest: 100.0
+2025-05-11 14:46:25,513 - ai - INFO - Initializing Model instance with model_info: {'name': 'yi-coder:latest', 'model': 'yi-coder:latest', 'modified_at': '2024-11-18T09:34:35.562851553-05:00', 'size': 5037007607, 'digest': '39c63e7675d7a5c44f71c142c269ab95951170a80971c946e216d3ef575791e6', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'llama', 'families': ['llama'], 'parameter_size': '8.8B', 'quantization_level': 'Q4_0'}}
+2025-05-11 14:46:25,513 - ai - DEBUG - Calculating base score for model: yi-coder:latest
+2025-05-11 14:46:25,513 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:46:25,513 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:46:25,513 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:46:25,513 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:46:25,513 - ai - INFO - Calculated base score for model yi-coder:latest: 100.0
+2025-05-11 14:46:25,513 - ai - INFO - Initializing Model instance with model_info: {'name': 'sqlcoder:15b', 'model': 'sqlcoder:15b', 'modified_at': '2024-11-18T09:34:35.09084484-05:00', 'size': 8987630230, 'digest': '93bb0e8a904ff98bcc6fa5cf3b8e63dc69203772f4bc713f761c82684541d08d', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'starcoder', 'families': None, 'parameter_size': '15B', 'quantization_level': 'Q4_0'}}
+2025-05-11 14:46:25,513 - ai - DEBUG - Calculating base score for model: sqlcoder:15b
+2025-05-11 14:46:25,513 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:46:25,513 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:46:25,513 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:46:25,513 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:46:25,513 - ai - INFO - Calculated base score for model sqlcoder:15b: 100.0
+2025-05-11 14:46:25,513 - ai - INFO - Initializing Model instance with model_info: {'name': 'qwen2-math:7b', 'model': 'qwen2-math:7b', 'modified_at': '2024-11-18T09:34:34.302833634-05:00', 'size': 4431400514, 'digest': '28cc3a337734d0db9326604d931ccce1c9379f2310b60dee03ef76440b37bb65', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'qwen2', 'families': ['qwen2'], 'parameter_size': '7.6B', 'quantization_level': 'Q4_0'}}
+2025-05-11 14:46:25,513 - ai - DEBUG - Calculating base score for model: qwen2-math:7b
+2025-05-11 14:46:25,513 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:46:25,513 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:46:25,513 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:46:25,513 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:46:25,513 - ai - INFO - Calculated base score for model qwen2-math:7b: 100.0
+2025-05-11 14:46:25,513 - ai - INFO - Initializing Model instance with model_info: {'name': 'qwen2.5-coder:latest', 'model': 'qwen2.5-coder:latest', 'modified_at': '2024-11-18T09:34:34.715839507-05:00', 'size': 4683087519, 'digest': '2b0496514337a3d5901f1d253d01726c890b721e891335a56d6e08cedf3e2cb0', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'qwen2', 'families': ['qwen2'], 'parameter_size': '7.6B', 'quantization_level': 'Q4_K_M'}}
+2025-05-11 14:46:25,513 - ai - DEBUG - Calculating base score for model: qwen2.5-coder:latest
+2025-05-11 14:46:25,513 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:46:25,513 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:46:25,513 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:46:25,513 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:46:25,513 - ai - INFO - Calculated base score for model qwen2.5-coder:latest: 100.0
+2025-05-11 14:46:25,513 - ai - INFO - Initializing Model instance with model_info: {'name': 'notux:latest', 'model': 'notux:latest', 'modified_at': '2024-11-18T09:34:33.867827449-05:00', 'size': 26442471290, 'digest': 'fe14e7d66184a006c5a1e7d77d0cc90efe8184fb572da7a0da384aaa1372472f', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'llama', 'families': ['llama'], 'parameter_size': '47B', 'quantization_level': 'Q4_0'}}
+2025-05-11 14:46:25,513 - ai - DEBUG - Calculating base score for model: notux:latest
+2025-05-11 14:46:25,513 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:46:25,513 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:46:25,513 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:46:25,513 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:46:25,513 - ai - INFO - Calculated base score for model notux:latest: 100.0
+2025-05-11 14:46:25,513 - ai - INFO - Initializing Model instance with model_info: {'name': 'mistral-nemo:latest', 'model': 'mistral-nemo:latest', 'modified_at': '2024-11-18T09:34:33.063816018-05:00', 'size': 7071713232, 'digest': '994f3b8b78011aa6d578b0c889cbb89a64b778f80d73b8d991a8db1f1e710ace', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'llama', 'families': ['llama'], 'parameter_size': '12.2B', 'quantization_level': 'Q4_0'}}
+2025-05-11 14:46:25,513 - ai - DEBUG - Calculating base score for model: mistral-nemo:latest
+2025-05-11 14:46:25,513 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:46:25,513 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:46:25,513 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:46:25,513 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:46:25,513 - ai - INFO - Calculated base score for model mistral-nemo:latest: 100.0
+2025-05-11 14:46:25,514 - ai - INFO - Initializing Model instance with model_info: {'name': 'minicpm-v:latest', 'model': 'minicpm-v:latest', 'modified_at': '2024-11-18T09:34:32.507808115-05:00', 'size': 5473838466, 'digest': 'c92bfad0120556eda311984f1ac2f0d0a589b8d68c4053c13486b526276aa205', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'qwen2', 'families': ['qwen2', 'clip'], 'parameter_size': '7.6B', 'quantization_level': 'Q4_0'}}
+2025-05-11 14:46:25,514 - ai - DEBUG - Calculating base score for model: minicpm-v:latest
+2025-05-11 14:46:25,514 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:46:25,514 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:46:25,514 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:46:25,514 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:46:25,514 - ai - INFO - Calculated base score for model minicpm-v:latest: 100.0
+2025-05-11 14:46:25,514 - ai - INFO - Initializing Model instance with model_info: {'name': 'llama3.2:3b', 'model': 'llama3.2:3b', 'modified_at': '2024-11-18T09:34:29.499765373-05:00', 'size': 2019393189, 'digest': 'a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'llama', 'families': ['llama'], 'parameter_size': '3.2B', 'quantization_level': 'Q4_K_M'}}
+2025-05-11 14:46:25,514 - ai - DEBUG - Calculating base score for model: llama3.2:3b
+2025-05-11 14:46:25,514 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:46:25,514 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:46:25,514 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:46:25,514 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:46:25,514 - ai - INFO - Calculated base score for model llama3.2:3b: 100.0
+2025-05-11 14:46:25,514 - ai - INFO - Initializing Model instance with model_info: {'name': 'llama3.1:latest', 'model': 'llama3.1:latest', 'modified_at': '2024-11-18T09:34:29.096759648-05:00', 'size': 4661230766, 'digest': '42182419e9508c30c4b1fe55015f06b65f4ca4b9e28a744be55008d21998a093', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'llama', 'families': ['llama'], 'parameter_size': '8.0B', 'quantization_level': 'Q4_0'}}
+2025-05-11 14:46:25,514 - ai - DEBUG - Calculating base score for model: llama3.1:latest
+2025-05-11 14:46:25,514 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:46:25,514 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:46:25,514 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:46:25,514 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:46:25,514 - ai - INFO - Calculated base score for model llama3.1:latest: 100.0
+2025-05-11 14:46:25,514 - ai - INFO - Initializing Model instance with model_info: {'name': 'llama3.1:70b', 'model': 'llama3.1:70b', 'modified_at': '2024-11-18T09:34:28.621752902-05:00', 'size': 39969751439, 'digest': 'c0df3564cfe84c762092864d37bf9b28276a7d283895242588ffcc7582c98f02', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'llama', 'families': ['llama'], 'parameter_size': '70.6B', 'quantization_level': 'Q4_0'}}
+2025-05-11 14:46:25,514 - ai - DEBUG - Calculating base score for model: llama3.1:70b
+2025-05-11 14:46:25,514 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:46:25,514 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:46:25,514 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:46:25,514 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:46:25,514 - ai - INFO - Calculated base score for model llama3.1:70b: 100.0
+2025-05-11 14:46:25,514 - ai - INFO - Initializing Model instance with model_info: {'name': 'deepseek-coder-v2:latest', 'model': 'deepseek-coder-v2:latest', 'modified_at': '2024-11-18T09:34:27.583738162-05:00', 'size': 8905126121, 'digest': '63fb193b3a9b4322a18e8c6b250ca2e70a5ff531e962dbf95ba089b2566f2fa5', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'deepseek2', 'families': ['deepseek2'], 'parameter_size': '15.7B', 'quantization_level': 'Q4_0'}}
+2025-05-11 14:46:25,514 - ai - DEBUG - Calculating base score for model: deepseek-coder-v2:latest
+2025-05-11 14:46:25,514 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:46:25,514 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:46:25,514 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:46:25,514 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:46:25,514 - ai - INFO - Calculated base score for model deepseek-coder-v2:latest: 100.0
+2025-05-11 14:46:25,514 - ai - INFO - Initializing Model instance with model_info: {'name': 'command-r:latest', 'model': 'command-r:latest', 'modified_at': '2024-11-18T09:34:27.110731446-05:00', 'size': 18719506654, 'digest': '7d96360d357f979f63a2be43d5bde200bfcbead950a4072e805d2196ae589aaa', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'command-r', 'families': ['command-r'], 'parameter_size': '32.3B', 'quantization_level': 'Q4_0'}}
+2025-05-11 14:46:25,514 - ai - DEBUG - Calculating base score for model: command-r:latest
+2025-05-11 14:46:25,514 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:46:25,514 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:46:25,514 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:46:25,514 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:46:25,514 - ai - INFO - Calculated base score for model command-r:latest: 100.0
+2025-05-11 14:46:25,514 - ai - INFO - Initializing Model instance with model_info: {'name': 'gemma2:latest', 'model': 'gemma2:latest', 'modified_at': '2024-11-18T09:34:27.961743529-05:00', 'size': 5443152417, 'digest': 'ff02c3702f322b9e075e9568332d96c0a7028002f1a5a056e0a6784320a4db0b', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'gemma2', 'families': ['gemma2'], 'parameter_size': '9.2B', 'quantization_level': 'Q4_0'}}
+2025-05-11 14:46:25,514 - ai - DEBUG - Calculating base score for model: gemma2:latest
+2025-05-11 14:46:25,514 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:46:25,514 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:46:25,514 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:46:25,514 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:46:25,514 - ai - INFO - Calculated base score for model gemma2:latest: 100.0
+2025-05-11 14:46:25,514 - ai - INFO - AI initialized with models: ['phi4:latest', 'yi-coder:latest', 'sqlcoder:15b', 'qwen2-math:7b', 'qwen2.5-coder:latest', 'notux:latest', 'mistral-nemo:latest', 'minicpm-v:latest', 'llama3.2:3b', 'llama3.1:latest', 'llama3.1:70b', 'deepseek-coder-v2:latest', 'command-r:latest', 'gemma2:latest']
+2025-05-11 14:46:25,514 - decorators - DEBUG - Wrapper before function half
+2025-05-11 14:46:25,514 - decorators - DEBUG - Wrapper before function half
+2025-05-11 14:46:25,514 - decorators - DEBUG - Decorator caught exception
+2025-05-11 14:46:25,515 - decorators - DEBUG - Retrieved Source Dictionary: 
+{'task': 'exception', 'fn_name': 'half', 'fn_input': {'args': (None,), 'kwargs': {}}, 'traceback': ['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n'], 'calling_code': '@ExceptionHandler\ndef half(x):\n    """Returns half of the incoming parameter"""\n    return x/2\n', 'error_message': "unsupported operand type(s) for /: 'NoneType' and 'int'"}
+2025-05-11 14:46:25,515 - prompts - DEBUG - generate_prompt called with {'calling_code': '@ExceptionHandler\n'
+                 'def half(x):\n'
+                 '    """Returns half of the incoming parameter"""\n'
+                 '    return x/2\n',
+ 'error_message': "unsupported operand type(s) for /: 'NoneType' and 'int'",
+ 'fn_input': {'args': (None,), 'kwargs': {}},
+ 'fn_name': 'half',
+ 'task': 'exception',
+ 'traceback': ['  File '
+               '"/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", '
+               'line 33, in wrapper\n'
+               '    return func(*args, **kwargs)\n'
+               '           ^^^^^^^^^^^^^^^^^^^^^\n',
+               '  File '
+               '"/home/grzegorz/development/caretaker/tests/test_decorator.py", '
+               'line 16, in half\n'
+               '    return x/2\n'
+               '           ~^~\n']}
+2025-05-11 14:46:25,515 - prompts - DEBUG - generate_prompt generated output ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'NoneType' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 14:46:25,515 - decorators - DEBUG - Generated a prompt:
+
+ ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'NoneType' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+
+
+2025-05-11 14:46:25,515 - decorators - DEBUG - Fixing code
+2025-05-11 14:46:25,515 - ai - INFO - getCode called with prompt: ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'NoneType' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 14:46:25,515 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,515 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,515 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,515 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,515 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,515 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,515 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,515 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,515 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,515 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,515 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,515 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,515 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,515 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,515 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,515 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,515 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,515 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,515 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,515 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,515 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,515 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,515 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,515 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,515 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,515 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,515 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,515 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,515 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,515 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,515 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,515 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,515 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,515 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,515 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,515 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,515 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,515 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,515 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,515 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,515 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,515 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,515 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,516 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,516 - ai - INFO - Ordered models by score: ['phi4:latest', 'yi-coder:latest', 'sqlcoder:15b', 'qwen2-math:7b', 'qwen2.5-coder:latest', 'notux:latest', 'mistral-nemo:latest', 'minicpm-v:latest', 'llama3.2:3b', 'llama3.1:latest', 'llama3.1:70b', 'deepseek-coder-v2:latest', 'command-r:latest', 'gemma2:latest']
+2025-05-11 14:46:25,516 - ai - INFO - Attempt 1 with model 'phi4:latest'
+2025-05-11 14:46:25,516 - ai - INFO - Executing prompt: ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'NoneType' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 14:46:25,516 - ai - DEBUG - Simulating LLM response (placeholder)
+2025-05-11 14:46:25,516 - ai - DEBUG - Received output: 
+        Here is your Python code:
+        ```python
+        print('Hello, World!')
+        ```
+        
+2025-05-11 14:46:25,516 - ai - DEBUG - Parsing Python code from text output
+2025-05-11 14:46:25,516 - ai - DEBUG - Extracted Python code: print('Hello, World!')
+2025-05-11 14:46:25,516 - ai - INFO - Evaluating code
+2025-05-11 14:46:25,516 - ai - DEBUG - Code is syntactically correct
+2025-05-11 14:46:25,516 - ai - INFO - Successfully generated valid code on attempt 1 with model 'phi4:latest'
+2025-05-11 14:46:25,516 - decorators - DEBUG - Fixed Code print('Hello, World!')
+2025-05-11 14:46:25,516 - decorators - DEBUG - Retrieved Source: 
+### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'NoneType' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 14:46:25,516 - decorators - DEBUG - Wrapper before function half
+2025-05-11 14:46:25,516 - decorators - DEBUG - Decorator caught exception
+2025-05-11 14:46:25,516 - decorators - DEBUG - Retrieved Source Dictionary: 
+{'task': 'exception', 'fn_name': 'half', 'fn_input': {'args': ('hello world',), 'kwargs': {}}, 'traceback': ['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n'], 'calling_code': '@ExceptionHandler\ndef half(x):\n    """Returns half of the incoming parameter"""\n    return x/2\n', 'error_message': "unsupported operand type(s) for /: 'str' and 'int'"}
+2025-05-11 14:46:25,516 - prompts - DEBUG - generate_prompt called with {'calling_code': '@ExceptionHandler\n'
+                 'def half(x):\n'
+                 '    """Returns half of the incoming parameter"""\n'
+                 '    return x/2\n',
+ 'error_message': "unsupported operand type(s) for /: 'str' and 'int'",
+ 'fn_input': {'args': ('hello world',), 'kwargs': {}},
+ 'fn_name': 'half',
+ 'task': 'exception',
+ 'traceback': ['  File '
+               '"/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", '
+               'line 33, in wrapper\n'
+               '    return func(*args, **kwargs)\n'
+               '           ^^^^^^^^^^^^^^^^^^^^^\n',
+               '  File '
+               '"/home/grzegorz/development/caretaker/tests/test_decorator.py", '
+               'line 16, in half\n'
+               '    return x/2\n'
+               '           ~^~\n']}
+2025-05-11 14:46:25,516 - prompts - DEBUG - generate_prompt generated output ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'str' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 14:46:25,516 - decorators - DEBUG - Generated a prompt:
+
+ ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'str' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+
+
+2025-05-11 14:46:25,516 - decorators - DEBUG - Fixing code
+2025-05-11 14:46:25,516 - ai - INFO - getCode called with prompt: ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'str' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 14:46:25,516 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,516 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,516 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,516 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,516 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,516 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,516 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,516 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,516 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,516 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,516 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,516 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,516 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,516 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,516 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,516 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,516 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,516 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,516 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,516 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,516 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,516 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,516 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,516 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,516 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,516 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,516 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,516 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,516 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,516 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,516 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,516 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,516 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,516 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,516 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,516 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,516 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,516 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,516 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,516 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,516 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,516 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,516 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,516 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,516 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,516 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,516 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,516 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,516 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,516 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,516 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,516 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,516 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,516 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,517 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,517 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,517 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,517 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,517 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,517 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,517 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,517 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,517 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,517 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,517 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,517 - ai - DEBUG - Calculating current score
+2025-05-11 14:46:25,517 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:46:25,517 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:46:25,517 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:46:25,517 - ai - INFO - Current score: 100.0
+2025-05-11 14:46:25,517 - ai - INFO - Ordered models by score: ['phi4:latest', 'yi-coder:latest', 'sqlcoder:15b', 'qwen2-math:7b', 'qwen2.5-coder:latest', 'notux:latest', 'mistral-nemo:latest', 'minicpm-v:latest', 'llama3.2:3b', 'llama3.1:latest', 'llama3.1:70b', 'deepseek-coder-v2:latest', 'command-r:latest', 'gemma2:latest']
+2025-05-11 14:46:25,517 - ai - INFO - Attempt 1 with model 'phi4:latest'
+2025-05-11 14:46:25,517 - ai - INFO - Executing prompt: ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'str' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 14:46:25,517 - ai - DEBUG - Simulating LLM response (placeholder)
+2025-05-11 14:46:25,517 - ai - DEBUG - Received output: 
+        Here is your Python code:
+        ```python
+        print('Hello, World!')
+        ```
+        
+2025-05-11 14:46:25,517 - ai - DEBUG - Parsing Python code from text output
+2025-05-11 14:46:25,517 - ai - DEBUG - Extracted Python code: print('Hello, World!')
+2025-05-11 14:46:25,517 - ai - INFO - Evaluating code
+2025-05-11 14:46:25,517 - ai - DEBUG - Code is syntactically correct
+2025-05-11 14:46:25,517 - ai - INFO - Successfully generated valid code on attempt 1 with model 'phi4:latest'
+2025-05-11 14:46:25,517 - decorators - DEBUG - Fixed Code print('Hello, World!')
+2025-05-11 14:46:25,517 - decorators - DEBUG - Retrieved Source: 
+### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'str' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 14:51:30,258 - config - INFO - logger instantiated
+2025-05-11 14:51:30,258 - config - INFO - models defined
+2025-05-11 14:51:30,325 - httpx - DEBUG - load_ssl_context verify=True cert=None trust_env=True http2=False
+2025-05-11 14:51:30,326 - httpx - DEBUG - load_verify_locations cafile='/home/grzegorz/miniconda3/lib/python3.12/site-packages/certifi/cacert.pem'
+2025-05-11 14:51:30,339 - httpcore.connection - DEBUG - connect_tcp.started host='127.0.0.1' port=11434 local_address=None timeout=None socket_options=None
+2025-05-11 14:51:30,340 - httpcore.connection - DEBUG - connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x7060a96854f0>
+2025-05-11 14:51:30,340 - httpcore.http11 - DEBUG - send_request_headers.started request=<Request [b'GET']>
+2025-05-11 14:51:30,340 - httpcore.http11 - DEBUG - send_request_headers.complete
+2025-05-11 14:51:30,340 - httpcore.http11 - DEBUG - send_request_body.started request=<Request [b'GET']>
+2025-05-11 14:51:30,340 - httpcore.http11 - DEBUG - send_request_body.complete
+2025-05-11 14:51:30,340 - httpcore.http11 - DEBUG - receive_response_headers.started request=<Request [b'GET']>
+2025-05-11 14:51:30,341 - httpcore.http11 - DEBUG - receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sun, 11 May 2025 18:51:30 GMT'), (b'Transfer-Encoding', b'chunked')])
+2025-05-11 14:51:30,342 - httpx - INFO - HTTP Request: GET http://127.0.0.1:11434/api/tags "HTTP/1.1 200 OK"
+2025-05-11 14:51:30,342 - httpcore.http11 - DEBUG - receive_response_body.started request=<Request [b'GET']>
+2025-05-11 14:51:30,342 - httpcore.http11 - DEBUG - receive_response_body.complete
+2025-05-11 14:51:30,342 - httpcore.http11 - DEBUG - response_closed.started
+2025-05-11 14:51:30,342 - httpcore.http11 - DEBUG - response_closed.complete
+2025-05-11 14:51:30,342 - ai - INFO - Initializing Model instance with model_info: {'name': 'phi4:latest', 'model': 'phi4:latest', 'modified_at': '2025-02-07T18:27:18.665316079-05:00', 'size': 9053116391, 'digest': 'ac896e5b8b34a1f4efa7b14d7520725140d5512484457fab45d2a4ea14c69dba', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'phi3', 'families': ['phi3'], 'parameter_size': '14.7B', 'quantization_level': 'Q4_K_M'}}
+2025-05-11 14:51:30,342 - ai - DEBUG - Calculating base score for model: phi4:latest
+2025-05-11 14:51:30,342 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:51:30,342 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:51:30,342 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:51:30,342 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:51:30,342 - ai - INFO - Calculated base score for model phi4:latest: 100.0
+2025-05-11 14:51:30,342 - ai - INFO - Initializing Model instance with model_info: {'name': 'yi-coder:latest', 'model': 'yi-coder:latest', 'modified_at': '2024-11-18T09:34:35.562851553-05:00', 'size': 5037007607, 'digest': '39c63e7675d7a5c44f71c142c269ab95951170a80971c946e216d3ef575791e6', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'llama', 'families': ['llama'], 'parameter_size': '8.8B', 'quantization_level': 'Q4_0'}}
+2025-05-11 14:51:30,342 - ai - DEBUG - Calculating base score for model: yi-coder:latest
+2025-05-11 14:51:30,342 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:51:30,342 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:51:30,342 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:51:30,342 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:51:30,342 - ai - INFO - Calculated base score for model yi-coder:latest: 100.0
+2025-05-11 14:51:30,342 - ai - INFO - Initializing Model instance with model_info: {'name': 'sqlcoder:15b', 'model': 'sqlcoder:15b', 'modified_at': '2024-11-18T09:34:35.09084484-05:00', 'size': 8987630230, 'digest': '93bb0e8a904ff98bcc6fa5cf3b8e63dc69203772f4bc713f761c82684541d08d', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'starcoder', 'families': None, 'parameter_size': '15B', 'quantization_level': 'Q4_0'}}
+2025-05-11 14:51:30,342 - ai - DEBUG - Calculating base score for model: sqlcoder:15b
+2025-05-11 14:51:30,342 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:51:30,342 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:51:30,342 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:51:30,342 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:51:30,342 - ai - INFO - Calculated base score for model sqlcoder:15b: 100.0
+2025-05-11 14:51:30,342 - ai - INFO - Initializing Model instance with model_info: {'name': 'qwen2-math:7b', 'model': 'qwen2-math:7b', 'modified_at': '2024-11-18T09:34:34.302833634-05:00', 'size': 4431400514, 'digest': '28cc3a337734d0db9326604d931ccce1c9379f2310b60dee03ef76440b37bb65', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'qwen2', 'families': ['qwen2'], 'parameter_size': '7.6B', 'quantization_level': 'Q4_0'}}
+2025-05-11 14:51:30,342 - ai - DEBUG - Calculating base score for model: qwen2-math:7b
+2025-05-11 14:51:30,342 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:51:30,342 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:51:30,342 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:51:30,342 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:51:30,342 - ai - INFO - Calculated base score for model qwen2-math:7b: 100.0
+2025-05-11 14:51:30,342 - ai - INFO - Initializing Model instance with model_info: {'name': 'qwen2.5-coder:latest', 'model': 'qwen2.5-coder:latest', 'modified_at': '2024-11-18T09:34:34.715839507-05:00', 'size': 4683087519, 'digest': '2b0496514337a3d5901f1d253d01726c890b721e891335a56d6e08cedf3e2cb0', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'qwen2', 'families': ['qwen2'], 'parameter_size': '7.6B', 'quantization_level': 'Q4_K_M'}}
+2025-05-11 14:51:30,342 - ai - DEBUG - Calculating base score for model: qwen2.5-coder:latest
+2025-05-11 14:51:30,342 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:51:30,342 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:51:30,342 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:51:30,343 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:51:30,343 - ai - INFO - Calculated base score for model qwen2.5-coder:latest: 100.0
+2025-05-11 14:51:30,343 - ai - INFO - Initializing Model instance with model_info: {'name': 'mistral-nemo:latest', 'model': 'mistral-nemo:latest', 'modified_at': '2024-11-18T09:34:33.063816018-05:00', 'size': 7071713232, 'digest': '994f3b8b78011aa6d578b0c889cbb89a64b778f80d73b8d991a8db1f1e710ace', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'llama', 'families': ['llama'], 'parameter_size': '12.2B', 'quantization_level': 'Q4_0'}}
+2025-05-11 14:51:30,343 - ai - DEBUG - Calculating base score for model: mistral-nemo:latest
+2025-05-11 14:51:30,343 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:51:30,343 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:51:30,343 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:51:30,343 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:51:30,343 - ai - INFO - Calculated base score for model mistral-nemo:latest: 100.0
+2025-05-11 14:51:30,343 - ai - INFO - Initializing Model instance with model_info: {'name': 'notux:latest', 'model': 'notux:latest', 'modified_at': '2024-11-18T09:34:33.867827449-05:00', 'size': 26442471290, 'digest': 'fe14e7d66184a006c5a1e7d77d0cc90efe8184fb572da7a0da384aaa1372472f', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'llama', 'families': ['llama'], 'parameter_size': '47B', 'quantization_level': 'Q4_0'}}
+2025-05-11 14:51:30,343 - ai - DEBUG - Calculating base score for model: notux:latest
+2025-05-11 14:51:30,343 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:51:30,343 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:51:30,343 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:51:30,343 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:51:30,343 - ai - INFO - Calculated base score for model notux:latest: 100.0
+2025-05-11 14:51:30,343 - ai - INFO - Initializing Model instance with model_info: {'name': 'minicpm-v:latest', 'model': 'minicpm-v:latest', 'modified_at': '2024-11-18T09:34:32.507808115-05:00', 'size': 5473838466, 'digest': 'c92bfad0120556eda311984f1ac2f0d0a589b8d68c4053c13486b526276aa205', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'qwen2', 'families': ['qwen2', 'clip'], 'parameter_size': '7.6B', 'quantization_level': 'Q4_0'}}
+2025-05-11 14:51:30,343 - ai - DEBUG - Calculating base score for model: minicpm-v:latest
+2025-05-11 14:51:30,343 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:51:30,343 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:51:30,343 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:51:30,343 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:51:30,343 - ai - INFO - Calculated base score for model minicpm-v:latest: 100.0
+2025-05-11 14:51:30,343 - ai - INFO - Initializing Model instance with model_info: {'name': 'llama3.1:latest', 'model': 'llama3.1:latest', 'modified_at': '2024-11-18T09:34:29.096759648-05:00', 'size': 4661230766, 'digest': '42182419e9508c30c4b1fe55015f06b65f4ca4b9e28a744be55008d21998a093', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'llama', 'families': ['llama'], 'parameter_size': '8.0B', 'quantization_level': 'Q4_0'}}
+2025-05-11 14:51:30,343 - ai - DEBUG - Calculating base score for model: llama3.1:latest
+2025-05-11 14:51:30,343 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:51:30,343 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:51:30,343 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:51:30,343 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:51:30,343 - ai - INFO - Calculated base score for model llama3.1:latest: 100.0
+2025-05-11 14:51:30,343 - ai - INFO - Initializing Model instance with model_info: {'name': 'llama3.2:3b', 'model': 'llama3.2:3b', 'modified_at': '2024-11-18T09:34:29.499765373-05:00', 'size': 2019393189, 'digest': 'a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'llama', 'families': ['llama'], 'parameter_size': '3.2B', 'quantization_level': 'Q4_K_M'}}
+2025-05-11 14:51:30,343 - ai - DEBUG - Calculating base score for model: llama3.2:3b
+2025-05-11 14:51:30,343 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:51:30,343 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:51:30,343 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:51:30,343 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:51:30,343 - ai - INFO - Calculated base score for model llama3.2:3b: 100.0
+2025-05-11 14:51:30,343 - ai - INFO - Initializing Model instance with model_info: {'name': 'llama3.1:70b', 'model': 'llama3.1:70b', 'modified_at': '2024-11-18T09:34:28.621752902-05:00', 'size': 39969751439, 'digest': 'c0df3564cfe84c762092864d37bf9b28276a7d283895242588ffcc7582c98f02', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'llama', 'families': ['llama'], 'parameter_size': '70.6B', 'quantization_level': 'Q4_0'}}
+2025-05-11 14:51:30,343 - ai - DEBUG - Calculating base score for model: llama3.1:70b
+2025-05-11 14:51:30,343 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:51:30,343 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:51:30,343 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:51:30,343 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:51:30,343 - ai - INFO - Calculated base score for model llama3.1:70b: 100.0
+2025-05-11 14:51:30,343 - ai - INFO - Initializing Model instance with model_info: {'name': 'gemma2:latest', 'model': 'gemma2:latest', 'modified_at': '2024-11-18T09:34:27.961743529-05:00', 'size': 5443152417, 'digest': 'ff02c3702f322b9e075e9568332d96c0a7028002f1a5a056e0a6784320a4db0b', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'gemma2', 'families': ['gemma2'], 'parameter_size': '9.2B', 'quantization_level': 'Q4_0'}}
+2025-05-11 14:51:30,343 - ai - DEBUG - Calculating base score for model: gemma2:latest
+2025-05-11 14:51:30,343 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:51:30,343 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:51:30,343 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:51:30,343 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:51:30,343 - ai - INFO - Calculated base score for model gemma2:latest: 100.0
+2025-05-11 14:51:30,343 - ai - INFO - Initializing Model instance with model_info: {'name': 'command-r:latest', 'model': 'command-r:latest', 'modified_at': '2024-11-18T09:34:27.110731446-05:00', 'size': 18719506654, 'digest': '7d96360d357f979f63a2be43d5bde200bfcbead950a4072e805d2196ae589aaa', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'command-r', 'families': ['command-r'], 'parameter_size': '32.3B', 'quantization_level': 'Q4_0'}}
+2025-05-11 14:51:30,343 - ai - DEBUG - Calculating base score for model: command-r:latest
+2025-05-11 14:51:30,343 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:51:30,343 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:51:30,343 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:51:30,343 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:51:30,343 - ai - INFO - Calculated base score for model command-r:latest: 100.0
+2025-05-11 14:51:30,343 - ai - INFO - Initializing Model instance with model_info: {'name': 'deepseek-coder-v2:latest', 'model': 'deepseek-coder-v2:latest', 'modified_at': '2024-11-18T09:34:27.583738162-05:00', 'size': 8905126121, 'digest': '63fb193b3a9b4322a18e8c6b250ca2e70a5ff531e962dbf95ba089b2566f2fa5', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'deepseek2', 'families': ['deepseek2'], 'parameter_size': '15.7B', 'quantization_level': 'Q4_0'}}
+2025-05-11 14:51:30,343 - ai - DEBUG - Calculating base score for model: deepseek-coder-v2:latest
+2025-05-11 14:51:30,343 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 14:51:30,343 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 14:51:30,343 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 14:51:30,343 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 14:51:30,343 - ai - INFO - Calculated base score for model deepseek-coder-v2:latest: 100.0
+2025-05-11 14:51:30,343 - ai - INFO - AI initialized with models: ['phi4:latest', 'yi-coder:latest', 'sqlcoder:15b', 'qwen2-math:7b', 'qwen2.5-coder:latest', 'mistral-nemo:latest', 'notux:latest', 'minicpm-v:latest', 'llama3.1:latest', 'llama3.2:3b', 'llama3.1:70b', 'gemma2:latest', 'command-r:latest', 'deepseek-coder-v2:latest']
+2025-05-11 14:51:30,344 - decorators - DEBUG - Wrapper before function half
+2025-05-11 14:51:30,344 - decorators - DEBUG - Wrapper before function half
+2025-05-11 14:51:30,344 - decorators - DEBUG - Decorator caught exception
+2025-05-11 14:51:30,344 - decorators - DEBUG - Retrieved Source Dictionary: 
+{'task': 'exception', 'fn_name': 'half', 'fn_input': {'args': (None,), 'kwargs': {}}, 'traceback': ['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n'], 'calling_code': '@ExceptionHandler\ndef half(x):\n    """Returns half of the incoming parameter"""\n    return x/2\n', 'error_message': "unsupported operand type(s) for /: 'NoneType' and 'int'"}
+2025-05-11 14:51:30,345 - prompts - DEBUG - generate_prompt called with {'calling_code': '@ExceptionHandler\n'
+                 'def half(x):\n'
+                 '    """Returns half of the incoming parameter"""\n'
+                 '    return x/2\n',
+ 'error_message': "unsupported operand type(s) for /: 'NoneType' and 'int'",
+ 'fn_input': {'args': (None,), 'kwargs': {}},
+ 'fn_name': 'half',
+ 'task': 'exception',
+ 'traceback': ['  File '
+               '"/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", '
+               'line 33, in wrapper\n'
+               '    return func(*args, **kwargs)\n'
+               '           ^^^^^^^^^^^^^^^^^^^^^\n',
+               '  File '
+               '"/home/grzegorz/development/caretaker/tests/test_decorator.py", '
+               'line 16, in half\n'
+               '    return x/2\n'
+               '           ~^~\n']}
+2025-05-11 14:51:30,345 - prompts - DEBUG - generate_prompt generated output ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'NoneType' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 14:51:30,345 - decorators - DEBUG - Generated a prompt:
+
+ ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'NoneType' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+
+
+2025-05-11 14:51:30,345 - decorators - DEBUG - Fixing code
+2025-05-11 14:51:30,345 - ai - INFO - getCode called with prompt: ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'NoneType' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 14:51:30,345 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,345 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,345 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,345 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,345 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,345 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,345 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,345 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,345 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,345 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,345 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,345 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,345 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,345 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,345 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,345 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,345 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,345 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,345 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,345 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,345 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,345 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,345 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,345 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,345 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,345 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,345 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,345 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,345 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,345 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,345 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,345 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,345 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,345 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,345 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,345 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,345 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,345 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,345 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,345 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,345 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,345 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,345 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,345 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,345 - ai - INFO - Ordered models by score: ['phi4:latest', 'yi-coder:latest', 'sqlcoder:15b', 'qwen2-math:7b', 'qwen2.5-coder:latest', 'mistral-nemo:latest', 'notux:latest', 'minicpm-v:latest', 'llama3.1:latest', 'llama3.2:3b', 'llama3.1:70b', 'gemma2:latest', 'command-r:latest', 'deepseek-coder-v2:latest']
+2025-05-11 14:51:30,345 - ai - INFO - Attempt 1 with model 'phi4:latest'
+2025-05-11 14:51:30,345 - ai - INFO - Executing prompt: ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'NoneType' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 14:51:30,345 - ai - DEBUG - Simulating LLM response (placeholder)
+2025-05-11 14:51:30,345 - ai - DEBUG - Received output: 
+        Here is your Python code:
+        ```python
+        print('Hello, World!')
+        ```
+        
+2025-05-11 14:51:30,345 - ai - DEBUG - Parsing Python code from text output
+2025-05-11 14:51:30,345 - ai - DEBUG - Extracted Python code: print('Hello, World!')
+2025-05-11 14:51:30,345 - ai - INFO - Evaluating code
+2025-05-11 14:51:30,345 - ai - DEBUG - Code is syntactically correct
+2025-05-11 14:51:30,346 - ai - INFO - Successfully generated valid code on attempt 1 with model 'phi4:latest'
+2025-05-11 14:51:30,346 - decorators - DEBUG - Fixed Code print('Hello, World!')
+2025-05-11 14:51:30,346 - decorators - DEBUG - Retrieved Source: 
+None
+2025-05-11 14:51:30,346 - decorators - DEBUG - Wrapper before function half
+2025-05-11 14:51:30,346 - decorators - DEBUG - Decorator caught exception
+2025-05-11 14:51:30,346 - decorators - DEBUG - Retrieved Source Dictionary: 
+{'task': 'exception', 'fn_name': 'half', 'fn_input': {'args': ('hello world',), 'kwargs': {}}, 'traceback': ['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n'], 'calling_code': '@ExceptionHandler\ndef half(x):\n    """Returns half of the incoming parameter"""\n    return x/2\n', 'error_message': "unsupported operand type(s) for /: 'str' and 'int'"}
+2025-05-11 14:51:30,346 - prompts - DEBUG - generate_prompt called with {'calling_code': '@ExceptionHandler\n'
+                 'def half(x):\n'
+                 '    """Returns half of the incoming parameter"""\n'
+                 '    return x/2\n',
+ 'error_message': "unsupported operand type(s) for /: 'str' and 'int'",
+ 'fn_input': {'args': ('hello world',), 'kwargs': {}},
+ 'fn_name': 'half',
+ 'task': 'exception',
+ 'traceback': ['  File '
+               '"/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", '
+               'line 33, in wrapper\n'
+               '    return func(*args, **kwargs)\n'
+               '           ^^^^^^^^^^^^^^^^^^^^^\n',
+               '  File '
+               '"/home/grzegorz/development/caretaker/tests/test_decorator.py", '
+               'line 16, in half\n'
+               '    return x/2\n'
+               '           ~^~\n']}
+2025-05-11 14:51:30,346 - prompts - DEBUG - generate_prompt generated output ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'str' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 14:51:30,346 - decorators - DEBUG - Generated a prompt:
+
+ ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'str' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+
+
+2025-05-11 14:51:30,346 - decorators - DEBUG - Fixing code
+2025-05-11 14:51:30,346 - ai - INFO - getCode called with prompt: ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'str' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 14:51:30,346 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,346 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,346 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,346 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,346 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,346 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,346 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,346 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,346 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,346 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,346 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,346 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,346 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,346 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,346 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,346 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,346 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,346 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,346 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,346 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,346 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,346 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,346 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,346 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,346 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,346 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,346 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,346 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,346 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,346 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,346 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,346 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,346 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,346 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,346 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,346 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,346 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,346 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,346 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,346 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Calculating current score
+2025-05-11 14:51:30,346 - ai - DEBUG - Base score: 100.0
+2025-05-11 14:51:30,346 - ai - DEBUG - Total adjustments: 0
+2025-05-11 14:51:30,346 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 14:51:30,346 - ai - INFO - Current score: 100.0
+2025-05-11 14:51:30,346 - ai - INFO - Ordered models by score: ['phi4:latest', 'yi-coder:latest', 'sqlcoder:15b', 'qwen2-math:7b', 'qwen2.5-coder:latest', 'mistral-nemo:latest', 'notux:latest', 'minicpm-v:latest', 'llama3.1:latest', 'llama3.2:3b', 'llama3.1:70b', 'gemma2:latest', 'command-r:latest', 'deepseek-coder-v2:latest']
+2025-05-11 14:51:30,346 - ai - INFO - Attempt 1 with model 'phi4:latest'
+2025-05-11 14:51:30,346 - ai - INFO - Executing prompt: ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'str' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 14:51:30,346 - ai - DEBUG - Simulating LLM response (placeholder)
+2025-05-11 14:51:30,346 - ai - DEBUG - Received output: 
+        Here is your Python code:
+        ```python
+        print('Hello, World!')
+        ```
+        
+2025-05-11 14:51:30,346 - ai - DEBUG - Parsing Python code from text output
+2025-05-11 14:51:30,346 - ai - DEBUG - Extracted Python code: print('Hello, World!')
+2025-05-11 14:51:30,346 - ai - INFO - Evaluating code
+2025-05-11 14:51:30,347 - ai - DEBUG - Code is syntactically correct
+2025-05-11 14:51:30,347 - ai - INFO - Successfully generated valid code on attempt 1 with model 'phi4:latest'
+2025-05-11 14:51:30,347 - decorators - DEBUG - Fixed Code print('Hello, World!')
+2025-05-11 14:51:30,347 - decorators - DEBUG - Retrieved Source: 
+None
+2025-05-11 15:20:40,369 - config - INFO - logger instantiated
+2025-05-11 15:20:40,369 - config - INFO - models defined
+2025-05-11 15:20:40,438 - httpx - DEBUG - load_ssl_context verify=True cert=None trust_env=True http2=False
+2025-05-11 15:20:40,439 - httpx - DEBUG - load_verify_locations cafile='/home/grzegorz/miniconda3/lib/python3.12/site-packages/certifi/cacert.pem'
+2025-05-11 15:20:40,454 - httpcore.connection - DEBUG - connect_tcp.started host='127.0.0.1' port=11434 local_address=None timeout=None socket_options=None
+2025-05-11 15:20:40,454 - httpcore.connection - DEBUG - connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x7af12c241af0>
+2025-05-11 15:20:40,454 - httpcore.http11 - DEBUG - send_request_headers.started request=<Request [b'GET']>
+2025-05-11 15:20:40,455 - httpcore.http11 - DEBUG - send_request_headers.complete
+2025-05-11 15:20:40,455 - httpcore.http11 - DEBUG - send_request_body.started request=<Request [b'GET']>
+2025-05-11 15:20:40,455 - httpcore.http11 - DEBUG - send_request_body.complete
+2025-05-11 15:20:40,455 - httpcore.http11 - DEBUG - receive_response_headers.started request=<Request [b'GET']>
+2025-05-11 15:20:40,457 - httpcore.http11 - DEBUG - receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sun, 11 May 2025 19:20:40 GMT'), (b'Transfer-Encoding', b'chunked')])
+2025-05-11 15:20:40,457 - httpx - INFO - HTTP Request: GET http://127.0.0.1:11434/api/tags "HTTP/1.1 200 OK"
+2025-05-11 15:20:40,457 - httpcore.http11 - DEBUG - receive_response_body.started request=<Request [b'GET']>
+2025-05-11 15:20:40,457 - httpcore.http11 - DEBUG - receive_response_body.complete
+2025-05-11 15:20:40,457 - httpcore.http11 - DEBUG - response_closed.started
+2025-05-11 15:20:40,457 - httpcore.http11 - DEBUG - response_closed.complete
+2025-05-11 15:20:40,457 - ai - INFO - Initializing Model instance with model_info: {'name': 'phi4:latest', 'model': 'phi4:latest', 'modified_at': '2025-02-07T18:27:18.665316079-05:00', 'size': 9053116391, 'digest': 'ac896e5b8b34a1f4efa7b14d7520725140d5512484457fab45d2a4ea14c69dba', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'phi3', 'families': ['phi3'], 'parameter_size': '14.7B', 'quantization_level': 'Q4_K_M'}}
+2025-05-11 15:20:40,457 - ai - DEBUG - Calculating base score for model: phi4:latest
+2025-05-11 15:20:40,457 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 15:20:40,457 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 15:20:40,457 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 15:20:40,457 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 15:20:40,457 - ai - INFO - Calculated base score for model phi4:latest: 100.0
+2025-05-11 15:20:40,457 - ai - INFO - Initializing Model instance with model_info: {'name': 'sqlcoder:15b', 'model': 'sqlcoder:15b', 'modified_at': '2024-11-18T09:34:35.09084484-05:00', 'size': 8987630230, 'digest': '93bb0e8a904ff98bcc6fa5cf3b8e63dc69203772f4bc713f761c82684541d08d', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'starcoder', 'families': None, 'parameter_size': '15B', 'quantization_level': 'Q4_0'}}
+2025-05-11 15:20:40,457 - ai - DEBUG - Calculating base score for model: sqlcoder:15b
+2025-05-11 15:20:40,457 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 15:20:40,457 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 15:20:40,457 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 15:20:40,457 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 15:20:40,457 - ai - INFO - Calculated base score for model sqlcoder:15b: 100.0
+2025-05-11 15:20:40,457 - ai - INFO - Initializing Model instance with model_info: {'name': 'yi-coder:latest', 'model': 'yi-coder:latest', 'modified_at': '2024-11-18T09:34:35.562851553-05:00', 'size': 5037007607, 'digest': '39c63e7675d7a5c44f71c142c269ab95951170a80971c946e216d3ef575791e6', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'llama', 'families': ['llama'], 'parameter_size': '8.8B', 'quantization_level': 'Q4_0'}}
+2025-05-11 15:20:40,457 - ai - DEBUG - Calculating base score for model: yi-coder:latest
+2025-05-11 15:20:40,457 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 15:20:40,457 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 15:20:40,457 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 15:20:40,457 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 15:20:40,457 - ai - INFO - Calculated base score for model yi-coder:latest: 100.0
+2025-05-11 15:20:40,457 - ai - INFO - Initializing Model instance with model_info: {'name': 'qwen2-math:7b', 'model': 'qwen2-math:7b', 'modified_at': '2024-11-18T09:34:34.302833634-05:00', 'size': 4431400514, 'digest': '28cc3a337734d0db9326604d931ccce1c9379f2310b60dee03ef76440b37bb65', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'qwen2', 'families': ['qwen2'], 'parameter_size': '7.6B', 'quantization_level': 'Q4_0'}}
+2025-05-11 15:20:40,457 - ai - DEBUG - Calculating base score for model: qwen2-math:7b
+2025-05-11 15:20:40,457 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 15:20:40,457 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 15:20:40,457 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 15:20:40,457 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 15:20:40,457 - ai - INFO - Calculated base score for model qwen2-math:7b: 100.0
+2025-05-11 15:20:40,457 - ai - INFO - Initializing Model instance with model_info: {'name': 'qwen2.5-coder:latest', 'model': 'qwen2.5-coder:latest', 'modified_at': '2024-11-18T09:34:34.715839507-05:00', 'size': 4683087519, 'digest': '2b0496514337a3d5901f1d253d01726c890b721e891335a56d6e08cedf3e2cb0', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'qwen2', 'families': ['qwen2'], 'parameter_size': '7.6B', 'quantization_level': 'Q4_K_M'}}
+2025-05-11 15:20:40,457 - ai - DEBUG - Calculating base score for model: qwen2.5-coder:latest
+2025-05-11 15:20:40,457 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 15:20:40,458 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 15:20:40,458 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 15:20:40,458 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 15:20:40,458 - ai - INFO - Calculated base score for model qwen2.5-coder:latest: 100.0
+2025-05-11 15:20:40,458 - ai - INFO - Initializing Model instance with model_info: {'name': 'mistral-nemo:latest', 'model': 'mistral-nemo:latest', 'modified_at': '2024-11-18T09:34:33.063816018-05:00', 'size': 7071713232, 'digest': '994f3b8b78011aa6d578b0c889cbb89a64b778f80d73b8d991a8db1f1e710ace', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'llama', 'families': ['llama'], 'parameter_size': '12.2B', 'quantization_level': 'Q4_0'}}
+2025-05-11 15:20:40,458 - ai - DEBUG - Calculating base score for model: mistral-nemo:latest
+2025-05-11 15:20:40,458 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 15:20:40,458 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 15:20:40,458 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 15:20:40,458 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 15:20:40,458 - ai - INFO - Calculated base score for model mistral-nemo:latest: 100.0
+2025-05-11 15:20:40,458 - ai - INFO - Initializing Model instance with model_info: {'name': 'notux:latest', 'model': 'notux:latest', 'modified_at': '2024-11-18T09:34:33.867827449-05:00', 'size': 26442471290, 'digest': 'fe14e7d66184a006c5a1e7d77d0cc90efe8184fb572da7a0da384aaa1372472f', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'llama', 'families': ['llama'], 'parameter_size': '47B', 'quantization_level': 'Q4_0'}}
+2025-05-11 15:20:40,458 - ai - DEBUG - Calculating base score for model: notux:latest
+2025-05-11 15:20:40,458 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 15:20:40,458 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 15:20:40,458 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 15:20:40,458 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 15:20:40,458 - ai - INFO - Calculated base score for model notux:latest: 100.0
+2025-05-11 15:20:40,458 - ai - INFO - Initializing Model instance with model_info: {'name': 'minicpm-v:latest', 'model': 'minicpm-v:latest', 'modified_at': '2024-11-18T09:34:32.507808115-05:00', 'size': 5473838466, 'digest': 'c92bfad0120556eda311984f1ac2f0d0a589b8d68c4053c13486b526276aa205', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'qwen2', 'families': ['qwen2', 'clip'], 'parameter_size': '7.6B', 'quantization_level': 'Q4_0'}}
+2025-05-11 15:20:40,458 - ai - DEBUG - Calculating base score for model: minicpm-v:latest
+2025-05-11 15:20:40,458 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 15:20:40,458 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 15:20:40,458 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 15:20:40,458 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 15:20:40,458 - ai - INFO - Calculated base score for model minicpm-v:latest: 100.0
+2025-05-11 15:20:40,458 - ai - INFO - Initializing Model instance with model_info: {'name': 'llama3.1:latest', 'model': 'llama3.1:latest', 'modified_at': '2024-11-18T09:34:29.096759648-05:00', 'size': 4661230766, 'digest': '42182419e9508c30c4b1fe55015f06b65f4ca4b9e28a744be55008d21998a093', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'llama', 'families': ['llama'], 'parameter_size': '8.0B', 'quantization_level': 'Q4_0'}}
+2025-05-11 15:20:40,458 - ai - DEBUG - Calculating base score for model: llama3.1:latest
+2025-05-11 15:20:40,458 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 15:20:40,458 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 15:20:40,458 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 15:20:40,458 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 15:20:40,458 - ai - INFO - Calculated base score for model llama3.1:latest: 100.0
+2025-05-11 15:20:40,458 - ai - INFO - Initializing Model instance with model_info: {'name': 'llama3.2:3b', 'model': 'llama3.2:3b', 'modified_at': '2024-11-18T09:34:29.499765373-05:00', 'size': 2019393189, 'digest': 'a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'llama', 'families': ['llama'], 'parameter_size': '3.2B', 'quantization_level': 'Q4_K_M'}}
+2025-05-11 15:20:40,458 - ai - DEBUG - Calculating base score for model: llama3.2:3b
+2025-05-11 15:20:40,458 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 15:20:40,458 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 15:20:40,458 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 15:20:40,458 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 15:20:40,458 - ai - INFO - Calculated base score for model llama3.2:3b: 100.0
+2025-05-11 15:20:40,458 - ai - INFO - Initializing Model instance with model_info: {'name': 'llama3.1:70b', 'model': 'llama3.1:70b', 'modified_at': '2024-11-18T09:34:28.621752902-05:00', 'size': 39969751439, 'digest': 'c0df3564cfe84c762092864d37bf9b28276a7d283895242588ffcc7582c98f02', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'llama', 'families': ['llama'], 'parameter_size': '70.6B', 'quantization_level': 'Q4_0'}}
+2025-05-11 15:20:40,458 - ai - DEBUG - Calculating base score for model: llama3.1:70b
+2025-05-11 15:20:40,458 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 15:20:40,458 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 15:20:40,458 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 15:20:40,458 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 15:20:40,458 - ai - INFO - Calculated base score for model llama3.1:70b: 100.0
+2025-05-11 15:20:40,458 - ai - INFO - Initializing Model instance with model_info: {'name': 'gemma2:latest', 'model': 'gemma2:latest', 'modified_at': '2024-11-18T09:34:27.961743529-05:00', 'size': 5443152417, 'digest': 'ff02c3702f322b9e075e9568332d96c0a7028002f1a5a056e0a6784320a4db0b', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'gemma2', 'families': ['gemma2'], 'parameter_size': '9.2B', 'quantization_level': 'Q4_0'}}
+2025-05-11 15:20:40,458 - ai - DEBUG - Calculating base score for model: gemma2:latest
+2025-05-11 15:20:40,458 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 15:20:40,458 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 15:20:40,458 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 15:20:40,458 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 15:20:40,458 - ai - INFO - Calculated base score for model gemma2:latest: 100.0
+2025-05-11 15:20:40,458 - ai - INFO - Initializing Model instance with model_info: {'name': 'command-r:latest', 'model': 'command-r:latest', 'modified_at': '2024-11-18T09:34:27.110731446-05:00', 'size': 18719506654, 'digest': '7d96360d357f979f63a2be43d5bde200bfcbead950a4072e805d2196ae589aaa', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'command-r', 'families': ['command-r'], 'parameter_size': '32.3B', 'quantization_level': 'Q4_0'}}
+2025-05-11 15:20:40,458 - ai - DEBUG - Calculating base score for model: command-r:latest
+2025-05-11 15:20:40,458 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 15:20:40,458 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 15:20:40,458 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 15:20:40,458 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 15:20:40,458 - ai - INFO - Calculated base score for model command-r:latest: 100.0
+2025-05-11 15:20:40,458 - ai - INFO - Initializing Model instance with model_info: {'name': 'deepseek-coder-v2:latest', 'model': 'deepseek-coder-v2:latest', 'modified_at': '2024-11-18T09:34:27.583738162-05:00', 'size': 8905126121, 'digest': '63fb193b3a9b4322a18e8c6b250ca2e70a5ff531e962dbf95ba089b2566f2fa5', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'deepseek2', 'families': ['deepseek2'], 'parameter_size': '15.7B', 'quantization_level': 'Q4_0'}}
+2025-05-11 15:20:40,458 - ai - DEBUG - Calculating base score for model: deepseek-coder-v2:latest
+2025-05-11 15:20:40,458 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 15:20:40,458 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 15:20:40,458 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 15:20:40,458 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 15:20:40,458 - ai - INFO - Calculated base score for model deepseek-coder-v2:latest: 100.0
+2025-05-11 15:20:40,458 - ai - INFO - AI initialized with models: ['phi4:latest', 'sqlcoder:15b', 'yi-coder:latest', 'qwen2-math:7b', 'qwen2.5-coder:latest', 'mistral-nemo:latest', 'notux:latest', 'minicpm-v:latest', 'llama3.1:latest', 'llama3.2:3b', 'llama3.1:70b', 'gemma2:latest', 'command-r:latest', 'deepseek-coder-v2:latest']
+2025-05-11 15:20:40,459 - decorators - DEBUG - Wrapper before function half
+2025-05-11 15:20:40,460 - decorators - DEBUG - Wrapper before function half
+2025-05-11 15:20:40,460 - decorators - DEBUG - Decorator caught exception
+2025-05-11 15:20:40,462 - decorators - DEBUG - Retrieved Source Dictionary: 
+{'task': 'exception', 'fn_name': 'half', 'fn_input': {'args': (None,), 'kwargs': {}}, 'traceback': ['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n'], 'calling_code': '@ExceptionHandler\ndef half(x):\n    """Returns half of the incoming parameter"""\n    return x/2\n', 'error_message': "unsupported operand type(s) for /: 'NoneType' and 'int'"}
+2025-05-11 15:20:40,462 - prompts - DEBUG - generate_prompt called with {'calling_code': '@ExceptionHandler\n'
+                 'def half(x):\n'
+                 '    """Returns half of the incoming parameter"""\n'
+                 '    return x/2\n',
+ 'error_message': "unsupported operand type(s) for /: 'NoneType' and 'int'",
+ 'fn_input': {'args': (None,), 'kwargs': {}},
+ 'fn_name': 'half',
+ 'task': 'exception',
+ 'traceback': ['  File '
+               '"/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", '
+               'line 33, in wrapper\n'
+               '    return func(*args, **kwargs)\n'
+               '           ^^^^^^^^^^^^^^^^^^^^^\n',
+               '  File '
+               '"/home/grzegorz/development/caretaker/tests/test_decorator.py", '
+               'line 16, in half\n'
+               '    return x/2\n'
+               '           ~^~\n']}
+2025-05-11 15:20:40,462 - prompts - DEBUG - generate_prompt generated output ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'NoneType' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 15:20:40,462 - decorators - DEBUG - Generated a prompt:
+
+ ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'NoneType' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+
+
+2025-05-11 15:20:40,462 - decorators - DEBUG - Fixing code
+2025-05-11 15:20:40,462 - ai - INFO - getCode called with prompt: ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'NoneType' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 15:20:40,462 - ai - DEBUG - Calculating current score
+2025-05-11 15:20:40,462 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:20:40,462 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:20:40,462 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:20:40,462 - ai - INFO - Current score: 100.0
+2025-05-11 15:20:40,462 - ai - DEBUG - Calculating current score
+2025-05-11 15:20:40,462 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:20:40,462 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:20:40,462 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:20:40,462 - ai - INFO - Current score: 100.0
+2025-05-11 15:20:40,462 - ai - DEBUG - Calculating current score
+2025-05-11 15:20:40,462 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:20:40,462 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:20:40,462 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:20:40,462 - ai - INFO - Current score: 100.0
+2025-05-11 15:20:40,462 - ai - DEBUG - Calculating current score
+2025-05-11 15:20:40,462 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:20:40,462 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:20:40,462 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:20:40,462 - ai - INFO - Current score: 100.0
+2025-05-11 15:20:40,462 - ai - DEBUG - Calculating current score
+2025-05-11 15:20:40,462 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:20:40,462 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:20:40,462 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:20:40,462 - ai - INFO - Current score: 100.0
+2025-05-11 15:20:40,462 - ai - DEBUG - Calculating current score
+2025-05-11 15:20:40,462 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:20:40,462 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:20:40,462 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:20:40,462 - ai - INFO - Current score: 100.0
+2025-05-11 15:20:40,462 - ai - DEBUG - Calculating current score
+2025-05-11 15:20:40,463 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:20:40,463 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:20:40,463 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:20:40,463 - ai - INFO - Current score: 100.0
+2025-05-11 15:20:40,463 - ai - DEBUG - Calculating current score
+2025-05-11 15:20:40,463 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:20:40,463 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:20:40,463 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:20:40,463 - ai - INFO - Current score: 100.0
+2025-05-11 15:20:40,463 - ai - DEBUG - Calculating current score
+2025-05-11 15:20:40,463 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:20:40,463 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:20:40,463 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:20:40,463 - ai - INFO - Current score: 100.0
+2025-05-11 15:20:40,463 - ai - DEBUG - Calculating current score
+2025-05-11 15:20:40,463 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:20:40,463 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:20:40,463 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:20:40,463 - ai - INFO - Current score: 100.0
+2025-05-11 15:20:40,463 - ai - DEBUG - Calculating current score
+2025-05-11 15:20:40,463 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:20:40,463 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:20:40,463 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:20:40,463 - ai - INFO - Current score: 100.0
+2025-05-11 15:20:40,463 - ai - DEBUG - Calculating current score
+2025-05-11 15:20:40,463 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:20:40,463 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:20:40,463 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:20:40,463 - ai - INFO - Current score: 100.0
+2025-05-11 15:20:40,463 - ai - DEBUG - Calculating current score
+2025-05-11 15:20:40,463 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:20:40,463 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:20:40,463 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:20:40,463 - ai - INFO - Current score: 100.0
+2025-05-11 15:20:40,463 - ai - DEBUG - Calculating current score
+2025-05-11 15:20:40,463 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:20:40,463 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:20:40,463 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:20:40,463 - ai - INFO - Current score: 100.0
+2025-05-11 15:20:40,463 - ai - INFO - Ordered models by score: ['phi4:latest', 'sqlcoder:15b', 'yi-coder:latest', 'qwen2-math:7b', 'qwen2.5-coder:latest', 'mistral-nemo:latest', 'notux:latest', 'minicpm-v:latest', 'llama3.1:latest', 'llama3.2:3b', 'llama3.1:70b', 'gemma2:latest', 'command-r:latest', 'deepseek-coder-v2:latest']
+2025-05-11 15:20:40,463 - ai - INFO - Attempt 1 with model 'phi4:latest'
+2025-05-11 15:20:40,463 - ai - INFO - Executing prompt: ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'NoneType' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 15:20:40,463 - ai - DEBUG - Executing LLM.
+2025-05-11 15:20:40,463 - httpcore.http11 - DEBUG - send_request_headers.started request=<Request [b'POST']>
+2025-05-11 15:20:40,463 - httpcore.http11 - DEBUG - send_request_headers.complete
+2025-05-11 15:20:40,463 - httpcore.http11 - DEBUG - send_request_body.started request=<Request [b'POST']>
+2025-05-11 15:20:40,463 - httpcore.http11 - DEBUG - send_request_body.complete
+2025-05-11 15:20:40,463 - httpcore.http11 - DEBUG - receive_response_headers.started request=<Request [b'POST']>
+2025-05-11 15:22:55,644 - httpcore.http11 - DEBUG - receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sun, 11 May 2025 19:22:55 GMT'), (b'Transfer-Encoding', b'chunked')])
+2025-05-11 15:22:55,645 - httpx - INFO - HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-05-11 15:22:55,645 - httpcore.http11 - DEBUG - receive_response_body.started request=<Request [b'POST']>
+2025-05-11 15:22:55,645 - httpcore.http11 - DEBUG - receive_response_body.complete
+2025-05-11 15:22:55,645 - httpcore.http11 - DEBUG - response_closed.started
+2025-05-11 15:22:55,645 - httpcore.http11 - DEBUG - response_closed.complete
+2025-05-11 15:22:55,645 - ai - DEBUG - Received output: To address the issue with the `half` function encountering an error when it tries to divide `NoneType` by an integer, we need to implement a robust solution that handles this edge case gracefully. The problem arises because the function is attempting to perform division on a value (`x`) that can be `None`. 
+
+The primary goal here is to ensure the program does not crash and instead returns a sensible result or indication when faced with unexpected input. To achieve this, we should:
+
+1. **Check for None**: Before performing any operations, check if the input is `None`.
+2. **Return a Default Value or Raise an Informative Error**: If `x` is `None`, decide on a strategy to handle it—either returning a default value like 0 or raising a custom exception with a clear message.
+3. **Proceed Safely with Division**: If `x` is not `None`, proceed with the division operation.
+
+Here's how you can implement this in Python:
+
+```python
+def half(x):
+    if x is None:
+        # Option 1: Return a default value, e.g., 0 or float('nan')
+        return 0
+        
+        # Option 2: Raise an informative exception (uncomment to use)
+        # raise ValueError("Input cannot be None")
+    
+    # Ensure the division operation proceeds safely
+    try:
+        result = x / 2
+    except TypeError as e:
+        # Handle cases where `x` is not a type that supports division, e.g., string or list
+        raise TypeError(f"Unsupported operand type(s) for '/': '{type(x).__name__}' and 'int'") from e
+
+    return result
+```
+
+### Explanation:
+
+- **None Check**: The function first checks if `x` is `None`. If it is, it returns 0 as a safe default value. Alternatively, you can raise an exception to signal improper usage.
+  
+- **Division Safeguard**: The division operation is wrapped in a try-except block to catch any `TypeError` that might occur if `x` is not of a type that supports division (e.g., string or list). This ensures the program doesn't crash and instead provides informative feedback.
+
+This approach ensures that the function handles unexpected input gracefully, maintaining robustness and reliability. You can choose between returning a default value or raising an exception based on how you want to handle such cases in your application's context.
+2025-05-11 15:22:55,645 - ai - DEBUG - Parsing Python code from text output
+2025-05-11 15:22:55,645 - ai - DEBUG - Extracted Python code: def half(x):
+    if x is None:
+        # Option 1: Return a default value, e.g., 0 or float('nan')
+        return 0
+        
+        # Option 2: Raise an informative exception (uncomment to use)
+        # raise ValueError("Input cannot be None")
+    
+    # Ensure the division operation proceeds safely
+    try:
+        result = x / 2
+    except TypeError as e:
+        # Handle cases where `x` is not a type that supports division, e.g., string or list
+        raise TypeError(f"Unsupported operand type(s) for '/': '{type(x).__name__}' and 'int'") from e
+
+    return result
+2025-05-11 15:22:55,645 - ai - INFO - Evaluating code
+2025-05-11 15:22:55,645 - ai - DEBUG - Code is syntactically correct
+2025-05-11 15:22:55,645 - ai - INFO - Successfully generated valid code on attempt 1 with model 'phi4:latest'
+2025-05-11 15:22:55,645 - decorators - DEBUG - Fixed Code def half(x):
+    if x is None:
+        # Option 1: Return a default value, e.g., 0 or float('nan')
+        return 0
+        
+        # Option 2: Raise an informative exception (uncomment to use)
+        # raise ValueError("Input cannot be None")
+    
+    # Ensure the division operation proceeds safely
+    try:
+        result = x / 2
+    except TypeError as e:
+        # Handle cases where `x` is not a type that supports division, e.g., string or list
+        raise TypeError(f"Unsupported operand type(s) for '/': '{type(x).__name__}' and 'int'") from e
+
+    return result
+2025-05-11 15:22:55,645 - decorators - DEBUG - Retrieved Source: 
+None
+2025-05-11 15:22:55,645 - decorators - DEBUG - Wrapper before function half
+2025-05-11 15:22:55,645 - decorators - DEBUG - Decorator caught exception
+2025-05-11 15:22:55,645 - decorators - DEBUG - Retrieved Source Dictionary: 
+{'task': 'exception', 'fn_name': 'half', 'fn_input': {'args': ('hello world',), 'kwargs': {}}, 'traceback': ['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n'], 'calling_code': '@ExceptionHandler\ndef half(x):\n    """Returns half of the incoming parameter"""\n    return x/2\n', 'error_message': "unsupported operand type(s) for /: 'str' and 'int'"}
+2025-05-11 15:22:55,646 - prompts - DEBUG - generate_prompt called with {'calling_code': '@ExceptionHandler\n'
+                 'def half(x):\n'
+                 '    """Returns half of the incoming parameter"""\n'
+                 '    return x/2\n',
+ 'error_message': "unsupported operand type(s) for /: 'str' and 'int'",
+ 'fn_input': {'args': ('hello world',), 'kwargs': {}},
+ 'fn_name': 'half',
+ 'task': 'exception',
+ 'traceback': ['  File '
+               '"/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", '
+               'line 33, in wrapper\n'
+               '    return func(*args, **kwargs)\n'
+               '           ^^^^^^^^^^^^^^^^^^^^^\n',
+               '  File '
+               '"/home/grzegorz/development/caretaker/tests/test_decorator.py", '
+               'line 16, in half\n'
+               '    return x/2\n'
+               '           ~^~\n']}
+2025-05-11 15:22:55,646 - prompts - DEBUG - generate_prompt generated output ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'str' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 15:22:55,646 - decorators - DEBUG - Generated a prompt:
+
+ ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'str' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+
+
+2025-05-11 15:22:55,646 - decorators - DEBUG - Fixing code
+2025-05-11 15:22:55,646 - ai - INFO - getCode called with prompt: ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'str' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 15:22:55,646 - ai - DEBUG - Calculating current score
+2025-05-11 15:22:55,646 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:22:55,646 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:22:55,646 - ai - INFO - Current score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Calculating current score
+2025-05-11 15:22:55,646 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:22:55,646 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:22:55,646 - ai - INFO - Current score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Calculating current score
+2025-05-11 15:22:55,646 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:22:55,646 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:22:55,646 - ai - INFO - Current score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Calculating current score
+2025-05-11 15:22:55,646 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:22:55,646 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:22:55,646 - ai - INFO - Current score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Calculating current score
+2025-05-11 15:22:55,646 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:22:55,646 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:22:55,646 - ai - INFO - Current score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Calculating current score
+2025-05-11 15:22:55,646 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:22:55,646 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:22:55,646 - ai - INFO - Current score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Calculating current score
+2025-05-11 15:22:55,646 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:22:55,646 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:22:55,646 - ai - INFO - Current score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Calculating current score
+2025-05-11 15:22:55,646 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:22:55,646 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:22:55,646 - ai - INFO - Current score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Calculating current score
+2025-05-11 15:22:55,646 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:22:55,646 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:22:55,646 - ai - INFO - Current score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Calculating current score
+2025-05-11 15:22:55,646 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:22:55,646 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:22:55,646 - ai - INFO - Current score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Calculating current score
+2025-05-11 15:22:55,646 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:22:55,646 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:22:55,646 - ai - INFO - Current score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Calculating current score
+2025-05-11 15:22:55,646 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:22:55,646 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:22:55,646 - ai - INFO - Current score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Calculating current score
+2025-05-11 15:22:55,646 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:22:55,646 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:22:55,646 - ai - INFO - Current score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Calculating current score
+2025-05-11 15:22:55,646 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:22:55,646 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:22:55,646 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:22:55,646 - ai - INFO - Current score: 100.0
+2025-05-11 15:22:55,646 - ai - INFO - Ordered models by score: ['phi4:latest', 'sqlcoder:15b', 'yi-coder:latest', 'qwen2-math:7b', 'qwen2.5-coder:latest', 'mistral-nemo:latest', 'notux:latest', 'minicpm-v:latest', 'llama3.1:latest', 'llama3.2:3b', 'llama3.1:70b', 'gemma2:latest', 'command-r:latest', 'deepseek-coder-v2:latest']
+2025-05-11 15:22:55,646 - ai - INFO - Attempt 1 with model 'phi4:latest'
+2025-05-11 15:22:55,646 - ai - INFO - Executing prompt: ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'str' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 15:22:55,646 - ai - DEBUG - Executing LLM.
+2025-05-11 15:22:55,647 - httpcore.http11 - DEBUG - send_request_headers.started request=<Request [b'POST']>
+2025-05-11 15:22:55,647 - httpcore.http11 - DEBUG - send_request_headers.complete
+2025-05-11 15:22:55,647 - httpcore.http11 - DEBUG - send_request_body.started request=<Request [b'POST']>
+2025-05-11 15:22:55,647 - httpcore.http11 - DEBUG - send_request_body.complete
+2025-05-11 15:22:55,647 - httpcore.http11 - DEBUG - receive_response_headers.started request=<Request [b'POST']>
+2025-05-11 15:25:00,367 - httpcore.http11 - DEBUG - receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sun, 11 May 2025 19:25:00 GMT'), (b'Transfer-Encoding', b'chunked')])
+2025-05-11 15:25:00,368 - httpx - INFO - HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-05-11 15:25:00,368 - httpcore.http11 - DEBUG - receive_response_body.started request=<Request [b'POST']>
+2025-05-11 15:25:00,368 - httpcore.http11 - DEBUG - receive_response_body.complete
+2025-05-11 15:25:00,368 - httpcore.http11 - DEBUG - response_closed.started
+2025-05-11 15:25:00,368 - httpcore.http11 - DEBUG - response_closed.complete
+2025-05-11 15:25:00,368 - ai - DEBUG - Received output: To address the issue in the `half` function where it attempts to divide a string by an integer, we need to ensure that the input is of a numeric type before performing any division. The error occurs because Python does not support dividing a string by an integer. To fix this, we will:
+
+1. Check if the input is a number (either an `int` or `float`). If it's a string representation of a number, convert it to a numeric type.
+2. Perform the division operation only if the conversion is successful.
+3. Handle cases where the input cannot be converted to a number by returning a meaningful response or raising an exception.
+
+Here's how you can implement these steps in the `half` function:
+
+```python
+def half(x):
+    """
+    This function takes an input 'x' and returns its half.
+    It handles different types of inputs, ensuring that non-numeric
+    strings do not cause a crash.
+    
+    Args:
+        x: The value to be halved. Can be int, float, or str representation of a number.
+
+    Returns:
+        The half of the input if it's numeric; otherwise, returns None.
+    """
+    try:
+        # Attempt to convert 'x' to a float for division
+        num = float(x)
+    except ValueError:
+        # If conversion fails, return None or handle as needed
+        print("Warning: Input is not a number. Returning None.")
+        return None
+    
+    # Return half of the numeric value
+    return num / 2
+
+start_marker = ```python
+
+def half(x):
+    """
+    This function takes an input 'x' and returns its half.
+    It handles different types of inputs, ensuring that non-numeric
+    strings do not cause a crash.
+    
+    Args:
+        x: The value to be halved. Can be int, float, or str representation of a number.
+
+    Returns:
+        The half of the input if it's numeric; otherwise, returns None.
+    """
+    try:
+        # Attempt to convert 'x' to a float for division
+        num = float(x)
+    except ValueError:
+        # If conversion fails, return None or handle as needed
+        print("Warning: Input is not a number. Returning None.")
+        return None
+    
+    # Return half of the numeric value
+    return num / 2
+
+end_marker = ```
+```
+
+### Key Points:
+
+- **Type Conversion**: We use `float(x)` to convert strings that represent numbers into floats, allowing for division.
+  
+- **Error Handling**: The `try-except` block catches a `ValueError` if the conversion fails, which occurs when the input is not a valid number.
+
+- **Return Value**: If the input cannot be converted to a number, we return `None` and print a warning message. This prevents the program from crashing and provides feedback for debugging.
+
+This approach ensures that the function handles unexpected inputs gracefully without causing runtime errors.
+2025-05-11 15:25:00,368 - ai - DEBUG - Parsing Python code from text output
+2025-05-11 15:25:00,368 - ai - DEBUG - Extracted Python code: def half(x):
+    """
+    This function takes an input 'x' and returns its half.
+    It handles different types of inputs, ensuring that non-numeric
+    strings do not cause a crash.
+    
+    Args:
+        x: The value to be halved. Can be int, float, or str representation of a number.
+
+    Returns:
+        The half of the input if it's numeric; otherwise, returns None.
+    """
+    try:
+        # Attempt to convert 'x' to a float for division
+        num = float(x)
+    except ValueError:
+        # If conversion fails, return None or handle as needed
+        print("Warning: Input is not a number. Returning None.")
+        return None
+    
+    # Return half of the numeric value
+    return num / 2
+
+start_marker =
+2025-05-11 15:25:00,368 - ai - INFO - Evaluating code
+2025-05-11 15:25:00,368 - ai - WARNING - Code evaluation failed: invalid syntax (<string>, line 24). Total failures: 1
+2025-05-11 15:25:00,368 - ai - WARNING - Generated code is invalid on attempt 1 with model 'phi4:latest'
+2025-05-11 15:25:00,368 - ai - INFO - Adjusting score by -1. Total adjustments: [-1]
+2025-05-11 15:25:00,368 - ai - INFO - Attempt 2 with model 'phi4:latest'
+2025-05-11 15:25:00,368 - ai - INFO - Executing prompt: ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'str' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+# Note: Previous attempt failed due to syntax error.
+2025-05-11 15:25:00,368 - ai - DEBUG - Executing LLM.
+2025-05-11 15:25:00,368 - httpcore.http11 - DEBUG - send_request_headers.started request=<Request [b'POST']>
+2025-05-11 15:25:00,368 - httpcore.http11 - DEBUG - send_request_headers.complete
+2025-05-11 15:25:00,368 - httpcore.http11 - DEBUG - send_request_body.started request=<Request [b'POST']>
+2025-05-11 15:25:00,368 - httpcore.http11 - DEBUG - send_request_body.complete
+2025-05-11 15:25:00,368 - httpcore.http11 - DEBUG - receive_response_headers.started request=<Request [b'POST']>
+2025-05-11 15:26:15,820 - httpcore.http11 - DEBUG - receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sun, 11 May 2025 19:26:15 GMT'), (b'Transfer-Encoding', b'chunked')])
+2025-05-11 15:26:15,820 - httpx - INFO - HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-05-11 15:26:15,820 - httpcore.http11 - DEBUG - receive_response_body.started request=<Request [b'POST']>
+2025-05-11 15:26:15,820 - httpcore.http11 - DEBUG - receive_response_body.complete
+2025-05-11 15:26:15,820 - httpcore.http11 - DEBUG - response_closed.started
+2025-05-11 15:26:15,820 - httpcore.http11 - DEBUG - response_closed.complete
+2025-05-11 15:26:15,820 - ai - DEBUG - Received output: To address the issue in the `half` function, we need to ensure it handles cases where a non-numeric input (such as a string) is provided. The error indicates that an operation was attempted between a string and an integer, which isn't supported.
+
+The goal is to modify the `half` function so that it:
+1. Checks if the input can be converted to a number.
+2. Safely divides by 2 if possible.
+3. Returns a meaningful response or handles errors gracefully without crashing.
+
+Here's how you can implement these changes:
+
+```python
+def half(x):
+    try:
+        # Attempt to convert x to a float, which covers both integers and floats
+        num = float(x)
+        return num / 2
+    except (ValueError, TypeError):
+        # If conversion fails, return None or an appropriate message
+        return None
+
+# Start marker for injection
+start_marker = '```python\n'
+
+# End marker for injection
+end_marker = '\n```\n'
+```
+
+### Explanation:
+
+1. **Type Conversion**: 
+   - We use `float(x)` to attempt converting the input `x` into a float. This covers both integer and floating-point numbers.
+
+2. **Error Handling**:
+   - A `try-except` block is used to catch `ValueError` (which occurs if conversion fails, e.g., when trying to convert a string that doesn't represent a number) and `TypeError` (if the input type isn't compatible with conversion).
+   
+3. **Return Value**:
+   - If successful, it returns half of the converted number.
+   - If an error is caught, it returns `None`. You could also choose to return a specific message or handle this case differently based on your application's needs.
+
+This approach ensures that the function won't crash and will handle unexpected input gracefully.
+2025-05-11 15:26:15,820 - ai - DEBUG - Parsing Python code from text output
+2025-05-11 15:26:15,820 - ai - DEBUG - Extracted Python code: def half(x):
+    try:
+        # Attempt to convert x to a float, which covers both integers and floats
+        num = float(x)
+        return num / 2
+    except (ValueError, TypeError):
+        # If conversion fails, return None or an appropriate message
+        return None
+
+# Start marker for injection
+start_marker = '
+2025-05-11 15:26:15,820 - ai - INFO - Evaluating code
+2025-05-11 15:26:15,821 - ai - WARNING - Code evaluation failed: unterminated string literal (detected at line 11) (<string>, line 11). Total failures: 2
+2025-05-11 15:26:15,821 - ai - WARNING - Generated code is invalid on attempt 2 with model 'phi4:latest'
+2025-05-11 15:26:15,821 - ai - INFO - Adjusting score by -1. Total adjustments: [-1, -1]
+2025-05-11 15:26:15,821 - ai - INFO - Attempt 3 with model 'phi4:latest'
+2025-05-11 15:26:15,821 - ai - INFO - Executing prompt: ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'str' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+# Note: Previous attempt failed due to syntax error.
+2025-05-11 15:26:15,821 - ai - DEBUG - Executing LLM.
+2025-05-11 15:26:15,821 - httpcore.http11 - DEBUG - send_request_headers.started request=<Request [b'POST']>
+2025-05-11 15:26:15,821 - httpcore.http11 - DEBUG - send_request_headers.complete
+2025-05-11 15:26:15,821 - httpcore.http11 - DEBUG - send_request_body.started request=<Request [b'POST']>
+2025-05-11 15:26:15,821 - httpcore.http11 - DEBUG - send_request_body.complete
+2025-05-11 15:26:15,821 - httpcore.http11 - DEBUG - receive_response_headers.started request=<Request [b'POST']>
+2025-05-11 15:27:27,479 - httpcore.http11 - DEBUG - receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sun, 11 May 2025 19:27:27 GMT'), (b'Transfer-Encoding', b'chunked')])
+2025-05-11 15:27:27,480 - httpx - INFO - HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-05-11 15:27:27,480 - httpcore.http11 - DEBUG - receive_response_body.started request=<Request [b'POST']>
+2025-05-11 15:27:27,480 - httpcore.http11 - DEBUG - receive_response_body.complete
+2025-05-11 15:27:27,480 - httpcore.http11 - DEBUG - response_closed.started
+2025-05-11 15:27:27,480 - httpcore.http11 - DEBUG - response_closed.complete
+2025-05-11 15:27:27,480 - ai - DEBUG - Received output: ```python
+def half(x):
+    """
+    Safely attempts to divide the input by 2, handling cases where the input might not be a number.
+    
+    Parameters:
+        x (any): The input which is expected to be convertible to a number.
+
+    Returns:
+        float or str: The result of dividing x by 2 if x can be converted to a number,
+                      otherwise returns an error message as a string.
+    """
+    try:
+        # Attempt to convert the input to a float
+        numeric_value = float(x)
+        # Return half of the numeric value
+        return numeric_value / 2
+    except (ValueError, TypeError):
+        # Handle cases where conversion fails or x is not a number
+        return "Error: Input must be a numeric type."
+
+```
+# Explanation:
+
+1. **Conversion to Float**: The function attempts to convert the input `x` into a float using `float(x)`. This allows handling of both integer and floating-point numbers, as well as strings that represent numbers (e.g., `"10"`, `"3.5"`).
+
+2. **Division**: If the conversion is successful, it divides the numeric value by 2 and returns the result.
+
+3. **Error Handling**:
+   - **ValueError**: This exception is raised if `x` cannot be converted to a float (e.g., when `x` is a string like `"abc"`).
+   - **TypeError**: This handles cases where `x` is not a type that can be converted to a float, such as lists or dictionaries.
+
+4. **Return Error Message**: If an exception occurs during the conversion, the function returns a descriptive error message indicating that the input must be numeric.
+
+This approach ensures that the program does not crash when encountering unexpected input types and provides informative feedback instead.
+2025-05-11 15:27:27,480 - ai - DEBUG - Parsing Python code from text output
+2025-05-11 15:27:27,480 - ai - DEBUG - Extracted Python code: def half(x):
+    """
+    Safely attempts to divide the input by 2, handling cases where the input might not be a number.
+    
+    Parameters:
+        x (any): The input which is expected to be convertible to a number.
+
+    Returns:
+        float or str: The result of dividing x by 2 if x can be converted to a number,
+                      otherwise returns an error message as a string.
+    """
+    try:
+        # Attempt to convert the input to a float
+        numeric_value = float(x)
+        # Return half of the numeric value
+        return numeric_value / 2
+    except (ValueError, TypeError):
+        # Handle cases where conversion fails or x is not a number
+        return "Error: Input must be a numeric type."
+2025-05-11 15:27:27,480 - ai - INFO - Evaluating code
+2025-05-11 15:27:27,480 - ai - DEBUG - Code is syntactically correct
+2025-05-11 15:27:27,480 - ai - INFO - Successfully generated valid code on attempt 3 with model 'phi4:latest'
+2025-05-11 15:27:27,480 - decorators - DEBUG - Fixed Code def half(x):
+    """
+    Safely attempts to divide the input by 2, handling cases where the input might not be a number.
+    
+    Parameters:
+        x (any): The input which is expected to be convertible to a number.
+
+    Returns:
+        float or str: The result of dividing x by 2 if x can be converted to a number,
+                      otherwise returns an error message as a string.
+    """
+    try:
+        # Attempt to convert the input to a float
+        numeric_value = float(x)
+        # Return half of the numeric value
+        return numeric_value / 2
+    except (ValueError, TypeError):
+        # Handle cases where conversion fails or x is not a number
+        return "Error: Input must be a numeric type."
+2025-05-11 15:27:27,480 - decorators - DEBUG - Retrieved Source: 
+None
+2025-05-11 15:36:48,361 - config - INFO - logger instantiated
+2025-05-11 15:36:48,361 - config - INFO - models defined
+2025-05-11 15:36:48,424 - httpx - DEBUG - load_ssl_context verify=True cert=None trust_env=True http2=False
+2025-05-11 15:36:48,425 - httpx - DEBUG - load_verify_locations cafile='/home/grzegorz/miniconda3/lib/python3.12/site-packages/certifi/cacert.pem'
+2025-05-11 15:36:48,439 - httpx - DEBUG - load_ssl_context verify=True cert=None trust_env=True http2=False
+2025-05-11 15:36:48,439 - httpx - DEBUG - load_verify_locations cafile='/home/grzegorz/miniconda3/lib/python3.12/site-packages/certifi/cacert.pem'
+2025-05-11 15:36:48,451 - httpcore.connection - DEBUG - connect_tcp.started host='192.168.2.122' port=11436 local_address=None timeout=None socket_options=None
+2025-05-11 15:36:48,453 - httpcore.connection - DEBUG - connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x79fa96fa2de0>
+2025-05-11 15:36:48,453 - httpcore.http11 - DEBUG - send_request_headers.started request=<Request [b'GET']>
+2025-05-11 15:36:48,453 - httpcore.http11 - DEBUG - send_request_headers.complete
+2025-05-11 15:36:48,453 - httpcore.http11 - DEBUG - send_request_body.started request=<Request [b'GET']>
+2025-05-11 15:36:48,453 - httpcore.http11 - DEBUG - send_request_body.complete
+2025-05-11 15:36:48,453 - httpcore.http11 - DEBUG - receive_response_headers.started request=<Request [b'GET']>
+2025-05-11 15:36:48,454 - httpcore.http11 - DEBUG - receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sun, 11 May 2025 19:36:48 GMT'), (b'Content-Length', b'1645')])
+2025-05-11 15:36:48,454 - httpx - INFO - HTTP Request: GET http://192.168.2.122:11436/api/tags "HTTP/1.1 200 OK"
+2025-05-11 15:36:48,454 - httpcore.http11 - DEBUG - receive_response_body.started request=<Request [b'GET']>
+2025-05-11 15:36:48,455 - httpcore.http11 - DEBUG - receive_response_body.complete
+2025-05-11 15:36:48,455 - httpcore.http11 - DEBUG - response_closed.started
+2025-05-11 15:36:48,455 - httpcore.http11 - DEBUG - response_closed.complete
+2025-05-11 15:36:48,456 - ai - INFO - Initializing Model instance with model_info: {'name': 'qwen3:32b', 'model': 'qwen3:32b', 'modified_at': '2025-05-01T21:03:59.444272019Z', 'size': 20201253588, 'digest': 'e1c9f234c6eb37545e991032e3d674e0762763cddab4e69009a2f0d8739deaaf', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'qwen3', 'families': ['qwen3'], 'parameter_size': '32.8B', 'quantization_level': 'Q4_K_M'}}
+2025-05-11 15:36:48,456 - ai - DEBUG - Calculating base score for model: qwen3:32b
+2025-05-11 15:36:48,456 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 15:36:48,456 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 15:36:48,456 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 15:36:48,456 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 15:36:48,456 - ai - INFO - Calculated base score for model qwen3:32b: 100.0
+2025-05-11 15:36:48,456 - ai - INFO - Initializing Model instance with model_info: {'name': 'qwen3:30b', 'model': 'qwen3:30b', 'modified_at': '2025-05-01T18:14:43.80575715Z', 'size': 18622562938, 'digest': '2ee832bc15b549ed17a6b83de0e0d3eab226b5e727ca046d22e11a2b50d9cd0c', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'qwen3moe', 'families': ['qwen3moe'], 'parameter_size': '30.5B', 'quantization_level': 'Q4_K_M'}}
+2025-05-11 15:36:48,456 - ai - DEBUG - Calculating base score for model: qwen3:30b
+2025-05-11 15:36:48,456 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 15:36:48,456 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 15:36:48,456 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 15:36:48,456 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 15:36:48,456 - ai - INFO - Calculated base score for model qwen3:30b: 100.0
+2025-05-11 15:36:48,456 - ai - INFO - Initializing Model instance with model_info: {'name': 'qwen:32b', 'model': 'qwen:32b', 'modified_at': '2025-04-28T16:11:46.248575499Z', 'size': 18498677860, 'digest': '26e7e8447f5d7fba43b4bc11236fc6f9db4e19ff3184f305b39c7ca76eb896a1', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'qwen2', 'families': ['qwen2'], 'parameter_size': '33B', 'quantization_level': 'Q4_0'}}
+2025-05-11 15:36:48,456 - ai - DEBUG - Calculating base score for model: qwen:32b
+2025-05-11 15:36:48,456 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 15:36:48,456 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 15:36:48,456 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 15:36:48,456 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 15:36:48,456 - ai - INFO - Calculated base score for model qwen:32b: 100.0
+2025-05-11 15:36:48,456 - ai - INFO - Initializing Model instance with model_info: {'name': 'llama3.3:latest', 'model': 'llama3.3:latest', 'modified_at': '2025-04-27T21:12:34.362740874Z', 'size': 42520413916, 'digest': 'a6eb4748fd2990ad2952b2335a95a7f952d1a06119a0aa6a2df6cd052a93a3fa', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'llama', 'families': ['llama'], 'parameter_size': '70.6B', 'quantization_level': 'Q4_K_M'}}
+2025-05-11 15:36:48,456 - ai - DEBUG - Calculating base score for model: llama3.3:latest
+2025-05-11 15:36:48,456 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 15:36:48,456 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 15:36:48,456 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 15:36:48,456 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 15:36:48,456 - ai - INFO - Calculated base score for model llama3.3:latest: 100.0
+2025-05-11 15:36:48,456 - ai - INFO - Initializing Model instance with model_info: {'name': 'deepseek-r1:32b', 'model': 'deepseek-r1:32b', 'modified_at': '2025-04-27T19:38:32.358653229Z', 'size': 19851337640, 'digest': '38056bbcbb2d068501ecb2d5ea9cea9dd4847465f1ab88c4d4a412a9f7792717', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'qwen2', 'families': ['qwen2'], 'parameter_size': '32.8B', 'quantization_level': 'Q4_K_M'}}
+2025-05-11 15:36:48,456 - ai - DEBUG - Calculating base score for model: deepseek-r1:32b
+2025-05-11 15:36:48,456 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 15:36:48,456 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 15:36:48,456 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 15:36:48,456 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 15:36:48,456 - ai - INFO - Calculated base score for model deepseek-r1:32b: 100.0
+2025-05-11 15:36:48,456 - ai - INFO - AI initialized with models: ['qwen3:32b', 'qwen3:30b', 'qwen:32b', 'llama3.3:latest', 'deepseek-r1:32b']
+2025-05-11 15:36:48,456 - decorators - DEBUG - Wrapper before function half
+2025-05-11 15:36:48,456 - decorators - DEBUG - Wrapper before function half
+2025-05-11 15:36:48,456 - decorators - DEBUG - Decorator caught exception
+2025-05-11 15:36:48,457 - decorators - DEBUG - Retrieved Source Dictionary: 
+{'task': 'exception', 'fn_name': 'half', 'fn_input': {'args': (None,), 'kwargs': {}}, 'traceback': ['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n'], 'calling_code': '@ExceptionHandler\ndef half(x):\n    """Returns half of the incoming parameter"""\n    return x/2\n', 'error_message': "unsupported operand type(s) for /: 'NoneType' and 'int'"}
+2025-05-11 15:36:48,457 - prompts - DEBUG - generate_prompt called with {'calling_code': '@ExceptionHandler\n'
+                 'def half(x):\n'
+                 '    """Returns half of the incoming parameter"""\n'
+                 '    return x/2\n',
+ 'error_message': "unsupported operand type(s) for /: 'NoneType' and 'int'",
+ 'fn_input': {'args': (None,), 'kwargs': {}},
+ 'fn_name': 'half',
+ 'task': 'exception',
+ 'traceback': ['  File '
+               '"/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", '
+               'line 33, in wrapper\n'
+               '    return func(*args, **kwargs)\n'
+               '           ^^^^^^^^^^^^^^^^^^^^^\n',
+               '  File '
+               '"/home/grzegorz/development/caretaker/tests/test_decorator.py", '
+               'line 16, in half\n'
+               '    return x/2\n'
+               '           ~^~\n']}
+2025-05-11 15:36:48,457 - prompts - DEBUG - generate_prompt generated output ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'NoneType' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 15:36:48,457 - decorators - DEBUG - Generated a prompt:
+
+ ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'NoneType' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+
+
+2025-05-11 15:36:48,457 - decorators - DEBUG - Fixing code
+2025-05-11 15:36:48,457 - ai - INFO - getCode called with prompt: ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'NoneType' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 15:36:48,457 - ai - DEBUG - Calculating current score
+2025-05-11 15:36:48,457 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:36:48,457 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:36:48,457 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:36:48,457 - ai - INFO - Current score: 100.0
+2025-05-11 15:36:48,457 - ai - DEBUG - Calculating current score
+2025-05-11 15:36:48,457 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:36:48,457 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:36:48,457 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:36:48,457 - ai - INFO - Current score: 100.0
+2025-05-11 15:36:48,457 - ai - DEBUG - Calculating current score
+2025-05-11 15:36:48,457 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:36:48,457 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:36:48,457 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:36:48,457 - ai - INFO - Current score: 100.0
+2025-05-11 15:36:48,457 - ai - DEBUG - Calculating current score
+2025-05-11 15:36:48,457 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:36:48,457 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:36:48,457 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:36:48,457 - ai - INFO - Current score: 100.0
+2025-05-11 15:36:48,457 - ai - DEBUG - Calculating current score
+2025-05-11 15:36:48,457 - ai - DEBUG - Base score: 100.0
+2025-05-11 15:36:48,457 - ai - DEBUG - Total adjustments: 0
+2025-05-11 15:36:48,457 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 15:36:48,457 - ai - INFO - Current score: 100.0
+2025-05-11 15:36:48,457 - ai - INFO - Ordered models by score: ['qwen3:32b', 'qwen3:30b', 'qwen:32b', 'llama3.3:latest', 'deepseek-r1:32b']
+2025-05-11 15:36:48,457 - ai - INFO - Attempt 1 with model 'qwen3:32b'
+2025-05-11 15:36:48,457 - ai - INFO - Executing prompt: ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'NoneType' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 15:36:48,457 - ai - DEBUG - Executing LLM.
+2025-05-11 15:36:48,458 - httpcore.http11 - DEBUG - send_request_headers.started request=<Request [b'POST']>
+2025-05-11 15:36:48,458 - httpcore.http11 - DEBUG - send_request_headers.complete
+2025-05-11 15:36:48,458 - httpcore.http11 - DEBUG - send_request_body.started request=<Request [b'POST']>
+2025-05-11 15:36:48,458 - httpcore.http11 - DEBUG - send_request_body.complete
+2025-05-11 15:36:48,458 - httpcore.http11 - DEBUG - receive_response_headers.started request=<Request [b'POST']>
+2025-05-11 15:42:05,564 - httpcore.http11 - DEBUG - receive_response_headers.failed exception=KeyboardInterrupt()
+2025-05-11 15:42:05,564 - httpcore.http11 - DEBUG - response_closed.started
+2025-05-11 15:42:05,565 - httpcore.http11 - DEBUG - response_closed.complete
+2025-05-11 16:06:53,307 - config - INFO - logger instantiated
+2025-05-11 16:06:53,307 - config - INFO - models defined
+2025-05-11 16:06:53,369 - httpx - DEBUG - load_ssl_context verify=True cert=None trust_env=True http2=False
+2025-05-11 16:06:53,370 - httpx - DEBUG - load_verify_locations cafile='/home/grzegorz/miniconda3/lib/python3.12/site-packages/certifi/cacert.pem'
+2025-05-11 16:06:53,383 - httpx - DEBUG - load_ssl_context verify=True cert=None trust_env=True http2=False
+2025-05-11 16:06:53,384 - httpx - DEBUG - load_verify_locations cafile='/home/grzegorz/miniconda3/lib/python3.12/site-packages/certifi/cacert.pem'
+2025-05-11 16:06:53,396 - httpcore.connection - DEBUG - connect_tcp.started host='192.168.2.122' port=11436 local_address=None timeout=None socket_options=None
+2025-05-11 16:06:53,397 - httpcore.connection - DEBUG - connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x7bcd04d8f050>
+2025-05-11 16:06:53,398 - httpcore.http11 - DEBUG - send_request_headers.started request=<Request [b'GET']>
+2025-05-11 16:06:53,398 - httpcore.http11 - DEBUG - send_request_headers.complete
+2025-05-11 16:06:53,398 - httpcore.http11 - DEBUG - send_request_body.started request=<Request [b'GET']>
+2025-05-11 16:06:53,398 - httpcore.http11 - DEBUG - send_request_body.complete
+2025-05-11 16:06:53,398 - httpcore.http11 - DEBUG - receive_response_headers.started request=<Request [b'GET']>
+2025-05-11 16:06:53,400 - httpcore.http11 - DEBUG - receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sun, 11 May 2025 20:06:53 GMT'), (b'Content-Length', b'1645')])
+2025-05-11 16:06:53,400 - httpx - INFO - HTTP Request: GET http://192.168.2.122:11436/api/tags "HTTP/1.1 200 OK"
+2025-05-11 16:06:53,400 - httpcore.http11 - DEBUG - receive_response_body.started request=<Request [b'GET']>
+2025-05-11 16:06:53,400 - httpcore.http11 - DEBUG - receive_response_body.complete
+2025-05-11 16:06:53,400 - httpcore.http11 - DEBUG - response_closed.started
+2025-05-11 16:06:53,400 - httpcore.http11 - DEBUG - response_closed.complete
+2025-05-11 16:06:53,400 - ai - INFO - Initializing Model instance with model_info: {'name': 'qwen3:32b', 'model': 'qwen3:32b', 'modified_at': '2025-05-01T21:03:59.444272019Z', 'size': 20201253588, 'digest': 'e1c9f234c6eb37545e991032e3d674e0762763cddab4e69009a2f0d8739deaaf', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'qwen3', 'families': ['qwen3'], 'parameter_size': '32.8B', 'quantization_level': 'Q4_K_M'}}
+2025-05-11 16:06:53,400 - ai - DEBUG - Calculating base score for model: qwen3:32b
+2025-05-11 16:06:53,400 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 16:06:53,400 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 16:06:53,400 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 16:06:53,400 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 16:06:53,400 - ai - INFO - Calculated base score for model qwen3:32b: 100.0
+2025-05-11 16:06:53,400 - ai - INFO - Initializing Model instance with model_info: {'name': 'qwen3:30b', 'model': 'qwen3:30b', 'modified_at': '2025-05-01T18:14:43.80575715Z', 'size': 18622562938, 'digest': '2ee832bc15b549ed17a6b83de0e0d3eab226b5e727ca046d22e11a2b50d9cd0c', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'qwen3moe', 'families': ['qwen3moe'], 'parameter_size': '30.5B', 'quantization_level': 'Q4_K_M'}}
+2025-05-11 16:06:53,401 - ai - DEBUG - Calculating base score for model: qwen3:30b
+2025-05-11 16:06:53,401 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 16:06:53,401 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 16:06:53,401 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 16:06:53,401 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 16:06:53,401 - ai - INFO - Calculated base score for model qwen3:30b: 100.0
+2025-05-11 16:06:53,401 - ai - INFO - Initializing Model instance with model_info: {'name': 'qwen:32b', 'model': 'qwen:32b', 'modified_at': '2025-04-28T16:11:46.248575499Z', 'size': 18498677860, 'digest': '26e7e8447f5d7fba43b4bc11236fc6f9db4e19ff3184f305b39c7ca76eb896a1', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'qwen2', 'families': ['qwen2'], 'parameter_size': '33B', 'quantization_level': 'Q4_0'}}
+2025-05-11 16:06:53,401 - ai - DEBUG - Calculating base score for model: qwen:32b
+2025-05-11 16:06:53,401 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 16:06:53,401 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 16:06:53,401 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 16:06:53,401 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 16:06:53,401 - ai - INFO - Calculated base score for model qwen:32b: 100.0
+2025-05-11 16:06:53,401 - ai - INFO - Initializing Model instance with model_info: {'name': 'llama3.3:latest', 'model': 'llama3.3:latest', 'modified_at': '2025-04-27T21:12:34.362740874Z', 'size': 42520413916, 'digest': 'a6eb4748fd2990ad2952b2335a95a7f952d1a06119a0aa6a2df6cd052a93a3fa', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'llama', 'families': ['llama'], 'parameter_size': '70.6B', 'quantization_level': 'Q4_K_M'}}
+2025-05-11 16:06:53,401 - ai - DEBUG - Calculating base score for model: llama3.3:latest
+2025-05-11 16:06:53,401 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 16:06:53,401 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 16:06:53,401 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 16:06:53,401 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 16:06:53,401 - ai - INFO - Calculated base score for model llama3.3:latest: 100.0
+2025-05-11 16:06:53,401 - ai - INFO - Initializing Model instance with model_info: {'name': 'deepseek-r1:32b', 'model': 'deepseek-r1:32b', 'modified_at': '2025-04-27T19:38:32.358653229Z', 'size': 19851337640, 'digest': '38056bbcbb2d068501ecb2d5ea9cea9dd4847465f1ab88c4d4a412a9f7792717', 'details': {'parent_model': '', 'format': 'gguf', 'family': 'qwen2', 'families': ['qwen2'], 'parameter_size': '32.8B', 'quantization_level': 'Q4_K_M'}}
+2025-05-11 16:06:53,401 - ai - DEBUG - Calculating base score for model: deepseek-r1:32b
+2025-05-11 16:06:53,401 - ai - DEBUG - Age factor (0 days old): 100.0
+2025-05-11 16:06:53,401 - ai - DEBUG - Model size factor (0B parameters): 0
+2025-05-11 16:06:53,401 - ai - DEBUG - Accuracy factor (0): 0
+2025-05-11 16:06:53,401 - ai - DEBUG - Speed factor (0): 0
+2025-05-11 16:06:53,401 - ai - INFO - Calculated base score for model deepseek-r1:32b: 100.0
+2025-05-11 16:06:53,401 - ai - INFO - AI initialized with models: ['qwen3:32b', 'qwen3:30b', 'qwen:32b', 'llama3.3:latest', 'deepseek-r1:32b']
+2025-05-11 16:06:53,401 - decorators - DEBUG - Wrapper before function half
+2025-05-11 16:06:53,401 - decorators - DEBUG - Wrapper before function half
+2025-05-11 16:06:53,401 - decorators - DEBUG - Decorator caught exception
+2025-05-11 16:06:53,403 - decorators - DEBUG - Retrieved Source Dictionary: 
+{'task': 'exception', 'fn_name': 'half', 'fn_input': {'args': (None,), 'kwargs': {}}, 'traceback': ['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n'], 'calling_code': '@ExceptionHandler\ndef half(x):\n    """Returns half of the incoming parameter"""\n    return x/2\n', 'error_message': "unsupported operand type(s) for /: 'NoneType' and 'int'"}
+2025-05-11 16:06:53,404 - prompts - DEBUG - generate_prompt called with {'calling_code': '@ExceptionHandler\n'
+                 'def half(x):\n'
+                 '    """Returns half of the incoming parameter"""\n'
+                 '    return x/2\n',
+ 'error_message': "unsupported operand type(s) for /: 'NoneType' and 'int'",
+ 'fn_input': {'args': (None,), 'kwargs': {}},
+ 'fn_name': 'half',
+ 'task': 'exception',
+ 'traceback': ['  File '
+               '"/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", '
+               'line 33, in wrapper\n'
+               '    return func(*args, **kwargs)\n'
+               '           ^^^^^^^^^^^^^^^^^^^^^\n',
+               '  File '
+               '"/home/grzegorz/development/caretaker/tests/test_decorator.py", '
+               'line 16, in half\n'
+               '    return x/2\n'
+               '           ~^~\n']}
+2025-05-11 16:06:53,404 - prompts - DEBUG - generate_prompt generated output ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'NoneType' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 16:06:53,404 - decorators - DEBUG - Generated a prompt:
+
+ ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'NoneType' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+
+
+2025-05-11 16:06:53,404 - decorators - DEBUG - Fixing code
+2025-05-11 16:06:53,404 - ai - INFO - getCode called with prompt: ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'NoneType' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 16:06:53,404 - ai - DEBUG - Calculating current score
+2025-05-11 16:06:53,404 - ai - DEBUG - Base score: 100.0
+2025-05-11 16:06:53,405 - ai - DEBUG - Total adjustments: 0
+2025-05-11 16:06:53,405 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 16:06:53,405 - ai - INFO - Current score: 100.0
+2025-05-11 16:06:53,405 - ai - DEBUG - Calculating current score
+2025-05-11 16:06:53,405 - ai - DEBUG - Base score: 100.0
+2025-05-11 16:06:53,405 - ai - DEBUG - Total adjustments: 0
+2025-05-11 16:06:53,405 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 16:06:53,405 - ai - INFO - Current score: 100.0
+2025-05-11 16:06:53,405 - ai - DEBUG - Calculating current score
+2025-05-11 16:06:53,405 - ai - DEBUG - Base score: 100.0
+2025-05-11 16:06:53,405 - ai - DEBUG - Total adjustments: 0
+2025-05-11 16:06:53,405 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 16:06:53,405 - ai - INFO - Current score: 100.0
+2025-05-11 16:06:53,405 - ai - DEBUG - Calculating current score
+2025-05-11 16:06:53,405 - ai - DEBUG - Base score: 100.0
+2025-05-11 16:06:53,405 - ai - DEBUG - Total adjustments: 0
+2025-05-11 16:06:53,405 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 16:06:53,405 - ai - INFO - Current score: 100.0
+2025-05-11 16:06:53,405 - ai - DEBUG - Calculating current score
+2025-05-11 16:06:53,405 - ai - DEBUG - Base score: 100.0
+2025-05-11 16:06:53,405 - ai - DEBUG - Total adjustments: 0
+2025-05-11 16:06:53,405 - ai - DEBUG - Failure penalty: 0.0
+2025-05-11 16:06:53,405 - ai - INFO - Current score: 100.0
+2025-05-11 16:06:53,405 - ai - INFO - Ordered models by score: ['qwen3:32b', 'qwen3:30b', 'qwen:32b', 'llama3.3:latest', 'deepseek-r1:32b']
+2025-05-11 16:06:53,405 - ai - INFO - Attempt 1 with model 'qwen3:32b'
+2025-05-11 16:06:53,405 - ai - INFO - Executing prompt: ### Problem:
+You are a caretaker AI of a program. Your job is to make sure the code under your responsibility continues to operate and provide correct results, even if unexpected errors or input happens. While a correct behavior may not always be known, the program should never, ever crash. Do not provide sample code and assume that straight replacement of one function for another will take place. Your task is to fix a python program by replacing the function or code provided with one that fixes the issue. Only the outputted program code matters as it will be injected into running program with the hope of fixing operational issue. This is a big responsibility, please take care in making sure you generate well functioning code.
+
+
+### Errors:
+The following stack trace was generated as part of the error.
+['  File "/home/grzegorz/development/caretaker/caretaker/decorators/decorators.py", line 33, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n', '  File "/home/grzegorz/development/caretaker/tests/test_decorator.py", line 16, in half\n    return x/2\n           ~^~\n']
+                    
+The code above has failed with the following error:
+unsupported operand type(s) for /: 'NoneType' and 'int'
+
+               
+### Task:
+A Python function named half has encountered an error. Using the information below, please create an alternate version to replace the one that has failed. Pay careful attention to managing errors. 
+
+Do not change function names. You can assume that if a function calls other functions, then those functions exist.
+
+The expected output is a python code generated between start_marker and end_marker as below:
+          start_marker = ```python
+ 
+          end_marker = ```
+          
+               
+### Response:
+
+2025-05-11 16:06:53,405 - ai - DEBUG - Executing LLM.
+2025-05-11 16:06:53,406 - httpcore.http11 - DEBUG - send_request_headers.started request=<Request [b'POST']>
+2025-05-11 16:06:53,406 - httpcore.http11 - DEBUG - send_request_headers.complete
+2025-05-11 16:06:53,406 - httpcore.http11 - DEBUG - send_request_body.started request=<Request [b'POST']>
+2025-05-11 16:06:53,406 - httpcore.http11 - DEBUG - send_request_body.complete
+2025-05-11 16:06:53,406 - httpcore.http11 - DEBUG - receive_response_headers.started request=<Request [b'POST']>
+2025-05-11 16:09:03,698 - httpcore.http11 - DEBUG - receive_response_headers.failed exception=KeyboardInterrupt()
+2025-05-11 16:09:03,698 - httpcore.http11 - DEBUG - response_closed.started
+2025-05-11 16:09:03,698 - httpcore.http11 - DEBUG - response_closed.complete
