@@ -33,12 +33,12 @@ class ModelManager:
         sorted_models = sorted(valid_models, key=lambda x: x[1], reverse=True)
         return [model for model, score in sorted_models]
 
-    def execute_prompt(self, prompt):
+    def execute_prompt(self, prompt, context={}):
         successes = []
         for model in self.get_best_models():
             start_time = datetime.now()
             try:
-                response = ollama.generate(model.name, prompt.get())
+                response = ollama.generate(model.name, prompt.get(context))
                 duration = (datetime.now() - start_time).total_seconds()
                 if self.validate_result(response, prompt): 
                     success = True
