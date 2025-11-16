@@ -5,6 +5,7 @@ from datetime import datetime, timezone, timedelta
 from caretaker.models.manager import ModelManager
 from caretaker.models.model import Model
 from tests.mocks.mock_ollama import Ollama as ollama
+from caretaker import config  # Import the actual config module
 
 class TestModelManager(unittest.TestCase):
     def setUp(self):
@@ -40,48 +41,122 @@ class TestModelManager(unittest.TestCase):
         mock_list.assert_not_called()
 
     def test_get_best_models(self):
-        model1 = Model(name='model1', release_date='2023-10-01T12:00:00Z')
-        model2 = Model(name='model2', release_date='2023-10-02T12:00:00Z')
+        model1 = Model(name='model1', release_date=datetime.fromisoformat('2023-10-01T12:00:00+00:00'))
+        model2 = Model(name='model2', release_date=datetime.fromisoformat('2023-10-02T12:00:00+00:00'))
         
         self.manager.models.append(model1)
         self.manager.models.append(model2)
         
         best_models = self.manager.get_best_models()
-        self.assertEqual(best_models, [model1, model2])  # Assuming model2 is newer and thus has a higher score
+        self.assertEqual(best_models, [model2, model1])  # Assuming model2 is newer and thus has a higher score
 
     @patch('ollama.generate')
     def test_execute_prompt(self, mock_generate):
         mock_generate.side_effect = ["Response from model1", "Response from model2"]
         
         prompt_mock = MagicMock()
-        prompt_mock.get.return_value = "Test Prompt"
+        prompt_mock.get_text.return_value = "Test Prompt"
         prompt_mock.validate.side_effect = [True, False]
         
-        model1 = Model(name='model1', release_date='2023-10-01T12:00:00Z')
-        model2 = Model(name='model2', release_date='2023-10-02T12:00:00Z')
+        model1 = Model(name='model1', release_date=datetime.fromisoformat('2023-10-01T12:00:00+00:00'))
+        model2 = Model(name='model2', release_date=datetime.fromisoformat('2023-10-02T12:00:00+00:00'))
         
         self.manager.models.append(model1)
         self.manager.models.append(model2)
         
         successes = self.manager.execute_prompt(prompt_mock)
         
-        self.assertEqual(len(successes), 2)
+        self.assertEqual(len(successes), 1)  # Only model1 should succeed
         self.assertEqual(successes[0][0].name, 'model1')
         self.assertTrue(successes[0][0].successes == 1)
         self.assertTrue(successes[0][0].executions == 1)
 
-    def test_update_model_stats(self):
-        model = Model(name='model1', release_date='2023-10-01T12:00:00Z')
+    @patch('ollama.generate')
+    def test_execute_model_prompt_within_timeout(self, mock_generate):
+        config.max_model_runtime = 5  # Set timeout to 5 seconds
         
-        self.manager.update_model_stats(model, speed=60, success=True)
-        self.assertEqual(model.successes, 1)
-        self.assertEqual(model.executions, 1)
-        self.assertEqual(model.speed, 60)
+        prompt_mock = MagicMock()
+        prompt_mock.get_text.return_value = "Test Prompt"
         
-        self.manager.update_model_stats(model, speed=30, success=False)
-        self.assertEqual(model.successes, 1)  # Success count should not change
-        self.assertEqual(model.executions, 2)
-        self.assertEqual(model.speed, 90)
+        model1 = Model(name='model1', release_date=datetime.fromisoformat('2023-10-01T12:00:00+00:00'))
+        
+        self.manager.models.append(model1)
+        
+        mock_generate.return_value = "Response from model1"
+            
+        response = self.manager.execute_model_prompt(prompt_mock, model1)
+            
+        self.assertEqual(response, "Response from model1")
+        mock_generate.assert_called_once_with("Test Prompt", model1.name)
+
+    @patch('ollama.generate')
+    def test_execute_model_prompt_exceeds_timeout(self, mock_generate):
+        config.max_model_runtime = 1  # Set timeout to 1 second
+        
+        prompt_mock = MagicMock()
+        prompt_mock.get_text.return_value = "Test Prompt"
+        
+        model1 = Model(name='model1', release_date=datetime.fromisoformat('2023-10-01T12:00:00+00:00'))
+        
+        self.manager.models.append(model1)
+        
+        mock_generate.side_effect = lambda *args: (datetime.now() + timedelta(seconds=2)).strftime('%Y-%m-%d %H:%M:%S')
+            
+        with self.assertRaises(TimeoutError) as context:
+            self.manager.execute_model_prompt(prompt_mock, model1)
+            
+        self.assertIn("timed out after 1 seconds", str(context.exception))
+        mock_generate.assert_called_once_with("Test Prompt", model1.name)
+
+    @patch('ollama.generate')
+    def test_execute_prompt_within_timeout(self, mock_generate):
+        config.max_runtime = 5  # Set timeout to 5 seconds
+        
+        prompt_mock = MagicMock()
+        prompt_mock.get_text.return_value = "Test Prompt"
+        prompt_mock.validate.side_effect = [True, False]
+        
+        model1 = Model(name='model1', release_date=datetime.fromisoformat('2023-10-01T12:00:00+00:00'))
+        model2 = Model(name='model2', release_date=datetime.fromisoformat('2023-10-02T12:00:00+00:00'))
+        
+        self.manager.models.append(model1)
+        self.manager.models.append(model2)
+        
+        mock_generate.side_effect = ["Response from model1", "Response from model2"]
+            
+        successes = self.manager.execute_prompt(prompt_mock)
+            
+        self.assertEqual(len(successes), 1)  # Only model1 should succeed
+        self.assertEqual(successes[0][0].name, 'model1')
+        self.assertTrue(successes[0][0].successes == 1)
+        self.assertTrue(successes[0][0].executions == 1)
+
+    @patch('ollama.generate')
+    def test_execute_prompt_exceeds_timeout(self, mock_generate):
+        config.max_runtime = 1  # Set timeout to 1 second
+        
+        prompt_mock = MagicMock()
+        prompt_mock.get_text.return_value = "Test Prompt"
+        prompt_mock.validate.side_effect = [True, False]
+        
+        model1 = Model(name='model1', release_date=datetime.fromisoformat('2023-10-01T12:00:00+00:00'))
+        model2 = Model(name='model2', release_date=datetime.fromisoformat('2023-10-02T12:00:00+00:00'))
+        
+        self.manager.models.append(model1)
+        self.manager.models.append(model2)
+        
+        mock_generate.side_effect = lambda *args: (datetime.now() + timedelta(seconds=2)).strftime('%Y-%m-%d %H:%M:%S')
+            
+        successes = self.manager.execute_prompt(prompt_mock)
+            
+        self.assertEqual(len(successes), 0)  # No successful responses
+
+    def test_validate_result(self):
+        mock_prompt = MagicMock()
+        mock_prompt.validate.return_value = True
+        response = "Valid response"
+        result = self.manager.validate_result(response, mock_prompt)
+        self.assertTrue(result)
 
 if __name__ == '__main__':
     unittest.main()

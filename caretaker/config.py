@@ -17,5 +17,6 @@ model_refresh_interval=3600
 # execute a query and provide results.
 # Used both in scoring a model and as a timeout.
 max_model_runtime = 300
+max_runtime = 3000
 
 

@@ -28,7 +28,7 @@ class TestModel(unittest.TestCase):
         self.assertEqual(self.model.info, {"description": "A test model"})
 
     def test_calculate_score(self):
-        current_date = datetime.now()
+        current_date = datetime.now(tz=self.model.release_date.tzinfo)
         days_since_release = (current_date - self.model.release_date).days
         age_score = max(0, 1 - (days_since_release * config.age_point_loss_per_day))
         accuracy_score = self.model.successes / self.model.executions

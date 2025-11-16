@@ -26,6 +26,7 @@ class TestPromptFunctionalUnmocked(unittest.TestCase):
         
         ret = self.manager.execute_prompt(self.joke_prompt, context)
         pprint.pprint(ret)
+        pprint.pprint(self.manager.get_best_models())
         # Check if the context matches the required parameters
         #self.assertTrue(self.report_prompt.match(context))
         

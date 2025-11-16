@@ -1,20 +1,14 @@
-# Plan
+# Milestones
 
-```mermaid
-graph TD;
-    Prompts[Library] --> |Dynamic prompts|prompt;
-    
-    user_code-->|wrapped| decorator;
 
-    decorator-->|generates|prompt;
-    decorator-->|selects|model;
-    decorator-->|generates| user_code;
+1. Validation of prompts - just need a capability of validation. Both as a function and as a prompt. 
+If I allow prompts, there is a possibility of a infinite loop
 
-```
+Perhaps I need to have two separate validation methods?
 
-prompts
-ai 
-model
-decorators
-necromancer
-tests
+3. Logging.
+
+4. 
+
+
+

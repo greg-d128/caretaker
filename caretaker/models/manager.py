@@ -5,6 +5,7 @@ import pprint
 import ollama
 import caretaker.models.model as model
 import caretaker.config as config
+from caretaker.util.timeout import timeout, TimeoutError
 from zoneinfo import ZoneInfo
 
 
@@ -33,12 +34,19 @@ class ModelManager:
         sorted_models = sorted(valid_models, key=lambda x: x[1], reverse=True)
         return [model for model, score in sorted_models]
 
+    @timeout(config.max_model_runtime)
+    def execute_model_prompt(self, model, prompt_text):
+        print (f"max_model_runtime={config.max_model_runtime}")
+        return ollama.generate(model.name, prompt_text)
+    
+    @timeout(config.max_runtime)
     def execute_prompt(self, prompt, context={}):
+        print (f"max_model_runtime={config.max_model_runtime}")
         successes = []
         for model in self.get_best_models():
             start_time = datetime.now()
             try:
-                response = ollama.generate(model.name, prompt.get(context))
+                response = self.execute_model_prompt(model, prompt.get_text(context))
                 duration = (datetime.now() - start_time).total_seconds()
                 if self.validate_result(response, prompt): 
                     success = True
