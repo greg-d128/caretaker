@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "Caretaker"
+version = "0.5.0a1"
+description = "Experimental application logging, runtime behavior analysis, self-repair, and public-key code integrity for Python"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "GPL-3.0-or-later"
+authors = [{name = "Grzegorz Dostatni"}]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "build>=1"]
+signing = ["cryptography>=42"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[project.scripts]
+caretaker-integrity = "caretaker.integrity.cli:main"
+caretaker-guard = "caretaker.guard.cli:main"
+caretaker-logging = "caretaker.logging.cli:main"
+caretaker-run = "caretaker.run:main"

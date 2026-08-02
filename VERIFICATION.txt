@@ -1,0 +1,145 @@
+Caretaker 0.5.0a1 verification report
+=====================================
+
+Release theme
+-------------
+This alpha adds the operator-controlled Logging subsystem and its integration
+with Guard, Repair, Integrity, and the shared runtime control plane. It also
+adds application-scoped multiprocessing collection, supplemental evidence
+attachments, system-data capture, historical baselines, interrogation, and
+runtime signing with policy-controlled key evolution.
+
+Environment
+-----------
+Python: 3.13.5
+Platform: Linux x86_64
+Package baseline: Python 3.11+
+Cryptographic test backend: cryptography 46.x with Ed25519 support
+
+Verification performed
+----------------------
+1. Complete source-tree test suite in one interpreter:
+
+   PYTHONPATH=src python -m pytest -q
+   Result: 90 passed
+
+2. Python compilation:
+
+   python -m compileall -q src examples
+   Result: passed
+
+3. Installed-wheel test suite from outside the source tree:
+
+   python -m pip install --no-deps --target <temporary-site> \
+       caretaker-0.5.0a1-py3-none-any.whl
+   PYTHONPATH=<temporary-site> python -m pytest -q
+   Result: 90 passed
+
+4. Extracted source-distribution test suite:
+
+   tar -xzf caretaker-0.5.0a1.tar.gz
+   cd caretaker-0.5.0a1
+   PYTHONPATH=src python -m pytest -q
+   Result: 90 passed
+
+5. Command-line interfaces:
+
+   caretaker-logging --help
+   caretaker-run --help
+   caretaker-guard --help
+   caretaker-integrity --help
+   Result: passed
+
+6. Logging demonstration:
+
+   PYTHONPATH=src python examples/logging_demo.py
+   Result: passed; emitted the expected late-start warning, function result,
+   append-only segment, compressed closed segment, manifest, and SQLite index.
+
+7. Multiprocessing and supervised-runtime paths:
+
+   Covered by the test suite, including multiple local Unix-socket emitters,
+   remote attachments, work and worker registries, application-scoped system
+   collection, and control-plane interactions.
+   Result: passed
+
+8. Runtime signing and key evolution:
+
+   Ed25519 ephemeral signer tests cover signed manifests, policy-driven epoch
+   rotation, transition signatures from the old key to the new public key,
+   public identity publication, and the absence of private-key disclosure from
+   public interfaces. The default maximum epoch duration is 86,400 seconds.
+   Result: passed
+
+9. Record and recovery behavior:
+
+   Tests cover the 4 KiB primary record limit, versioned TLV fields, skipping
+   unknown fields, truncated-tail recovery, cross-segment hash chains,
+   compressed supplemental attachments, and rate-driven attachment sampling.
+   Result: passed
+
+10. Persistent private-key material scan:
+
+   Source, wheel, and source-distribution archives contain no recognizable
+   armored private-key blocks or fixed private-key material. The package does
+   intentionally contain runtime ephemeral key-generation and signing code.
+   Result: passed
+
+New subsystem coverage includes
+-------------------------------
+- standard Python logging-handler compatibility and structured direct events;
+- operator-owned unsigned policy loading and attributable policy snapshots;
+- explicit higher-mode policy reconciliation and reversible mode leases;
+- policy-driven buffering, backpressure, rotation, compression, retention,
+  storage-emergency behavior, and high-priority evidence preservation;
+- application, Guard, Repair, Integrity, audit, and emergency log channels;
+- decorator masking before persistence or LLM analysis;
+- 4 KiB versioned record framing and separately compressed large attachments;
+- hash-chained segments and optional ephemeral or external signing contracts;
+- daily-by-default ephemeral key evolution with signed key transitions;
+- local Unix-domain event and administrative control sockets;
+- peer process identity, active-work tracking, worker health, and watchdog
+  restart accounting;
+- application-scoped /proc and /sys collection with synchronized cycle times,
+  process-tree selection, and independent rotation and retention;
+- application, module, and function baselines, multiple accepted anchors,
+  per-unit-of-work comparisons, trend and slow-drift findings;
+- deterministic interrogation and structured advisory Ollama assessments;
+- manual proposal/approval Repair authority and stale-policy deployment gates;
+- hard prohibition on generated modification of Caretaker's own code.
+
+Security interpretation
+-----------------------
+Caretaker remains an application-scoped technology demonstrator. It runs with
+the application's privileges and is not a kernel or hostile-code security
+boundary. Python audit hooks, decorators, runtime introspection, and local Unix
+socket credentials provide useful evidence and control points, but native
+extensions, ctypes, subprocesses, a compromised interpreter, or a same-user
+attacker may bypass or alter them.
+
+Hash chaining without an independent commitment does not prevent a capable
+attacker from replacing an entire local corpus. Ephemeral signing improves
+post-run resistance if private key material was not recovered during runtime,
+but self-recorded public keys can also be replaced with the corpus. External
+public-key anchoring, an external signer, or shipping records through an
+independent logging agent to a separate collection system materially improves
+security because an attacker must compromise more than one evidence location.
+
+The LLM is advisory for logging interrogation and root-cause hypotheses. It may
+participate in candidate selection only under explicitly enabled automatic
+Repair authority. Deterministic policy, integrity, validation, regression,
+behavioral, and observation gates remain authoritative.
+
+Known limitations and deferred work
+-----------------------------------
+- system-data parsers and semantic metric extraction are intentionally deferred;
+- the built-in sink is local; remote shipping uses a future LogSink implementation;
+- Python cannot prove complete in-memory zeroization of ephemeral private keys;
+- external public-key witnessing and external manifest signing require an
+  operator-provided process or agent;
+- async repair and async-generator handling remain deferred;
+- hard interruption of arbitrary hanging functions remains deferred;
+- container, VM, kernel, or hardware-enforced isolation remains deferred;
+- cross-host ordering and distributed baseline aggregation remain future work;
+- general live replacement of already imported third-party modules remains
+  restricted to approved routing plus supervised restart.

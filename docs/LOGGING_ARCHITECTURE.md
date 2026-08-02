@@ -1,0 +1,69 @@
+# Logging architecture
+
+## Purpose
+
+Caretaker Logging serves two purposes:
+
+1. a lightweight replacement or destination for conventional application logging; and
+2. the historical, correlated evidence layer used by Guard, Repair, Research, Forensic, and baseline analysis.
+
+It is intentionally usable without the other subsystems.
+
+## Fast path and analysis path
+
+```text
+Fast path                         Analysis path
+---------                         -------------
+normalize                         query closed segments
+mask/redact                       correlate calls and signals
+queue or local IPC                detect templates and outliers
+append framed record              build baselines
+update derived index              compare long-term drift
+                                  construct LLM evidence bundle
+```
+
+Analysis is never performed synchronously in an ordinary logging call.
+
+## Multiprocess model
+
+Each application process uses a lightweight emitter. One supervised service owns the event segment writer and SQLite index. Unix-domain sockets preserve local-only deployment and allow the operating-system credential model to authenticate emitters and administrators.
+
+The application lifecycle controls Caretaker's lifecycle. The supervised process exits after the application and flushes complete records where possible.
+
+## Channels
+
+- `APPLICATION`
+- `CARETAKER_INTERNAL`
+- `REPAIR`
+- `GUARD`
+- `INTEGRITY`
+- `AUDIT`
+- `EMERGENCY`
+
+Channels are independent of Python logger names. Higher-mode evidence does not require changing all application loggers to DEBUG.
+
+## Startup modes
+
+### Supervised
+
+```bash
+python -m caretaker.run --policy POLICY MODULE
+```
+
+Installs logging and relevant hooks before the application module executes.
+
+### Late attachment
+
+An application calls `configure_from_operator_policy()`. Caretaker records that pre-initialization imports and behavior were not observed and includes the preferred supervised command.
+
+## Policy boundary
+
+The operator policy is unsigned. It controls capture, sampling, storage, rotation, compression, retention, emergency actions, attachments, runtime signing, system collection, interrogation, and baselines.
+
+Caretaker's signed implementation controls the semantics of those options and the minimum evidence requirements of higher modes.
+
+## Failure behavior
+
+Backpressure and storage failure are policy-driven. Possible behavior includes blocking, throttling, sampling, dropping low priorities, emergency synchronous writes, bypassing logging, stopping analysis, or terminating the application.
+
+Guard and Repair receive capability-health information. They may continue in degraded mode or enforce a stricter policy; they do not silently claim full confidence when required evidence is unavailable.

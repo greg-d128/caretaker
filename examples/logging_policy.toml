@@ -1,0 +1,129 @@
+[logging]
+enabled = true
+application_id = "example-service"
+directory = "./caretaker-data/example-service"
+modes = ["application"]
+conflict_action = "apply_required_overrides"
+
+[logging.capture]
+capabilities = [
+  "application_logs",
+  "warnings",
+  "exceptions",
+  "call_correlation",
+  "policy_change_records",
+  "high_priority_evidence_channel",
+]
+capture_arguments = false
+capture_results = false
+maximum_value_characters = 512
+
+[logging.sampling]
+debug_rate = 0.25
+info_rate = 1.0
+warning_rate = 1.0
+always_preserve_errors = true
+
+[logging.buffering]
+queue_capacity = 8192
+batch_records = 256
+flush_interval_seconds = 0.25
+
+[logging.backpressure]
+action = "drop_debug"
+high_priority_action = "emergency_sync_write"
+block_timeout_seconds = 1.0
+
+[logging.rotation]
+maximum_segment_bytes = 134217728
+maximum_segment_seconds = 3600
+
+[logging.compression]
+enabled = true
+algorithm = "gzip"
+level = 6
+
+[logging.retention]
+maximum_age_days = 90
+preserve_incident_segments = true
+preserve_baseline_segments = true
+
+[logging.storage_emergency]
+minimum_free_bytes = 52428800
+pressure_action = "drop_low_priority"
+emergency_action = "stop_logging"
+unavailable_action = "stop_application"
+
+[logging.attachments]
+enabled = true
+maximum_attachment_bytes = 67108864
+maximum_rate_per_minute = 120
+minimum_sampling_probability = 0.01
+overload_action = "probabilistic_sample"
+always_preserve_priorities = ["critical"]
+
+[logging.attachments.rotation]
+maximum_segment_bytes = 536870912
+maximum_segment_seconds = 3600
+
+[logging.attachments.compression]
+enabled = true
+algorithm = "gzip"
+level = 6
+
+[logging.attachments.retention]
+maximum_age_days = 30
+
+[logging.signing]
+mode = "ephemeral_signed"
+algorithm = "ed25519"
+key_epoch_maximum_seconds = 86400
+run_signer_in_separate_process = true
+publish_public_key_to_log = true
+publish_public_key_to_control_clients = true
+require_external_anchor = false
+
+[logging.reload]
+enabled = true
+check_interval_seconds = 30
+retain_previous_on_failure = true
+
+[system_data]
+enabled = false
+interval_seconds = 5
+host_sources = [
+  "schedstat",
+  "zoneinfo",
+  "meminfo",
+  "vmstat",
+  "diskstats",
+  "pressure_cpu",
+  "pressure_memory",
+  "pressure_io",
+]
+process_sources = ["cmdline", "io", "sched", "schedstat", "stat", "statm", "status"]
+timestamp_mode = "shared_cycle_timestamp"
+
+[system_data.process_selector]
+include_application_root = true
+include_descendants = true
+
+[system_data.rotation]
+maximum_segment_bytes = 268435456
+maximum_segment_seconds = 3600
+
+[system_data.compression]
+enabled = true
+algorithm = "gzip"
+level = 6
+
+[system_data.retention]
+maximum_age_days = 14
+
+[logging.worker_restart]
+enabled = true
+maximum_restarts = 5
+restart_window_seconds = 300
+initial_backoff_seconds = 0.5
+maximum_backoff_seconds = 30
+exhaustion_action = "continue_degraded"
