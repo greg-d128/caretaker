@@ -11,7 +11,7 @@ help: ## Show available commands
 
 setup: ## Create the development virtual environment
 	$(PYTHON) -m venv $(VENV)
-	$(BIN)/python -m pip install --upgrade pip build pytest
+	$(BIN)/python -m pip install --upgrade pip build pytest cryptography
 
 test: ## Run tests against the source tree
 	PYTHONPATH=src $(BIN)/python -m pytest -q
