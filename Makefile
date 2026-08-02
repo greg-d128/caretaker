@@ -35,7 +35,7 @@ verify-wheel: wheel ## Install and test the wheel in a temporary virtual environ
 	wheel="$$(realpath "$$wheel")"; \
 	$(PYTHON) -m venv "$$tmp/venv"; \
 	"$$tmp/venv/bin/python" -m pip install --quiet --upgrade pip pytest; \
-	"$$tmp/venv/bin/python" -m pip install --quiet --no-deps "$$wheel"; \
+	"$$tmp/venv/bin/python" -m pip install --quiet "$$wheel" cryptography; \
 	cp -a tests "$$tmp/tests"; \
 	cd "$$tmp"; \
 	"$$tmp/venv/bin/python" -c 'import caretaker; print("Version:", caretaker.__version__); print("Loaded from:", caretaker.__file__)'; \
