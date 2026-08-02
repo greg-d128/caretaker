@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "Caretaker"
-version = "0.5.0a1"
+version = "0.5.0a2"
 description = "Experimental application logging, runtime behavior analysis, self-repair, and public-key code integrity for Python"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -155,9 +155,19 @@ def _generate_manifest(args: argparse.Namespace) -> int:
             exclude_patterns.extend(root_policy.protected_paths)
             exclude_patterns.extend(root_policy.sealed_paths)
         elif manifest_type is ManifestType.PROTECTED and not include_patterns:
-            include_patterns.extend(root_policy.protected_paths)
-            include_patterns.extend(root_policy.sealed_paths)
-    manifest = build_manifest(
+            include_patterns.extend(
+                f"{pattern}/*"
+                if pattern == "**" or pattern.endswith("/**")
+                else pattern
+                for pattern in root_policy.protected_paths
+            )
+            include_patterns.extend(
+                f"{pattern}/*"
+                if pattern == "**" or pattern.endswith("/**")
+                else pattern
+                for pattern in root_policy.sealed_paths
+            )
+        manifest = build_manifest(
         root_dir=args.root_dir,
         project=args.project,
         package_version=args.package_version,
