@@ -1,5 +1,7 @@
 """Interactive Caretaker behavior laboratory.
 
+See ``examples/interactive_caretaker_lab.md`` for a guided walkthrough.
+
 This example is intentionally driven from a terminal menu.  It is meant to be
 run by a developer who wants to make one controlled change at a time and then
 inspect Caretaker's evidence, Guard observations, Repair state, logs, and local
