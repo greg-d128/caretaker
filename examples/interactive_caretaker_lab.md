@@ -28,7 +28,7 @@ its live Repair and Guard objects:
 
 ```bash
 PYTHONPATH=src:. python -m caretaker.run \
-  --data-directory ./caretaker-interactive-lab/caretaker-data \
+  --data-directory ./examples/.caretaker-interactive-lab/caretaker-data \
   examples.interactive_caretaker_lab
 ```
 
@@ -38,14 +38,14 @@ In a second terminal, attach the standard Caretaker console:
 
 ```bash
 PYTHONPATH=src:. python -m caretaker.console \
-  --data-directory ./caretaker-interactive-lab/caretaker-data
+  --data-directory ./examples/.caretaker-interactive-lab/caretaker-data
 ```
 
 After installation the shorter command is:
 
 ```bash
 caretaker-console \
-  --data-directory ./caretaker-interactive-lab/caretaker-data
+  --data-directory ./examples/.caretaker-interactive-lab/caretaker-data
 ```
 
 The console status line continuously reports information such as:
@@ -240,17 +240,30 @@ The `malicious` variants are deliberately contained simulations. They:
 - do not delete arbitrary user files;
 - do not intentionally transmit data off-host.
 
-The workspace defaults to:
+The lab keeps generated state beside the example source rather than in the
+repository root. The entire runtime directory is ignored by Git. The workspace
+defaults to:
 
 ```text
-./caretaker-interactive-lab/workspace
+./examples/.caretaker-interactive-lab/workspace
 ```
 
-and can be moved with:
+The Caretaker data directory used by the commands above is:
+
+```text
+./examples/.caretaker-interactive-lab/caretaker-data
+```
+
+The complete lab root can be moved with:
 
 ```bash
 CARETAKER_LAB_ROOT=/some/test/path ...
 ```
+
+If an older version of the example created `./caretaker-interactive-lab` in the
+repository root, this change does not move or delete it. Preserve it if you need
+the old evidence; otherwise it can be removed manually after the new lab is
+running from `examples/.caretaker-interactive-lab`.
 
 Use a disposable development environment when experimenting with runtime code
 mutation and FunctionSlot injection.
@@ -263,7 +276,7 @@ start the supervised lab with a local Ollama model name:
 ```bash
 CARETAKER_LAB_OLLAMA_MODEL=gemma3:27b \
 PYTHONPATH=src:. python -m caretaker.run \
-  --data-directory ./caretaker-interactive-lab/caretaker-data \
+  --data-directory ./examples/.caretaker-interactive-lab/caretaker-data \
   examples.interactive_caretaker_lab
 ```
 

@@ -10,3 +10,4 @@ dist/
 coverage.xml
 .coverage
 htmlcov/
+examples/.caretaker-interactive-lab/

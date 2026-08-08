@@ -72,9 +72,10 @@ from textual.widgets import Button, Footer, Header, Input, Label, RichLog, Stati
 
 LOGGER = logging.getLogger("caretaker.interactive_lab")
 
+DEFAULT_LAB_ROOT = Path(__file__).resolve().parent / ".caretaker-interactive-lab"
 LAB_ROOT = Path(
-    os.environ.get("CARETAKER_LAB_ROOT", "./caretaker-interactive-lab")
-).resolve()
+    os.environ.get("CARETAKER_LAB_ROOT", str(DEFAULT_LAB_ROOT))
+).expanduser().resolve()
 WORKSPACE = LAB_ROOT / "workspace"
 LOCAL_LOG_DIRECTORY = LAB_ROOT / "caretaker-data"
 SYNTHETIC_SECRET = WORKSPACE / "demo-secret.txt"
