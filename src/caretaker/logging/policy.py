@@ -248,6 +248,11 @@ class OperatorLoggingPolicy:
     reload: PolicyReloadPolicy = field(default_factory=PolicyReloadPolicy)
     worker_restart: WorkerRestartPolicy = field(default_factory=WorkerRestartPolicy)
 
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "directory", str(Path(self.directory).expanduser().resolve())
+        )
+
     @classmethod
     def application_defaults(cls, *, directory: str, application_id: str = "application") -> "OperatorLoggingPolicy":
         return cls(directory=directory, application_id=application_id)
@@ -413,10 +418,14 @@ def load_operator_policy(path: str | Path) -> tuple[OperatorLoggingPolicy, Loggi
     attachment_retention_data = dict(attachment_data.pop("retention", {}))
     attachment_priorities = attachment_data.pop("always_preserve_priorities", None)
 
+    configured_directory = Path(str(log.get("directory", "./caretaker-data"))).expanduser()
+    if not configured_directory.is_absolute():
+        configured_directory = path.parent / configured_directory
+
     policy = OperatorLoggingPolicy(
         enabled=bool(log.get("enabled", True)),
         application_id=str(log.get("application_id", "application")),
-        directory=str(log.get("directory", "./caretaker-data")),
+        directory=str(configured_directory),
         modes=tuple(_enum(LoggingMode, item) for item in log.get("modes", ["APPLICATION"])),
         conflict_action=_enum(PolicyConflictAction, log.get("conflict_action", "APPLY_REQUIRED_OVERRIDES")),
         capture=CapturePolicy(

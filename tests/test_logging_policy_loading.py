@@ -119,3 +119,10 @@ command_regexes = ["worker"]
     assert [item.source_id for item in policy.process_sources] == ["stat", "status"]
     assert policy.process_selector.command_regexes == ("worker",)
     assert policy.retention.maximum_age_days == 3
+
+
+def test_relative_logging_directory_is_resolved_from_policy_file(tmp_path) -> None:
+    policy_file = tmp_path / "policy.toml"
+    policy_file.write_text('[logging]\ndirectory="relative-data"\n')
+    policy, _ = load_operator_policy(policy_file)
+    assert policy.directory == str((tmp_path / "relative-data").resolve())

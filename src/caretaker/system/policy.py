@@ -60,6 +60,13 @@ class SystemOutputPolicy:
     preserve_source_body: bool = True
     file_extension: str = ".ctsys"
 
+    def __post_init__(self) -> None:
+        from pathlib import Path
+
+        object.__setattr__(
+            self, "directory", str(Path(self.directory).expanduser().resolve())
+        )
+
 
 DEFAULT_HOST_SOURCES = (
     SystemSourceDefinition("schedstat", "/proc/schedstat"),

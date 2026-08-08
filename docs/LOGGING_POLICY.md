@@ -43,3 +43,8 @@ Restart exhaustion may continue degraded, disable the affected component, or sto
 ## Storage-unavailable default
 
 Ordinary application logging now fails by stopping Caretaker logging rather than terminating the application. Deployments that require fail-closed audit semantics can explicitly set `storage_emergency.unavailable_action = STOP_APPLICATION`.
+
+
+## Storage paths
+
+Logging and system-collection output directories are normalized to absolute paths when policies are constructed. Relative paths loaded from a TOML policy are resolved relative to the policy file rather than the process working directory. This prevents a working-directory change from silently redirecting evidence storage.
