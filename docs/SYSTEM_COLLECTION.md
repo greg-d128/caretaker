@@ -29,3 +29,8 @@ Sources unavailable to the application account are recorded as unavailable. `/pr
 ## Metrics placeholder
 
 `MetricsProvider` and `NullMetricsProvider` establish the integration contract for the user's advanced metrics system. No general metrics collector is implemented in this alpha.
+
+
+## Process command lines
+
+Process command lines are no longer persisted by default because arguments commonly contain passwords, tokens, DSNs, and other credentials. Set `redaction.capture_cmdline=True` explicitly to retain them. When enabled, `mask_cmdline` is applied both to raw `/proc/<pid>/cmdline` records and to the persisted process identity summary.

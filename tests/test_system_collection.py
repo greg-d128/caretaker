@@ -44,3 +44,15 @@ def test_process_selector_includes_application_process_tree(tmp_path):
     collector = SystemDataCollector(policy, application_pid=os.getpid())
     selected = collector.select_processes()
     assert any(item.pid == os.getpid() for item in selected)
+
+
+def test_command_line_capture_is_opt_in(tmp_path) -> None:
+    from caretaker.system.policy import SystemRedactionPolicy
+
+    policy = SystemCollectionPolicy(
+        output=__import__("caretaker.system.policy", fromlist=["SystemOutputPolicy"]).SystemOutputPolicy(directory=str(tmp_path)),
+    )
+    assert policy.redaction.capture_cmdline is False
+    collector = SystemDataCollector(policy, application_pid=__import__("os").getpid())
+    identity = next(item for item in collector.select_processes() if item.pid == __import__("os").getpid())
+    assert identity.command_summary == "<not captured>"

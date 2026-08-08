@@ -47,7 +47,7 @@ class ProcessSelector:
 
 @dataclass(frozen=True, slots=True)
 class SystemRedactionPolicy:
-    capture_cmdline: bool = True
+    capture_cmdline: bool = False
     capture_environment: bool = False
     environment_name_allowlist: tuple[str, ...] = ()
     mask_cmdline: Callable[[str], str] | None = None

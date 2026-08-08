@@ -220,7 +220,11 @@ class SystemDataCollector:
                 pid=pid, proc_start_ticks=start_ticks,
                 process_start_id=self._process_start_ids.setdefault(key, uuid4()),
                 parent_pid=int(info["ppid"]), executable=executable,
-                command_summary=command,
+                command_summary=(
+                    self.policy.redaction.mask_cmdline(command)
+                    if self.policy.redaction.capture_cmdline and self.policy.redaction.mask_cmdline
+                    else command if self.policy.redaction.capture_cmdline else "<not captured>"
+                ),
             ))
         return tuple(sorted(identities, key=lambda item: item.pid))
 
@@ -237,8 +241,11 @@ class SystemDataCollector:
         path = Path(path_text)
         started = time.monotonic_ns() - clock
         try:
-            body = path.read_bytes()
-            if path.name == "cmdline":
+            if path.name == "cmdline" and not self.policy.redaction.capture_cmdline:
+                body = b"<not captured>"
+            else:
+                body = path.read_bytes()
+            if path.name == "cmdline" and self.policy.redaction.capture_cmdline:
                 body = body.replace(b"\0", b" ")
                 if self.policy.redaction.mask_cmdline:
                     body = self.policy.redaction.mask_cmdline(body.decode(errors="replace")).encode()
