@@ -14,6 +14,7 @@ from ..domain import (
     RepairMode,
     ReplaySafety,
     TargetCapability,
+    TimeoutMode,
     ValidatorErrorBehavior,
 )
 from ..engine import RepairEngine, ResolutionKind
@@ -594,7 +595,7 @@ def repair_on_soft_timeout(
     base = policy or DEFAULT_POLICY
     configured = replace(
         base,
-        triggers=(TimeoutTrigger(seconds=seconds, mode="soft"),),
+        triggers=(TimeoutTrigger(seconds=seconds, mode=TimeoutMode.SOFT),),
         retry=replace(base.retry, max_attempts=retry, safety=replay_safety),
     )
     return repair(policy=configured, **repair_kwargs)
@@ -687,7 +688,7 @@ def _exceeded_soft_timeout(
     for trigger in policy.triggers:
         if (
             isinstance(trigger, TimeoutTrigger)
-            and trigger.mode == "soft"
+            and trigger.mode is TimeoutMode.SOFT
             and elapsed_seconds > trigger.seconds
         ):
             return trigger

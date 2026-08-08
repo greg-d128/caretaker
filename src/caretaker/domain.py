@@ -23,6 +23,10 @@ class ValidatorErrorBehavior(Enum):
     FAIL_OPEN = auto()
 
 
+class TimeoutMode(Enum):
+    SOFT = "soft"
+
+
 class TriggerKind(Enum):
     EXCEPTION = auto()
     TIMEOUT = auto()

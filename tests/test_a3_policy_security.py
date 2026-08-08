@@ -227,3 +227,10 @@ def test_differential_execution_requires_explicit_purity_confirmation() -> None:
 
 def test_failure_locals_are_not_captured_by_default() -> None:
     assert StatePolicy().capture_failure_locals is False
+
+
+def test_timeout_mode_is_typed_and_legacy_soft_string_is_coerced() -> None:
+    from caretaker import TimeoutMode, TimeoutTrigger
+
+    assert TimeoutTrigger(seconds=1).mode is TimeoutMode.SOFT
+    assert TimeoutTrigger(seconds=1, mode="soft").mode is TimeoutMode.SOFT

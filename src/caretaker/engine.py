@@ -45,6 +45,7 @@ from .domain import (
     TargetCapability,
     TimeoutEvidence,
     TriggerKind,
+    TimeoutMode,
     ValidationCheckKind,
     ValidationCheckResult,
     utcnow,
@@ -1572,7 +1573,7 @@ class RepairEngine:
                         ),
                         evidence=result.evidence,
                     )
-            elif isinstance(trigger, TimeoutTrigger) and trigger.mode == "soft":
+            elif isinstance(trigger, TimeoutTrigger) and trigger.mode is TimeoutMode.SOFT:
                 if elapsed_seconds > trigger.seconds:
                     return ValidationResult(
                         valid=False,

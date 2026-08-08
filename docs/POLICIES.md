@@ -6,7 +6,7 @@
 
 - `ExceptionTrigger`
 - `OutputValidationTrigger`
-- `TimeoutTrigger` (`mode="soft"` only)
+- `TimeoutTrigger` (`TimeoutMode.SOFT` only; the legacy string `"soft"` is coerced for compatibility)
 
 ## State policy
 

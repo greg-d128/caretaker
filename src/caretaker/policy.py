@@ -21,6 +21,7 @@ from .domain import (
     ReplaySafety,
     SnapshotStrategy,
     ValidatorErrorBehavior,
+    TimeoutMode,
 )
 
 
@@ -49,7 +50,11 @@ class ExceptionTrigger:
 @dataclass(frozen=True, slots=True)
 class TimeoutTrigger:
     seconds: float
-    mode: str = "soft"
+    mode: TimeoutMode = TimeoutMode.SOFT
+
+    def __post_init__(self) -> None:
+        if isinstance(self.mode, str):
+            object.__setattr__(self, "mode", TimeoutMode(self.mode.lower()))
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,8 +286,8 @@ def validate_policy(policy: RepairPolicy) -> None:
         if isinstance(trigger, TimeoutTrigger):
             if trigger.seconds <= 0:
                 errors.append("timeout seconds must be greater than zero")
-            if trigger.mode != "soft":
-                errors.append(f"timeout mode {trigger.mode!r} is unsupported; only 'soft' is available")
+            if trigger.mode is not TimeoutMode.SOFT:
+                errors.append(f"timeout mode {trigger.mode!r} is unsupported; only SOFT is available")
     if policy.retry.max_attempts < 0:
         errors.append("retry.max_attempts cannot be negative")
     if policy.retry.backoff_seconds < 0:
@@ -458,7 +463,7 @@ def _human_readable(policy: RepairPolicy) -> str:
             exclude = ", ".join(exc.__name__ for exc in trigger.exclude)
             lines.extend([f"  - Exceptions: {include}", f"    Excluded: {exclude}"])
         elif isinstance(trigger, TimeoutTrigger):
-            lines.append(f"  - Timeout: {trigger.seconds:g}s ({trigger.mode})")
+            lines.append(f"  - Timeout: {trigger.seconds:g}s ({trigger.mode.value})")
         else:
             validator = trigger.validator_id or (
                 f"{trigger.validator.__module__}:{trigger.validator.__qualname__}"

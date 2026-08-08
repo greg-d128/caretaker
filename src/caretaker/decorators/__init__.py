@@ -16,6 +16,7 @@ from .decorators import exception_handler, input_validator
 
 __all__ = [
     "InvalidOutputError",
+    "caretaker",
     "configure_default_engine",
     "diagnose_only",
     "exception_handler",
