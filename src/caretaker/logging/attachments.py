@@ -14,12 +14,14 @@ from threading import RLock
 from uuid import UUID, uuid4
 
 from .models import (
+    AttachmentOverloadAction,
     AttachmentReference,
     AttachmentSamplingDecision,
     CompressionAlgorithm,
     EvidencePriority,
     SignatureStatus,
 )
+from .buffering import ApplicationStopRequested
 from .policy import AttachmentPolicy
 
 
@@ -69,7 +71,18 @@ class AttachmentStore:
         self._arrival_times.append(now)
         if observed <= maximum:
             return 1.0
-        return max(self.policy.minimum_sampling_probability, maximum / observed)
+        action = self.policy.overload_action
+        if action is AttachmentOverloadAction.PRESERVE_ALL:
+            return 1.0
+        if action is AttachmentOverloadAction.PROBABILISTIC_SAMPLE:
+            return max(self.policy.minimum_sampling_probability, maximum / observed)
+        if action is AttachmentOverloadAction.DROP_ORDINARY:
+            return 0.0
+        if action is AttachmentOverloadAction.STOP_APPLICATION:
+            raise ApplicationStopRequested(
+                "Caretaker attachment overload policy requested application shutdown"
+            )
+        return 1.0
 
     def store(
         self,

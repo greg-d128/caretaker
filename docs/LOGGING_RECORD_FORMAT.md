@@ -46,4 +46,4 @@ SQLite stores offsets and selected metadata but is rebuildable.
 
 Large bodies are stored outside the 4 KiB event stream. The event contains a compact typed reference. Attachment segments have independent hash chains, manifests, rotation, compression, retention, size limits, and probabilistic overload sampling.
 
-Attachments may be sampled out, but the primary event records the decision. Critical categories can bypass sampling.
+Attachment overload now preserves all payloads by default. Sampling or dropping requires an explicit `AttachmentOverloadAction`; when selected, the primary event records the resulting storage decision. Critical categories can bypass sampling/drop policies.

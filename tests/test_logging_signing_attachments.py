@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from caretaker.logging import (
+    AttachmentOverloadAction,
     AttachmentPolicy,
     AttachmentSamplingDecision,
     AttachmentStore,
@@ -75,6 +76,7 @@ def test_attachment_rate_policy_can_sample(monkeypatch, tmp_path):
     policy = AttachmentPolicy(
         maximum_rate_per_minute=1,
         minimum_sampling_probability=0.01,
+        overload_action=AttachmentOverloadAction.PROBABILISTIC_SAMPLE,
     )
     store = AttachmentStore(tmp_path, policy)
     monkeypatch.setattr("caretaker.logging.attachments.random.random", lambda: 0.99)
@@ -82,4 +84,13 @@ def test_attachment_rate_policy_can_sample(monkeypatch, tmp_path):
     second = store.store(event_id=uuid4(), event_sequence=2, content_type="text/plain", payload=b"second")
     assert first.stored
     assert second.sampling_decision is AttachmentSamplingDecision.SAMPLED_OUT
+    store.close()
+
+
+def test_attachment_overload_preserves_by_default(monkeypatch, tmp_path):
+    policy = AttachmentPolicy(maximum_rate_per_minute=1)
+    store = AttachmentStore(tmp_path, policy)
+    monkeypatch.setattr("caretaker.logging.attachments.random.random", lambda: 0.99)
+    assert store.store(event_id=uuid4(), event_sequence=1, content_type="text/plain", payload=b"first").stored
+    assert store.store(event_id=uuid4(), event_sequence=2, content_type="text/plain", payload=b"second").stored
     store.close()

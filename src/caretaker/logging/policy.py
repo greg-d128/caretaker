@@ -160,7 +160,7 @@ class AttachmentPolicy:
     retention: RetentionPolicy = field(default_factory=lambda: RetentionPolicy(maximum_age_days=30))
     maximum_attachment_bytes: int | None = 64 * 1024 * 1024
     maximum_rate_per_minute: float | None = 120.0
-    overload_action: AttachmentOverloadAction = AttachmentOverloadAction.PROBABILISTIC_SAMPLE
+    overload_action: AttachmentOverloadAction = AttachmentOverloadAction.PRESERVE_ALL
     minimum_sampling_probability: float = 0.01
     always_preserve_priorities: frozenset[EvidencePriority] = frozenset({EvidencePriority.CRITICAL})
 
