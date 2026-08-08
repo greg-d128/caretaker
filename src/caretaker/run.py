@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, replace
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import subprocess
@@ -15,6 +16,9 @@ from .logging import (
     CaretakerApplicationSupervisor,
     LogChannel,
     LoggingMode,
+    InterrogationRequest,
+    LogInterrogator,
+    OllamaRootCauseProvider,
     WorkerFailureAction,
     WorkerKind,
     WorkerState,
@@ -53,6 +57,17 @@ def main(argv: list[str] | None = None) -> int:
     child_holder: dict[str, subprocess.Popen] = {}
     supervisor_holder: dict[str, CaretakerApplicationSupervisor] = {}
 
+    def recent_log_records(limit: int = 1000):
+        event_directory = Path(policy.directory) / "application" / "events"
+        paths = sorted(event_directory.glob("*.ctlog")) + sorted(event_directory.glob("*.ctlog.gz"))
+        records = []
+        for path in paths[-16:]:
+            try:
+                records.extend(read_segment(path))
+            except Exception:
+                continue
+        return records[-max(1, limit):]
+
     def control_handler(request, credentials):
         command = request.get("command")
         if command in {"status", "health"}:
@@ -79,14 +94,7 @@ def main(argv: list[str] | None = None) -> int:
                 return {"ok": False, "error": f"application runtime control unavailable: {exc}"}
         if command == "logs":
             limit = max(1, min(int(request.get("limit", 100)), 500))
-            event_directory = Path(policy.directory) / "application" / "events"
-            paths = sorted(event_directory.glob("*.ctlog")) + sorted(event_directory.glob("*.ctlog.gz"))
-            records = []
-            for path in paths[-8:]:
-                try:
-                    records.extend(read_segment(path))
-                except Exception:
-                    continue
+            records = recent_log_records(limit)
             return {
                 "ok": True,
                 "records": [
@@ -101,6 +109,52 @@ def main(argv: list[str] | None = None) -> int:
                     }
                     for item in records[-limit:]
                 ],
+            }
+        if command == "investigate":
+            target = str(request.get("target") or "").strip()
+            minutes = max(1, min(int(request.get("minutes", 15)), 24 * 60))
+            objective = str(request.get("objective") or "Investigate the current Caretaker incident")
+            now = datetime.now(timezone.utc)
+            interrogation = InterrogationRequest(
+                period_start=now - timedelta(minutes=minutes),
+                period_end=now,
+                target_ids=(target,) if target else (),
+                objective=objective,
+            )
+            behavior = ()
+            if target and runtime_control_socket.exists():
+                try:
+                    response = control_request(
+                        runtime_control_socket,
+                        {"command": "guard-deviations", "target": target, "limit": 50},
+                    )
+                    behavior = tuple(
+                        json.dumps(item, sort_keys=True, default=str)
+                        for item in response.get("deviations", ())
+                    )
+                except OSError:
+                    behavior = ()
+            interrogator = LogInterrogator()
+            bundle = interrogator.build_bundle(
+                interrogation,
+                tuple(recent_log_records(2000)),
+                behavior_deviations=behavior,
+            )
+            model = str(request.get("model") or "").strip()
+            if model:
+                provider = OllamaRootCauseProvider(
+                    model=model,
+                    endpoint=str(request.get("endpoint") or "http://127.0.0.1:11434/api/generate"),
+                )
+                assessment = provider.assess(bundle)
+            else:
+                assessment = interrogator.deterministic_assessment(bundle)
+            return {
+                "ok": True,
+                "provider": "ollama" if model else "deterministic",
+                "evidence_hash": bundle.evidence_hash,
+                "omitted_record_count": bundle.omitted_record_count,
+                "assessment": asdict(assessment),
             }
         if command == "policy-effective":
             return {"ok": True, "requested_modes": [item.name for item in runtime.effective.requested_modes],

@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "GPL-3.0-or-later"
 authors = [{name = "Grzegorz Dostatni"}]
+dependencies = ["textual>=0.80"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Programming Language :: Python :: 3",
@@ -37,3 +38,4 @@ caretaker-integrity = "caretaker.integrity.cli:main"
 caretaker-guard = "caretaker.guard.cli:main"
 caretaker-logging = "caretaker.logging.cli:main"
 caretaker-run = "caretaker.run:main"
+caretaker-console = "caretaker.console:main"

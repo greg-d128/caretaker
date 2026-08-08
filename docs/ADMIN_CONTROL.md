@@ -41,3 +41,41 @@ than only supervisor/logging state. Exposed information includes:
 Approval/rejection and baseline acceptance remain typed declarative operations.
 The runtime socket does not accept arbitrary Python, shell commands, or source
 text from the operator console.
+
+## Textual operator console
+
+Textual is a required Caretaker dependency. The primary interactive operator
+interface is installed as:
+
+```bash
+caretaker-console --data-directory ./caretaker-data/my.application
+```
+
+The console attaches to the authenticated `caretaker-run` control socket and
+shows a continuously refreshed status line with:
+
+- current runtime state;
+- highest Guard alert severity observed in the last five minutes;
+- active Repair incident count;
+- functions currently undergoing candidate validation;
+- repairs awaiting operator approval;
+- target count;
+- supervisor worker-health issues and degraded Guard capabilities.
+
+Tabs provide target/FunctionSlot inspection, Guard evidence and baseline
+operations, Repair event/approval controls, persisted logs, and Guard LLM
+assistance when the application configured an advisory assessment provider.
+
+### Incident investigation and LLM assistance
+
+The Textual console includes an **Investigate** view. It builds a bounded logging
+interrogation bundle for the selected target and recent time window and includes
+recent Guard deviations when available.
+
+With no model selected, Caretaker performs deterministic interrogation only. If
+the operator explicitly supplies an Ollama model, the supervisor sends the
+bounded evidence bundle to the loopback Ollama endpoint through
+`OllamaRootCauseProvider`. Remote endpoints remain disallowed by default.
+
+The resulting assessment is advisory evidence. It cannot approve a repair,
+override candidate validation, or bypass Integrity policy.
