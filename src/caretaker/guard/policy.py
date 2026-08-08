@@ -141,7 +141,7 @@ class GuardBinding:
     include_guard_context_in_repair: bool = True
     validate_candidate_behavior: bool = True
     monitor_during_probation: bool = True
-    deviation_action: GuardDeviationAction = GuardDeviationAction.OPEN_REPAIR_EPISODE
+    deviation_action: GuardDeviationAction = GuardDeviationAction.ALERT
 
     @property
     def observed_resource_categories(self) -> tuple[str, ...]:

@@ -138,3 +138,5 @@ A candidate may be functionally correct but behaviorally ineligible.
 ## Repair-target Guard binding
 
 `GuardBinding(enabled=True)` enables call correlation and runtime code inspection for the target. It does **not** implicitly enable network, filesystem, subprocess, or import observation. Those resource categories must be selected individually. `observed_resource_categories` exposes the selected resource categories for status/reporting code.
+
+Guard deviations attached through `RepairPolicy.guard` now alert by default. Opening a Repair episode from a Guard deviation requires the explicit `GuardDeviationAction.OPEN_REPAIR_EPISODE` setting.

@@ -159,3 +159,10 @@ def test_guard_binding_reports_resource_observation_categories() -> None:
     binding = GuardBinding(enabled=True, observe_network=True, observe_imports=True)
     assert binding.observed_resource_categories == ("network", "imports")
     assert GuardBinding(enabled=True).observed_resource_categories == ()
+
+
+def test_guard_binding_deviation_default_is_alert() -> None:
+    from caretaker import GuardBinding
+    from caretaker.guard.models import GuardDeviationAction
+
+    assert GuardBinding().deviation_action is GuardDeviationAction.ALERT
