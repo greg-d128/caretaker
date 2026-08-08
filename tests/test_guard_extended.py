@@ -130,7 +130,7 @@ def _guard_policy(*, llm: bool = False) -> GuardPolicy:
 
 
 def _repair_policy() -> RepairPolicy:
-    return RepairPolicy(
+    return RepairPolicy.automatic(
         triggers=(ExceptionTrigger(),),
         state=StatePolicy(snapshot_arguments=True, restore_before_retry=True),
         retry=RetryPolicy(max_attempts=1, safety=ReplaySafety.PURE),

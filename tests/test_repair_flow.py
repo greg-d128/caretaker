@@ -43,7 +43,7 @@ def broken_divide(total: float, count: int) -> float:
         provider=StaticRepairProvider([bad, good]),
         store=store,
     )
-    policy = RepairPolicy(
+    policy = RepairPolicy.automatic(
         triggers=(ExceptionTrigger(),),
         state=StatePolicy(
             snapshot_arguments=True,

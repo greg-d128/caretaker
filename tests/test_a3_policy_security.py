@@ -17,6 +17,7 @@ from caretaker import (
     PolicyConfigurationError,
     RepairEngine,
     RepairPolicy,
+    RepairAuthority,
     ReplaySafety,
     RetryPolicy,
     SnapshotStrategy,
@@ -100,7 +101,11 @@ def test_convenience_decorators_compile_to_repair_policies() -> None:
         [CandidateProposal(source="def always_fails(value: int) -> int:\n    return value\n", explanation="fix")]
     )
     engine = RepairEngine(provider=provider)
-    wrapped = repair_and_retry(engine=engine, replay_safety=ReplaySafety.PURE)(always_fails)
+    wrapped = repair_and_retry(
+        engine=engine,
+        replay_safety=ReplaySafety.PURE,
+        policy=RepairPolicy(authority=RepairAuthority.AUTOMATIC_ELIGIBLE_REPAIRS),
+    )(always_fails)
     assert wrapped(7) == 7
     assert wrapped.__caretaker_target__.policy.retry.max_attempts == 1
 
@@ -137,6 +142,7 @@ def test_structured_comparator_is_used_for_differential_execution() -> None:
         triggers=(ExceptionTrigger(),),
         state=StatePolicy(snapshot_arguments=True, restore_before_retry=True),
         retry=RetryPolicy(max_attempts=1, safety=ReplaySafety.PURE),
+        authority=RepairAuthority.AUTOMATIC_ELIGIBLE_REPAIRS,
         observation=ObservationPolicy(
             initial_successful_executions=10,
             long_term_successful_executions=20,
@@ -171,6 +177,7 @@ def test_integrity_classification_controls_repair_eligibility() -> None:
         integrity=IntegrityRepairPolicy(allow_protected_automatic_repair=True),
         state=StatePolicy(snapshot_arguments=True, restore_before_retry=True),
         retry=RetryPolicy(max_attempts=1, safety=ReplaySafety.PURE),
+        authority=RepairAuthority.AUTOMATIC_ELIGIBLE_REPAIRS,
     )
     allowed_engine = RepairEngine(provider=provider)
     allowed = repair(
@@ -185,3 +192,7 @@ def test_integrity_classification_controls_repair_eligibility() -> None:
     with pytest.raises(ValueError):
         sealed(1)
     assert sealed.__caretaker_target__.support.capability.name == "DIAGNOSTIC_ONLY"
+
+
+def test_default_repair_authority_requires_operator_approval() -> None:
+    assert RepairPolicy().authority is RepairAuthority.REQUIRE_OPERATOR_APPROVAL

@@ -62,7 +62,7 @@ def test_differential_mismatch_submits_both_versions_for_another_repair() -> Non
     store = InMemoryRepairStore()
     provider = SequentialProvider()
     engine = RepairEngine(provider=provider, store=store)
-    policy = RepairPolicy(
+    policy = RepairPolicy.automatic(
         triggers=(ExceptionTrigger(),),
         state=StatePolicy(snapshot_arguments=True, restore_before_retry=True),
         retry=RetryPolicy(max_attempts=1, safety=ReplaySafety.PURE),

@@ -80,7 +80,7 @@ authority: RepairAuthority
 - `REQUIRE_OPERATOR_APPROVAL`
 - `AUTOMATIC_ELIGIBLE_REPAIRS`
 
-A manual incident escalation should normally use operator approval. Standing automatic mode preserves the existing deterministic validation and observation gates.
+`REQUIRE_OPERATOR_APPROVAL` is the default. Automatic activation must be opted into explicitly with `AUTOMATIC_ELIGIBLE_REPAIRS` (or the convenience constructor `RepairPolicy.automatic(...)`); deterministic validation and observation gates still apply after that opt-in.
 
 ## Effective policy generation
 

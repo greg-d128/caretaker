@@ -53,7 +53,7 @@ def test_observation_failure_budget_rolls_back_only_after_budget_is_exceeded() -
         "    return total / count\n"
     )
     engine = RepairEngine(provider=StaticRepairProvider([CandidateProposal(source=candidate, explanation="fix")]))
-    policy = RepairPolicy(
+    policy = RepairPolicy.automatic(
         triggers=(ExceptionTrigger(),),
         state=StatePolicy(snapshot_arguments=True, restore_before_retry=True),
         retry=RetryPolicy(max_attempts=1, safety=ReplaySafety.PURE),
@@ -94,7 +94,7 @@ def test_successful_repair_becomes_regression_case_for_later_candidates() -> Non
     )
     store = InMemoryRepairStore()
     engine = RepairEngine(provider=provider, store=store)
-    policy = RepairPolicy(
+    policy = RepairPolicy.automatic(
         triggers=(ExceptionTrigger(),),
         state=StatePolicy(snapshot_arguments=True, restore_before_retry=True),
         retry=RetryPolicy(max_attempts=1, safety=ReplaySafety.PURE),

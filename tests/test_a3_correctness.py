@@ -45,7 +45,7 @@ def test_repaired_output_is_revalidated_against_output_contract() -> None:
         ]
     )
     engine = RepairEngine(provider=provider)
-    policy = RepairPolicy(
+    policy = RepairPolicy.automatic(
         triggers=(OutputValidationTrigger(validator=lambda value: value >= 0, name="nonnegative"),),
         state=StatePolicy(snapshot_arguments=True, restore_before_retry=True),
         retry=RetryPolicy(max_attempts=1, safety=ReplaySafety.PURE),
@@ -74,7 +74,7 @@ def test_repaired_output_is_revalidated_against_timeout_contract() -> None:
         ]
     )
     engine = RepairEngine(provider=provider)
-    policy = RepairPolicy(
+    policy = RepairPolicy.automatic(
         triggers=(TimeoutTrigger(seconds=0.005),),
         state=StatePolicy(snapshot_arguments=True, restore_before_retry=True),
         retry=RetryPolicy(max_attempts=1, safety=ReplaySafety.PURE),
@@ -106,7 +106,7 @@ def test_retry_policy_performs_multiple_attempts_and_backoff_path() -> None:
         ]
     )
     engine = RepairEngine(provider=provider)
-    policy = RepairPolicy(
+    policy = RepairPolicy.automatic(
         triggers=(ExceptionTrigger(),),
         state=StatePolicy(snapshot_arguments=True, restore_before_retry=True),
         retry=RetryPolicy(
@@ -136,7 +136,7 @@ def test_generated_tests_are_preserved_and_run_as_advisory_evidence() -> None:
     )
     store = InMemoryRepairStore()
     engine = RepairEngine(provider=provider, store=store)
-    policy = RepairPolicy(
+    policy = RepairPolicy.automatic(
         triggers=(ExceptionTrigger(),),
         validation=ValidationPolicy(run_generated_tests=True),
         state=StatePolicy(snapshot_arguments=True, restore_before_retry=True),
@@ -189,7 +189,7 @@ def test_correlated_logs_are_redacted_and_included_in_repair_request() -> None:
     app_logger = logging.getLogger("caretaker-test.application")
     app_logger.addHandler(engine.log_handler)
     app_logger.setLevel(logging.WARNING)
-    policy = RepairPolicy(
+    policy = RepairPolicy.automatic(
         triggers=(ExceptionTrigger(),),
         state=StatePolicy(snapshot_arguments=True, restore_before_retry=True),
         retry=RetryPolicy(max_attempts=1, safety=ReplaySafety.PURE),

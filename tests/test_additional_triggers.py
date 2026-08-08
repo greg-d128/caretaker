@@ -34,7 +34,7 @@ def bad_payload(value: int) -> dict[str, int]:
         ]
     )
     engine = RepairEngine(provider=provider)
-    policy = RepairPolicy(
+    policy = RepairPolicy.automatic(
         triggers=(
             OutputValidationTrigger(
                 validator=valid_payload,
@@ -72,7 +72,7 @@ def slow_identity(value: int) -> int:
         ]
     )
     engine = RepairEngine(provider=provider)
-    policy = RepairPolicy(
+    policy = RepairPolicy.automatic(
         triggers=(TimeoutTrigger(seconds=0.005, mode="soft"),),
         state=StatePolicy(snapshot_arguments=True, restore_before_retry=True),
         retry=RetryPolicy(max_attempts=1, safety=ReplaySafety.PURE),

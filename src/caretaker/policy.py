@@ -238,8 +238,16 @@ class RepairPolicy:
     guard: GuardBinding = field(default_factory=GuardBinding)
     candidate_guard: CandidateGuardPolicy = field(default_factory=CandidateGuardPolicy)
     mode: RepairMode = RepairMode.AUTOMATIC
-    authority: RepairAuthority = RepairAuthority.AUTOMATIC_ELIGIBLE_REPAIRS
+    authority: RepairAuthority = RepairAuthority.REQUIRE_OPERATOR_APPROVAL
     enabled: bool = True
+
+    @classmethod
+    def automatic(cls, **changes: Any) -> "RepairPolicy":
+        """Construct a policy that explicitly opts into automatic activation."""
+        return cls(
+            authority=RepairAuthority.AUTOMATIC_ELIGIBLE_REPAIRS,
+            **changes,
+        )
 
     def snapshot(self) -> PolicySnapshot:
         canonical = _canonicalize(self)

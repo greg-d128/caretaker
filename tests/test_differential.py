@@ -29,7 +29,7 @@ def broken_divide(total: float, count: int) -> float:
         ]
     )
     engine = RepairEngine(provider=provider)
-    policy = RepairPolicy(
+    policy = RepairPolicy.automatic(
         triggers=(ExceptionTrigger(),),
         state=StatePolicy(snapshot_arguments=True, restore_before_retry=True),
         retry=RetryPolicy(max_attempts=1, safety=ReplaySafety.PURE),
