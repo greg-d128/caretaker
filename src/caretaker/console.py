@@ -47,8 +47,12 @@ class CaretakerConsoleApp(App):
         border-bottom: solid $accent;
     }
     #overview-details {
-        height: 5;
+        height: 6;
         padding: 1 2;
+    }
+    #target-details {
+        height: 12;
+        border-top: solid $surface-lighten-2;
     }
     TabbedContent {
         height: 1fr;
@@ -89,11 +93,13 @@ class CaretakerConsoleApp(App):
         with TabbedContent(initial="overview"):
             with TabPane("Overview", id="overview"):
                 yield Static("", id="overview-details")
-                table = DataTable(id="targets-table", cursor_type="row")
+                table = DataTable(id="targets-table")
+                table.cursor_type = "row"
                 table.add_columns(
                     "Target", "Mode", "Authority", "Version", "Guard", "Slot state"
                 )
                 yield table
+                yield RichLog(id="target-details", wrap=True, markup=True)
             with TabPane("Guard", id="guard"):
                 with Horizontal(classes="toolbar"):
                     yield Input(placeholder="Target id", id="guard-target")
@@ -165,6 +171,10 @@ class CaretakerConsoleApp(App):
             if str(item.get("state", "")).upper() not in {"HEALTHY", "WORKERSTATE.HEALTHY"}
         ]
         validating = runtime.get("validating_functions") or []
+        incidents = runtime.get("active_incidents") or []
+        incident_targets = sorted(
+            {str(item.get("target_id")) for item in incidents if item.get("target_id")}
+        )
         degraded = runtime.get("degraded_components") or []
         line = (
             f"Status {runtime.get('current_status', 'STARTING')}  |  "
@@ -178,6 +188,7 @@ class CaretakerConsoleApp(App):
         self.query_one("#operator-status", Static).update(line)
         details = [
             f"Application PID: {status.get('application_pid')}   running={status.get('application_running')}",
+            f"Active incident targets: {', '.join(incident_targets) if incident_targets else 'none'}",
             f"Validating functions: {', '.join(validating) if validating else 'none'}",
             f"Degraded capabilities: {', '.join(degraded) if degraded else 'none'}",
         ]
@@ -188,13 +199,41 @@ class CaretakerConsoleApp(App):
         table = self.query_one("#targets-table", DataTable)
         table.clear()
         for target in response.get("targets", []):
+            target_id = str(target.get("target_id", ""))
             table.add_row(
-                str(target.get("target_id", "")),
+                target_id,
                 str(target.get("repair_mode") or "-"),
                 str(target.get("repair_authority") or "-"),
                 str(target.get("function_version") if target.get("function_version") is not None else "-"),
                 "yes" if target.get("guard_enabled") else "no",
                 "repairing" if target.get("repair_in_progress") else "ready",
+                key=target_id,
+            )
+
+    async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if event.data_table.id != "targets-table":
+            return
+        row = event.data_table.get_row(event.row_key)
+        if not row:
+            return
+        target_id = str(row[0])
+        try:
+            state, policy = await asyncio.gather(
+                self._request("runtime-target-state", target=target_id),
+                self._request("runtime-target-policy", target=target_id),
+            )
+            self._write_json(
+                "#target-details",
+                {
+                    "target": target_id,
+                    "state": state.get("state"),
+                    "policy": policy.get("policy"),
+                },
+            )
+        except Exception as exc:
+            self._write_json(
+                "#target-details",
+                {"error": f"{type(exc).__name__}: {exc}", "target": target_id},
             )
 
     async def refresh_all(self) -> None:

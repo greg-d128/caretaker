@@ -1,145 +1,118 @@
 # Interactive Caretaker Behavior Lab
 
-`interactive_caretaker_lab.py` is a terminal-driven laboratory for exploring
-Caretaker one behavior at a time. The application menu is intentionally limited
-to **driving application behavior**. Observation and operator interaction happen
-from a second terminal through the lab console.
-
-This separation makes experiments easier to follow:
+`interactive_caretaker_lab.py` is a Textual application for driving one
+Caretaker experiment at a time. The lab changes application inputs and
+implementations; the **standard Caretaker console** is used from a second
+terminal to inspect what happened.
 
 ```text
-Terminal 1: application menu       Terminal 2: Caretaker lab console
-----------------------------       -------------------------------
-run a function                     inspect Guard events
-change an implementation           inspect Repair events
-run the function again             compare deviations/inspections
-restore the function               accept baselines / approve repairs
+Terminal 1: Textual lab               Terminal 2: caretaker-console
+-----------------------               -----------------------------
+choose a target                       watch runtime status
+enter parameters                      inspect Guard evidence
+execute the target                    inspect Repair events
+substitute/inject behavior            approve or reject repairs
+restore the target                    inspect logs / ask Guard LLM
 ```
 
-The lab is intended for development and testing. Run one experiment, inspect the
-evidence, restore the target, and then move to the next experiment.
+The separation is intentional. Application controls stay in the example while
+operator controls stay in Caretaker itself.
+
+> The lab records function arguments and results. Do not enter real passwords,
+> API keys, tokens, or other sensitive information.
 
 ## Quick start
 
-From the repository root, start the application in the first terminal:
+Run the lab under the Caretaker supervisor so the operator console can inspect
+its live Repair and Guard objects:
 
 ```bash
-PYTHONPATH=src:. python -m examples.interactive_caretaker_lab
+PYTHONPATH=src:. python -m caretaker.run \
+  --data-directory ./caretaker-interactive-lab/caretaker-data \
+  examples.interactive_caretaker_lab
 ```
 
-The program creates its own working directory under:
+The lab itself opens as a Textual UI.
 
-```text
-./caretaker-interactive-lab/
-```
-
-No Internet access is required. The example starts local loopback HTTP servers
-for the webpage and API tests.
-
-In a **second terminal**, attach the lab console:
+In a second terminal, attach the standard Caretaker console:
 
 ```bash
-PYTHONPATH=src:. python -m examples.interactive_caretaker_lab_console
+PYTHONPATH=src:. python -m caretaker.console \
+  --data-directory ./caretaker-interactive-lab/caretaker-data
 ```
 
-You should see something similar to:
+After installation the shorter command is:
+
+```bash
+caretaker-console \
+  --data-directory ./caretaker-interactive-lab/caretaker-data
+```
+
+The console status line continuously reports information such as:
 
 ```text
-Caretaker interactive lab console
-Attached to: .../caretaker-data/run/lab-console.sock
-Lab PID: 12345  supervised=False
-Type 'help' for commands; 'quit' to disconnect.
-caretaker-lab>
+Status HEALTHY | Alert NONE | Incidents 0 | Validating 0 |
+Approvals 0 | Targets 8 | Worker issues 0
 ```
 
-Then type:
+When Caretaker is actively processing a failure you can see the status change to
+states such as `INCIDENT_ACTIVE`, `VALIDATING`, or `AWAITING_APPROVAL`.
 
-```text
-help
-```
+## Lab UI
 
-> **Do not enter real passwords, API keys, tokens, or other sensitive data.**
-> The lab intentionally enables argument and result evidence so you can inspect
-> what Caretaker records.
+The left side selects one of eight application targets. The main panel shows:
 
-## Menu breadcrumbs
+- a breadcrumb showing the current target/action;
+- a short list of ideas worth trying;
+- editable function arguments;
+- the currently selected behavior and FunctionSlot state;
+- an **Execute function** action;
+- controls for benign/bad/malicious implementation experiments;
+- a local result/error log.
 
-Every application menu shows where you are. For example:
-
-```text
-[Caretaker Lab > Main]
-Application behavior menu
-```
-
-and:
-
-```text
-[Caretaker Lab > Main > Modify implementations]
-Implementation modification menu
-```
-
-Target and variant-selection menus continue the breadcrumb. This is especially
-useful while repeatedly moving between execution and modification experiments.
+The lab deliberately does not duplicate Guard, Repair, approval, or logging
+screens. Those belong to `caretaker-console`.
 
 ## Recommended first experiment
 
-Division is a useful first target because it demonstrates input errors, output
-validation, Repair, operator approval, and FunctionSlot changes.
+### 1. Establish normal division behavior
 
-### Terminal 1: establish normal behavior
-
-1. Start the lab.
-2. Select **1. Divide two values**.
-3. Accept the defaults `10` and `2`.
-
-### Terminal 2: inspect the normal call
-
-At the lab console:
+In the lab select **Divide two values** and execute the defaults:
 
 ```text
-state lab.divide
-events lab.divide
-repair lab.divide
+10
+2
 ```
 
-Accept the current Guard behavior as a baseline:
+In `caretaker-console`:
 
-```text
-baseline lab.divide
-```
+1. Open the **Guard** tab.
+2. Enter `lab.divide` as the target.
+3. View **Events** and **Summary**.
+4. Select **Accept baseline**.
 
-### Terminal 1: introduce a defect
+### 2. Introduce a bad implementation
 
-1. Select **9. Modify / inject function implementations**.
-2. Select **1. Change behavior substitution**.
-3. Select the division target.
-4. Select **bad**.
-5. Run division again with `10` and `2`.
+Back in the lab:
 
-### Terminal 2: examine Caretaker's response
+1. Select **Bad**.
+2. Select **Substitute behavior**.
+3. Execute division again with `10` and `2`.
 
-```text
-state lab.divide
-events lab.divide
-deviations lab.divide
-repair lab.divide
-approvals
-```
+The bad implementation returns the wrong type, causing output validation to
+fail and opening a Repair episode.
 
-If a Repair episode is awaiting approval, copy its episode ID and approve it:
+In `caretaker-console`:
 
-```text
-approve <episode-id>
-```
+1. Watch the status line for incident/validation activity.
+2. Open **Repair** and select **Events**.
+3. Select **Approvals**.
+4. Copy the pending episode UUID into the episode field.
+5. Select **Approve**.
 
-Then rerun the division target in Terminal 1 and inspect the state again:
+Run division again and inspect the target/runtime state.
 
-```text
-state lab.divide
-repair lab.divide
-```
-
-Also try division inputs such as:
+Also try inputs such as:
 
 ```text
 5       0
@@ -148,316 +121,152 @@ monkey  wrench
 10      banana
 ```
 
-The point is not merely whether the call succeeds. Compare the application
-exception, Guard evidence, Repair events, FunctionSlot state, and logged data.
-
-## Lab console commands
-
-The second-terminal console attaches to the running lab process through a
-same-UID Unix-domain socket. It exposes declarative observation and operator
-commands only; it does **not** provide arbitrary Python or shell execution.
-
-Useful commands include:
-
-```text
-status
-    Show the lab PID, workspace, data directory, supervision state, and counts.
-
-targets
-    List all targets and current FunctionSlot/variant state.
-
-state TARGET
-    Show one target's FunctionSlot, behavior substitution, and code mutation.
-
-policy TARGET
-    Show the Repair, Logging, Guard, retry, and candidate-Guard policy.
-
-summary TARGET
-    Show Guard's recent aggregated behavior summary.
-
-events [TARGET] [LIMIT]
-    Show recent raw Guard behavior events.
-
-deviations TARGET [LIMIT]
-    Show deviations from the accepted Guard baseline.
-
-inspections TARGET [LIMIT]
-    Show runtime/code inspections, especially useful after __code__ mutation.
-
-decisions [LIMIT]
-    Show recent Guard decisions.
-
-repair [TARGET] [LIMIT]
-    Show recent Repair events.
-
-approvals
-    Show Repair episodes awaiting operator approval.
-
-baseline TARGET
-    Accept the current Guard baseline for a target.
-
-approve EPISODE_ID
-reject EPISODE_ID [REASON]
-    Act on a pending Repair episode.
-
-logs [LIMIT]
-    Show recent persisted Caretaker application log records.
-
-collector [LIMIT]
-    Show events received by the synthetic loopback collector.
-```
-
-A target can be specified by menu number, short name, or target ID:
-
-```text
-1
-divide
-lab.divide
-```
-
-The console also supports one-shot commands. For example:
-
-```bash
-PYTHONPATH=src:. python -m examples.interactive_caretaker_lab_console \
-  events lab.divide 20
-```
+These demonstrate the difference between bad input and a bad implementation.
 
 ## Guard behavioral-drift experiment
 
-To explore behavioral drift separately from bad input:
-
-1. In Terminal 1, run a target using its **benign** implementation.
-2. In Terminal 2, accept its baseline:
-
-   ```text
-   baseline lab.load_webpage
-   ```
-
-3. In Terminal 1, open **Modify implementations**.
-4. Change the same target's behavior substitution to **malicious**.
+1. Restore a target to benign behavior.
+2. Run it once or more.
+3. In the Caretaker console, accept its Guard baseline.
+4. In the lab select **Malicious** and **Substitute behavior**.
 5. Run the target again.
-6. In Terminal 2, compare:
+6. In the Caretaker console inspect:
+   - Guard events;
+   - deviations;
+   - runtime inspections;
+   - Guard decisions;
+   - Repair events where applicable.
 
-   ```text
-   summary lab.load_webpage
-   events lab.load_webpage
-   deviations lab.load_webpage
-   decisions
-   collector
-   ```
-
-7. Restore the target in Terminal 1 when finished.
-
-The contained `malicious` variants may perform unrelated filesystem,
-subprocess, and loopback-network activity so Guard has something obvious to
-observe. They are intentionally constrained to the laboratory workspace and
-loopback interfaces.
+The contained malicious variants intentionally add unrelated filesystem,
+subprocess, and loopback-network activity so Guard has obvious new behavior to
+observe.
 
 ## Runtime tampering experiment
 
-Behavior substitution changes what the stable dispatcher calls. It does not
-itself modify the active Caretaker FunctionSlot implementation.
+The lab exposes three different implementation-change mechanisms because they
+test different Caretaker boundaries.
 
-To simulate an unauthorized runtime code change instead:
+### Substitute behavior
 
-1. Run a target normally.
-2. Open **Modify implementations**.
-3. Select **Mutate the active dispatcher's `__code__` object**.
-4. Choose a target and alternate implementation.
-5. Run the target again.
-6. From the lab console, examine:
+The stable Caretaker target remains unchanged, but its dispatcher calls another
+implementation.
 
-   ```text
-   state lab.divide
-   inspections lab.divide
-   events lab.divide
-   decisions
-   ```
+Use this for:
 
-This experiment shows the difference between a change in application behavior
-and direct mutation of a Python code object.
+- application bugs;
+- wrong results;
+- new resource behavior;
+- Guard baseline/deviation experiments.
 
-The modification menu also provides **direct FunctionSlot injection**. This is
-an intentionally out-of-band operation that bypasses the normal Repair provider
-and validation pipeline so you can examine Caretaker's runtime state after an
-unexpected implementation replacement.
+### Mutate `__code__`
+
+The active dispatcher's Python `__code__` object is replaced directly without
+calling Caretaker Repair.
+
+Use this for:
+
+- simulated unauthorized in-process mutation;
+- Guard runtime inspection;
+- code-identity vs. behavioral evidence comparisons.
+
+After mutation, execute the target and inspect **Guard > Inspections** in the
+Caretaker console.
+
+### Inject FunctionSlot
+
+An alternate implementation is inserted directly into the FunctionSlot,
+deliberately bypassing candidate generation and validation.
+
+Use this for:
+
+- FunctionSlot version/state inspection;
+- out-of-band activation simulations;
+- rollback/probation experiments.
+
+This is a lab control, not a supported repair deployment path.
 
 ## Targets and useful inputs
 
 | Target | Things to try |
 | --- | --- |
 | Divide two values | `10 / 2`, `5 / 0`, `monkey / wrench`, numeric strings |
-| List a directory | default workspace, `.`, nonexistent directory, a filename instead of a directory |
-| Load a webpage | default `/page`, `/pag`, `/missing`, bad port, optionally an external URL |
-| Search file contents | `caretaker`, `banana`, nonexistent word, nonexistent directory, binary/unreadable files |
-| Call a JSON API | `/api/status`, `/api/echo`, `/api/stats`, missing leading slash, bad port |
+| List a directory | default workspace, `.`, nonexistent directory, a filename |
+| Load a webpage | default `/page`, `/pag`, `/missing`, bad port |
+| Search file contents | `caretaker`, `banana`, nonexistent word/directory |
+| Call a JSON API | `/api/status`, `/api/echo`, `/api/stats`, bad port |
 | Transform text | ordinary text, numbers, punctuation, empty input |
 | Write a note | `notes/test.txt`, `nested/deeper.txt`, `../escape.txt` |
 | Soft timeout | `0.10`, `0.75`, invalid numeric input |
 
-Each target displays more specific ideas immediately before asking for its
-parameters.
+The webpage/API targets use loopback-only demo servers, so Internet access is
+not required.
 
-## Understanding the three implementation changes
+## LLM-assisted investigation
 
-The modification menu deliberately exposes three different mechanisms because
-they test different Caretaker behaviors.
+The Caretaker console's **Guard > LLM assist** action asks the running Guard
+engine for an advisory assessment of the selected target's evidence.
 
-### Behavior substitution
+This is available only when the application configured a Guard assessment
+provider and enabled LLM review. The console does not silently create a remote
+provider or transmit evidence merely because the button was selected.
 
-The stable Caretaker target remains unchanged, but its dispatcher calls a
-benign, bad, or suspicious alternate implementation.
+LLM output is advisory. It does not authorize Repair, override deterministic
+validation gates, or override Integrity policy.
 
-Use this primarily for:
+## What to watch in the Caretaker console
 
-- application defects;
-- incorrect results;
-- behavioral drift;
-- additional resource activity observed by Guard.
+The most useful observations are:
 
-### Code-object mutation
+- **status line**: incident, validation, approval, alert, and worker state;
+- **Overview**: registered targets, Repair mode/authority, FunctionSlot version;
+- **Guard / Events**: resource activity correlated to target calls;
+- **Guard / Deviations**: behavior compared with an accepted baseline;
+- **Guard / Inspections**: runtime/code changes;
+- **Repair / Events**: incident, generation, validation, activation, retry;
+- **Repair / Approvals**: candidates waiting for explicit operator action;
+- **Logs**: persisted Caretaker/application evidence.
 
-The target's active Python `__code__` object is replaced directly.
+A useful discipline is to make **one change, run one target, inspect evidence,
+then restore it** before trying the next experiment.
 
-Use this for:
+## Safety boundary
 
-- simulated runtime tampering;
-- Guard runtime inspection;
-- comparing code identity with behavioral evidence.
+The `malicious` variants are deliberately contained simulations. They:
 
-### FunctionSlot injection
+- read only a synthetic secret created inside the lab workspace;
+- write only lab-owned marker files;
+- run a fixed harmless Python child process without `shell=True`;
+- send only a SHA-256 digest to a second loopback-only HTTP server;
+- do not delete arbitrary user files;
+- do not intentionally transmit data off-host.
 
-An alternate implementation is inserted directly into the Caretaker
-FunctionSlot.
+The workspace defaults to:
 
-Use this for:
+```text
+./caretaker-interactive-lab/workspace
+```
 
-- examining FunctionSlot versions and state;
-- simulated out-of-band activation;
-- rollback and probation experiments.
-
-This deliberately bypasses the normal candidate-generation and validation path.
-It is a laboratory control, not an example of how an application should deploy
-repairs.
-
-## Running under the Caretaker supervisor
-
-The lab console works whether the example is launched directly or under the
-Caretaker supervisor. For experiments involving the standard Caretaker control
-socket, start the application with:
+and can be moved with:
 
 ```bash
+CARETAKER_LAB_ROOT=/some/test/path ...
+```
+
+Use a disposable development environment when experimenting with runtime code
+mutation and FunctionSlot injection.
+
+### Optional Guard LLM assessment in the lab
+
+To make the console's **Guard > LLM assist** action available for this example,
+start the supervised lab with a local Ollama model name:
+
+```bash
+CARETAKER_LAB_OLLAMA_MODEL=gemma3:27b \
 PYTHONPATH=src:. python -m caretaker.run \
   --data-directory ./caretaker-interactive-lab/caretaker-data \
   examples.interactive_caretaker_lab
 ```
 
-Then attach the lab console exactly as before:
-
-```bash
-PYTHONPATH=src:. python -m examples.interactive_caretaker_lab_console
-```
-
-The supervisor's standard control socket is separate from the lab console. It
-can be queried from another terminal with commands such as:
-
-```bash
-caretaker-logging control \
-  ./caretaker-interactive-lab/caretaker-data/run/control.sock \
-  status
-
-caretaker-logging control \
-  ./caretaker-interactive-lab/caretaker-data/run/control.sock \
-  health
-
-caretaker-logging control \
-  ./caretaker-interactive-lab/caretaker-data/run/control.sock \
-  policy-effective
-```
-
-The distinction is intentional:
-
-- the **standard Caretaker control socket** reports supervisor/logging control
-  state;
-- the **example-specific lab console** exposes the live Guard and Repair objects
-  created by this demonstration.
-
-The lab console uses Caretaker's same-UID Unix-socket control mechanism, but its
-commands are specific to this example and should not be mistaken for a general
-production administration API.
-
-## Custom data directory or lab root
-
-By default, everything created by the example is placed below:
-
-```text
-./caretaker-interactive-lab/
-```
-
-Important paths are:
-
-```text
-caretaker-interactive-lab/
-├── caretaker-data/
-│   ├── application/        Caretaker log segments
-│   └── run/
-│       ├── control.sock    Standard supervisor socket, when supervised
-│       └── lab-console.sock Example-specific observation console
-└── workspace/              Synthetic files used by experiments
-```
-
-You can place the lab somewhere else by setting `CARETAKER_LAB_ROOT` in **both
-terminals**:
-
-```bash
-CARETAKER_LAB_ROOT=/tmp/my-caretaker-lab \
-PYTHONPATH=src:. python -m examples.interactive_caretaker_lab
-```
-
-and:
-
-```bash
-CARETAKER_LAB_ROOT=/tmp/my-caretaker-lab \
-PYTHONPATH=src:. python -m examples.interactive_caretaker_lab_console
-```
-
-If the Caretaker data directory is otherwise customized, pass the socket path
-explicitly:
-
-```bash
-PYTHONPATH=src:. python -m examples.interactive_caretaker_lab_console \
-  --socket /path/to/caretaker-data/run/lab-console.sock
-```
-
-## Safety notes
-
-The built-in suspicious implementations are designed for observation, not for
-damage. They are limited to laboratory-owned files, a fixed harmless child
-process, and loopback HTTP traffic. The synthetic collector receives a digest,
-not arbitrary user file contents.
-
-However, some application menu options allow *you* to enter paths and URLs. If
-you enter a real directory or an external URL, the application will attempt to
-operate on what you supplied, subject to the target's own checks. For a clean
-demonstration, use the default workspace and loopback endpoints first.
-
-The example also exposes deliberate runtime mutation controls. Run it only in a
-development/test environment.
-
-## A useful testing rhythm
-
-For most experiments, use this sequence:
-
-```text
-Terminal 1: run benign target
-Terminal 2: inspect and optionally accept Guard baseline
-Terminal 1: make one implementation or input change
-Terminal 1: run again
-Terminal 2: inspect Guard / Repair / logs
-Terminal 2: approve or reject Repair if applicable
-Terminal 1: restore target
-Repeat with the next experiment
-```
-
-Changing only one thing at a time makes Caretaker's response much easier to
-understand.
+The example uses Caretaker's loopback-only Ollama provider defaults. If the
+environment variable is absent, Guard LLM review remains disabled and selecting
+**LLM assist** reports that no advisory provider is configured.

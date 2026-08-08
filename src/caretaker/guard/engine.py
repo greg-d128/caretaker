@@ -151,9 +151,17 @@ class GuardEngine(GuardFacade):
         if binding is None:
             return ()
         inspections = self.store.recent_inspections(binding.identity.module_name, limit=max(limit * 4, 50))
+        qualified_names = {binding.identity.qualified_name}
+        if binding.function_resolver is not None:
+            try:
+                current = binding.function_resolver()
+            except Exception:
+                current = None
+            if current is not None:
+                qualified_names.add(getattr(current, "__qualname__", binding.identity.qualified_name))
         return tuple(
             item for item in inspections
-            if getattr(getattr(item, "subject", None), "qualified_name", None) == binding.identity.qualified_name
+            if getattr(getattr(item, "subject", None), "qualified_name", None) in qualified_names
         )[-limit:]
 
     def _control_context(self) -> dict[str, object]:

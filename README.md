@@ -35,6 +35,26 @@ The console-script equivalent is:
 caretaker-run --policy /etc/caretaker/invoice-service.toml invoice_service
 ```
 
+## Operator console
+
+Caretaker includes a Textual operator console for live inspection and explicit
+operator actions. Start the application with `caretaker-run`, then attach from a
+second terminal:
+
+```bash
+caretaker-console --data-directory /var/lib/invoice-service/caretaker
+```
+
+The status line reports current runtime state, recent alert severity, active
+Repair incidents, functions undergoing candidate validation, pending approvals,
+registered targets, degraded capabilities, and supervisor worker health. Tabs
+provide FunctionSlot/target inspection, Guard evidence and baseline actions,
+Repair approval/rejection, persisted logs, and advisory Guard LLM assessment
+when the application configured an assessment provider.
+
+The console uses the same authenticated local Unix control plane as the
+supervisor. It does not expose arbitrary shell commands or Python execution.
+
 ## Logging-only use
 
 Existing application logging calls continue to work:

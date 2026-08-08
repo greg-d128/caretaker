@@ -1,74 +1,21 @@
-"""Interactive Caretaker behavior laboratory.
+"""Interactive Textual Caretaker behavior laboratory.
 
-See ``examples/interactive_caretaker_lab.md`` for a guided walkthrough.
+See ``examples/interactive_caretaker_lab.md`` for the guided walkthrough.
 
-This example is intentionally driven from a terminal menu.  It is meant to be
-run by a developer who wants to make one controlled change at a time and then
-inspect Caretaker's evidence, Guard observations, Repair state, and logs from a
-second-terminal lab console.
+Run the lab under ``caretaker-run`` and attach the standard ``caretaker-console``
+from a second terminal. The application UI drives inputs and controlled behavior
+changes; Guard/Repair inspection and operator approval live in Caretaker's own
+console.
 
-The lab provides eight application functions:
-
-* division;
-* directory listing;
-* webpage loading;
-* recursive content search;
-* JSON API calls;
-* text transformation;
-* note writing;
-* a deliberately slow operation for soft-timeout experiments.
-
-Each target has three application-level implementations:
-
-``benign``
-    Expected implementation.
-``bad``
-    Plausible implementation defect: exception, incorrect result, wrong path,
-    or misspelled endpoint.
-``malicious``
-    A *contained simulation* of suspicious behavior.  It still returns the
-    expected result when possible, but also performs unrelated filesystem,
-    subprocess, and loopback-network activity.  It never deletes user data,
-    never transmits real file contents, and never sends data off-host.  The only
-    synthetic secret it reads is created inside this lab's private workspace.
-
-Three modification mechanisms are available:
-
-1. behavior substitution changes the function selected by the original stable
-   dispatcher while leaving the Caretaker FunctionSlot implementation alone;
-2. code-object mutation replaces the active dispatcher's ``__code__`` object
-   without going through Caretaker, simulating unauthorized runtime tampering;
-3. slot injection deliberately replaces the active FunctionSlot implementation
-   and therefore simulates an out-of-band candidate activation.
-
-The mutation/injection mechanisms intentionally bypass the Repair provider and
-validation pipeline.  They exist only so a developer can observe Guard runtime
-inspection and candidate/probation behavior.
-
-The example uses only the Python standard library and Caretaker itself.  It
-starts two loopback-only HTTP servers so network behavior can be tested without
-requiring Internet access.
-
-Direct execution from the repository root::
-
-    PYTHONPATH=src:. python -m examples.interactive_caretaker_lab
-
-Supervised execution, which also exposes Caretaker's standard supervisor control socket::
-
-    PYTHONPATH=src:. python -m caretaker.run \
-      --data-directory ./caretaker-interactive-lab/caretaker-data \
-      examples.interactive_caretaker_lab
-
-Attach the example-specific observation console from a second terminal::
-
-    PYTHONPATH=src:. python -m examples.interactive_caretaker_lab_console
-
-The lab deliberately enables argument and result evidence.  Do not enter real
-secrets while experimenting.
+The contained ``malicious`` variants never intentionally transmit data off-host
+and operate only on synthetic lab-owned data, loopback endpoints, and a fixed
+harmless subprocess. Do not enter real secrets because argument/result evidence
+is intentionally enabled for this example.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import inspect
 import json
@@ -95,6 +42,7 @@ from caretaker import (
     GuardPolicy,
     LoggingBinding,
     ObservationPolicy,
+    OllamaBehaviorAssessmentProvider,
     OutputValidationTrigger,
     RegisteredCase,
     RepairAuthority,
@@ -110,14 +58,16 @@ from caretaker import (
     caretaker,
 )
 from caretaker.guard.models import GuardDeviationAction
+from caretaker.guard.policy import LLMReviewPolicy
 from caretaker.logging import (
     OperatorLoggingPolicy,
     configure as configure_logging,
     get_runtime as get_logging_runtime,
-    read_segment,
 )
-from caretaker.logging.ipc import ControlSocketServer
 from caretaker.provider import CandidateBatch, RepairRequest
+from textual.app import App, ComposeResult
+from textual.containers import Horizontal, Vertical
+from textual.widgets import Button, Footer, Header, Input, Label, RichLog, Static
 
 
 LOGGER = logging.getLogger("caretaker.interactive_lab")
@@ -129,8 +79,6 @@ WORKSPACE = LAB_ROOT / "workspace"
 LOCAL_LOG_DIRECTORY = LAB_ROOT / "caretaker-data"
 SYNTHETIC_SECRET = WORKSPACE / "demo-secret.txt"
 COLLECTOR_EVENTS: list[dict[str, str]] = []
-LAB_CONSOLE_SERVER: ControlSocketServer | None = None
-LAB_CONSOLE_THREAD: threading.Thread | None = None
 
 SEARCH_FILE_LIMIT = 2_000
 HTTP_TIMEOUT_SECONDS = 4.0
@@ -609,7 +557,14 @@ class LabRepairProvider:
 # ---------------------------------------------------------------------------
 
 
-GUARD = GuardEngine(policy=GuardPolicy())
+LAB_OLLAMA_MODEL = os.environ.get("CARETAKER_LAB_OLLAMA_MODEL", "").strip()
+if LAB_OLLAMA_MODEL:
+    GUARD = GuardEngine(
+        policy=GuardPolicy(llm_review=LLMReviewPolicy(enabled=True)),
+        provider=OllamaBehaviorAssessmentProvider(model=LAB_OLLAMA_MODEL),
+    )
+else:
+    GUARD = GuardEngine(policy=GuardPolicy())
 ENGINE = RepairEngine(provider=LabRepairProvider(), guard=GUARD)
 
 COMMON_LOGGING = LoggingBinding(
@@ -868,7 +823,7 @@ def slow_operation(delay_seconds):
 
 
 # ---------------------------------------------------------------------------
-# Menu metadata and helpers
+# Textual laboratory UI
 # ---------------------------------------------------------------------------
 
 
@@ -882,7 +837,7 @@ class TargetSpec:
         function: Callable[..., Any],
         variant_key: str,
         hints: str,
-        prompt: Callable[[], tuple[Any, ...]],
+        parameter_labels: tuple[str, ...],
     ) -> None:
         self.key = key
         self.title = title
@@ -890,471 +845,116 @@ class TargetSpec:
         self.function = function
         self.variant_key = variant_key
         self.hints = hints
-        self.prompt = prompt
+        self.parameter_labels = parameter_labels
 
 
 TARGETS: dict[str, TargetSpec] = {}
 
 
-def _input_with_default(label: str, default: str) -> str:
-    value = input(f"{label} [{default}]: ").strip()
-    return value if value else default
-
-
-def _prompt_divide() -> tuple[Any, ...]:
-    left = _input_with_default("Left value", "10")
-    right = _input_with_default("Right value", "2")
-    return left, right
-
-
-def _prompt_list() -> tuple[Any, ...]:
-    return (_input_with_default("Directory", str(WORKSPACE)),)
-
-
-def _prompt_web() -> tuple[Any, ...]:
+def _default_arguments(spec: TargetSpec) -> tuple[str, ...]:
     assert SERVERS is not None
-    return (_input_with_default("URL", f"{SERVERS.application_base}/page"),)
-
-
-def _prompt_search() -> tuple[Any, ...]:
-    directory = _input_with_default("Directory", str(WORKSPACE))
-    word = _input_with_default("Word", "caretaker")
-    return directory, word
-
-
-def _prompt_api() -> tuple[Any, ...]:
-    assert SERVERS is not None
-    base = _input_with_default("API base URL", SERVERS.application_base)
-    endpoint = _input_with_default("Endpoint", "/api/status")
-    value = _input_with_default("value parameter", "example")
-    return base, endpoint, value
-
-
-def _prompt_transform() -> tuple[Any, ...]:
-    return (_input_with_default("Text", "Caretaker test"),)
-
-
-def _prompt_write() -> tuple[Any, ...]:
-    relative = _input_with_default("Relative path under lab workspace", "notes/user-note.txt")
-    text = _input_with_default("Text", "Caretaker interactive lab note")
-    return relative, text
-
-
-def _prompt_slow() -> tuple[Any, ...]:
-    return (_input_with_default("Requested delay in seconds", "0.10"),)
+    values = {
+        "divide": ("10", "2"),
+        "list": (str(WORKSPACE),),
+        "web": (f"{SERVERS.application_base}/page",),
+        "search": (str(WORKSPACE), "caretaker"),
+        "api": (SERVERS.application_base, "/api/status", "example"),
+        "transform": ("Caretaker test",),
+        "write": ("notes/user-note.txt", "Caretaker interactive lab note"),
+        "slow": ("0.10",),
+    }
+    return values[spec.variant_key]
 
 
 def _build_target_specs() -> None:
     TARGETS.clear()
     specs = (
         TargetSpec(
-            key="1",
-            title="Divide two values",
-            target_id="lab.divide",
-            function=divide_values,
-            variant_key="divide",
+            key="1", title="Divide two values", target_id="lab.divide",
+            function=divide_values, variant_key="divide",
+            parameter_labels=("Left value", "Right value"),
             hints=(
                 "Try 10 / 2, 5 / 0, numeric strings such as '9' and '3', or "
                 "words such as 'monkey' and 'wrench'. The bad implementation "
                 "returns the wrong type and exercises output validation. This "
                 "target requires operator approval before a validated repair is activated."
             ),
-            prompt=_prompt_divide,
         ),
         TargetSpec(
-            key="2",
-            title="List a directory",
-            target_id="lab.list_directory",
-            function=list_directory,
-            variant_key="list",
+            key="2", title="List a directory", target_id="lab.list_directory",
+            function=list_directory, variant_key="list",
+            parameter_labels=("Directory",),
             hints=(
                 "Use the default demo workspace, '.', a nonexistent path, or a file "
                 "instead of a directory. The bad implementation appends a misspelled "
                 "subdirectory. This target diagnoses exceptions but does not repair them."
             ),
-            prompt=_prompt_list,
         ),
         TargetSpec(
-            key="3",
-            title="Load a webpage",
-            target_id="lab.load_webpage",
-            function=load_webpage,
-            variant_key="web",
+            key="3", title="Load a webpage", target_id="lab.load_webpage",
+            function=load_webpage, variant_key="web", parameter_labels=("URL",),
             hints=(
                 "The default URL is a local /page endpoint. Try /pag, /missing, a bad "
                 "port, or an external URL if your environment permits it. The bad "
                 "implementation deliberately adds a typo to the requested URL."
             ),
-            prompt=_prompt_web,
         ),
         TargetSpec(
-            key="4",
-            title="Search file contents recursively",
-            target_id="lab.search_files",
-            function=search_files,
-            variant_key="search",
+            key="4", title="Search file contents recursively", target_id="lab.search_files",
+            function=search_files, variant_key="search",
+            parameter_labels=("Directory", "Word"),
             hints=(
                 "Search the default workspace for 'caretaker', 'banana', or text that "
                 "does not exist. Try a nonexistent directory or a directory containing "
                 "unreadable/binary files. The bad implementation searches filenames "
                 "instead of file contents."
             ),
-            prompt=_prompt_search,
         ),
         TargetSpec(
-            key="5",
-            title="Call a JSON API",
-            target_id="lab.api_call",
-            function=api_call,
-            variant_key="api",
+            key="5", title="Call a JSON API", target_id="lab.api_call",
+            function=api_call, variant_key="api",
+            parameter_labels=("API base URL", "Endpoint", "value parameter"),
             hints=(
                 "Default endpoint: /api/status. Try /api/echo, /api/stats, an endpoint "
                 "without the leading slash, or a bad base URL/port. The bad implementation "
                 "misspells the endpoint after you enter it."
             ),
-            prompt=_prompt_api,
         ),
         TargetSpec(
-            key="6",
-            title="Transform text",
-            target_id="lab.transform",
-            function=transform_text,
-            variant_key="transform",
+            key="6", title="Transform text", target_id="lab.transform",
+            function=transform_text, variant_key="transform", parameter_labels=("Text",),
             hints=(
                 "Enter ordinary text, numbers, punctuation, or an empty string. The bad "
                 "implementation returns bytes instead of str. This target is configured "
                 "for automatic eligible repair and one pure retry, so it is useful for "
                 "watching a complete Repair activation cycle."
             ),
-            prompt=_prompt_transform,
         ),
         TargetSpec(
-            key="7",
-            title="Write a note inside the lab workspace",
-            target_id="lab.write_note",
-            function=write_note,
-            variant_key="write",
+            key="7", title="Write a note inside the lab workspace", target_id="lab.write_note",
+            function=write_note, variant_key="write",
+            parameter_labels=("Relative path under lab workspace", "Text"),
             hints=(
                 "Try notes/test.txt, nested/deeper.txt, or ../escape.txt. The lab itself "
                 "rejects path traversal for safety. The bad implementation writes to a "
                 "'.wrong' filename instead of the requested path."
             ),
-            prompt=_prompt_write,
         ),
         TargetSpec(
-            key="8",
-            title="Run a soft-timeout experiment",
-            target_id="lab.slow_operation",
-            function=slow_operation,
-            variant_key="slow",
+            key="8", title="Run a soft-timeout experiment", target_id="lab.slow_operation",
+            function=slow_operation, variant_key="slow",
+            parameter_labels=("Requested delay in seconds",),
             hints=(
                 "The target has a 0.5 second soft-timeout trigger. Try 0.10, 0.75, or "
-                "a nonnumeric value. The bad implementation adds 0.75 seconds. Notice "
-                "that a soft timeout is detected only after the function returns; it "
-                "does not interrupt the sleep."
+                "a nonnumeric value. The bad implementation adds 0.75 seconds. A soft "
+                "timeout is detected only after the function returns; it does not interrupt sleep."
             ),
-            prompt=_prompt_slow,
         ),
     )
     TARGETS.update((spec.key, spec) for spec in specs)
     for spec in specs:
         implementation = spec.function.__caretaker_target__.slot.original
         ORIGINAL_CODE_OBJECTS.setdefault(spec.target_id, implementation.__code__)
-
-
-def _target_by_id(target_id: str) -> TargetSpec:
-    return next(spec for spec in TARGETS.values() if spec.target_id == target_id)
-
-
-def _print_result(result: Any) -> None:
-    if isinstance(result, (dict, list, tuple)):
-        print(json.dumps(result, indent=2, default=str))
-    else:
-        print(repr(result))
-
-
-def _close_guard_window(target_id: str) -> None:
-    try:
-        window = GUARD.close_target_window(target_id)
-    except Exception as exc:
-        print(f"[Guard] Could not close observation window: {type(exc).__name__}: {exc}")
-        return
-    if window is not None:
-        print(
-            f"[Guard] Closed behavior window: {window.event_count} events, "
-            f"{window.call_count} correlated call(s)."
-        )
-
-
-def execute_target(spec: TargetSpec) -> None:
-    _menu_header("Main", spec.title, title=spec.title)
-    print("Target:", spec.target_id)
-    print("Behavior substitution:", ACTIVE_VARIANTS[spec.variant_key])
-    current = spec.function.__caretaker_target__.slot.load()
-    print(
-        "FunctionSlot:",
-        f"version={current.number}",
-        f"candidate={current.candidate_id or '-'}",
-        f"state={spec.function.__caretaker_target__.slot.state.name}",
-    )
-    print("\nIdeas to try:")
-    print(textwrap.fill(spec.hints, width=78, initial_indent="  ", subsequent_indent="  "))
-    print()
-
-    args = spec.prompt()
-    print("\nExecuting...")
-    try:
-        result = spec.function(*args)
-    except BaseException as exc:
-        print(f"APPLICATION EXCEPTION: {type(exc).__name__}: {exc}")
-        notes = getattr(exc, "__notes__", ())
-        for note in notes:
-            print(f"  note: {note}")
-    else:
-        print("RESULT:")
-        _print_result(result)
-    finally:
-        _close_guard_window(spec.target_id)
-
-    print("\nNext useful steps:")
-    print("  * Use the attached lab console to inspect Guard / Repair / log evidence")
-    print("  * Use the modification menu to substitute or inject another implementation")
-    print("  * Run 'help' in the lab console for useful observation commands")
-
-
-# ---------------------------------------------------------------------------
-# Menu breadcrumbs
-# ---------------------------------------------------------------------------
-
-
-def _breadcrumb(*parts: str) -> str:
-    return "Caretaker Lab > " + " > ".join(parts)
-
-
-def _menu_header(*parts: str, title: str | None = None) -> None:
-    print(f"\n[{_breadcrumb(*parts)}]")
-    if title:
-        print(title)
-        print("-" * len(title))
-
-
-# ---------------------------------------------------------------------------
-# Modification menu
-# ---------------------------------------------------------------------------
-
-
-def _choose_target(*breadcrumb: str) -> TargetSpec | None:
-    _menu_header(*breadcrumb, "Select target", title="Targets")
-    for key, spec in TARGETS.items():
-        print(f"  {key}. {spec.title} ({spec.target_id})")
-    value = input("Select target, or Enter to cancel: ").strip()
-    return TARGETS.get(value)
-
-
-def _choose_variant(spec: TargetSpec, *breadcrumb: str) -> str | None:
-    _menu_header(
-        *breadcrumb,
-        spec.title,
-        "Select variant",
-        title=f"Variants for {spec.title}",
-    )
-    print("  1. benign     expected behavior")
-    print("  2. bad        application defect / incorrect result")
-    print("  3. malicious  contained suspicious side effects + expected result")
-    value = input("Select variant, or Enter to cancel: ").strip()
-    return {"1": "benign", "2": "bad", "3": "malicious"}.get(value)
-
-
-def change_behavior_substitution() -> None:
-    spec = _choose_target("Main", "Modify implementations")
-    if spec is None:
-        return
-    variant = _choose_variant(spec, "Main", "Modify implementations")
-    if variant is None:
-        return
-    ACTIVE_VARIANTS[spec.variant_key] = variant
-    print(
-        f"Behavior substitution for {spec.target_id} is now {variant!r}.\n"
-        "The Caretaker FunctionSlot itself was not modified. This is useful for "
-        "behavioral-drift experiments after accepting a benign Guard baseline."
-    )
-
-
-def mutate_active_code_object() -> None:
-    spec = _choose_target("Main", "Modify implementations")
-    if spec is None:
-        return
-    variant_name = _choose_variant(spec, "Main", "Modify implementations")
-    if variant_name is None:
-        return
-
-    slot = spec.function.__caretaker_target__.slot
-    if slot.load().number != 0:
-        print(
-            "Code-object mutation is limited to the original dispatcher. Restore the "
-            "target to its oldest FunctionSlot version first."
-        )
-        return
-
-    implementation = slot.load().implementation
-    variant = VARIANTS[spec.variant_key][variant_name]
-    if implementation.__code__.co_argcount != variant.__code__.co_argcount:
-        print("Variant signature is incompatible with this dispatcher.")
-        return
-
-    print(
-        "\nWARNING: this simulates unauthorized in-process tampering by replacing the "
-        "function's __code__ object directly. No Caretaker Repair or validation API "
-        "is called. Execute the function once, then inspect Guard runtime inspections."
-    )
-    answer = input("Mutate the active code object? [y/N]: ").strip().lower()
-    if answer != "y":
-        return
-
-    implementation.__code__ = variant.__code__
-    CODE_MUTATIONS[spec.target_id] = variant_name
-    print(f"Mutated {spec.target_id} to the {variant_name!r} code object.")
-
-
-def restore_code_object(spec: TargetSpec) -> None:
-    original = ORIGINAL_CODE_OBJECTS.get(spec.target_id)
-    if original is None:
-        return
-    slot = spec.function.__caretaker_target__.slot
-    slot.original.__code__ = original
-    CODE_MUTATIONS.pop(spec.target_id, None)
-
-
-def inject_slot_variant() -> None:
-    spec = _choose_target("Main", "Modify implementations")
-    if spec is None:
-        return
-    variant_name = _choose_variant(spec, "Main", "Modify implementations")
-    if variant_name is None:
-        return
-
-    implementation = VARIANTS[spec.variant_key][variant_name]
-    source = textwrap.dedent(inspect.getsource(implementation))
-    source_hash = hashlib.sha256(source.encode("utf-8")).hexdigest()
-    slot = spec.function.__caretaker_target__.slot
-
-    print(
-        "\nWARNING: this lab action deliberately bypasses Repair candidate generation "
-        "and validation. It directly activates a FunctionSlot version to simulate "
-        "runtime code substitution. Guard may identify it as a changed candidate and "
-        "may roll it back after execution."
-    )
-    answer = input("Inject this implementation? [y/N]: ").strip().lower()
-    if answer != "y":
-        return
-
-    lease = slot.begin_repair()
-    try:
-        version = slot.activate(
-            lease=lease,
-            implementation=implementation,
-            source=source,
-            source_hash=source_hash,
-            repair_attempt_id=uuid4(),
-            candidate_id=uuid4(),
-        )
-    except Exception:
-        try:
-            slot.abandon_repair(lease)
-        except Exception:
-            pass
-        raise
-
-    print(
-        f"Injected {variant_name!r} into {spec.target_id}; "
-        f"FunctionSlot version is now {version.number}."
-    )
-    print(
-        "Execute the target once, then inspect Guard runtime inspections, decisions, "
-        "candidate state, and Repair/rollback events."
-    )
-
-
-def rollback_one_version() -> None:
-    spec = _choose_target("Main", "Modify implementations")
-    if spec is None:
-        return
-    slot = spec.function.__caretaker_target__.slot
-    current = slot.load()
-    previous = slot.previous()
-    if previous is None:
-        print("No previous FunctionSlot version exists.")
-        return
-    failed = slot.rollback(current.number)
-    print(
-        f"Rolled back version {failed.number}; active version is now {slot.load().number}."
-    )
-
-
-def restore_original_dispatcher() -> None:
-    spec = _choose_target("Main", "Modify implementations")
-    if spec is None:
-        return
-    restore_code_object(spec)
-    slot = spec.function.__caretaker_target__.slot
-    count = 0
-    while slot.previous() is not None:
-        slot.rollback(slot.load().number)
-        count += 1
-    ACTIVE_VARIANTS[spec.variant_key] = "benign"
-    print(
-        f"Restored {spec.target_id} to its oldest available FunctionSlot version "
-        f"after {count} rollback(s); dispatcher behavior is benign."
-    )
-
-
-def reset_all_behavior_substitutions() -> None:
-    for key in ACTIVE_VARIANTS:
-        ACTIVE_VARIANTS[key] = "benign"
-    print("All dispatcher behavior substitutions are now benign.")
-
-
-
-def modification_menu() -> None:
-    while True:
-        _menu_header(
-            "Main",
-            "Modify implementations",
-            title="Implementation modification menu",
-        )
-        print("1. Change behavior substitution (stable FunctionSlot remains unchanged)")
-        print("2. Mutate the active dispatcher's __code__ object (simulated tampering)")
-        print("3. Inject a variant directly into the FunctionSlot")
-        print("4. Roll back one FunctionSlot version")
-        print("5. Restore target to oldest version + original code + benign dispatcher")
-        print("6. Reset all dispatcher substitutions to benign")
-        print("0. Return to main menu")
-
-        choice = input("Selection: ").strip()
-        try:
-            if choice == "1":
-                change_behavior_substitution()
-            elif choice == "2":
-                mutate_active_code_object()
-            elif choice == "3":
-                inject_slot_variant()
-            elif choice == "4":
-                rollback_one_version()
-            elif choice == "5":
-                restore_original_dispatcher()
-            elif choice == "6":
-                reset_all_behavior_substitutions()
-            elif choice == "0":
-                return
-            else:
-                print("Unknown selection.")
-        except Exception as exc:
-            print(f"Modification failed: {type(exc).__name__}: {exc}")
-
-
-# ---------------------------------------------------------------------------
-# Live lab console
-# ---------------------------------------------------------------------------
 
 
 def _active_log_directory() -> Path:
@@ -1364,267 +964,275 @@ def _active_log_directory() -> Path:
     return Path(runtime.active_policy.directory)
 
 
-def _lab_console_socket_path() -> Path:
-    return _active_log_directory() / "run" / "lab-console.sock"
+def _restore_code_object(spec: TargetSpec) -> None:
+    original = ORIGINAL_CODE_OBJECTS.get(spec.target_id)
+    if original is None:
+        return
+    slot = spec.function.__caretaker_target__.slot
+    slot.original.__code__ = original
+    CODE_MUTATIONS.pop(spec.target_id, None)
 
 
-def _resolve_console_target(value: str | None) -> TargetSpec | None:
-    if value is None or value in {"", "all", "*"}:
-        return None
-    for spec in TARGETS.values():
-        if value in {spec.key, spec.variant_key, spec.target_id}:
-            return spec
-    raise KeyError(f"Unknown target {value!r}; use the console 'targets' command")
+class CaretakerLabApp(App):
+    TITLE = "Caretaker Interactive Behavior Lab"
+    SUB_TITLE = "Drive one behavior change at a time; inspect it with caretaker-console"
 
-
-def _jsonable(value: Any) -> Any:
-    import dataclasses
-    from datetime import datetime
-    from enum import Enum
-    from uuid import UUID
-
-    if dataclasses.is_dataclass(value):
-        return {
-            field.name: _jsonable(getattr(value, field.name))
-            for field in dataclasses.fields(value)
-        }
-    if isinstance(value, Enum):
-        return value.name
-    if isinstance(value, (UUID, Path)):
-        return str(value)
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if isinstance(value, dict):
-        return {str(key): _jsonable(item) for key, item in value.items()}
-    if isinstance(value, (tuple, list, set, frozenset)):
-        return [_jsonable(item) for item in value]
-    if callable(value):
-        return f"{getattr(value, '__module__', '')}.{getattr(value, '__qualname__', repr(value))}"
-    return value
-
-
-def _console_target_state(spec: TargetSpec) -> dict[str, Any]:
-    target = spec.function.__caretaker_target__
-    return {
-        "menu_key": spec.key,
-        "title": spec.title,
-        "target_id": spec.target_id,
-        "behavior_substitution": ACTIVE_VARIANTS[spec.variant_key],
-        "code_mutation": CODE_MUTATIONS.get(spec.target_id),
-        "slot": target.slot.snapshot(),
+    CSS = """
+    Screen { layout: vertical; }
+    #breadcrumb {
+        height: 3;
+        padding: 1 2;
+        text-style: bold;
+        border-bottom: solid $accent;
     }
-
-
-def _console_target_policy(spec: TargetSpec) -> dict[str, Any]:
-    policy = spec.function.__caretaker_target__.policy
-    return {
-        "target_id": spec.target_id,
-        "repair_mode": policy.mode.name,
-        "repair_authority": policy.authority.name,
-        "triggers": [type(item).__name__ for item in policy.triggers],
-        "retry_attempts": policy.retry.max_attempts,
-        "replay_safety": policy.retry.safety.name,
-        "logging": {
-            "enabled": policy.logging.enabled,
-            "calls": policy.logging.capture_calls,
-            "exceptions": policy.logging.capture_exceptions,
-            "timing": policy.logging.capture_timing,
-            "arguments": policy.logging.capture_arguments,
-            "results": policy.logging.capture_results,
-        },
-        "guard": {
-            "enabled": policy.guard.enabled,
-            "network": policy.guard.observe_network,
-            "filesystem": policy.guard.observe_filesystem,
-            "subprocesses": policy.guard.observe_subprocesses,
-            "imports": policy.guard.observe_imports,
-            "deviation_action": policy.guard.deviation_action.name,
-        },
-        "candidate_guard": {
-            "allow_new_capabilities": policy.candidate_guard.allow_new_capabilities,
-            "rollback_on_significant_deviation": policy.candidate_guard.rollback_on_significant_deviation,
-        },
+    #body { height: 1fr; }
+    #menu {
+        width: 34;
+        padding: 1;
+        border-right: solid $surface-lighten-2;
     }
+    #menu Button { width: 100%; margin-bottom: 1; }
+    #work { width: 1fr; padding: 1 2; }
+    #target-title { text-style: bold; margin-bottom: 1; }
+    #target-hints { height: 7; margin-bottom: 1; }
+    #variant-state { height: 2; }
+    .parameter { margin-bottom: 1; }
+    #execute { width: 20; margin: 1 0; }
+    #modification-bar { height: auto; margin-top: 1; }
+    #modification-bar Button { margin-right: 1; }
+    #action-bar { height: auto; margin-bottom: 1; }
+    #action-bar Button { margin-right: 1; }
+    #output { height: 1fr; border: solid $surface-lighten-2; }
+    """
 
+    BINDINGS = [("q", "quit", "Quit")]
 
-def _console_guard_inspections(spec: TargetSpec, limit: int) -> list[Any]:
-    module_name = spec.function.__caretaker_target__.source.module_name
-    inspections = GUARD.store.recent_inspections(module_name, limit=max(limit * 3, 50))
-    names = {
-        spec.function.__caretaker_target__.source.qualified_name,
-        VARIANTS[spec.variant_key]["benign"].__qualname__,
-        VARIANTS[spec.variant_key]["bad"].__qualname__,
-        VARIANTS[spec.variant_key]["malicious"].__qualname__,
-    }
-    return [item for item in inspections if item.subject.qualified_name in names][-limit:]
+    def __init__(self) -> None:
+        super().__init__()
+        self.selected_key = "1"
+        self.selected_variant = "benign"
 
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Static("Caretaker Lab > Divide two values", id="breadcrumb")
+        with Horizontal(id="body"):
+            with Vertical(id="menu"):
+                yield Label("Application functions")
+                for key, spec in TARGETS.items():
+                    yield Button(f"{key}. {spec.title}", id=f"target-{key}")
+                yield Label("\nImplementation experiments")
+                yield Button("Reset all substitutions", id="reset-all")
+                yield Static(
+                    "\nObserve in a second terminal with:\n"
+                    "caretaker-console --data-directory <lab data dir>",
+                    id="console-help",
+                )
+            with Vertical(id="work"):
+                yield Static("", id="target-title")
+                yield Static("", id="target-hints")
+                yield Static("", id="variant-state")
+                yield Input(id="parameter-1", classes="parameter")
+                yield Input(id="parameter-2", classes="parameter")
+                yield Input(id="parameter-3", classes="parameter")
+                yield Button("Execute function", id="execute", variant="primary")
+                yield Label("Implementation variant to apply")
+                with Horizontal(id="modification-bar"):
+                    yield Button("Benign", id="variant-benign")
+                    yield Button("Bad", id="variant-bad")
+                    yield Button("Malicious", id="variant-malicious")
+                with Horizontal(id="action-bar"):
+                    yield Button("Substitute behavior", id="substitute")
+                    yield Button("Mutate __code__", id="mutate", variant="warning")
+                    yield Button("Inject FunctionSlot", id="inject", variant="warning")
+                    yield Button("Rollback slot", id="rollback")
+                    yield Button("Restore target", id="restore")
+                yield RichLog(id="output", wrap=True, markup=True)
+        yield Footer()
 
-def _console_log_records(limit: int) -> list[dict[str, Any]]:
-    event_directory = _active_log_directory() / "application" / "events"
-    paths = sorted(event_directory.glob("*.ctlog")) + sorted(
-        event_directory.glob("*.ctlog.gz")
-    )
-    records = []
-    for path in paths[-6:]:
+    def on_mount(self) -> None:
+        self._show_target("1")
+
+    @property
+    def spec(self) -> TargetSpec:
+        return TARGETS[self.selected_key]
+
+    def _set_breadcrumb(self, *parts: str) -> None:
+        self.query_one("#breadcrumb", Static).update("Caretaker Lab > " + " > ".join(parts))
+
+    def _show_target(self, key: str) -> None:
+        self.selected_key = key
+        spec = self.spec
+        self._set_breadcrumb(spec.title)
+        self.query_one("#target-title", Static).update(f"{spec.title}  [{spec.target_id}]")
+        self.query_one("#target-hints", Static).update("Ideas to try:\n" + textwrap.fill(spec.hints, width=90))
+        defaults = _default_arguments(spec)
+        inputs = [self.query_one(f"#parameter-{index}", Input) for index in (1, 2, 3)]
+        for index, widget in enumerate(inputs):
+            if index < len(spec.parameter_labels):
+                widget.disabled = False
+                widget.placeholder = spec.parameter_labels[index]
+                widget.value = defaults[index]
+            else:
+                widget.value = ""
+                widget.placeholder = "unused"
+                widget.disabled = True
+        self._refresh_variant_state()
+
+    def _refresh_variant_state(self) -> None:
+        spec = self.spec
+        slot = spec.function.__caretaker_target__.slot
+        current = slot.load()
+        self.query_one("#variant-state", Static).update(
+            f"Behavior={ACTIVE_VARIANTS[spec.variant_key]}   selected={self.selected_variant}   "
+            f"slot-version={current.number}   slot-state={slot.state.name}   "
+            f"code-mutation={CODE_MUTATIONS.get(spec.target_id, '-')}"
+        )
+
+    def _arguments(self) -> tuple[str, ...]:
+        count = len(self.spec.parameter_labels)
+        return tuple(self.query_one(f"#parameter-{index}", Input).value for index in range(1, count + 1))
+
+    def _output(self, message: Any) -> None:
+        log = self.query_one("#output", RichLog)
+        if isinstance(message, (dict, list, tuple)):
+            log.write(json.dumps(message, indent=2, default=str))
+        else:
+            log.write(str(message))
+
+    async def _execute(self) -> None:
+        spec = self.spec
+        args = self._arguments()
+        self._set_breadcrumb(spec.title, "Execute")
+        self._output(f"Executing {spec.target_id}{args!r}")
         try:
-            records.extend(read_segment(path))
-        except Exception:
-            continue
-    return [
-        {
-            "time": record.occurred_at.isoformat(),
-            "channel": record.channel.name,
-            "severity": record.severity,
-            "logger": record.logger_name,
-            "message": record.formatted_message or record.message_template,
-            "target_id": str(record.target_id or record.fields.get("target_id", "")),
-            "event": str(record.fields.get("event", "")),
-            "fields": _jsonable(dict(record.fields)),
-        }
-        for record in records[-limit:]
-    ]
+            result = await asyncio.to_thread(spec.function, *args)
+        except BaseException as exc:
+            self._output(f"APPLICATION EXCEPTION: {type(exc).__name__}: {exc}")
+            for note in getattr(exc, "__notes__", ()):
+                self._output(f"  note: {note}")
+        else:
+            self._output({"result": result})
+        finally:
+            try:
+                GUARD.close_target_window(spec.target_id)
+            except Exception as exc:
+                self._output(f"Guard window close failed: {type(exc).__name__}: {exc}")
+            self._refresh_variant_state()
+            self._output("Inspect the same target in caretaker-console before making the next change.")
 
+    def _substitute(self) -> None:
+        spec = self.spec
+        ACTIVE_VARIANTS[spec.variant_key] = self.selected_variant
+        self._set_breadcrumb(spec.title, "Modify", "Behavior substitution")
+        self._output(
+            f"Behavior substitution for {spec.target_id} is now {self.selected_variant!r}. "
+            "The FunctionSlot itself was not changed."
+        )
+        self._refresh_variant_state()
 
-def _lab_console_handler(
-    request: dict[str, Any],
-    credentials: tuple[int, int, int],
-) -> dict[str, Any]:
-    command = str(request.get("command", "")).strip().lower()
-    target_value = request.get("target")
-    limit = max(1, min(int(request.get("limit", 30)), 200))
+    def _mutate(self) -> None:
+        spec = self.spec
+        slot = spec.function.__caretaker_target__.slot
+        if slot.load().number != 0:
+            raise RuntimeError("Restore the target to FunctionSlot version 0 before __code__ mutation")
+        implementation = slot.load().implementation
+        variant = VARIANTS[spec.variant_key][self.selected_variant]
+        if implementation.__code__.co_argcount != variant.__code__.co_argcount:
+            raise RuntimeError("Selected variant has an incompatible signature")
+        implementation.__code__ = variant.__code__
+        CODE_MUTATIONS[spec.target_id] = self.selected_variant
+        self._set_breadcrumb(spec.title, "Modify", "Runtime __code__ mutation")
+        self._output(
+            f"Directly replaced the active dispatcher's __code__ with {self.selected_variant!r}. "
+            "This bypassed Caretaker Repair. Execute it, then inspect Guard runtime inspections."
+        )
+        self._refresh_variant_state()
 
-    if command == "status":
-        return {
-            "ok": True,
-            "pid": os.getpid(),
-            "peer_pid": credentials[0],
-            "supervised": os.environ.get("CARETAKER_SUPERVISED") == "1",
-            "workspace": str(WORKSPACE),
-            "data_directory": str(_active_log_directory()),
-            "console_socket": str(_lab_console_socket_path()),
-            "pending_approvals": len(ENGINE.pending_approvals()),
-            "guard_decisions": len(GUARD.decisions),
-            "collector_events": len(COLLECTOR_EVENTS),
-        }
-
-    if command == "targets":
-        return {"ok": True, "targets": [_console_target_state(spec) for spec in TARGETS.values()]}
-
-    if command in {"state", "policy", "summary", "deviations", "inspections", "baseline-accept"}:
-        spec = _resolve_console_target(str(target_value or ""))
-        if spec is None:
-            raise ValueError(f"{command} requires a target")
-        if command == "state":
-            return {"ok": True, "state": _console_target_state(spec)}
-        if command == "policy":
-            return {"ok": True, "policy": _console_target_policy(spec)}
-        if command == "summary":
-            summary = GUARD.recent_summary(spec.target_id, calls=20)
-            return {"ok": True, "target_id": spec.target_id, "summary": _jsonable(summary)}
-        if command == "deviations":
-            deviations = list(
-                getattr(GUARD, "_deviations_by_target", {}).get(spec.target_id, ())
+    def _inject(self) -> None:
+        spec = self.spec
+        implementation = VARIANTS[spec.variant_key][self.selected_variant]
+        source = textwrap.dedent(inspect.getsource(implementation))
+        source_hash = hashlib.sha256(source.encode("utf-8")).hexdigest()
+        slot = spec.function.__caretaker_target__.slot
+        lease = slot.begin_repair()
+        try:
+            version = slot.activate(
+                lease=lease,
+                implementation=implementation,
+                source=source,
+                source_hash=source_hash,
+                repair_attempt_id=uuid4(),
+                candidate_id=uuid4(),
             )
-            return {
-                "ok": True,
-                "target_id": spec.target_id,
-                "deviations": _jsonable(deviations[-limit:]),
-            }
-        if command == "inspections":
-            return {
-                "ok": True,
-                "target_id": spec.target_id,
-                "inspections": _jsonable(_console_guard_inspections(spec, limit)),
-            }
-        baseline = GUARD.accept_baseline(spec.target_id)
-        return {"ok": True, "target_id": spec.target_id, "baseline": _jsonable(baseline)}
-
-    if command == "events":
-        spec = _resolve_console_target(str(target_value)) if target_value else None
-        events = GUARD.store.recent_behavior_events(
-            target_id=spec.target_id if spec is not None else None,
-            limit=limit,
+        except Exception:
+            try:
+                slot.abandon_repair(lease)
+            except Exception:
+                pass
+            raise
+        self._set_breadcrumb(spec.title, "Modify", "FunctionSlot injection")
+        self._output(
+            f"Injected {self.selected_variant!r} directly as FunctionSlot version {version.number}. "
+            "This deliberately bypassed candidate generation and validation."
         )
-        return {
-            "ok": True,
-            "target_id": spec.target_id if spec is not None else None,
-            "events": _jsonable(events),
-        }
+        self._refresh_variant_state()
 
-    if command == "decisions":
-        return {"ok": True, "decisions": _jsonable(GUARD.decisions[-limit:])}
+    def _rollback(self) -> None:
+        spec = self.spec
+        slot = spec.function.__caretaker_target__.slot
+        if slot.previous() is None:
+            raise RuntimeError("No previous FunctionSlot version exists")
+        failed = slot.rollback(slot.load().number)
+        self._set_breadcrumb(spec.title, "Modify", "Rollback")
+        self._output(f"Rolled back version {failed.number}; active version={slot.load().number}")
+        self._refresh_variant_state()
 
-    if command == "repair-events":
-        spec = _resolve_console_target(str(target_value)) if target_value else None
-        events = ENGINE.store.recent_events(
-            spec.target_id if spec is not None else None,
-            limit=limit,
-        )
-        return {
-            "ok": True,
-            "target_id": spec.target_id if spec is not None else None,
-            "events": _jsonable(events),
-        }
+    def _restore(self) -> None:
+        spec = self.spec
+        _restore_code_object(spec)
+        slot = spec.function.__caretaker_target__.slot
+        count = 0
+        while slot.previous() is not None:
+            slot.rollback(slot.load().number)
+            count += 1
+        ACTIVE_VARIANTS[spec.variant_key] = "benign"
+        self.selected_variant = "benign"
+        self._set_breadcrumb(spec.title, "Modify", "Restore")
+        self._output(f"Restored original code, oldest slot version, and benign behavior ({count} rollback(s)).")
+        self._refresh_variant_state()
 
-    if command == "approvals":
-        return {"ok": True, "approvals": _jsonable(ENGINE.pending_approvals())}
-
-    if command in {"approve", "reject"}:
-        from uuid import UUID
-
-        episode_id = UUID(str(request["episode_id"]))
-        if command == "approve":
-            activated = ENGINE.approve_repair(episode_id)
-            return {
-                "ok": True,
-                "episode_id": str(episode_id),
-                "activated_version": activated.number,
-            }
-        reason = str(request.get("reason") or "interactive lab rejection")
-        ENGINE.reject_repair(episode_id, reason)
-        return {"ok": True, "episode_id": str(episode_id), "reason": reason}
-
-    if command == "logs":
-        return {
-            "ok": True,
-            "data_directory": str(_active_log_directory()),
-            "records": _console_log_records(limit),
-        }
-
-    if command == "collector":
-        return {"ok": True, "events": list(COLLECTOR_EVENTS[-limit:])}
-
-    return {"ok": False, "error": f"unsupported lab console command: {command!r}"}
-
-
-def start_lab_console() -> None:
-    global LAB_CONSOLE_SERVER, LAB_CONSOLE_THREAD
-
-    server = ControlSocketServer(
-        _lab_console_socket_path(),
-        _lab_console_handler,
-        allowed_uids={os.getuid()},
-    )
-    server.start()
-    thread = threading.Thread(
-        target=server.serve_forever,
-        name="caretaker-interactive-lab-console",
-        daemon=True,
-    )
-    thread.start()
-    LAB_CONSOLE_SERVER = server
-    LAB_CONSOLE_THREAD = thread
-
-
-def stop_lab_console() -> None:
-    global LAB_CONSOLE_SERVER, LAB_CONSOLE_THREAD
-
-    if LAB_CONSOLE_SERVER is not None:
-        LAB_CONSOLE_SERVER.stop()
-    if LAB_CONSOLE_THREAD is not None:
-        LAB_CONSOLE_THREAD.join(timeout=1.0)
-    LAB_CONSOLE_SERVER = None
-    LAB_CONSOLE_THREAD = None
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        button = event.button.id or ""
+        try:
+            if button.startswith("target-"):
+                self._show_target(button.removeprefix("target-"))
+                return
+            if button.startswith("variant-"):
+                self.selected_variant = button.removeprefix("variant-")
+                self._set_breadcrumb(self.spec.title, "Modify", f"Selected {self.selected_variant}")
+                self._refresh_variant_state()
+                return
+            if button == "execute":
+                await self._execute()
+            elif button == "substitute":
+                self._substitute()
+            elif button == "mutate":
+                self._mutate()
+            elif button == "inject":
+                self._inject()
+            elif button == "rollback":
+                self._rollback()
+            elif button == "restore":
+                self._restore()
+            elif button == "reset-all":
+                for key in ACTIVE_VARIANTS:
+                    ACTIVE_VARIANTS[key] = "benign"
+                self.selected_variant = "benign"
+                self._set_breadcrumb("Reset all substitutions")
+                self._output("All behavior substitutions are benign. FunctionSlot versions were not changed.")
+                self._refresh_variant_state()
+        except Exception as exc:
+            self._output(f"ACTION FAILED: {type(exc).__name__}: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -1676,54 +1284,6 @@ def initialize_logging():
     return runtime, True
 
 
-def print_banner() -> None:
-    assert SERVERS is not None
-    print(
-        f"""
-Caretaker interactive behavior laboratory
-=========================================
-
-Workspace:          {WORKSPACE}
-Caretaker data:     {_active_log_directory()}
-Lab console socket: {_lab_console_socket_path()}
-Local webpage/API:  {SERVERS.application_base}
-Synthetic collector:{SERVERS.collector_base}
-Supervised:         {os.environ.get('CARETAKER_SUPERVISED') == '1'}
-
-Observe from another terminal
------------------------------
-PYTHONPATH=src:. python -m examples.interactive_caretaker_lab_console
-
-The menu drives application behavior only. Use the attached lab console to
-inspect Guard events, Repair events, pending approvals, logs, target state, and
-accepted baselines. Type 'help' in that console for commands.
-
-Safety boundary
----------------
-The 'malicious' implementations are contained simulations. They read only the
-synthetic demo secret under the workspace, write only lab-owned marker files,
-run a fixed harmless Python child process, and send only a SHA-256 digest to the
-second loopback server. They do not delete files or transmit data off-host.
-
-Suggested first experiment
---------------------------
-1. In this menu, run a target with its benign implementation.
-2. In the lab console, inspect its Guard events and optionally accept a baseline.
-3. Here, change the target's behavior substitution to malicious.
-4. Run the same target again.
-5. In the console, compare events, deviations, inspections, and Repair state.
-6. Restore the original/benign implementation before moving to the next target.
-
-For Repair, try division with the bad implementation, then use the lab console's
-'approvals' and 'approve <episode-id>' commands. Text transform demonstrates an
-automatic eligible repair and retry.
-
-This lab logs function arguments/results. Do not enter real credentials or
-sensitive data.
-""".strip()
-    )
-
-
 def main() -> None:
     global SERVERS
 
@@ -1735,33 +1295,10 @@ def main() -> None:
     SERVERS.start()
     _build_target_specs()
     GUARD.install(import_hook=False, periodic=False)
-    start_lab_console()
 
-    print_banner()
     try:
-        while True:
-            _menu_header("Main", title="Application behavior menu")
-            for key, spec in TARGETS.items():
-                print(
-                    f"{key}. {spec.title:<39} "
-                    f"[{ACTIVE_VARIANTS[spec.variant_key]}]"
-                )
-            print("9. Modify / inject function implementations")
-            print("0. Quit")
-
-            choice = input("Selection: ").strip()
-            if choice in TARGETS:
-                execute_target(TARGETS[choice])
-            elif choice == "9":
-                modification_menu()
-            elif choice == "0":
-                return
-            else:
-                print("Unknown selection.")
-    except (EOFError, KeyboardInterrupt):
-        print("\nExiting interactive lab.")
+        CaretakerLabApp().run()
     finally:
-        stop_lab_console()
         GUARD.close()
         if SERVERS is not None:
             SERVERS.close()
