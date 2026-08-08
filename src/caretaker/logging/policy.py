@@ -149,7 +149,7 @@ class StorageEmergencyPolicy:
     minimum_free_percent: float | None = None
     pressure_action: EmergencyAction = EmergencyAction.DROP_LOW_PRIORITY
     emergency_action: EmergencyAction = EmergencyAction.STOP_LOGGING
-    unavailable_action: EmergencyAction = EmergencyAction.STOP_APPLICATION
+    unavailable_action: EmergencyAction = EmergencyAction.STOP_LOGGING
 
 
 @dataclass(frozen=True, slots=True)

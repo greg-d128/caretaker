@@ -38,3 +38,8 @@ Every repair episode captures the effective logging-policy generation. A change 
 The supervised runtime maintains heartbeats for its writer, event server, control server, and optional system collector. `WorkerRestartPolicy` controls bounded exponential-backoff restart of restartable components. In 0.5.0a1 the system collector is automatically restartable; writer and socket failures are detected and surfaced as degraded or failed health because safe reconnection and open-segment recovery must take precedence over blind restart.
 
 Restart exhaustion may continue degraded, disable the affected component, or stop the supervised application. Caretaker workers do not elect a replacement supervisor; they remain subordinate to the application-scoped supervisor.
+
+
+## Storage-unavailable default
+
+Ordinary application logging now fails by stopping Caretaker logging rather than terminating the application. Deployments that require fail-closed audit semantics can explicitly set `storage_emergency.unavailable_action = STOP_APPLICATION`.

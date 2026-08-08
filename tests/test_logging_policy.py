@@ -74,3 +74,10 @@ def test_policy_snapshot_is_unsigned_but_attributable(tmp_path):
     assert policy.application_id == "demo"
     assert snapshot.source_path == str(path)
     assert len(snapshot.content_hash) == 64
+
+
+def test_storage_unavailable_does_not_stop_application_by_default() -> None:
+    from caretaker.logging.models import EmergencyAction
+    from caretaker.logging.policy import StorageEmergencyPolicy
+
+    assert StorageEmergencyPolicy().unavailable_action is EmergencyAction.STOP_LOGGING
