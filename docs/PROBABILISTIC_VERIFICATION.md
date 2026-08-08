@@ -30,7 +30,7 @@ Protected and root runtime verification may not reduce the sample below the 2-of
 
 - `FULL_PUBLICATION`: verify all three published signatures. This is the default for the `caretaker-integrity verify` CLI and should be used for release acceptance, CI, forensic analysis, and manual verification.
 - `AUTHORIZATION_THRESHOLD`: verify the role's minimum authorization threshold. This is used for root continuity and compatibility with schema V1.
-- `RANDOMIZED_RUNTIME`: select identities with `secrets.SystemRandom` and verify only the role's runtime sample. `bootstrap_integrity` uses this mode by default.
+- `RANDOMIZED_RUNTIME`: select identities with `secrets.SystemRandom` and verify only the role's runtime sample. This mode is an explicit opt-in. `bootstrap_integrity` defaults to `AUTHORIZATION_THRESHOLD`.
 
 Every verification record stores the mode and the selected primary fingerprints.
 

@@ -197,3 +197,11 @@ def test_root_v2_records_rolling_two_year_rotation_schedule(tmp_path: Path) -> N
     assert status.warning
     assert not status.overdue
     assert status.full_cycle_days == 2190
+
+
+def test_bootstrap_integrity_default_is_authorization_threshold() -> None:
+    import inspect
+    from caretaker.integrity.runtime import bootstrap_integrity
+
+    parameter = inspect.signature(bootstrap_integrity).parameters["verification_mode"]
+    assert parameter.default is SignatureVerificationMode.AUTHORIZATION_THRESHOLD

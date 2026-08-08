@@ -73,7 +73,7 @@ def bootstrap_integrity(
     artifact_root: str | Path,
     root_threshold: int = 2,
     accept_state: bool = False,
-    verification_mode: SignatureVerificationMode = SignatureVerificationMode.RANDOMIZED_RUNTIME,
+    verification_mode: SignatureVerificationMode = SignatureVerificationMode.AUTHORIZATION_THRESHOLD,
 ) -> IntegrityVerification:
     """Verify the configured Caretaker installation before enabling repair.
 
