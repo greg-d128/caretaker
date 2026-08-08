@@ -81,6 +81,7 @@ class StatePolicy:
     restore_for_validation: bool = True
     restore_before_retry: bool = False
     restore_live_environment: bool = False
+    restore_external_side_effects: bool = False
     max_snapshot_bytes: int = 10_000_000
     max_diff_entries: int = 200
     resources: tuple[StateResourceSpec, ...] = ()
@@ -289,6 +290,8 @@ def validate_policy(policy: RepairPolicy) -> None:
         errors.append("only SnapshotStrategy.DEEPCOPY is implemented in 0.3.0a3")
     if policy.state.resources:
         errors.append("custom StatePolicy.resources are reserved for a later release")
+    if policy.state.restore_external_side_effects:
+        errors.append("external side-effect rollback is not implemented; state restoration covers captured in-process Python state only")
     if policy.state.max_snapshot_bytes <= 0:
         errors.append("state.max_snapshot_bytes must be greater than zero")
     if policy.state.max_diff_entries < 0:
@@ -470,7 +473,8 @@ def _human_readable(policy: RepairPolicy) -> str:
             f"  snapshot instance: {policy.state.snapshot_instance}",
             f"  snapshot globals: {', '.join(policy.state.snapshot_globals) or '(none)'}",
             f"  maximum snapshot bytes: {policy.state.max_snapshot_bytes}",
-            f"  restore before retry: {policy.state.restore_before_retry}",
+            f"  restore captured Python state before retry: {policy.state.restore_before_retry}",
+            f"  restore external side effects: {policy.state.restore_external_side_effects}",
             f"  restore live environment: {policy.state.restore_live_environment}",
             "Retry:",
             f"  maximum attempts: {policy.retry.max_attempts}",

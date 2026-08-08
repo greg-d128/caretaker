@@ -199,3 +199,9 @@ def test_integrity_classification_controls_repair_eligibility() -> None:
 
 def test_default_repair_authority_requires_operator_approval() -> None:
     assert RepairPolicy().authority is RepairAuthority.REQUIRE_OPERATOR_APPROVAL
+
+
+def test_external_side_effect_restore_is_rejected() -> None:
+    policy = RepairPolicy(state=StatePolicy(restore_external_side_effects=True))
+    with pytest.raises(PolicyConfigurationError, match="external side-effect rollback"):
+        repair(policy=policy)(always_fails)
