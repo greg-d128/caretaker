@@ -8,6 +8,7 @@ import re
 import textwrap
 import time
 import types
+import threading
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, TYPE_CHECKING
@@ -138,6 +139,9 @@ class RepairEngine:
         self._attempt_cache: dict[UUID, RepairAttempt] = {}
         self._pending_guard_deviations: dict[str, tuple[Any, ...]] = {}
         self._pending_approvals: dict[UUID, PendingRepairApproval] = {}
+        self._activity_lock = threading.RLock()
+        self._active_incidents: dict[UUID, dict[str, Any]] = {}
+        self._active_validations: dict[UUID, dict[str, Any]] = {}
         self.postmortem = PostMortemRecorder(
             store=self.store,
             registry=self.registry,
@@ -148,6 +152,8 @@ class RepairEngine:
                 open_repair=self.queue_guard_repair,
                 rollback_candidate=self.rollback_candidate,
             )
+        from .operator import register_repair_engine
+        register_repair_engine(self)
 
     def register(self, target: RepairTarget) -> None:
         self.registry.register(target)
@@ -161,6 +167,14 @@ class RepairEngine:
 
     def pending_approvals(self) -> tuple[PendingRepairApproval, ...]:
         return tuple(self._pending_approvals.values())
+
+    def runtime_activity(self) -> dict[str, list[dict[str, Any]]]:
+        """Return live Repair work for operator inspection."""
+        with self._activity_lock:
+            return {
+                "active_incidents": [dict(item) for item in self._active_incidents.values()],
+                "active_validations": [dict(item) for item in self._active_validations.values()],
+            }
 
     def approve_repair(self, episode_id: UUID):
         pending = self._pending_approvals[episode_id]
@@ -559,6 +573,13 @@ class RepairEngine:
         tokens = set_runtime_context(target_id=target.target_id, call_id=call_id, incident_id=incident.incident_id, operation="repair")
         depth_token = repair_depth.set(repair_depth.get() + 1)
         episode_guard = current_episode_id.set(current_episode_id.get())
+        with self._activity_lock:
+            self._active_incidents[incident.incident_id] = {
+                "incident_id": str(incident.incident_id),
+                "target_id": target.target_id,
+                "trigger": trigger.name,
+                "started_at": incident.occurred_at.isoformat(),
+            }
         try:
             return self._repair_incident(
                 target=target,
@@ -594,6 +615,8 @@ class RepairEngine:
                 active_function_version=target.slot.load().number,
             )
         finally:
+            with self._activity_lock:
+                self._active_incidents.pop(incident.incident_id, None)
             current_episode_id.reset(episode_guard)
             repair_depth.reset(depth_token)
             tokens.reset()
@@ -1332,6 +1355,15 @@ class RepairEngine:
         )
         self.store.record_attempt(attempt)
         self._attempt_cache[attempt.attempt_id] = attempt
+        with self._activity_lock:
+            self._active_validations[attempt.attempt_id] = {
+                "attempt_id": str(attempt.attempt_id),
+                "candidate_id": str(candidate.candidate_id),
+                "episode_id": str(episode.episode_id),
+                "incident_id": str(incident.incident_id),
+                "target_id": target.target_id,
+                "started_at": attempt.created_at.isoformat(),
+            }
         tokens = set_runtime_context(attempt_id=attempt.attempt_id, candidate_id=candidate.candidate_id, operation="candidate-validation")
         try:
             report = self.validation_backend.validate_candidate(
@@ -1424,6 +1456,8 @@ class RepairEngine:
                 self.store.record_candidate(replace(candidate, state=CandidateState.SANDBOX_VALIDATED))
             return EvaluatedCandidate(candidate=candidate, report=report, score=score), attempt
         finally:
+            with self._activity_lock:
+                self._active_validations.pop(attempt.attempt_id, None)
             tokens.reset()
 
     def _attempt_records(self, attempt_ids: list[UUID]) -> list[RepairAttempt]:

@@ -3,10 +3,12 @@ from __future__ import annotations
 import os
 import runpy
 import sys
+import threading
 from pathlib import Path
 
-from .logging import configure_remote
+from .logging import ControlSocketServer, configure_remote
 from .logging.policy import OperatorLoggingPolicy, load_operator_policy
+from .operator import get_operator_runtime_registry
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -24,6 +26,24 @@ def main(argv: list[str] | None = None) -> int:
         )
     socket_path = os.environ["CARETAKER_EVENT_SOCKET"]
     runtime = configure_remote(policy, socket_path)
+
+    runtime_control = None
+    runtime_control_thread = None
+    runtime_control_path = os.environ.get("CARETAKER_RUNTIME_CONTROL_SOCKET")
+    if runtime_control_path:
+        runtime_control = ControlSocketServer(
+            runtime_control_path,
+            get_operator_runtime_registry().handle_request,
+            allowed_uids={os.getuid()},
+        )
+        runtime_control.start()
+        runtime_control_thread = threading.Thread(
+            target=runtime_control.serve_forever,
+            name="caretaker-runtime-control",
+            daemon=True,
+        )
+        runtime_control_thread.start()
+
     old_argv = sys.argv
     sys.argv = [module, *module_args]
     try:
@@ -31,6 +51,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     finally:
         sys.argv = old_argv
+        if runtime_control is not None:
+            runtime_control.stop()
+        if runtime_control_thread is not None:
+            runtime_control_thread.join(timeout=1.0)
         runtime.close()
 
 

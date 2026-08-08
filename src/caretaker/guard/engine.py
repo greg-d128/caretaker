@@ -131,6 +131,30 @@ class GuardEngine(GuardFacade):
         self.control_plane.register_handler(RuntimeActionKind.OPEN_REPAIR_EPISODE, self._handle_open_repair)
         self.control_plane.register_handler(RuntimeActionKind.ROLLBACK_REPAIR, self._handle_rollback)
         self.control_plane.register_handler(RuntimeActionKind.QUARANTINE_MODULE, self._handle_quarantine)
+        from ..operator import register_guard_engine
+        register_guard_engine(self)
+
+    def registered_target_ids(self) -> tuple[str, ...]:
+        with self._lock:
+            return tuple(sorted(self._targets))
+
+    def recent_events(self, target_id: str, *, limit: int = 100) -> tuple[object, ...]:
+        return tuple(self.store.recent_behavior_events(target_id=target_id, limit=limit))
+
+    def recent_deviations(self, target_id: str, *, limit: int = 50) -> tuple[BehaviorDeviation, ...]:
+        with self._lock:
+            return tuple(self._deviations_by_target.get(target_id, ())[-limit:])
+
+    def recent_target_inspections(self, target_id: str, *, limit: int = 20) -> tuple[object, ...]:
+        with self._lock:
+            binding = self._targets.get(target_id)
+        if binding is None:
+            return ()
+        inspections = self.store.recent_inspections(binding.identity.module_name, limit=max(limit * 4, 50))
+        return tuple(
+            item for item in inspections
+            if getattr(getattr(item, "subject", None), "qualified_name", None) == binding.identity.qualified_name
+        )[-limit:]
 
     def _control_context(self) -> dict[str, object]:
         context: dict[str, object] = {"guard": self}

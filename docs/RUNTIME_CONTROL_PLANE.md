@@ -87,3 +87,15 @@ The policy engine should remain deterministic and fast. It should not perform da
 ## Hook behavior
 
 System and audit hooks perform only bounded capture, normalization, evidence recording, and immediate deterministic decisions. Long-running repair or LLM work is deferred to normal execution boundaries.
+
+## Operator runtime registry
+
+Repair and Guard engines register weak references with the process-local
+`OperatorRuntimeRegistry`. This registry exists only for inspection and explicit
+operator actions; it does not own engines and does not participate in Repair or
+Guard policy decisions.
+
+The registry exposes a compact status snapshot suitable for an operator status
+line. It includes the current operational state, highest recent alert severity,
+active incidents, targets currently in candidate validation, pending approvals,
+and degraded Guard logging capabilities.

@@ -20,8 +20,9 @@ from .logging import (
     WorkerState,
 )
 from .logging.handler import LoggingRuntime
-from .logging.ipc import ControlSocketServer, SocketLogServer
+from .logging.ipc import ControlSocketServer, SocketLogServer, control_request
 from .logging.policy import OperatorLoggingPolicy, load_operator_policy
+from .logging.segments import read_segment
 from .system import SystemCollectionPolicy, SystemDataCollector, SystemOutputPolicy, load_system_policy
 
 
@@ -42,6 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     run_dir = Path(policy.directory) / "run"
     event_socket = run_dir / "events.sock"
     control_socket = run_dir / "control.sock"
+    runtime_control_socket = run_dir / "runtime.sock"
     server = SocketLogServer(event_socket, runtime.sink, allowed_uids={os.getuid()}, attachment_store=runtime.attachments)
     server.start()
     server_thread = threading.Thread(target=server.serve_forever, name="caretaker-event-server", daemon=True)
@@ -56,11 +58,50 @@ def main(argv: list[str] | None = None) -> int:
         if command in {"status", "health"}:
             child = child_holder.get("child")
             supervisor = supervisor_holder.get("supervisor")
+            application_runtime = None
+            if runtime_control_socket.exists():
+                try:
+                    application_runtime = control_request(runtime_control_socket, {"command": "status"})
+                except OSError:
+                    application_runtime = None
             return {"ok": True, "application_pid": child.pid if child else None,
                     "application_running": child.poll() is None if child else False,
                     "policy_generation": runtime.effective.generation,
                     "active_leases": list(leases),
-                    "workers": [asdict(item) for item in supervisor.workers.all()] if supervisor else []}
+                    "workers": [asdict(item) for item in supervisor.workers.all()] if supervisor else [],
+                    "runtime": application_runtime}
+        if isinstance(command, str) and command.startswith("runtime-"):
+            forwarded = dict(request)
+            forwarded["command"] = command.removeprefix("runtime-")
+            try:
+                return control_request(runtime_control_socket, forwarded)
+            except OSError as exc:
+                return {"ok": False, "error": f"application runtime control unavailable: {exc}"}
+        if command == "logs":
+            limit = max(1, min(int(request.get("limit", 100)), 500))
+            event_directory = Path(policy.directory) / "application" / "events"
+            paths = sorted(event_directory.glob("*.ctlog")) + sorted(event_directory.glob("*.ctlog.gz"))
+            records = []
+            for path in paths[-8:]:
+                try:
+                    records.extend(read_segment(path))
+                except Exception:
+                    continue
+            return {
+                "ok": True,
+                "records": [
+                    {
+                        "occurred_at": item.occurred_at.isoformat(),
+                        "severity": item.severity,
+                        "channel": item.channel.name,
+                        "logger": item.logger_name,
+                        "message": item.formatted_message or item.message_template,
+                        "target_id": str(item.target_id) if item.target_id else None,
+                        "fields": dict(item.fields),
+                    }
+                    for item in records[-limit:]
+                ],
+            }
         if command == "policy-effective":
             return {"ok": True, "requested_modes": [item.name for item in runtime.effective.requested_modes],
                     "effective_modes": [item.name for item in runtime.effective.effective_modes],
@@ -89,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
         "CARETAKER_RUN_ID": str(runtime.run_id),
         "CARETAKER_APPLICATION_ID": policy.application_id,
         "CARETAKER_DATA_DIR": policy.directory,
+        "CARETAKER_RUNTIME_CONTROL_SOCKET": str(runtime_control_socket),
     })
     if args.policy:
         env["CARETAKER_LOGGING_POLICY"] = str(Path(args.policy).resolve())
