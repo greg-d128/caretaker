@@ -143,6 +143,19 @@ class GuardBinding:
     monitor_during_probation: bool = True
     deviation_action: GuardDeviationAction = GuardDeviationAction.OPEN_REPAIR_EPISODE
 
+    @property
+    def observed_resource_categories(self) -> tuple[str, ...]:
+        categories = []
+        if self.observe_network:
+            categories.append("network")
+        if self.observe_filesystem:
+            categories.append("filesystem")
+        if self.observe_subprocesses:
+            categories.append("subprocesses")
+        if self.observe_imports:
+            categories.append("imports")
+        return tuple(categories)
+
 
 @dataclass(frozen=True, slots=True)
 class CandidateGuardPolicy:

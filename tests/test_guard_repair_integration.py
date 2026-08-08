@@ -151,3 +151,11 @@ def test_guard_control_plane_can_roll_back_active_candidate() -> None:
     )
     guard.control_plane.submit(signal)
     assert wrapped.__caretaker_target__.slot.load().number == 0
+
+
+def test_guard_binding_reports_resource_observation_categories() -> None:
+    from caretaker import GuardBinding
+
+    binding = GuardBinding(enabled=True, observe_network=True, observe_imports=True)
+    assert binding.observed_resource_categories == ("network", "imports")
+    assert GuardBinding(enabled=True).observed_resource_categories == ()
