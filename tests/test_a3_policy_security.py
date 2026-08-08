@@ -205,3 +205,8 @@ def test_external_side_effect_restore_is_rejected() -> None:
     policy = RepairPolicy(state=StatePolicy(restore_external_side_effects=True))
     with pytest.raises(PolicyConfigurationError, match="external side-effect rollback"):
         repair(policy=policy)(always_fails)
+
+
+def test_retry_requires_explicit_replay_safety() -> None:
+    with pytest.raises(PolicyConfigurationError, match="explicit replay safety"):
+        repair(policy=RepairPolicy(retry=RetryPolicy(max_attempts=1)))(always_fails)

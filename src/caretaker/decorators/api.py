@@ -628,7 +628,7 @@ def repair_on_timeout(
 def repair_and_retry(
     *,
     retry: int = 1,
-    replay_safety: ReplaySafety = ReplaySafety.IDEMPOTENT,
+    replay_safety: ReplaySafety = ReplaySafety.UNKNOWN,
     policy: RepairPolicy | None = None,
     **repair_kwargs: Any,
 ) -> Callable[[F], F]:

@@ -94,7 +94,7 @@ This is an elapsed-time contract: the original invocation must finish before the
 
 ### `repair_and_retry`
 
-A convenience form of exception repair with one retry by default.
+A convenience form of exception repair with one retry by default. Replay safety must now be declared explicitly; the default is `ReplaySafety.UNKNOWN`, which is rejected when retry is enabled.
 
 ### `diagnose_only`
 

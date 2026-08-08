@@ -22,7 +22,7 @@ Custom transaction resources and alternative serialization strategies remain res
 - `retry_original_exception_only`
 - `backoff_seconds`
 
-Retries are permitted only when safety and state policy permit them.
+Retries are permitted only when safety and state policy permit them. Any retry requires an explicit replay classification; `UNKNOWN` and `NEVER` are rejected when `max_attempts > 0`.
 
 ## Validation policy
 

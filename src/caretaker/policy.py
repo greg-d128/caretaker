@@ -286,6 +286,8 @@ def validate_policy(policy: RepairPolicy) -> None:
         errors.append("retry.max_attempts cannot be negative")
     if policy.retry.backoff_seconds < 0:
         errors.append("retry.backoff_seconds cannot be negative")
+    if policy.retry.max_attempts > 0 and policy.retry.safety in {ReplaySafety.UNKNOWN, ReplaySafety.NEVER}:
+        errors.append("retry requires an explicit replay safety classification other than UNKNOWN or NEVER")
     if policy.state.strategy is not SnapshotStrategy.DEEPCOPY:
         errors.append("only SnapshotStrategy.DEEPCOPY is implemented in 0.3.0a3")
     if policy.state.resources:
