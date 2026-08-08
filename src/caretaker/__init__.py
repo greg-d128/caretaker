@@ -3,6 +3,7 @@
 from .auxiliary import AuxiliaryFunctionManager, AuxiliaryRegistry
 from .decorators import (
     InvalidOutputError,
+    caretaker,
     configure_default_engine,
     diagnose_only,
     get_default_engine,

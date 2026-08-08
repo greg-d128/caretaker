@@ -1,6 +1,41 @@
 # Decorators
 
-## Primary decorator
+## Umbrella decorator
+
+`@caretaker` is the preferred interface when a function uses multiple
+Caretaker capabilities. It is a thin facade over `@repair`: the function
+is registered through the same `RepairPolicy`, `RepairEngine`, and stable
+`FunctionSlot`, and no additional runtime wrapper is introduced.
+
+Logging, Guard, candidate-behavior checks, Integrity restrictions, and
+Repair behavior are selected through the existing policy objects.
+
+```python
+@caretaker(
+    policy=policy,
+    engine=engine,
+    target_id="optional-stable-id",
+    cases=(...),
+    tags=frozenset({...}),
+    integrity_class=IntegrityClass.ORDINARY,
+)
+def function(...):
+    ...
+```
+
+Use the narrower decorators when the narrower interface better describes
+the intent:
+
+- `@logged(...)` for Logging without Repair.
+- `@repair(...)` for an explicitly Repair-oriented target.
+- `@repair_on_exception(...)`, `@repair_on_invalid_output(...)`, and
+  `@repair_on_timeout(...)` for the existing convenience forms.
+
+`@caretaker` does not introduce a new policy type. In particular,
+`RepairPolicy` remains the single policy composition used by the Repair
+execution boundary.
+
+## Repair decorator
 
 ```python
 @repair(

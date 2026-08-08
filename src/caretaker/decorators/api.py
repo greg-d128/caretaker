@@ -476,6 +476,59 @@ def repair(
     return decorate
 
 
+@overload
+def caretaker(function: F) -> F:
+    ...
+
+
+@overload
+def caretaker(
+    function: None = None,
+    *,
+    policy: RepairPolicy | None = None,
+    engine: RepairEngine | None = None,
+    target_id: str | None = None,
+    cases: tuple[Any, ...] = (),
+    tags: frozenset[str] = frozenset(),
+    integrity_class: IntegrityClass = IntegrityClass.ORDINARY,
+    mask: MaskFunction | None = None,
+) -> Callable[[F], F]:
+    ...
+
+
+def caretaker(
+    function: F | None = None,
+    *,
+    policy: RepairPolicy | None = None,
+    engine: RepairEngine | None = None,
+    target_id: str | None = None,
+    cases: tuple[Any, ...] = (),
+    tags: frozenset[str] = frozenset(),
+    integrity_class: IntegrityClass = IntegrityClass.ORDINARY,
+    mask: MaskFunction | None = None,
+) -> F | Callable[[F], F]:
+    """Register a function as a fully managed Caretaker target.
+
+    ``caretaker`` is the preferred public decorator when a target uses
+    multiple Caretaker capabilities.  Logging, Guard, candidate behavior,
+    Integrity restrictions, and Repair behavior remain configured through
+    the existing ``RepairPolicy``.
+
+    This function delegates directly to ``repair``.  It does not add a
+    second wrapper, registration path, or execution boundary.
+    """
+    return repair(
+        function,
+        policy=policy,
+        engine=engine,
+        target_id=target_id,
+        cases=cases,
+        tags=tags,
+        integrity_class=integrity_class,
+        mask=mask,
+    )
+
+
 def repair_on_exception(
     *,
     exceptions: tuple[type[BaseException], ...] = (Exception,),

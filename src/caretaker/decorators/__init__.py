@@ -1,5 +1,6 @@
 from .api import (
     InvalidOutputError,
+    caretaker,
     configure_default_engine,
     diagnose_only,
     get_default_engine,
