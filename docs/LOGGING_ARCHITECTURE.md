@@ -67,3 +67,8 @@ Caretaker's signed implementation controls the semantics of those options and th
 Backpressure and storage failure are policy-driven. Possible behavior includes blocking, throttling, sampling, dropping low priorities, emergency synchronous writes, bypassing logging, stopping analysis, or terminating the application.
 
 Guard and Repair receive capability-health information. They may continue in degraded mode or enforce a stricter policy; they do not silently claim full confidence when required evidence is unavailable.
+
+
+## Worker restart exhaustion
+
+After the configured restart budget is exhausted, the default action is now `DISABLE_COMPONENT` rather than silently continuing in a degraded state. Deployments that prefer availability over evidence completeness can explicitly select `CONTINUE_DEGRADED`.

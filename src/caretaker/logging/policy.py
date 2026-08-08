@@ -210,7 +210,7 @@ class WorkerRestartPolicy:
     restart_window_seconds: float = 300.0
     initial_backoff_seconds: float = 0.5
     maximum_backoff_seconds: float = 30.0
-    exhaustion_action: WorkerFailureAction = WorkerFailureAction.CONTINUE_DEGRADED
+    exhaustion_action: WorkerFailureAction = WorkerFailureAction.DISABLE_COMPONENT
 
 
 @dataclass(frozen=True, slots=True)

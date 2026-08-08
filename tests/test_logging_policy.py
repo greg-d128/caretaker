@@ -95,3 +95,10 @@ def test_runtime_integrity_assurance_distinguishes_hash_chain_from_external_anch
         RuntimeSigningPolicy(mode=RuntimeRecordIntegrityMode.EXTERNAL_SIGNED)
     )
     assert external["corpus_replacement_resistant"] is True
+
+
+def test_worker_restart_exhaustion_disables_component_by_default() -> None:
+    from caretaker.logging.models import WorkerFailureAction
+    from caretaker.logging.policy import WorkerRestartPolicy
+
+    assert WorkerRestartPolicy().exhaustion_action is WorkerFailureAction.DISABLE_COMPONENT
