@@ -72,6 +72,7 @@ def test_differential_mismatch_submits_both_versions_for_another_repair() -> Non
             long_term_minimum_duration_seconds=0,
             differential_execution=DifferentialExecutionPolicy(
                 mode=DifferentialExecutionMode.PURE_FUNCTION,
+                pure_function_confirmed=True,
                 observation_executions=5,
             ),
         ),

@@ -16,7 +16,7 @@ For explicitly pure functions, Caretaker may run the previous and candidate vers
 - Both succeed and compare equivalent: candidate may continue.
 - Both succeed but differ: candidate is rejected unless a registered comparator declares semantic equivalence.
 
-Do not use differential execution for side-effecting functions without a future isolation adapter.
+Differential execution can run both implementations. `PURE_FUNCTION` therefore requires `pure_function_confirmed=True`; do not set that acknowledgement for side-effecting functions without an isolation adapter.
 
 ## Regression corpus
 

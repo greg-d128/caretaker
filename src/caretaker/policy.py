@@ -119,6 +119,7 @@ class ValidationPolicy:
 @dataclass(frozen=True, slots=True)
 class DifferentialExecutionPolicy:
     mode: DifferentialExecutionMode = DifferentialExecutionMode.DISABLED
+    pure_function_confirmed: bool = False
     observation_executions: int = 0
     comparator: Comparator | None = None
     comparator_id: str | None = None
@@ -352,6 +353,8 @@ def validate_policy(policy: RepairPolicy) -> None:
         DifferentialExecutionMode.PURE_FUNCTION,
     }:
         errors.append("only DISABLED and PURE_FUNCTION differential modes are implemented")
+    if differential.mode is DifferentialExecutionMode.PURE_FUNCTION and not differential.pure_function_confirmed:
+        errors.append("PURE_FUNCTION differential execution requires pure_function_confirmed=True because both implementations may execute")
     if differential.comparator is not None and differential.comparator_id is not None:
         errors.append("specify at most one differential comparator or comparator_id")
     weights = policy.scoring

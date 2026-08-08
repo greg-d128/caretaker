@@ -152,6 +152,7 @@ def test_structured_comparator_is_used_for_differential_execution() -> None:
             long_term_minimum_duration_seconds=0,
             differential_execution=DifferentialExecutionPolicy(
                 mode=DifferentialExecutionMode.PURE_FUNCTION,
+                pure_function_confirmed=True,
                 observation_executions=5,
                 comparator=comparator,
             ),
@@ -210,3 +211,15 @@ def test_external_side_effect_restore_is_rejected() -> None:
 def test_retry_requires_explicit_replay_safety() -> None:
     with pytest.raises(PolicyConfigurationError, match="explicit replay safety"):
         repair(policy=RepairPolicy(retry=RetryPolicy(max_attempts=1)))(always_fails)
+
+
+def test_differential_execution_requires_explicit_purity_confirmation() -> None:
+    policy = RepairPolicy(
+        observation=ObservationPolicy(
+            differential_execution=DifferentialExecutionPolicy(
+                mode=DifferentialExecutionMode.PURE_FUNCTION,
+            )
+        )
+    )
+    with pytest.raises(PolicyConfigurationError, match="pure_function_confirmed"):
+        repair(policy=policy)(always_fails)

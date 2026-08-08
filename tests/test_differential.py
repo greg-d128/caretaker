@@ -39,6 +39,7 @@ def broken_divide(total: float, count: int) -> float:
             long_term_minimum_duration_seconds=0,
             differential_execution=DifferentialExecutionPolicy(
                 mode=DifferentialExecutionMode.PURE_FUNCTION,
+                pure_function_confirmed=True,
                 observation_executions=3,
             ),
         ),
