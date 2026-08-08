@@ -29,6 +29,7 @@ from caretaker import (
     repair_and_retry,
     repair_on_exception,
     repair_on_invalid_output,
+    repair_on_soft_timeout,
     repair_on_timeout,
 )
 from caretaker.slot import FunctionSlot
@@ -115,7 +116,9 @@ def test_convenience_decorators_compile_to_repair_policies() -> None:
     assert observed.__caretaker_target__.policy.mode.name == "OBSERVE"
 
     assert repair_on_exception(engine=RepairEngine(provider=provider), target_id="tests:exception-always-fails")(always_fails).__caretaker_target__.policy.triggers
-    assert repair_on_timeout(1.0, engine=RepairEngine(provider=provider), target_id="tests:timeout-always-fails")(always_fails).__caretaker_target__.policy.triggers
+    assert repair_on_soft_timeout(1.0, engine=RepairEngine(provider=provider), target_id="tests:timeout-always-fails")(always_fails).__caretaker_target__.policy.triggers
+    with pytest.deprecated_call(match="soft elapsed-time trigger"):
+        repair_on_timeout(1.0, engine=RepairEngine(provider=provider), target_id="tests:timeout-compat")(always_fails)
     assert repair_on_invalid_output(lambda value: True, engine=RepairEngine(provider=provider), target_id="tests:output-invalid-result")(invalid_result).__caretaker_target__.policy.triggers
 
 

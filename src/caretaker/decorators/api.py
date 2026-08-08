@@ -578,6 +578,28 @@ def repair_on_invalid_output(
     return repair(policy=configured, **repair_kwargs)
 
 
+def repair_on_soft_timeout(
+    seconds: float,
+    *,
+    retry: int = 0,
+    replay_safety: ReplaySafety = ReplaySafety.UNKNOWN,
+    policy: RepairPolicy | None = None,
+    **repair_kwargs: Any,
+) -> Callable[[F], F]:
+    """Open a Repair incident after a completed call exceeds ``seconds``.
+
+    This is an elapsed-time contract, not an interruption mechanism. The
+    original invocation must return before Caretaker can detect the violation.
+    """
+    base = policy or DEFAULT_POLICY
+    configured = replace(
+        base,
+        triggers=(TimeoutTrigger(seconds=seconds, mode="soft"),),
+        retry=replace(base.retry, max_attempts=retry, safety=replay_safety),
+    )
+    return repair(policy=configured, **repair_kwargs)
+
+
 def repair_on_timeout(
     seconds: float,
     *,
@@ -586,13 +608,21 @@ def repair_on_timeout(
     policy: RepairPolicy | None = None,
     **repair_kwargs: Any,
 ) -> Callable[[F], F]:
-    base = policy or DEFAULT_POLICY
-    configured = replace(
-        base,
-        triggers=(TimeoutTrigger(seconds=seconds, mode="soft"),),
-        retry=replace(base.retry, max_attempts=retry, safety=replay_safety),
+    """Backward-compatible name for :func:`repair_on_soft_timeout`.
+
+    The call is not interrupted when the threshold is reached.
+    """
+    import warnings
+
+    warnings.warn(
+        "repair_on_timeout() is a soft elapsed-time trigger and does not interrupt "
+        "a running function; prefer repair_on_soft_timeout()",
+        DeprecationWarning,
+        stacklevel=2,
     )
-    return repair(policy=configured, **repair_kwargs)
+    return repair_on_soft_timeout(
+        seconds, retry=retry, replay_safety=replay_safety, policy=policy, **repair_kwargs
+    )
 
 
 def repair_and_retry(

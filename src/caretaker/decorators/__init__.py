@@ -9,6 +9,7 @@ from .api import (
     repair_and_retry,
     repair_on_exception,
     repair_on_invalid_output,
+    repair_on_soft_timeout,
     repair_on_timeout,
 )
 from .decorators import exception_handler, input_validator
@@ -25,5 +26,6 @@ __all__ = [
     "repair_and_retry",
     "repair_on_exception",
     "repair_on_invalid_output",
+    "repair_on_soft_timeout",
     "repair_on_timeout",
 ]

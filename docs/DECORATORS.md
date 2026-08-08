@@ -82,15 +82,15 @@ def calculate(...):
 
 The validator can return a Boolean or `ValidationResult`.
 
-### `repair_on_timeout`
+### `repair_on_soft_timeout`
 
 ```python
-@repair_on_timeout(0.100)
+@repair_on_soft_timeout(0.100)
 def operation(...):
     ...
 ```
 
-The current implementation is a soft timeout: the original invocation must finish before the elapsed-time violation can be detected.
+This is an elapsed-time contract: the original invocation must finish before the violation can be detected. It does not interrupt a running function. `repair_on_timeout` remains as a deprecated compatibility alias.
 
 ### `repair_and_retry`
 
