@@ -137,7 +137,7 @@ def repair(
                 logging_fields = {
                     "event": "repair.function.call.started",
                     "target_id": target.target_id,
-                    "function_version": version.version,
+                    "function_version": version.number,
                     "candidate_id": str(version.candidate_id) if version.candidate_id else None,
                     "masking": {
                         "fully_removed_fields": masked_input.fully_removed_fields,
@@ -153,7 +153,7 @@ def repair(
                     channel=LogChannel.REPAIR,
                     message=f"Repair-enabled call started: {target.target_id}",
                     fields=logging_fields,
-                    function_version=version.version,
+                    function_version=version.number,
                 )
             guard_started = False
             pending = selected_engine.handle_pending_guard_signal(
@@ -459,12 +459,12 @@ def repair(
                         fields={
                             "event": "repair.function.call.completed" if succeeded else "repair.function.call.failed",
                             "target_id": target.target_id,
-                            "function_version": version.version,
+                            "function_version": version.number,
                             "candidate_id": str(version.candidate_id) if version.candidate_id else None,
                             "succeeded": succeeded,
                             "elapsed_seconds": elapsed_for_logging if target.policy.logging.capture_timing else None,
                         },
-                        function_version=version.version,
+                        function_version=version.number,
                     )
                 tokens.reset()
 
