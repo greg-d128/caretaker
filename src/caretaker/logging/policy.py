@@ -181,6 +181,20 @@ class RuntimeSigningPolicy:
     external_anchor_failure_action: AnchorFailureAction = AnchorFailureAction.CONTINUE_SELF_RECORDED
 
 
+def runtime_integrity_assurance(policy: RuntimeSigningPolicy) -> dict[str, object]:
+    """Return explicit assurance properties for operator/status reporting."""
+    externally_anchored = (
+        policy.mode is RuntimeRecordIntegrityMode.EXTERNAL_SIGNED
+        or policy.require_external_anchor
+    )
+    return {
+        "record_integrity_mode": policy.mode.name,
+        "identity_anchor_required": policy.require_external_anchor,
+        "externally_anchored_expected": externally_anchored,
+        "corpus_replacement_resistant": externally_anchored,
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class PolicyReloadPolicy:
     enabled: bool = True

@@ -81,3 +81,17 @@ def test_storage_unavailable_does_not_stop_application_by_default() -> None:
     from caretaker.logging.policy import StorageEmergencyPolicy
 
     assert StorageEmergencyPolicy().unavailable_action is EmergencyAction.STOP_LOGGING
+
+
+def test_runtime_integrity_assurance_distinguishes_hash_chain_from_external_anchor() -> None:
+    from caretaker.logging.policy import RuntimeSigningPolicy, runtime_integrity_assurance
+    from caretaker.logging.models import RuntimeRecordIntegrityMode
+
+    chained = runtime_integrity_assurance(RuntimeSigningPolicy())
+    assert chained["record_integrity_mode"] == "HASH_CHAINED"
+    assert chained["corpus_replacement_resistant"] is False
+
+    external = runtime_integrity_assurance(
+        RuntimeSigningPolicy(mode=RuntimeRecordIntegrityMode.EXTERNAL_SIGNED)
+    )
+    assert external["corpus_replacement_resistant"] is True

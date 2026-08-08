@@ -29,3 +29,8 @@ The external signer protocol accepts only a manifest commitment and metadata. Pe
 ## External log collection
 
 A separate logging agent and independent collection server materially improve security. An attacker must compromise or intercept both the application-side evidence and the external copy. Caretaker's future sink interface is designed for such replication, while the alpha keeps the built-in writer local-only.
+
+
+## Assurance reporting
+
+Runtime status now reports the record-integrity mode separately from identity anchoring. A healthy hash chain is not reported as corpus-replacement resistant. Only externally anchored/signed configurations claim that stronger property.

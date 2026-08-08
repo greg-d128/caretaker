@@ -24,6 +24,7 @@ from .policy import (
     load_operator_policy,
     policy_snapshot,
     reconcile_policy,
+    runtime_integrity_assurance,
     policy_security_warnings,
     OperatorPolicyWatcher,
 )
@@ -128,6 +129,7 @@ class LoggingRuntime:
                 "effective_modes": [item.name for item in self.effective.effective_modes],
                 "overrides": [item.field_path for item in self.effective.overrides],
                 "security_warnings": policy_security_warnings(self.snapshot),
+                "runtime_integrity_assurance": runtime_integrity_assurance(self.active_policy.signing),
             },
         )
 
