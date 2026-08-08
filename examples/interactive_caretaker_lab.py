@@ -4,8 +4,8 @@ See ``examples/interactive_caretaker_lab.md`` for a guided walkthrough.
 
 This example is intentionally driven from a terminal menu.  It is meant to be
 run by a developer who wants to make one controlled change at a time and then
-inspect Caretaker's evidence, Guard observations, Repair state, logs, and local
-control interface.
+inspect Caretaker's evidence, Guard observations, Repair state, and logs from a
+second-terminal lab console.
 
 The lab provides eight application functions:
 
@@ -53,11 +53,15 @@ Direct execution from the repository root::
 
     PYTHONPATH=src:. python -m examples.interactive_caretaker_lab
 
-Supervised execution, which also exposes Caretaker's local control socket::
+Supervised execution, which also exposes Caretaker's standard supervisor control socket::
 
     PYTHONPATH=src:. python -m caretaker.run \
       --data-directory ./caretaker-interactive-lab/caretaker-data \
       examples.interactive_caretaker_lab
+
+Attach the example-specific observation console from a second terminal::
+
+    PYTHONPATH=src:. python -m examples.interactive_caretaker_lab_console
 
 The lab deliberately enables argument and result evidence.  Do not enter real
 secrets while experimenting.
@@ -65,7 +69,6 @@ secrets while experimenting.
 
 from __future__ import annotations
 
-import code
 import hashlib
 import inspect
 import json
@@ -113,6 +116,7 @@ from caretaker.logging import (
     get_runtime as get_logging_runtime,
     read_segment,
 )
+from caretaker.logging.ipc import ControlSocketServer
 from caretaker.provider import CandidateBatch, RepairRequest
 
 
@@ -125,6 +129,8 @@ WORKSPACE = LAB_ROOT / "workspace"
 LOCAL_LOG_DIRECTORY = LAB_ROOT / "caretaker-data"
 SYNTHETIC_SECRET = WORKSPACE / "demo-secret.txt"
 COLLECTOR_EVENTS: list[dict[str, str]] = []
+LAB_CONSOLE_SERVER: ControlSocketServer | None = None
+LAB_CONSOLE_THREAD: threading.Thread | None = None
 
 SEARCH_FILE_LIMIT = 2_000
 HTTP_TIMEOUT_SECONDS = 4.0
@@ -1081,8 +1087,7 @@ def _close_guard_window(target_id: str) -> None:
 
 
 def execute_target(spec: TargetSpec) -> None:
-    print("\n" + "=" * 78)
-    print(spec.title)
+    _menu_header("Main", spec.title, title=spec.title)
     print("Target:", spec.target_id)
     print("Behavior substitution:", ACTIVE_VARIANTS[spec.variant_key])
     current = spec.function.__caretaker_target__.slot.load()
@@ -1112,10 +1117,25 @@ def execute_target(spec: TargetSpec) -> None:
         _close_guard_window(spec.target_id)
 
     print("\nNext useful steps:")
-    print("  * Inspection menu -> recent Guard events / deviations")
-    print("  * Inspection menu -> Repair events / pending approvals")
-    print("  * Inspection menu -> Caretaker log records")
-    print("  * Modification menu -> substitute or inject another implementation")
+    print("  * Use the attached lab console to inspect Guard / Repair / log evidence")
+    print("  * Use the modification menu to substitute or inject another implementation")
+    print("  * Run 'help' in the lab console for useful observation commands")
+
+
+# ---------------------------------------------------------------------------
+# Menu breadcrumbs
+# ---------------------------------------------------------------------------
+
+
+def _breadcrumb(*parts: str) -> str:
+    return "Caretaker Lab > " + " > ".join(parts)
+
+
+def _menu_header(*parts: str, title: str | None = None) -> None:
+    print(f"\n[{_breadcrumb(*parts)}]")
+    if title:
+        print(title)
+        print("-" * len(title))
 
 
 # ---------------------------------------------------------------------------
@@ -1123,16 +1143,21 @@ def execute_target(spec: TargetSpec) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _choose_target() -> TargetSpec | None:
-    print("\nTargets:")
+def _choose_target(*breadcrumb: str) -> TargetSpec | None:
+    _menu_header(*breadcrumb, "Select target", title="Targets")
     for key, spec in TARGETS.items():
         print(f"  {key}. {spec.title} ({spec.target_id})")
     value = input("Select target, or Enter to cancel: ").strip()
     return TARGETS.get(value)
 
 
-def _choose_variant(spec: TargetSpec) -> str | None:
-    print(f"\nVariants for {spec.title}:")
+def _choose_variant(spec: TargetSpec, *breadcrumb: str) -> str | None:
+    _menu_header(
+        *breadcrumb,
+        spec.title,
+        "Select variant",
+        title=f"Variants for {spec.title}",
+    )
     print("  1. benign     expected behavior")
     print("  2. bad        application defect / incorrect result")
     print("  3. malicious  contained suspicious side effects + expected result")
@@ -1141,10 +1166,10 @@ def _choose_variant(spec: TargetSpec) -> str | None:
 
 
 def change_behavior_substitution() -> None:
-    spec = _choose_target()
+    spec = _choose_target("Main", "Modify implementations")
     if spec is None:
         return
-    variant = _choose_variant(spec)
+    variant = _choose_variant(spec, "Main", "Modify implementations")
     if variant is None:
         return
     ACTIVE_VARIANTS[spec.variant_key] = variant
@@ -1156,10 +1181,10 @@ def change_behavior_substitution() -> None:
 
 
 def mutate_active_code_object() -> None:
-    spec = _choose_target()
+    spec = _choose_target("Main", "Modify implementations")
     if spec is None:
         return
-    variant_name = _choose_variant(spec)
+    variant_name = _choose_variant(spec, "Main", "Modify implementations")
     if variant_name is None:
         return
 
@@ -1201,10 +1226,10 @@ def restore_code_object(spec: TargetSpec) -> None:
 
 
 def inject_slot_variant() -> None:
-    spec = _choose_target()
+    spec = _choose_target("Main", "Modify implementations")
     if spec is None:
         return
-    variant_name = _choose_variant(spec)
+    variant_name = _choose_variant(spec, "Main", "Modify implementations")
     if variant_name is None:
         return
 
@@ -1251,7 +1276,7 @@ def inject_slot_variant() -> None:
 
 
 def rollback_one_version() -> None:
-    spec = _choose_target()
+    spec = _choose_target("Main", "Modify implementations")
     if spec is None:
         return
     slot = spec.function.__caretaker_target__.slot
@@ -1267,7 +1292,7 @@ def rollback_one_version() -> None:
 
 
 def restore_original_dispatcher() -> None:
-    spec = _choose_target()
+    spec = _choose_target("Main", "Modify implementations")
     if spec is None:
         return
     restore_code_object(spec)
@@ -1289,37 +1314,22 @@ def reset_all_behavior_substitutions() -> None:
     print("All dispatcher behavior substitutions are now benign.")
 
 
-def show_variant_state() -> None:
-    print("\nCurrent target implementations:")
-    for spec in TARGETS.values():
-        slot = spec.function.__caretaker_target__.slot
-        version = slot.load()
-        print(
-            f"  {spec.target_id:<24} "
-            f"dispatch={ACTIVE_VARIANTS[spec.variant_key]:<9} "
-            f"slot_version={version.number:<3} "
-            f"slot_state={slot.state.name:<20} "
-            f"candidate={str(version.candidate_id)[:8] if version.candidate_id else '-':<8} "
-            f"code_mutation={CODE_MUTATIONS.get(spec.target_id, '-')}"
-        )
-
 
 def modification_menu() -> None:
     while True:
-        print(
-            """
-\nImplementation modification menu
---------------------------------
-1. Change behavior substitution (stable FunctionSlot remains unchanged)
-2. Mutate the active dispatcher's __code__ object (simulated tampering)
-3. Inject a variant directly into the FunctionSlot
-4. Roll back one FunctionSlot version
-5. Restore target to oldest version + original code + benign dispatcher
-6. Reset all dispatcher substitutions to benign
-7. Show current implementation state
-0. Return to main menu
-""".strip()
+        _menu_header(
+            "Main",
+            "Modify implementations",
+            title="Implementation modification menu",
         )
+        print("1. Change behavior substitution (stable FunctionSlot remains unchanged)")
+        print("2. Mutate the active dispatcher's __code__ object (simulated tampering)")
+        print("3. Inject a variant directly into the FunctionSlot")
+        print("4. Roll back one FunctionSlot version")
+        print("5. Restore target to oldest version + original code + benign dispatcher")
+        print("6. Reset all dispatcher substitutions to benign")
+        print("0. Return to main menu")
+
         choice = input("Selection: ").strip()
         try:
             if choice == "1":
@@ -1334,8 +1344,6 @@ def modification_menu() -> None:
                 restore_original_dispatcher()
             elif choice == "6":
                 reset_all_behavior_substitutions()
-            elif choice == "7":
-                show_variant_state()
             elif choice == "0":
                 return
             else:
@@ -1345,17 +1353,72 @@ def modification_menu() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Inspection and operator interaction
+# Live lab console
 # ---------------------------------------------------------------------------
 
 
-def show_target_policy() -> None:
-    spec = _choose_target()
-    if spec is None:
-        return
+def _active_log_directory() -> Path:
+    runtime = get_logging_runtime()
+    if runtime is None:
+        return LOCAL_LOG_DIRECTORY
+    return Path(runtime.active_policy.directory)
+
+
+def _lab_console_socket_path() -> Path:
+    return _active_log_directory() / "run" / "lab-console.sock"
+
+
+def _resolve_console_target(value: str | None) -> TargetSpec | None:
+    if value is None or value in {"", "all", "*"}:
+        return None
+    for spec in TARGETS.values():
+        if value in {spec.key, spec.variant_key, spec.target_id}:
+            return spec
+    raise KeyError(f"Unknown target {value!r}; use the console 'targets' command")
+
+
+def _jsonable(value: Any) -> Any:
+    import dataclasses
+    from datetime import datetime
+    from enum import Enum
+    from uuid import UUID
+
+    if dataclasses.is_dataclass(value):
+        return {
+            field.name: _jsonable(getattr(value, field.name))
+            for field in dataclasses.fields(value)
+        }
+    if isinstance(value, Enum):
+        return value.name
+    if isinstance(value, (UUID, Path)):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list, set, frozenset)):
+        return [_jsonable(item) for item in value]
+    if callable(value):
+        return f"{getattr(value, '__module__', '')}.{getattr(value, '__qualname__', repr(value))}"
+    return value
+
+
+def _console_target_state(spec: TargetSpec) -> dict[str, Any]:
+    target = spec.function.__caretaker_target__
+    return {
+        "menu_key": spec.key,
+        "title": spec.title,
+        "target_id": spec.target_id,
+        "behavior_substitution": ACTIVE_VARIANTS[spec.variant_key],
+        "code_mutation": CODE_MUTATIONS.get(spec.target_id),
+        "slot": target.slot.snapshot(),
+    }
+
+
+def _console_target_policy(spec: TargetSpec) -> dict[str, Any]:
     policy = spec.function.__caretaker_target__.policy
-    payload = {
-        "target": spec.target_id,
+    return {
+        "target_id": spec.target_id,
         "repair_mode": policy.mode.name,
         "repair_authority": policy.authority.name,
         "triggers": [type(item).__name__ for item in policy.triggers],
@@ -1382,387 +1445,186 @@ def show_target_policy() -> None:
             "rollback_on_significant_deviation": policy.candidate_guard.rollback_on_significant_deviation,
         },
     }
-    print(json.dumps(payload, indent=2, default=str))
 
 
-def accept_guard_baseline() -> None:
-    spec = _choose_target()
-    if spec is None:
-        return
-    try:
-        baseline = GUARD.accept_baseline(spec.target_id)
-    except KeyError as exc:
-        print(exc)
-        print("Run the benign target at least once first so a behavior window exists.")
-        return
-    print(
-        f"Accepted Guard baseline {baseline.baseline_id} for {spec.target_id} "
-        f"from {baseline.observations} observed window(s)."
-    )
-    print(
-        "Now change the behavior substitution to 'malicious' and execute the same "
-        "target again to create new resource behavior under the original code identity."
-    )
-
-
-def show_guard_summary() -> None:
-    spec = _choose_target()
-    if spec is None:
-        return
-    summary = GUARD.recent_summary(spec.target_id, calls=20)
-    if summary is None:
-        print("No Guard summary is available yet.")
-        return
-    payload = {
-        "target": spec.target_id,
-        "windows": summary.window_count,
-        "calls": summary.call_count,
-        "events": summary.event_count,
-        "event_kinds": dict(summary.event_kind_counts),
-        "network_destinations": summary.network_destinations,
-        "filesystem_roots": summary.filesystem_roots,
-        "subprocesses": summary.subprocesses,
-        "imports": summary.imports,
-        "dynamic_code_operations": summary.dynamic_code_operations,
-    }
-    print(json.dumps(payload, indent=2, default=str))
-
-
-def show_recent_guard_events() -> None:
-    spec = _choose_target()
-    if spec is None:
-        return
-    events = GUARD.store.recent_behavior_events(target_id=spec.target_id, limit=30)
-    if not events:
-        print("No Guard events recorded for this target.")
-        return
-    for event in events:
-        resource = None
-        if getattr(event, "resource", None) is not None:
-            resource = f"{event.resource.kind}:{event.resource.value}"
-        print(
-            f"{event.occurred_at.isoformat()} "
-            f"{event.event_kind.name:<20} "
-            f"{event.operation:<32} "
-            f"resource={resource or '-'} "
-            f"outcome={event.outcome.name}"
-        )
-
-
-def show_guard_deviations() -> None:
-    spec = _choose_target()
-    if spec is None:
-        return
-    # BehaviorDeviation does not carry target_id in this alpha. The Guard engine
-    # keeps the target-indexed view used by its own repair integration, so this
-    # laboratory intentionally exposes that diagnostic cache.
-    deviations = list(getattr(GUARD, "_deviations_by_target", {}).get(spec.target_id, ()))
-    if not deviations:
-        print("No Guard deviations recorded for this target.")
-        return
-    for item in deviations[-20:]:
-        print(
-            f"{item.created_at.isoformat()} "
-            f"{item.category.name:<28} "
-            f"significance={item.significance_score:5.1f} "
-            f"{item.explanation}"
-        )
-
-
-def show_runtime_inspections() -> None:
-    spec = _choose_target()
-    if spec is None:
-        return
+def _console_guard_inspections(spec: TargetSpec, limit: int) -> list[Any]:
     module_name = spec.function.__caretaker_target__.source.module_name
-    inspections = GUARD.store.recent_inspections(module_name, limit=50)
-    relevant = [
-        item for item in inspections
-        if item.subject.qualified_name in {
-            spec.function.__caretaker_target__.source.qualified_name,
-            VARIANTS[spec.variant_key]["benign"].__qualname__,
-            VARIANTS[spec.variant_key]["bad"].__qualname__,
-            VARIANTS[spec.variant_key]["malicious"].__qualname__,
-        }
-    ]
-    if not relevant:
-        print("No runtime inspections are available for this target yet.")
-        return
-    for item in relevant[-20:]:
-        print(
-            f"{item.occurred_at.isoformat()} "
-            f"{item.inspection_kind.name:<22} "
-            f"subject={item.subject.qualified_name or '-'} "
-            f"changes_from_load={len(item.differences_from_load)}"
-        )
-        for difference in item.differences_from_load:
-            print(
-                f"    {difference.kind.name:<10} {difference.path}: "
-                f"{difference.before!r} -> {difference.after!r}"
-            )
+    inspections = GUARD.store.recent_inspections(module_name, limit=max(limit * 3, 50))
+    names = {
+        spec.function.__caretaker_target__.source.qualified_name,
+        VARIANTS[spec.variant_key]["benign"].__qualname__,
+        VARIANTS[spec.variant_key]["bad"].__qualname__,
+        VARIANTS[spec.variant_key]["malicious"].__qualname__,
+    }
+    return [item for item in inspections if item.subject.qualified_name in names][-limit:]
 
 
-def show_guard_decisions() -> None:
-    decisions = GUARD.decisions
-    if not decisions:
-        print("No Guard decisions have been recorded.")
-        return
-    for item in decisions[-30:]:
-        print(
-            f"{item.created_at.isoformat()} "
-            f"{item.action.name:<24} "
-            f"human_review={item.requires_human_review} "
-            f"{item.reason}"
-        )
-
-
-def show_repair_events() -> None:
-    spec = _choose_target()
-    if spec is None:
-        return
-    events = ENGINE.store.recent_events(spec.target_id, limit=40)
-    if not events:
-        print("No Repair events recorded for this target.")
-        return
-    for item in events:
-        print(
-            f"{item.timestamp.isoformat()} "
-            f"{item.event_type:<34} "
-            f"incident={str(item.incident_id)[:8] if item.incident_id else '-':<8} "
-            f"episode={str(item.episode_id)[:8] if item.episode_id else '-':<8} "
-            f"candidate={str(item.candidate_id)[:8] if item.candidate_id else '-':<8}"
-        )
-        if item.details:
-            print("    ", json.dumps(dict(item.details), default=str, sort_keys=True)[:500])
-
-
-def show_pending_approvals() -> None:
-    approvals = ENGINE.pending_approvals()
-    if not approvals:
-        print("No repairs are awaiting operator approval.")
-        return
-    for index, item in enumerate(approvals, start=1):
-        print(
-            f"{index}. episode={item.episode_id} target={item.target_id} "
-            f"candidate={item.candidate_id} expected_version={item.expected_function_version}"
-        )
-        print(f"   reason: {item.reason}")
-        print("   source:")
-        for line in item.source.splitlines():
-            print("      " + line)
-
-
-def approve_pending_repair() -> None:
-    approvals = ENGINE.pending_approvals()
-    if not approvals:
-        print("No repairs are awaiting operator approval.")
-        return
-    show_pending_approvals()
-    value = input("Approval number, or Enter to cancel: ").strip()
-    if not value.isdigit() or not (1 <= int(value) <= len(approvals)):
-        return
-    pending = approvals[int(value) - 1]
-    activated = ENGINE.approve_repair(pending.episode_id)
-    print(
-        f"Approved episode {pending.episode_id}; active function version is "
-        f"{activated.number}."
-    )
-
-
-def reject_pending_repair() -> None:
-    approvals = ENGINE.pending_approvals()
-    if not approvals:
-        print("No repairs are awaiting operator approval.")
-        return
-    show_pending_approvals()
-    value = input("Rejection number, or Enter to cancel: ").strip()
-    if not value.isdigit() or not (1 <= int(value) <= len(approvals)):
-        return
-    pending = approvals[int(value) - 1]
-    reason = _input_with_default("Reason", "interactive lab rejection")
-    ENGINE.reject_repair(pending.episode_id, reason)
-    print(f"Rejected episode {pending.episode_id}.")
-
-
-def _active_log_directory() -> Path:
-    runtime = get_logging_runtime()
-    if runtime is None:
-        return LOCAL_LOG_DIRECTORY
-    return Path(runtime.active_policy.directory)
-
-
-def show_caretaker_log_records() -> None:
-    directory = _active_log_directory()
-    event_directory = directory / "application" / "events"
+def _console_log_records(limit: int) -> list[dict[str, Any]]:
+    event_directory = _active_log_directory() / "application" / "events"
     paths = sorted(event_directory.glob("*.ctlog")) + sorted(
         event_directory.glob("*.ctlog.gz")
     )
-    print(f"Caretaker data directory: {directory}")
-    print(f"Application event directory: {event_directory}")
-    if not paths:
-        print("No readable segment files are present yet. Execute a few functions first.")
-        return
     records = []
-    for path in paths[-4:]:
+    for path in paths[-6:]:
         try:
             records.extend(read_segment(path))
-        except Exception as exc:
-            print(f"Could not read {path.name}: {type(exc).__name__}: {exc}")
-    if not records:
-        print("No complete records were readable yet.")
-        return
-    for record in records[-20:]:
-        print(
-            json.dumps(
-                {
-                    "time": record.occurred_at.isoformat(),
-                    "channel": record.channel.name,
-                    "severity": record.severity,
-                    "logger": record.logger_name,
-                    "message": record.formatted_message or record.message_template,
-                    "target_id": str(record.target_id or record.fields.get("target_id", "")),
-                    "event": str(record.fields.get("event", "")),
-                },
-                sort_keys=True,
-                default=str,
+        except Exception:
+            continue
+    return [
+        {
+            "time": record.occurred_at.isoformat(),
+            "channel": record.channel.name,
+            "severity": record.severity,
+            "logger": record.logger_name,
+            "message": record.formatted_message or record.message_template,
+            "target_id": str(record.target_id or record.fields.get("target_id", "")),
+            "event": str(record.fields.get("event", "")),
+            "fields": _jsonable(dict(record.fields)),
+        }
+        for record in records[-limit:]
+    ]
+
+
+def _lab_console_handler(
+    request: dict[str, Any],
+    credentials: tuple[int, int, int],
+) -> dict[str, Any]:
+    command = str(request.get("command", "")).strip().lower()
+    target_value = request.get("target")
+    limit = max(1, min(int(request.get("limit", 30)), 200))
+
+    if command == "status":
+        return {
+            "ok": True,
+            "pid": os.getpid(),
+            "peer_pid": credentials[0],
+            "supervised": os.environ.get("CARETAKER_SUPERVISED") == "1",
+            "workspace": str(WORKSPACE),
+            "data_directory": str(_active_log_directory()),
+            "console_socket": str(_lab_console_socket_path()),
+            "pending_approvals": len(ENGINE.pending_approvals()),
+            "guard_decisions": len(GUARD.decisions),
+            "collector_events": len(COLLECTOR_EVENTS),
+        }
+
+    if command == "targets":
+        return {"ok": True, "targets": [_console_target_state(spec) for spec in TARGETS.values()]}
+
+    if command in {"state", "policy", "summary", "deviations", "inspections", "baseline-accept"}:
+        spec = _resolve_console_target(str(target_value or ""))
+        if spec is None:
+            raise ValueError(f"{command} requires a target")
+        if command == "state":
+            return {"ok": True, "state": _console_target_state(spec)}
+        if command == "policy":
+            return {"ok": True, "policy": _console_target_policy(spec)}
+        if command == "summary":
+            summary = GUARD.recent_summary(spec.target_id, calls=20)
+            return {"ok": True, "target_id": spec.target_id, "summary": _jsonable(summary)}
+        if command == "deviations":
+            deviations = list(
+                getattr(GUARD, "_deviations_by_target", {}).get(spec.target_id, ())
             )
+            return {
+                "ok": True,
+                "target_id": spec.target_id,
+                "deviations": _jsonable(deviations[-limit:]),
+            }
+        if command == "inspections":
+            return {
+                "ok": True,
+                "target_id": spec.target_id,
+                "inspections": _jsonable(_console_guard_inspections(spec, limit)),
+            }
+        baseline = GUARD.accept_baseline(spec.target_id)
+        return {"ok": True, "target_id": spec.target_id, "baseline": _jsonable(baseline)}
+
+    if command == "events":
+        spec = _resolve_console_target(str(target_value)) if target_value else None
+        events = GUARD.store.recent_behavior_events(
+            target_id=spec.target_id if spec is not None else None,
+            limit=limit,
         )
+        return {
+            "ok": True,
+            "target_id": spec.target_id if spec is not None else None,
+            "events": _jsonable(events),
+        }
 
+    if command == "decisions":
+        return {"ok": True, "decisions": _jsonable(GUARD.decisions[-limit:])}
 
-def show_control_commands() -> None:
-    supervised = os.environ.get("CARETAKER_SUPERVISED") == "1"
-    data_directory = _active_log_directory()
-    socket_path = data_directory / "run" / "control.sock"
-    print(f"Supervised runtime detected: {supervised}")
-    print(f"Expected control socket: {socket_path}")
-    if supervised:
-        print("\nUseful commands from another terminal:")
-        print(f"  caretaker-logging control {socket_path} status")
-        print(f"  caretaker-logging control {socket_path} policy-effective")
-        print(
-            f"  caretaker-logging control {socket_path} mode-acquire "
-            "--mode guard --reason 'interactive lab'"
+    if command == "repair-events":
+        spec = _resolve_console_target(str(target_value)) if target_value else None
+        events = ENGINE.store.recent_events(
+            spec.target_id if spec is not None else None,
+            limit=limit,
         )
-        print("  # release with the lease ID returned by mode-acquire")
-    else:
-        print(
-            "\nThis process was started directly, so there is no supervisor control "
-            "socket. Restart from the repository root with:\n"
-        )
-        print("  PYTHONPATH=src:. python -m caretaker.run \\")
-        print(f"    --data-directory {LOCAL_LOG_DIRECTORY} \\")
-        print("    examples.interactive_caretaker_lab")
+        return {
+            "ok": True,
+            "target_id": spec.target_id if spec is not None else None,
+            "events": _jsonable(events),
+        }
+
+    if command == "approvals":
+        return {"ok": True, "approvals": _jsonable(ENGINE.pending_approvals())}
+
+    if command in {"approve", "reject"}:
+        from uuid import UUID
+
+        episode_id = UUID(str(request["episode_id"]))
+        if command == "approve":
+            activated = ENGINE.approve_repair(episode_id)
+            return {
+                "ok": True,
+                "episode_id": str(episode_id),
+                "activated_version": activated.number,
+            }
+        reason = str(request.get("reason") or "interactive lab rejection")
+        ENGINE.reject_repair(episode_id, reason)
+        return {"ok": True, "episode_id": str(episode_id), "reason": reason}
+
+    if command == "logs":
+        return {
+            "ok": True,
+            "data_directory": str(_active_log_directory()),
+            "records": _console_log_records(limit),
+        }
+
+    if command == "collector":
+        return {"ok": True, "events": list(COLLECTOR_EVENTS[-limit:])}
+
+    return {"ok": False, "error": f"unsupported lab console command: {command!r}"}
 
 
-def show_collector_events() -> None:
-    if not COLLECTOR_EVENTS:
-        print("The synthetic loopback collector has not received anything.")
-        return
-    print("Synthetic loopback collector events:")
-    for item in COLLECTOR_EVENTS[-20:]:
-        print("  " + json.dumps(item, sort_keys=True))
+def start_lab_console() -> None:
+    global LAB_CONSOLE_SERVER, LAB_CONSOLE_THREAD
 
-
-def open_python_console() -> None:
-    runtime = get_logging_runtime()
-    namespace = {
-        "ENGINE": ENGINE,
-        "GUARD": GUARD,
-        "TARGETS": TARGETS,
-        "VARIANTS": VARIANTS,
-        "ACTIVE_VARIANTS": ACTIVE_VARIANTS,
-        "WORKSPACE": WORKSPACE,
-        "SERVERS": SERVERS,
-        "runtime": runtime,
-        "divide_values": divide_values,
-        "list_directory": list_directory,
-        "load_webpage": load_webpage,
-        "search_files": search_files,
-        "api_call": api_call,
-        "transform_text": transform_text,
-        "write_note": write_note,
-        "slow_operation": slow_operation,
-    }
-    code.interact(
-        banner=(
-            "Caretaker interactive lab Python console\n"
-            "This console has application-account privileges and can change runtime state.\n"
-            "Useful names: ENGINE, GUARD, TARGETS, VARIANTS, ACTIVE_VARIANTS, "
-            "WORKSPACE, SERVERS, runtime, and all lab target functions.\n"
-            "Examples:\n"
-            "  ENGINE.pending_approvals()\n"
-            "  GUARD.decisions\n"
-            "  divide_values.__caretaker_target__.slot.snapshot()\n"
-            "Exit with Ctrl-D or exit()."
-        ),
-        local=namespace,
+    server = ControlSocketServer(
+        _lab_console_socket_path(),
+        _lab_console_handler,
+        allowed_uids={os.getuid()},
     )
+    server.start()
+    thread = threading.Thread(
+        target=server.serve_forever,
+        name="caretaker-interactive-lab-console",
+        daemon=True,
+    )
+    thread.start()
+    LAB_CONSOLE_SERVER = server
+    LAB_CONSOLE_THREAD = thread
 
 
-def inspection_menu() -> None:
-    while True:
-        print(
-            """
-\nCaretaker / Guard inspection menu
---------------------------------
-1. Show target FunctionSlot and behavior state
-2. Show effective target policy
-3. Accept Guard baseline for a target
-4. Show Guard behavior summary
-5. Show recent Guard events
-6. Show Guard deviations
-7. Show Guard runtime inspections / code changes
-8. Show Guard decisions
-9. Show recent Repair events
-10. Show pending Repair approvals
-11. Approve a pending Repair
-12. Reject a pending Repair
-13. Show recent Caretaker log records
-14. Show control-socket commands / supervised startup
-15. Show synthetic loopback collector events
-16. Open interactive Python console
-0. Return to main menu
-""".strip()
-        )
-        choice = input("Selection: ").strip()
-        try:
-            if choice == "1":
-                show_variant_state()
-            elif choice == "2":
-                show_target_policy()
-            elif choice == "3":
-                accept_guard_baseline()
-            elif choice == "4":
-                show_guard_summary()
-            elif choice == "5":
-                show_recent_guard_events()
-            elif choice == "6":
-                show_guard_deviations()
-            elif choice == "7":
-                show_runtime_inspections()
-            elif choice == "8":
-                show_guard_decisions()
-            elif choice == "9":
-                show_repair_events()
-            elif choice == "10":
-                show_pending_approvals()
-            elif choice == "11":
-                approve_pending_repair()
-            elif choice == "12":
-                reject_pending_repair()
-            elif choice == "13":
-                show_caretaker_log_records()
-            elif choice == "14":
-                show_control_commands()
-            elif choice == "15":
-                show_collector_events()
-            elif choice == "16":
-                open_python_console()
-            elif choice == "0":
-                return
-            else:
-                print("Unknown selection.")
-        except Exception as exc:
-            print(f"Inspection action failed: {type(exc).__name__}: {exc}")
+def stop_lab_console() -> None:
+    global LAB_CONSOLE_SERVER, LAB_CONSOLE_THREAD
+
+    if LAB_CONSOLE_SERVER is not None:
+        LAB_CONSOLE_SERVER.stop()
+    if LAB_CONSOLE_THREAD is not None:
+        LAB_CONSOLE_THREAD.join(timeout=1.0)
+    LAB_CONSOLE_SERVER = None
+    LAB_CONSOLE_THREAD = None
 
 
 # ---------------------------------------------------------------------------
@@ -1823,9 +1685,18 @@ Caretaker interactive behavior laboratory
 
 Workspace:          {WORKSPACE}
 Caretaker data:     {_active_log_directory()}
+Lab console socket: {_lab_console_socket_path()}
 Local webpage/API:  {SERVERS.application_base}
 Synthetic collector:{SERVERS.collector_base}
 Supervised:         {os.environ.get('CARETAKER_SUPERVISED') == '1'}
+
+Observe from another terminal
+-----------------------------
+PYTHONPATH=src:. python -m examples.interactive_caretaker_lab_console
+
+The menu drives application behavior only. Use the attached lab console to
+inspect Guard events, Repair events, pending approvals, logs, target state, and
+accepted baselines. Type 'help' in that console for commands.
 
 Safety boundary
 ---------------
@@ -1836,18 +1707,16 @@ second loopback server. They do not delete files or transmit data off-host.
 
 Suggested first experiment
 --------------------------
-1. Run a target with its benign implementation.
-2. Inspect the raw Guard events produced by the benign call.
-3. Optionally accept a Guard baseline for the target.
-4. Modification menu -> change behavior substitution to malicious.
-5. Run the same target and compare its raw filesystem/network/subprocess events.
-6. For explicit runtime-code-change detection, use the code-object mutation option
-   and then inspect Guard runtime inspections.
-7. Restore the original/benign implementation before moving to the next target.
+1. In this menu, run a target with its benign implementation.
+2. In the lab console, inspect its Guard events and optionally accept a baseline.
+3. Here, change the target's behavior substitution to malicious.
+4. Run the same target again.
+5. In the console, compare events, deviations, inspections, and Repair state.
+6. Restore the original/benign implementation before moving to the next target.
 
-For Repair, try option 1 (division) with the bad implementation, then inspect
-pending approvals. Option 6 (text transform) demonstrates automatic eligible
-repair and retry.
+For Repair, try division with the bad implementation, then use the lab console's
+'approvals' and 'approve <episode-id>' commands. Text transform demonstrates an
+automatic eligible repair and retry.
 
 This lab logs function arguments/results. Do not enter real credentials or
 sensitive data.
@@ -1866,19 +1735,18 @@ def main() -> None:
     SERVERS.start()
     _build_target_specs()
     GUARD.install(import_hook=False, periodic=False)
+    start_lab_console()
 
     print_banner()
     try:
         while True:
-            print("\nMain menu")
-            print("---------")
+            _menu_header("Main", title="Application behavior menu")
             for key, spec in TARGETS.items():
                 print(
                     f"{key}. {spec.title:<39} "
                     f"[{ACTIVE_VARIANTS[spec.variant_key]}]"
                 )
             print("9. Modify / inject function implementations")
-            print("10. Inspect Caretaker / Guard / logs / console")
             print("0. Quit")
 
             choice = input("Selection: ").strip()
@@ -1886,8 +1754,6 @@ def main() -> None:
                 execute_target(TARGETS[choice])
             elif choice == "9":
                 modification_menu()
-            elif choice == "10":
-                inspection_menu()
             elif choice == "0":
                 return
             else:
@@ -1895,6 +1761,7 @@ def main() -> None:
     except (EOFError, KeyboardInterrupt):
         print("\nExiting interactive lab.")
     finally:
+        stop_lab_console()
         GUARD.close()
         if SERVERS is not None:
             SERVERS.close()
