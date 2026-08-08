@@ -6,6 +6,7 @@ import importlib
 import inspect
 import io
 import json
+import os
 import pickle
 import statistics
 import sys
@@ -15,6 +16,34 @@ from pathlib import Path
 from typing import Any
 
 from .validation import assess_candidate_source, sanitized_function_tree
+
+
+def _install_validation_audit_hook(payload: dict[str, Any], output_path: Path) -> None:
+    """Deny common external side effects during candidate execution.
+
+    This is defense in depth inside the same-UID validation process, not an OS
+    security sandbox. Strong isolation still requires a container/VM boundary.
+    """
+    allow_network = bool(payload.get("allow_network", False))
+    allow_subprocesses = bool(payload.get("allow_subprocesses", False))
+    allow_filesystem_writes = bool(payload.get("allow_filesystem_writes", False))
+    allowed_output = str(output_path.resolve())
+    write_flags = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
+
+    def audit(event: str, args: tuple[Any, ...]) -> None:
+        if not allow_network and event.startswith("socket."):
+            raise PermissionError(f"validation policy blocks network operation: {event}")
+        if not allow_subprocesses and (event.startswith("subprocess.") or event in {"os.system", "os.posix_spawn", "os.posix_spawnp"}):
+            raise PermissionError(f"validation policy blocks subprocess operation: {event}")
+        if not allow_filesystem_writes:
+            if event == "open" and len(args) >= 3:
+                path, _mode, flags = args[:3]
+                if isinstance(flags, int) and flags & write_flags and str(Path(path).resolve()) != allowed_output:
+                    raise PermissionError(f"validation policy blocks filesystem write: {path}")
+            if event in {"os.remove", "os.rename", "os.rmdir", "os.mkdir", "os.chmod", "os.chown", "os.link", "os.symlink"}:
+                raise PermissionError(f"validation policy blocks filesystem mutation: {event}")
+
+    sys.addaudithook(audit)
 
 
 def check(kind: str, outcome: str, summary: str, **details: Any) -> dict[str, Any]:
@@ -569,6 +598,7 @@ def main() -> int:
     output_path = Path(sys.argv[2])
     with input_path.open("rb") as handle:
         payload = pickle.load(handle)
+    _install_validation_audit_hook(payload, output_path)
     stdout = io.StringIO()
     stderr = io.StringIO()
     try:

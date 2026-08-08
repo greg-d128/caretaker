@@ -94,6 +94,9 @@ class SubprocessValidationBackend:
             "signature_text": target.contract.signature_text,
             "callable_kind": target.contract.kind.name,
             "allow_imports": target.policy.validation.allow_imports,
+            "allow_network": target.policy.validation.allow_network,
+            "allow_subprocesses": target.policy.validation.allow_subprocesses,
+            "allow_filesystem_writes": target.policy.validation.allow_filesystem_writes,
             "registered_cases": registered_cases,
             "generated_tests": generated_tests,
             "run_registered_tests": target.policy.validation.run_registered_tests,
@@ -179,6 +182,7 @@ class SubprocessValidationBackend:
                 ),
                 "PATH": os.environ.get("PATH", ""),
                 "PYTHONIOENCODING": "utf-8",
+                "PYTHONDONTWRITEBYTECODE": "1",
             }
             command = [
                 self.python_executable,
@@ -196,6 +200,8 @@ class SubprocessValidationBackend:
                     text=True,
                     timeout=timeout_seconds,
                     check=False,
+                    close_fds=True,
+                    start_new_session=True,
                 )
             except subprocess.TimeoutExpired as exc:
                 now = utcnow()

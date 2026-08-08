@@ -42,3 +42,8 @@ Functional correctness cannot compensate for a prohibited behavioral capability.
 ## Guard is not a sandbox
 
 Python audit hooks and introspection increase observability but do not prevent native extensions, `ctypes`, or a compromised interpreter from bypassing Python-level evidence. See `GUARD_SECURITY.md`.
+
+
+## Validation-process side-effect restrictions
+
+The default validation policy now blocks network use, subprocess creation, and filesystem writes inside the validation worker. These controls use Python audit hooks and are defense in depth only. The worker still executes under the application OS account; use the documented container/VM isolation when candidate code must be treated as actively hostile. Each capability can be explicitly enabled through `ValidationPolicy` when validation genuinely requires it.

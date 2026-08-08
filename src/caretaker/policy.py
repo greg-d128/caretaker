@@ -109,6 +109,9 @@ class ValidationPolicy:
     isolate_validation: bool = True
     validation_timeout_seconds: float = 30.0
     allow_imports: bool = False
+    allow_network: bool = False
+    allow_subprocesses: bool = False
+    allow_filesystem_writes: bool = False
     accepted_artifact_kinds: tuple[str, ...] = ("FUNCTION_REPLACEMENT",)
 
 
