@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any, Mapping, Protocol
 from uuid import UUID, uuid4
 
+from ..provider_security import validate_provider_endpoint
 from .models import LogEnvelope, RootCauseAssessment, RootCauseConfidence, RootCauseHypothesis
 
 
@@ -122,9 +123,11 @@ class OllamaRootCauseProvider:
     provider_name = "ollama"
     prompt_version = "caretaker-logging-root-cause-v1"
 
-    def __init__(self, *, model: str, endpoint: str = "http://127.0.0.1:11434/api/generate", timeout_seconds: float = 120.0) -> None:
+    def __init__(self, *, model: str, endpoint: str = "http://127.0.0.1:11434/api/generate", timeout_seconds: float = 120.0, allow_remote_endpoint: bool = False) -> None:
         self.model_name = model
-        self.endpoint = endpoint
+        self.endpoint = validate_provider_endpoint(
+            endpoint, allow_remote_endpoint=allow_remote_endpoint
+        )
         self.timeout_seconds = timeout_seconds
 
     def assess(self, bundle: LoggingEvidenceBundle) -> RootCauseAssessment:

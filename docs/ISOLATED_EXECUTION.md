@@ -407,7 +407,7 @@ volumes:
   ollama-models:
 ```
 
-Configure `OllamaRepairProvider`, `OllamaBehaviorAssessmentProvider`, or `OllamaRootCauseProvider` to use:
+Configure `OllamaRepairProvider`, `OllamaBehaviorAssessmentProvider`, or `OllamaRootCauseProvider` to use the private service endpoint and set `allow_remote_endpoint=True` explicitly:
 
 ```text
 http://ollama:11434

@@ -7,6 +7,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Protocol
 
+from ..provider_security import validate_provider_endpoint
 from .models import (
     AssessmentSeverity,
     BehaviorAssessment,
@@ -49,9 +50,12 @@ class OllamaBehaviorAssessmentProvider:
         base_url: str = "http://localhost:11434",
         timeout_seconds: float = 300.0,
         keep_alive: str | int = "30m",
+        allow_remote_endpoint: bool = False,
     ) -> None:
         self.model_name = model
-        self.base_url = base_url.rstrip("/")
+        self.base_url = validate_provider_endpoint(
+            base_url, allow_remote_endpoint=allow_remote_endpoint
+        )
         self.timeout_seconds = timeout_seconds
         self.keep_alive = keep_alive
 
