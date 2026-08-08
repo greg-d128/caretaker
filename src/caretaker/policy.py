@@ -70,7 +70,7 @@ TriggerSpec = ExceptionTrigger | TimeoutTrigger | OutputValidationTrigger
 @dataclass(frozen=True, slots=True)
 class StatePolicy:
     capture_arguments: bool = True
-    capture_failure_locals: bool = True
+    capture_failure_locals: bool = False
     capture_instance_state: bool = False
     snapshot_arguments: bool = False
     snapshot_instance: bool = False

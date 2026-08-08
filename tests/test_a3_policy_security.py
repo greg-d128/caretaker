@@ -223,3 +223,7 @@ def test_differential_execution_requires_explicit_purity_confirmation() -> None:
     )
     with pytest.raises(PolicyConfigurationError, match="pure_function_confirmed"):
         repair(policy=policy)(always_fails)
+
+
+def test_failure_locals_are_not_captured_by_default() -> None:
+    assert StatePolicy().capture_failure_locals is False
