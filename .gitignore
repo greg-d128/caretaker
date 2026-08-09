@@ -11,3 +11,4 @@ coverage.xml
 .coverage
 htmlcov/
 examples/.caretaker-interactive-lab/
+examples/.caretaker-interactive-lab/*

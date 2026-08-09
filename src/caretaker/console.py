@@ -11,9 +11,10 @@ from textual.containers import Grid, Horizontal, Vertical
 from textual.widgets import Button, DataTable, Footer, Header, Input, RichLog, Static, TabbedContent, TabPane
 
 from .logging.ipc import control_request
+from .logging.segments import read_segment
 
 
-def discover_control_socket(data_directory: Path) -> Path:
+def discover_control_socket(data_directory: Path) -> Path | None:
     direct = data_directory / "run" / "control.sock"
     if direct.exists():
         return direct.resolve()
@@ -21,10 +22,7 @@ def discover_control_socket(data_directory: Path) -> Path:
     if len(candidates) == 1:
         return candidates[0].resolve()
     if not candidates:
-        raise FileNotFoundError(
-            f"No Caretaker control socket found under {data_directory}. "
-            "Start the application with caretaker-run or pass --socket."
-        )
+        return None
     rendered = "\n  ".join(str(path) for path in candidates)
     raise RuntimeError(
         "Multiple Caretaker control sockets were found. Pass --socket or "
@@ -110,8 +108,57 @@ class CaretakerConsoleApp(App):
         min-height: 0;
         border: none;
     }
-    #repair-episode, #repair-reason {
+    #repair-toolbar {
+        height: 3;
+        padding: 0 1;
+        align-vertical: middle;
+        overflow: hidden hidden;
+    }
+    #repair-refresh {
+        width: auto;
+        min-width: 16;
+        height: 3;
+        margin: 0;
+    }
+    #repair-split {
+        height: 1fr;
+        min-height: 0;
+        grid-size: 2 1;
+        grid-columns: 3fr 2fr;
+        grid-rows: 1fr;
+        grid-gutter: 1;
+    }
+    .repair-pane {
+        height: 1fr;
+        min-height: 0;
+        border: solid $surface-lighten-2;
+        overflow: hidden hidden;
+    }
+    .repair-pane-title {
+        height: 3;
+        padding: 1 2;
+        text-style: bold;
+        border-bottom: solid $surface-lighten-2;
+    }
+    #repair-table, #repair-output {
+        height: 1fr;
+        min-height: 0;
+        border: none;
+    }
+    #repair-actions {
+        height: 4;
+        padding: 0 1;
+        align-vertical: middle;
+        border-top: solid $surface-lighten-2;
+    }
+    #repair-reason {
         width: 1fr;
+        min-width: 24;
+    }
+    #repair-actions Button {
+        width: auto;
+        min-width: 12;
+        margin-left: 1;
     }
     """
 
@@ -120,11 +167,16 @@ class CaretakerConsoleApp(App):
         ("r", "refresh", "Refresh"),
     ]
 
-    def __init__(self, socket_path: Path) -> None:
+    def __init__(self, socket_path: Path | None, data_directory: Path) -> None:
         super().__init__()
         self.socket_path = socket_path
+        self.data_directory = data_directory
         self._last_status: dict[str, Any] = {}
+        self._last_runtime: dict[str, Any] = {}
+        self._application_running: bool | None = None
         self._log_records: list[dict[str, Any]] = []
+        self._repair_records: list[dict[str, Any]] = []
+        self._selected_repair_approval: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -150,16 +202,43 @@ class CaretakerConsoleApp(App):
                     yield Button("LLM assist", id="guard-assess")
                 yield RichLog(id="guard-output", wrap=True, markup=True)
             with TabPane("Repair", id="repair"):
-                with Horizontal(classes="toolbar"):
-                    yield Input(placeholder="Target id (optional for events)", id="repair-target")
-                    yield Button("Events", id="repair-events")
-                    yield Button("Approvals", id="repair-approvals")
-                with Horizontal(classes="toolbar"):
-                    yield Input(placeholder="Episode UUID", id="repair-episode")
-                    yield Input(placeholder="Rejection reason", id="repair-reason")
-                    yield Button("Approve", id="repair-approve", variant="success")
-                    yield Button("Reject", id="repair-reject", variant="error")
-                yield RichLog(id="repair-output", wrap=True, markup=True)
+                with Horizontal(id="repair-toolbar"):
+                    yield Button("Refresh repair", id="repair-refresh")
+                with Grid(id="repair-split"):
+                    with Vertical(classes="repair-pane"):
+                        yield Static(
+                            "Recent and waiting Repair activity",
+                            id="repair-list-title",
+                            classes="repair-pane-title",
+                        )
+                        table = DataTable(id="repair-table")
+                        table.cursor_type = "row"
+                        table.add_columns("#", "State", "Time", "Target", "Description", "Episode")
+                        yield table
+                    with Vertical(classes="repair-pane"):
+                        yield Static(
+                            "Selected Repair record",
+                            id="repair-detail-title",
+                            classes="repair-pane-title",
+                        )
+                        yield RichLog(id="repair-output", wrap=True, markup=True)
+                        with Horizontal(id="repair-actions"):
+                            yield Input(
+                                placeholder="Rejection reason (used only for Reject)",
+                                id="repair-reason",
+                            )
+                            yield Button(
+                                "Approve",
+                                id="repair-approve",
+                                variant="success",
+                                disabled=True,
+                            )
+                            yield Button(
+                                "Reject",
+                                id="repair-reject",
+                                variant="error",
+                                disabled=True,
+                            )
             with TabPane("Investigate", id="investigate"):
                 with Horizontal(classes="toolbar"):
                     yield Input(placeholder="Target id (optional)", id="investigate-target")
@@ -201,22 +280,78 @@ class CaretakerConsoleApp(App):
         self.set_interval(1.0, self.refresh_status)
 
     async def _request(self, command: str, **payload: Any) -> dict[str, Any]:
+        if self.socket_path is None:
+            raise ConnectionError("Caretaker supervisor is not running")
         request = {"command": command, **payload}
         response = await asyncio.to_thread(control_request, self.socket_path, request)
         if response.get("ok") is False:
             raise RuntimeError(str(response.get("error", "Caretaker control request failed")))
         return response
 
+    @staticmethod
+    def _metric(runtime: dict[str, Any], key: str) -> Any:
+        return runtime.get(key, "-") if runtime else "-"
+
+    def _offline_overview(self, *, reason: str, status_label: str = "OFFLINE") -> None:
+        runtime = self._last_runtime
+        incident_targets = sorted(
+            {
+                str(item.get("target_id"))
+                for item in runtime.get("active_incidents", ())
+                if item.get("target_id")
+            }
+        ) if runtime else []
+        validating = runtime.get("validating_functions", ()) if runtime else ()
+        degraded = runtime.get("degraded_components", ()) if runtime else ()
+        self.query_one("#operator-status", Static).update(
+            f"Status {status_label}  |  "
+            f"Last alert {self._metric(runtime, 'alert_level')}  |  "
+            f"Last incidents {self._metric(runtime, 'active_incident_count')}  |  "
+            f"Last validating {self._metric(runtime, 'validation_count')}  |  "
+            f"Last approvals {self._metric(runtime, 'pending_approval_count')}  |  "
+            f"Last targets {self._metric(runtime, 'target_count')}"
+        )
+        self._selected_repair_approval = None
+        self.query_one("#repair-approve", Button).disabled = True
+        self.query_one("#repair-reject", Button).disabled = True
+        details = [
+            f"Application: stopped / unavailable ({reason})",
+            "Live runtime state is unavailable. Last successfully read runtime data is retained on screen.",
+            "Last active incident targets: "
+            f"{', '.join(incident_targets) if incident_targets else 'none / unknown'}",
+            f"Last validating functions: {', '.join(validating) if validating else 'none / unknown'}",
+            f"Last degraded capabilities: {', '.join(degraded) if degraded else 'none / unknown'}",
+            "Persisted Caretaker logs remain available from the Logs tab.",
+        ]
+        self.query_one("#overview-details", Static).update("\n".join(details))
+
     async def refresh_status(self) -> None:
+        if self.socket_path is None:
+            self._application_running = False
+            self._offline_overview(reason="no active caretaker-run control socket")
+            return
         try:
             status = await self._request("status")
-        except Exception as exc:
-            self.query_one("#operator-status", Static).update(
-                f"DISCONNECTED | {type(exc).__name__}: {exc}"
+        except Exception:
+            self._application_running = False
+            self._offline_overview(reason="Caretaker supervisor control socket is unavailable")
+            return
+
+        self._last_status = status
+        running = bool(status.get("application_running"))
+        self._application_running = running
+        runtime_value = status.get("runtime")
+        runtime = runtime_value if isinstance(runtime_value, dict) else {}
+        if runtime:
+            self._last_runtime = dict(runtime)
+
+        if not running:
+            self._offline_overview(
+                reason="application process has exited",
+                status_label="STOPPED",
             )
             return
-        self._last_status = status
-        runtime = status.get("runtime") or {}
+
         workers = status.get("workers") or []
         unhealthy = [
             item for item in workers
@@ -239,7 +374,7 @@ class CaretakerConsoleApp(App):
         )
         self.query_one("#operator-status", Static).update(line)
         details = [
-            f"Application PID: {status.get('application_pid')}   running={status.get('application_running')}",
+            f"Application PID: {status.get('application_pid')}   running=True",
             f"Active incident targets: {', '.join(incident_targets) if incident_targets else 'none'}",
             f"Validating functions: {', '.join(validating) if validating else 'none'}",
             f"Degraded capabilities: {', '.join(degraded) if degraded else 'none'}",
@@ -247,6 +382,21 @@ class CaretakerConsoleApp(App):
         self.query_one("#overview-details", Static).update("\n".join(details))
 
     async def refresh_targets(self) -> None:
+        if not self._application_running:
+            details = self.query_one("#target-details", RichLog)
+            if self.query_one("#targets-table", DataTable).row_count:
+                details.clear()
+                details.write(
+                    "Application is stopped. The target table contains the last live snapshot "
+                    "captured by this console; live target state and policy inspection are unavailable."
+                )
+            else:
+                details.clear()
+                details.write(
+                    "Application is stopped and no live target snapshot is available. "
+                    "Persisted evidence remains available in Logs."
+                )
+            return
         response = await self._request("runtime-targets")
         table = self.query_one("#targets-table", DataTable)
         table.clear()
@@ -279,12 +429,46 @@ class CaretakerConsoleApp(App):
             self._write_json("#logs-output", record)
             return
 
+        if event.data_table.id == "repair-table":
+            row = event.data_table.get_row(event.row_key)
+            if not row:
+                return
+            try:
+                record_number = int(row[0])
+                record = self._repair_records[record_number - 1]
+            except (TypeError, ValueError, IndexError):
+                return
+            self._selected_repair_approval = (
+                str(record.get("episode_id"))
+                if record.get("record_kind") == "pending_approval" and record.get("episode_id")
+                else None
+            )
+            actionable = self._selected_repair_approval is not None and bool(self._application_running)
+            self.query_one("#repair-approve", Button).disabled = not actionable
+            self.query_one("#repair-reject", Button).disabled = not actionable
+            title = (
+                f"Pending approval | {record.get('target_id', '-')}"
+                if record.get("record_kind") == "pending_approval"
+                else f"Repair event | {record.get('target_id', '-')}"
+            )
+            self.query_one("#repair-detail-title", Static).update(title)
+            self._write_json("#repair-output", record.get("payload", record))
+            return
+
         if event.data_table.id != "targets-table":
             return
         row = event.data_table.get_row(event.row_key)
         if not row:
             return
         target_id = str(row[0])
+        if not self._application_running:
+            details = self.query_one("#target-details", RichLog)
+            details.clear()
+            details.write(
+                f"{target_id}: application is stopped. This row is the last live snapshot; "
+                "current FunctionSlot state and policy cannot be queried."
+            )
+            return
         try:
             state, policy = await asyncio.gather(
                 self._request("runtime-target-state", target=target_id),
@@ -306,12 +490,23 @@ class CaretakerConsoleApp(App):
 
     async def refresh_all(self) -> None:
         await self.refresh_status()
-        try:
+        if self._application_running:
+            try:
+                await self.refresh_targets()
+            except Exception as exc:
+                details = self.query_one("#target-details", RichLog)
+                details.clear()
+                details.write(f"Unable to refresh live target state: {type(exc).__name__}: {exc}")
+            try:
+                await self.refresh_repair()
+            except Exception as exc:
+                self._show_repair_message(
+                    f"Unable to refresh live Repair state: {type(exc).__name__}: {exc}"
+                )
+        else:
             await self.refresh_targets()
-        except Exception as exc:
-            self.query_one("#overview-details", Static).update(
-                f"Unable to read runtime targets: {type(exc).__name__}: {exc}"
-            )
+            await self.refresh_repair()
+        await self.refresh_logs()
 
     async def action_refresh(self) -> None:
         await self.refresh_all()
@@ -342,9 +537,13 @@ class CaretakerConsoleApp(App):
         return text[: max(0, limit - 1)] + "…"
 
     async def refresh_logs(self) -> None:
-        response = await self._request("logs", limit=200)
-        records = response.get("records", [])
-        self._log_records = [dict(record) for record in records if isinstance(record, dict)]
+        records: list[dict[str, Any]]
+        try:
+            response = await self._request("logs", limit=200)
+            records = [dict(record) for record in response.get("records", []) if isinstance(record, dict)]
+        except Exception:
+            records = self._local_log_records(200)
+        self._log_records = records
 
         table = self.query_one("#logs-table", DataTable)
         table.clear()
@@ -368,6 +567,175 @@ class CaretakerConsoleApp(App):
             detail.write("Select a log record from the list to inspect its full JSON.")
         else:
             detail.write("No log records were returned.")
+
+    def _local_log_records(self, limit: int) -> list[dict[str, Any]]:
+        event_directories = []
+        direct = self.data_directory / "application" / "events"
+        if direct.exists():
+            event_directories.append(direct)
+        event_directories.extend(
+            path for path in self.data_directory.glob("*/application/events")
+            if path not in event_directories
+        )
+        paths: list[Path] = []
+        for directory in event_directories:
+            paths.extend(directory.glob("*.ctlog"))
+            paths.extend(directory.glob("*.ctlog.gz"))
+        envelopes = []
+        for path in sorted(paths)[-16:]:
+            try:
+                envelopes.extend(read_segment(path))
+            except Exception:
+                continue
+        return [
+            {
+                "occurred_at": item.occurred_at.isoformat(),
+                "severity": item.severity,
+                "channel": item.channel.name,
+                "logger": item.logger_name,
+                "message": item.formatted_message or item.message_template,
+                "target_id": str(item.target_id) if item.target_id else None,
+                "fields": dict(item.fields),
+            }
+            for item in envelopes[-max(1, limit):]
+        ]
+
+    @staticmethod
+    def _repair_state(event_type: str) -> str:
+        value = event_type.lower()
+        if value == "incident.created":
+            return "INCIDENT"
+        if value == "repair.episode_started":
+            return "ACTIVE"
+        if "operator_approved" in value or "retry_succeeded" in value:
+            return "REPAIRED"
+        if "operator_rejected" in value:
+            return "REJECTED"
+        if "rolled_back" in value:
+            return "ROLLBACK"
+        if "failed" in value:
+            return "FAILED"
+        if "suppressed" in value:
+            return "BLOCKED"
+        if "queued" in value:
+            return "QUEUED"
+        return "EVENT"
+
+    @staticmethod
+    def _repair_description(event: dict[str, Any]) -> str:
+        event_type = str(event.get("event_type") or "repair event")
+        details = event.get("details") if isinstance(event.get("details"), dict) else {}
+        if event_type == "incident.created":
+            trigger = details.get("trigger")
+            return f"Incident created{f' ({trigger})' if trigger else ''}"
+        if event_type == "repair.episode_started":
+            return "Repair episode started"
+        if event_type == "repair.operator_approved":
+            return "Operator approved validated repair"
+        if event_type == "repair.operator_rejected":
+            return f"Operator rejected repair: {details.get('reason', 'no reason recorded')}"
+        if event_type == "repair.retry_succeeded":
+            return "Repair activated and retry succeeded"
+        if event_type == "repair.retry_failed":
+            return str(details.get("exception") or "Repair retry failed")
+        if event_type == "repair.retry_contract_failed":
+            return str(details.get("reason") or "Repaired result failed contract validation")
+        if event_type == "repair.suppressed_by_limits":
+            return "Repair suppressed by configured limits"
+        if event_type == "candidate.synthesis_failed":
+            return str(details.get("error") or "Candidate synthesis failed")
+        if event_type == "guard.repair_queued":
+            explanations = details.get("explanations") or []
+            return str(explanations[0]) if explanations else "Guard queued a Repair episode"
+        return event_type.replace(".", " / ")
+
+    def _show_repair_message(self, message: str) -> None:
+        output = self.query_one("#repair-output", RichLog)
+        output.clear()
+        output.write(message)
+
+    async def refresh_repair(self) -> None:
+        if not self._application_running:
+            self.query_one("#repair-approve", Button).disabled = True
+            self.query_one("#repair-reject", Button).disabled = True
+            self._selected_repair_approval = None
+            if self._repair_records:
+                self.query_one("#repair-list-title", Static).update(
+                    "Last live Repair activity (application stopped)"
+                )
+                self._show_repair_message(
+                    "Application is stopped. The list contains the last live Repair snapshot "
+                    "captured by this console. Approval actions are unavailable; "
+                    "use Logs for persisted evidence."
+                )
+            else:
+                self.query_one("#repair-list-title", Static).update(
+                    "Repair activity (live runtime unavailable)"
+                )
+                self._show_repair_message(
+                    "Application is stopped and no live Repair snapshot is available. "
+                    "Use the Logs tab to inspect persisted Caretaker evidence."
+                )
+            return
+
+        events_response, approvals_response = await asyncio.gather(
+            self._request("runtime-repair-events", limit=100),
+            self._request("runtime-repair-approvals"),
+        )
+        events = [item for item in events_response.get("events", ()) if isinstance(item, dict)]
+        approvals = [item for item in approvals_response.get("approvals", ()) if isinstance(item, dict)]
+
+        records: list[dict[str, Any]] = []
+        for approval in approvals:
+            episode_id = str(approval.get("episode_id") or "")
+            records.append({
+                "record_kind": "pending_approval",
+                "state": "WAITING",
+                "timestamp": "",
+                "target_id": str(approval.get("target_id") or "-"),
+                "description": (
+                    "Validated repair awaiting approval: "
+                    f"{approval.get('reason') or 'operator review required'}"
+                ),
+                "episode_id": episode_id,
+                "payload": approval,
+            })
+        for item in reversed(events):
+            records.append({
+                "record_kind": "event",
+                "state": self._repair_state(str(item.get("event_type") or "")),
+                "timestamp": str(item.get("timestamp") or ""),
+                "target_id": str(item.get("target_id") or "-"),
+                "description": self._repair_description(item),
+                "episode_id": str(item.get("episode_id") or ""),
+                "payload": item,
+            })
+        self._repair_records = records
+        self._selected_repair_approval = None
+        self.query_one("#repair-approve", Button).disabled = True
+        self.query_one("#repair-reject", Button).disabled = True
+        self.query_one("#repair-list-title", Static).update("Recent and waiting Repair activity")
+        self.query_one("#repair-detail-title", Static).update("Selected Repair record")
+
+        table = self.query_one("#repair-table", DataTable)
+        table.clear()
+        for index, record in enumerate(records, start=1):
+            timestamp = record["timestamp"]
+            rendered_time = timestamp[:19].replace("T", " ") if timestamp else "-"
+            table.add_row(
+                index,
+                record["state"],
+                rendered_time,
+                self._compact_log_text(record["target_id"], limit=28),
+                self._compact_log_text(record["description"], limit=72),
+                self._compact_log_text(record["episode_id"], limit=12) or "-",
+            )
+
+        self._show_repair_message(
+            "Select a waiting approval or recent Repair event to inspect it. "
+            "Approve and Reject are enabled only for the selected pending approval."
+            if records else "No Repair events or pending approvals were returned."
+        )
 
     def _target(self, input_id: str) -> str:
         value = self.query_one(input_id, Input).value.strip()
@@ -396,19 +764,15 @@ class CaretakerConsoleApp(App):
                 response = await self._request(command_map[button], target=target, limit=100)
                 self._write_json("#guard-output", response)
                 return
-            if button == "repair-events":
-                target = self.query_one("#repair-target", Input).value.strip() or None
-                response = await self._request("runtime-repair-events", target=target, limit=100)
-                self._write_json("#repair-output", response)
-                return
-            if button == "repair-approvals":
-                response = await self._request("runtime-repair-approvals")
-                self._write_json("#repair-output", response)
+            if button == "repair-refresh":
+                await self.refresh_repair()
                 return
             if button in {"repair-approve", "repair-reject"}:
-                episode = self.query_one("#repair-episode", Input).value.strip()
+                episode = self._selected_repair_approval
                 if not episode:
-                    raise ValueError("Enter an episode UUID")
+                    raise ValueError("Select a pending Repair approval first")
+                if not self._application_running:
+                    raise RuntimeError("The application is stopped; Repair approvals require a live runtime")
                 if button == "repair-approve":
                     response = await self._request("runtime-repair-approve", episode_id=episode)
                 else:
@@ -420,6 +784,7 @@ class CaretakerConsoleApp(App):
                     )
                 self._write_json("#repair-output", response)
                 await self.refresh_status()
+                await self.refresh_repair()
                 return
             if button == "investigate-run":
                 target = self.query_one("#investigate-target", Input).value.strip()
@@ -455,12 +820,17 @@ def main(argv: list[str] | None = None) -> int:
         help="Caretaker data directory or parent directory containing one active run",
     )
     args = parser.parse_args(argv)
+    data_directory = args.data_directory.expanduser().resolve()
     try:
-        socket_path = args.socket.expanduser().resolve() if args.socket else discover_control_socket(args.data_directory.expanduser().resolve())
-    except (FileNotFoundError, RuntimeError) as exc:
+        socket_path = (
+            args.socket.expanduser().resolve()
+            if args.socket
+            else discover_control_socket(data_directory)
+        )
+    except RuntimeError as exc:
         parser.error(str(exc))
         return 2
-    CaretakerConsoleApp(socket_path).run()
+    CaretakerConsoleApp(socket_path, data_directory).run()
     return 0
 
 
