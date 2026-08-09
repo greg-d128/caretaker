@@ -68,6 +68,28 @@ Tabs provide target/FunctionSlot inspection, Guard evidence and baseline
 operations, Repair event/approval controls, persisted logs, and Guard LLM
 assistance when the application configured an advisory assessment provider.
 
+### Log browsing and filtering
+
+The **Logs** view orders records by their `occurred_at` timestamp, newest first,
+regardless of segment or writer return order. The left pane is a compact event
+list and the right pane shows the full JSON object for the selected record.
+Press `r` to refresh the console; a separate refresh button is not required.
+
+The filter field accepts ordinary case-insensitive text and compact field
+selectors. Multiple terms are combined with AND semantics. Examples:
+
+```text
+level:warn+
+channel:guard target:lab.divide
+logger:caretaker.repair timeout
+message:validation level:error
+```
+
+`level:warn` selects only warning-level records while `level:warn+` includes
+warning, error, and critical records. Supported selectors are `level`,
+`channel`, `target`, `logger`, and `message`; unqualified text searches the full
+JSON record.
+
 ### Incident investigation and LLM assistance
 
 The Textual console includes an **Investigate** view. It builds a bounded logging

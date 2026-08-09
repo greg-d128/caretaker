@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -85,18 +86,6 @@ class CaretakerConsoleApp(App):
         height: 1fr;
         border: solid $surface-lighten-2;
     }
-    #logs-toolbar {
-        height: 3;
-        padding: 0 1;
-        align-vertical: middle;
-        overflow: hidden hidden;
-    }
-    #logs-refresh {
-        width: auto;
-        min-width: 16;
-        height: 3;
-        margin: 0;
-    }
     #logs-split {
         height: 1fr;
         min-height: 0;
@@ -117,6 +106,12 @@ class CaretakerConsoleApp(App):
         padding: 1 2;
         text-style: bold;
         border-bottom: solid $surface-lighten-2;
+    }
+    #logs-filter {
+        height: 3;
+        border: none;
+        padding: 0 1;
+        background: $surface;
     }
     #logs-table, #logs-output {
         height: 1fr;
@@ -238,6 +233,7 @@ class CaretakerConsoleApp(App):
         self._last_runtime: dict[str, Any] = {}
         self._application_running: bool | None = None
         self._log_records: list[dict[str, Any]] = []
+        self._displayed_log_records: list[dict[str, Any]] = []
         self._repair_records: list[dict[str, Any]] = []
         self._selected_repair_approval: str | None = None
         self._authority_snapshot: dict[str, Any] = {}
@@ -352,18 +348,22 @@ class CaretakerConsoleApp(App):
                 )
                 yield RichLog(id="investigate-output", wrap=True, markup=True)
             with TabPane("Logs", id="logs"):
-                with Horizontal(id="logs-toolbar"):
-                    yield Button("Refresh logs", id="logs-refresh")
                 with Grid(id="logs-split"):
                     with Vertical(classes="logs-pane"):
-                        yield Static("Log records (newest first)", classes="logs-pane-title")
+                        yield Input(
+                            placeholder=(
+                                "Filter logs: text, level:warn+, channel:guard, "
+                                "target:lab.divide, logger:name"
+                            ),
+                            id="logs-filter",
+                        )
                         table = DataTable(id="logs-table")
                         table.cursor_type = "row"
                         table.add_columns("#", "Time", "Level", "Channel", "Target", "Message")
                         yield table
                     with Vertical(classes="logs-pane"):
                         yield Static(
-                            "Selected log record",
+                            "Selected log record | R refreshes",
                             id="logs-detail-title",
                             classes="logs-pane-title",
                         )
@@ -524,7 +524,7 @@ class CaretakerConsoleApp(App):
                 return
             try:
                 record_number = int(row[0])
-                record = self._log_records[record_number - 1]
+                record = self._displayed_log_records[record_number - 1]
             except (TypeError, ValueError, IndexError):
                 return
             self.query_one("#logs-detail-title", Static).update(
@@ -634,6 +634,10 @@ class CaretakerConsoleApp(App):
     async def action_refresh(self) -> None:
         await self.refresh_all()
 
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "logs-filter":
+            self._apply_log_filter()
+
     @staticmethod
     def _log_level(severity: Any) -> str:
         try:
@@ -659,23 +663,114 @@ class CaretakerConsoleApp(App):
             return text
         return text[: max(0, limit - 1)] + "…"
 
-    async def refresh_logs(self) -> None:
-        records: list[dict[str, Any]]
+    @staticmethod
+    def _log_timestamp(record: dict[str, Any]) -> float:
+        value = str(record.get("occurred_at") or "").strip()
+        if not value:
+            return float("-inf")
         try:
-            response = await self._request("logs", limit=200)
-            records = [dict(record) for record in response.get("records", []) if isinstance(record, dict)]
-        except Exception:
-            records = self._local_log_records(200)
-        self._log_records = records
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.timestamp()
+        except (TypeError, ValueError, OverflowError):
+            return float("-inf")
+
+    @classmethod
+    def _sorted_log_records(cls, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        # Do not trust segment or IPC return order. Multiple writers/segments may
+        # be interleaved, so render by event time with a deterministic JSON
+        # tie-breaker for records that share the same timestamp.
+        return sorted(
+            records,
+            key=lambda record: (
+                cls._log_timestamp(record),
+                str(record.get("channel") or ""),
+                str(record.get("target_id") or ""),
+                str(record.get("logger") or ""),
+                str(record.get("message") or ""),
+            ),
+            reverse=True,
+        )
+
+    @classmethod
+    def _log_matches_filter(cls, record: dict[str, Any], expression: str) -> bool:
+        tokens = [token for token in expression.casefold().split() if token]
+        if not tokens:
+            return True
+
+        level_name = cls._log_level(record.get("severity")).casefold()
+        try:
+            severity = int(record.get("severity"))
+        except (TypeError, ValueError):
+            severity = -1
+        level_values = {
+            "debug": 10,
+            "info": 20,
+            "warn": 30,
+            "warning": 30,
+            "error": 40,
+            "crit": 50,
+            "critical": 50,
+        }
+        fields = {
+            "channel": str(record.get("channel") or "").casefold(),
+            "target": str(record.get("target_id") or "").casefold(),
+            "logger": str(record.get("logger") or "").casefold(),
+            "message": str(record.get("message") or "").casefold(),
+        }
+        searchable = json.dumps(record, default=str).casefold()
+
+        for token in tokens:
+            if ":" not in token:
+                if token not in searchable:
+                    return False
+                continue
+            field, value = token.split(":", 1)
+            if not value:
+                continue
+            if field == "level":
+                minimum = value.endswith("+")
+                normalized = value[:-1] if minimum else value
+                wanted = level_values.get(normalized)
+                if wanted is None:
+                    if normalized not in level_name:
+                        return False
+                elif minimum:
+                    if severity < wanted:
+                        return False
+                else:
+                    normalized_name = {
+                        "warning": "warn",
+                        "critical": "crit",
+                    }.get(normalized, normalized)
+                    if level_name != normalized_name:
+                        return False
+                continue
+            if field in fields:
+                if value not in fields[field]:
+                    return False
+                continue
+            # Unknown prefixes remain useful as ordinary full-record search
+            # terms rather than unexpectedly hiding every row.
+            if token not in searchable:
+                return False
+        return True
+
+    def _apply_log_filter(self) -> None:
+        expression = self.query_one("#logs-filter", Input).value.strip()
+        self._displayed_log_records = [
+            record for record in self._log_records
+            if self._log_matches_filter(record, expression)
+        ]
 
         table = self.query_one("#logs-table", DataTable)
         table.clear()
-        for index in range(len(self._log_records) - 1, -1, -1):
-            record = self._log_records[index]
+        for index, record in enumerate(self._displayed_log_records, start=1):
             occurred_at = str(record.get("occurred_at") or "")
             timestamp = occurred_at[:19].replace("T", " ") if occurred_at else "-"
             table.add_row(
-                index + 1,
+                index,
                 timestamp,
                 self._log_level(record.get("severity")),
                 self._compact_log_text(record.get("channel"), limit=18) or "-",
@@ -685,11 +780,27 @@ class CaretakerConsoleApp(App):
 
         detail = self.query_one("#logs-output", RichLog)
         detail.clear()
-        self.query_one("#logs-detail-title", Static).update("Selected log record")
-        if self._log_records:
+        shown = len(self._displayed_log_records)
+        total = len(self._log_records)
+        self.query_one("#logs-detail-title", Static).update(
+            f"Selected log record | Showing {shown}/{total} | R refreshes"
+        )
+        if self._displayed_log_records:
             detail.write("Select a log record from the list to inspect its full JSON.")
+        elif total:
+            detail.write("No log records match the current filter.")
         else:
             detail.write("No log records were returned.")
+
+    async def refresh_logs(self) -> None:
+        records: list[dict[str, Any]]
+        try:
+            response = await self._request("logs", limit=200)
+            records = [dict(record) for record in response.get("records", []) if isinstance(record, dict)]
+        except Exception:
+            records = self._local_log_records(200)
+        self._log_records = self._sorted_log_records(records)
+        self._apply_log_filter()
 
     def _local_log_records(self, limit: int) -> list[dict[str, Any]]:
         event_directories = []
@@ -1084,14 +1195,10 @@ class CaretakerConsoleApp(App):
                 )
                 self._write_json("#investigate-output", response)
                 return
-            if button == "logs-refresh":
-                await self.refresh_logs()
         except Exception as exc:
             output = "#guard-output" if button.startswith("guard-") else "#repair-output"
             if button == "investigate-run":
                 output = "#investigate-output"
-            elif button == "logs-refresh":
-                output = "#logs-output"
             elif button.startswith("policy-"):
                 output = "#policy-output"
             self._write_json(output, {"error": f"{type(exc).__name__}: {exc}"})
