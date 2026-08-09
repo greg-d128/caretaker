@@ -6,6 +6,8 @@ The control interface uses a Unix-domain socket, filesystem permissions, and pee
 
 No network listener, password database, arbitrary Python, shell command, or unrestricted path execution is provided.
 
+The configured `run/control.sock` and `run/runtime.sock` names are logical paths. On systems with short `AF_UNIX` pathname limits, Caretaker transparently relocates only an overlong socket file to a private per-user runtime directory; the configured evidence/data directory is unchanged. Caretaker's control clients resolve the same mapping automatically.
+
 ## Declarative commands
 
 The initial protocol supports status, health, effective-policy inspection, and mode lease acquisition/release. Logging CLI commands also provide offline record, baseline, and interrogation operations.

@@ -43,3 +43,32 @@ def test_operator_runtime_reports_validation_activity():
     assert status["current_status"] == "VALIDATING"
     assert status["validation_count"] == 1
     assert status["validating_functions"] == ["target.one"]
+
+
+def test_authority_update_rolls_back_process_context_when_component_refresh_fails(monkeypatch):
+    from caretaker.authority import get_authority_runtime_context
+
+    registry = OperatorRuntimeRegistry()
+    engine = RepairEngine()
+    registry.register_repair_engine(engine)
+    context = get_authority_runtime_context()
+    previous = context.effective.snapshot_dict()
+    changed = dict(previous)
+    changed["generation"] = int(previous.get("generation", 0)) + 1
+    changed["fingerprint"] = "changed-authority-generation"
+
+    def fail_refresh():
+        raise RuntimeError("synthetic refresh failure")
+
+    monkeypatch.setattr(engine, "refresh_authority_policy", fail_refresh)
+    try:
+        import pytest
+        with pytest.raises(RuntimeError, match="synthetic refresh failure"):
+            registry.handle_request(
+                {"command": "policy-authority-update", "snapshot": changed},
+                (123, 1000, 1000),
+            )
+        assert context.effective.fingerprint == previous["fingerprint"]
+        assert context.effective.generation == previous["generation"]
+    finally:
+        context.update_from_snapshot(previous)

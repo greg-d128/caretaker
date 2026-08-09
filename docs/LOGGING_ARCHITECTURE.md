@@ -28,6 +28,8 @@ Analysis is never performed synchronously in an ordinary logging call.
 
 Each application process uses a lightweight emitter. One supervised service owns the event segment writer and SQLite index. Unix-domain sockets preserve local-only deployment and allow the operating-system credential model to authenticate emitters and administrators.
 
+Caretaker treats `<data-directory>/run/*.sock` as logical socket paths. If the absolute pathname would exceed the platform Unix-domain socket limit, only the ephemeral socket is mapped to a deterministic private per-user runtime directory under `$XDG_RUNTIME_DIR` or the system temporary directory. Persistent logs, evidence, indexes, and attachments remain in the configured data directory. Caretaker clients and consoles perform the same mapping automatically.
+
 The application lifecycle controls Caretaker's lifecycle. The supervised process exits after the application and flushes complete records where possible.
 
 ## Channels

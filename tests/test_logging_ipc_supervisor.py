@@ -103,3 +103,78 @@ def test_remote_runtime_emits_through_socket(tmp_path):
     records = read_segment(manifest.path)
     assert records[-1].formatted_message == "remote hello"
     assert records[-1].fields["token"] == "<redacted>"
+
+
+def test_long_unix_socket_path_uses_short_private_runtime_path(tmp_path):
+    from caretaker.logging import unix_socket_path
+
+    requested = tmp_path
+    while len(os.fsencode(str(requested / "events.sock"))) <= 120:
+        requested = requested / "deep-caretaker-project-directory"
+    requested_socket = requested / "events.sock"
+
+    resolved = unix_socket_path(requested_socket)
+
+    assert resolved.name == "events.sock"
+    assert resolved != requested_socket
+    assert len(os.fsencode(str(resolved))) <= 100
+    assert resolved.parent.stat().st_mode & 0o077 == 0
+
+
+def test_long_unix_socket_path_logging_round_trip(tmp_path):
+    policy = OperatorLoggingPolicy.application_defaults(directory=str(tmp_path), application_id="demo")
+    writer = SegmentWriter(policy, run_id=uuid4(), process_start_id=uuid4())
+    requested = tmp_path
+    while len(os.fsencode(str(requested / "events.sock"))) <= 120:
+        requested = requested / "deep-caretaker-project-directory"
+    socket_path = requested / "events.sock"
+
+    server = SocketLogServer(socket_path, writer, allowed_uids={os.getuid()})
+    server.start()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    client = SocketLogClient(socket_path)
+    client.write(LogEnvelope(
+        schema_version=1, writer_version="0.5.0a1", record_id=uuid4(),
+        occurred_at=datetime.now(timezone.utc), monotonic_ns=1,
+        process_start_id=uuid4(), sequence_number=1,
+        channel=LogChannel.APPLICATION, severity=20, logger_name="demo",
+        message_template=None, formatted_message="long path", fields={},
+        process_id=os.getpid(), thread_id=1, task_id=None, run_id=uuid4(),
+        call_id=None, target_id=None, function_version=None, incident_id=None,
+    ))
+    client.close()
+    server.stop()
+    thread.join(timeout=2)
+    manifest = writer.close()
+    assert manifest.record_count == 1
+
+
+def test_long_unix_control_socket_path_round_trip(tmp_path):
+    from caretaker.logging import ControlSocketServer, control_request
+
+    requested = tmp_path
+    while len(os.fsencode(str(requested / "control.sock"))) <= 120:
+        requested = requested / "deep-caretaker-project-directory"
+    socket_path = requested / "control.sock"
+
+    server = ControlSocketServer(
+        socket_path,
+        lambda request, credentials: {
+            "ok": True,
+            "command": request.get("command"),
+            "uid": credentials[1],
+        },
+        allowed_uids={os.getuid()},
+    )
+    server.start()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        response = control_request(socket_path, {"command": "status"})
+        assert response["ok"] is True
+        assert response["command"] == "status"
+        assert response["uid"] == os.getuid()
+    finally:
+        server.stop()
+        thread.join(timeout=2)

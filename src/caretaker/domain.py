@@ -387,6 +387,8 @@ class Incident:
     repair_depth: int = 0
     fingerprint: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    authority_policy_generation: int = 0
+    authority_policy_fingerprint: str = "unconfigured"
 
 
 @dataclass(frozen=True, slots=True)
@@ -402,6 +404,8 @@ class RepairEpisode:
     selected_attempt_id: UUID | None = None
     final_function_version: int | None = None
     summary: str | None = None
+    authority_policy_generation: int = 0
+    authority_policy_fingerprint: str = "unconfigured"
 
 
 @dataclass(frozen=True, slots=True)
@@ -489,6 +493,8 @@ class RepairCandidate:
     model_name: str | None = None
     lineage: CandidateLineage | None = None
     state: CandidateState = CandidateState.GENERATED
+    authority_policy_generation: int = 0
+    authority_policy_fingerprint: str = "unconfigured"
 
 
 @dataclass(frozen=True, slots=True)
@@ -594,6 +600,8 @@ class RepairAttempt:
     rollback_reason: str | None = None
     error_type: str | None = None
     error_message: str | None = None
+    authority_policy_generation: int = 0
+    authority_policy_fingerprint: str = "unconfigured"
 
 
 @dataclass(frozen=True, slots=True)

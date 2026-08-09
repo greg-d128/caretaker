@@ -10,6 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from uuid import UUID, uuid4
 
+from ..authority import get_authority_runtime_context
 from ..control_plane import (
     RuntimeAction,
     RuntimeActionKind,
@@ -81,7 +82,10 @@ class GuardEngine(GuardFacade):
         run_id: UUID | None = None,
         work_registry: object | None = None,
     ) -> None:
-        self.policy = policy or GuardPolicy()
+        self._declared_policy = policy or GuardPolicy()
+        self.policy = get_authority_runtime_context().apply(
+            self._declared_policy, prefix="guard"
+        )
         self.store = store or InMemoryEvidenceStore(
             event_limit=self.policy.retention.maximum_raw_events
         )
@@ -133,6 +137,18 @@ class GuardEngine(GuardFacade):
         self.control_plane.register_handler(RuntimeActionKind.QUARANTINE_MODULE, self._handle_quarantine)
         from ..operator import register_guard_engine
         register_guard_engine(self)
+
+    def refresh_authority_policy(self) -> None:
+        """Reapply the process authority policy to Guard's declared policy."""
+        self.policy = get_authority_runtime_context().apply(
+            self._declared_policy, prefix="guard"
+        )
+        self.aggregator.policy = self.policy.aggregation
+        self.baselines.policy = self.policy.baseline
+        self.detector.policy = self.policy.deviations
+        self.audit_collector.collectors = self.policy.collectors
+        self.audit_collector.attribution = self.policy.attribution
+        self.audit_collector.sampling = self.policy.sampling
 
     def registered_target_ids(self) -> tuple[str, ...]:
         with self._lock:

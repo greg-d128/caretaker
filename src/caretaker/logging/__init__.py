@@ -19,7 +19,15 @@ from .interrogation import (
     OllamaRootCauseProvider,
     RootCauseProvider,
 )
-from .ipc import ControlSocketServer, SocketLogClient, SocketLogServer, control_request, peer_credentials
+from .ipc import (
+    ControlSocketServer,
+    SocketLogClient,
+    SocketLogServer,
+    control_request,
+    peer_credentials,
+    unix_socket_exists,
+    unix_socket_path,
+)
 from .masking import MaskFunction, MaskingResult, apply_mask, mask_card_number
 from .metrics import MetricSample, MetricsContext, MetricsProvider, NullMetricsProvider
 from .models import *

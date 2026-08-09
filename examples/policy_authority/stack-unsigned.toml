@@ -1,0 +1,19 @@
+schema_version = 1
+
+# This example deliberately has no [trust] section and no signatures. It shows
+# the same authority/constraint semantics with PARTIAL_OR_UNSIGNED assurance.
+
+[[layers]]
+kind = "framework"
+path = "framework-policy.json"
+require_signature = false
+
+[[layers]]
+kind = "application"
+path = "application-policy.json"
+require_signature = false
+
+[[layers]]
+kind = "deployment"
+path = "deployment-policy.json"
+require_signature = false

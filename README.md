@@ -24,6 +24,7 @@ Caretaker terminates when the application terminates. Caretaker may inspect and 
 ```bash
 python -m caretaker.run \
   --policy /etc/caretaker/invoice-service.toml \
+  --authority-stack /etc/caretaker/policy-authority/stack.toml \
   invoice_service
 ```
 
@@ -47,10 +48,11 @@ caretaker-console --data-directory /var/lib/invoice-service/caretaker
 
 The status line reports current runtime state, recent alert severity, active
 Repair incidents, functions undergoing candidate validation, pending approvals,
-registered targets, degraded capabilities, and supervisor worker health. Tabs
+policy-authority assurance, degraded capabilities, and supervisor worker health. Tabs
 provide FunctionSlot/target inspection, Guard evidence and baseline actions,
-Repair approval/rejection, persisted logs, and advisory Guard LLM assessment
-when the application configured an assessment provider.
+Repair approval/rejection, signed/unsigned policy-authority inspection and temporary
+runtime leases, persisted logs, and advisory Guard LLM assessment when the
+application configured an assessment provider.
 
 The console uses the same authenticated local Unix control plane as the
 supervisor. It does not expose arbitrary shell commands or Python execution.
@@ -118,11 +120,11 @@ Original values remain available to the function and explicitly trusted local va
 
 The same `mask=` contract is available to Repair decorators.
 
-## Operator policy and higher modes
+## Operator policy, authority layers, and higher modes
 
-The operator policy is unsigned and intentionally outside Caretaker's release-signature authority. The application author may provide recommendations, but the software administrator controls the deployed policy.
+The ordinary operator policy remains usable without signatures. Deployments that need stronger provenance may add a supervisor-owned authority stack containing framework, optional application-owner, and deployment layers. Each layer can select values and constrain what lower authorities may change without invalidating its guarantee. A deployer may deliberately override a higher constraint, but the violated guarantee remains visible in the console and evidence. See [`docs/POLICY_AUTHORITY.md`](docs/POLICY_AUTHORITY.md).
 
-In Application mode, the operator policy is authoritative. Guard, Repair, Research, Forensic, and Baseline modes require certain evidence capabilities. When a requested higher mode conflicts with the base logging policy, Caretaker performs explicit reconciliation according to the operator-selected conflict action:
+In Application mode, the reconciled operator/effective policy is authoritative for execution. Guard, Repair, Research, Forensic, and Baseline modes require certain evidence capabilities. When a requested higher mode conflicts with the base logging policy, Caretaker performs explicit reconciliation according to the operator-selected conflict action:
 
 - apply only the required overrides;
 - refuse the higher mode;
@@ -209,6 +211,8 @@ A supervised application exposes local Unix-domain sockets under its run directo
 <directory>/run/events.sock
 <directory>/run/control.sock
 ```
+
+These are logical paths. If an absolute socket pathname would exceed the platform `AF_UNIX` limit, Caretaker places only that ephemeral socket in a deterministic private per-user runtime directory. The configured data/evidence directory is not moved, and Caretaker clients resolve the mapping automatically.
 
 Authentication uses file permissions and peer credentials. The protocol is declarative and does not accept Python, shell commands, or arbitrary executable paths.
 

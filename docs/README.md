@@ -12,6 +12,7 @@
 - `LOGGING_BASELINES.md` — population baselines and slow drift
 - `LOGGING_INTERROGATION.md` — outliers, hypotheses, and LLM authority
 - `ADMIN_CONTROL.md` — local socket authentication and mode control
+- `POLICY_AUTHORITY.md` — signed authority layers, constraints, overrides, and runtime leases
 
 ## Shared runtime and Guard
 

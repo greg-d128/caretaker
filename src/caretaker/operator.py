@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from .authority import get_authority_runtime_context
 from .control_plane import SignalSeverity
 
 
@@ -138,6 +139,7 @@ class OperatorRuntimeRegistry:
         else:
             current = "HEALTHY"
 
+        authority = get_authority_runtime_context().effective
         return {
             "pid": os.getpid(),
             "current_status": current,
@@ -154,6 +156,13 @@ class OperatorRuntimeRegistry:
             "degraded_components": sorted(degraded),
             "repair_engine_count": len(repairs),
             "guard_engine_count": len(guards),
+            "authority_policy": {
+                "generation": authority.generation,
+                "fingerprint": authority.fingerprint,
+                "overall_assurance": authority.overall_assurance,
+                "violations": len(authority.violations),
+                "layers": authority.layer_status(),
+            },
         }
 
     def targets(self) -> list[dict[str, Any]]:
@@ -229,6 +238,48 @@ class OperatorRuntimeRegistry:
             if not target_id:
                 raise ValueError("target-policy requires target")
             return {"ok": True, "policy": self.target_policy(target_id)}
+
+        if command == "policy-authority-update":
+            snapshot = request.get("snapshot")
+            if not isinstance(snapshot, dict):
+                raise ValueError("policy-authority-update requires snapshot object")
+            context = get_authority_runtime_context()
+            previous = context.effective
+
+            def refresh_components(effective_policy: Any) -> None:
+                for engine in self.repair_engines():
+                    engine.refresh_authority_policy()
+                for guard in self.guard_engines():
+                    refresh = getattr(guard, "refresh_authority_policy", None)
+                    if refresh is not None:
+                        refresh()
+                from .logging.handler import get_runtime as get_logging_runtime
+                logging_runtime = get_logging_runtime()
+                if logging_runtime is not None and hasattr(logging_runtime, "apply_authority_policy"):
+                    logging_runtime.apply_authority_policy(effective_policy)
+
+            try:
+                effective = context.update_from_snapshot(snapshot)
+                refresh_components(effective)
+            except Exception:
+                context.update_from_snapshot(previous.snapshot_dict())
+                try:
+                    refresh_components(previous)
+                except Exception:
+                    # The supervisor will detect the fingerprint mismatch and report
+                    # runtime policy assurance as invalid if rollback reconciliation fails.
+                    pass
+                raise
+            return {
+                "ok": True,
+                "generation": effective.generation,
+                "fingerprint": effective.fingerprint,
+                "overall_assurance": effective.overall_assurance,
+            }
+
+        if command == "policy-authority-status":
+            effective = get_authority_runtime_context().effective
+            return {"ok": True, **effective.snapshot_dict()}
 
         if command in {
             "guard-summary",

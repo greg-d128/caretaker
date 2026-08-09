@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, TypeVar, overload
 from uuid import uuid4
 
+from ..authority import get_authority_runtime_context
 from ..contracts import normalize_validation_result
 from ..domain import (
     DifferentialEvidence,
@@ -88,7 +89,11 @@ def repair(
 
     def decorate(original: F) -> F:
         selected_engine = engine or get_default_engine()
-        selected_policy = policy or DEFAULT_POLICY
+        declared_policy = policy or DEFAULT_POLICY
+        resolved_target_id = target_id or f"{original.__module__}:{original.__qualname__}"
+        selected_policy = get_authority_runtime_context().apply(
+            declared_policy, prefix="repair", target_id=resolved_target_id
+        )
         target = build_target(
             original,
             policy=selected_policy,
@@ -98,27 +103,33 @@ def repair(
             integrity_class=integrity_class,
             mask_function=mask,
         )
-        selected_engine.register(target)
+        selected_engine.register(target, declared_policy=declared_policy)
+
+        registered_target_id = target.target_id
 
         @functools.wraps(original)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
+            # Authority policy generations can replace the immutable RepairTarget
+            # in the registry. Resolve it at each call rather than pinning the
+            # decoration-time policy forever.
+            runtime_target = selected_engine.registry.get(registered_target_id)
             call_id = uuid4()
             tokens = set_runtime_context(
-                target_id=target.target_id,
+                target_id=runtime_target.target_id,
                 call_id=call_id,
                 operation="function-call",
             )
             started_at = datetime.now(timezone.utc)
             started_counter = time.perf_counter()
-            version = target.slot.load()
+            version = runtime_target.slot.load()
             call_state = selected_engine.state_capture.capture_before(
                 version.implementation,
                 args,
                 kwargs,
-                target.policy.state,
+                runtime_target.policy.state,
             )
-            masked_input = apply_mask(target.mask_function, args, kwargs)
-            if target.mask_function is not None and call_state.bound_arguments:
+            masked_input = apply_mask(runtime_target.mask_function, args, kwargs)
+            if runtime_target.mask_function is not None and call_state.bound_arguments:
                 try:
                     masked_bound = inspect.signature(version.implementation).bind_partial(
                         *masked_input.masked_args, **dict(masked_input.masked_kwargs)
@@ -133,10 +144,10 @@ def repair(
                         "<masking-error>": value_snapshot(masking_exc)
                     }
             logging_runtime = get_logging_runtime()
-            if logging_runtime is not None and target.policy.logging.enabled and target.policy.logging.capture_calls:
+            if logging_runtime is not None and runtime_target.policy.logging.enabled and runtime_target.policy.logging.capture_calls:
                 logging_fields = {
                     "event": "repair.function.call.started",
-                    "target_id": target.target_id,
+                    "target_id": runtime_target.target_id,
                     "function_version": version.number,
                     "candidate_id": str(version.candidate_id) if version.candidate_id else None,
                     "masking": {
@@ -145,19 +156,19 @@ def repair(
                         "structural_metadata": masked_input.structural_metadata,
                     },
                 }
-                if target.policy.logging.capture_arguments:
+                if runtime_target.policy.logging.capture_arguments:
                     logging_fields["args"] = masked_input.masked_args
                     logging_fields["kwargs"] = dict(masked_input.masked_kwargs)
                 logging_runtime.event(
                     logger_name=original.__module__, severity=10,
                     channel=LogChannel.REPAIR,
-                    message=f"Repair-enabled call started: {target.target_id}",
+                    message=f"Repair-enabled call started: {runtime_target.target_id}",
                     fields=logging_fields,
                     function_version=version.number,
                 )
             guard_started = False
             pending = selected_engine.handle_pending_guard_signal(
-                target=target,
+                target=runtime_target,
                 version=version,
                 function=version.implementation,
                 args=args,
@@ -170,31 +181,31 @@ def repair(
                 if pending.kind == ResolutionKind.RETRY_SUCCEEDED:
                     tokens.reset()
                     return pending.retry_output
-                version = target.slot.load()
+                version = runtime_target.slot.load()
                 call_state = selected_engine.state_capture.capture_before(
                     version.implementation,
                     args,
                     kwargs,
-                    target.policy.state,
+                    runtime_target.policy.state,
                 )
-            if selected_engine.guard is not None and target.policy.guard.enabled:
+            if selected_engine.guard is not None and runtime_target.policy.guard.enabled:
                 selected_engine.guard.before_call(
-                    target.target_id,
+                    runtime_target.target_id,
                     version.implementation,
                     call_id,
                     candidate_id=version.candidate_id,
                 )
                 guard_started = True
             try:
-                differential = target.policy.observation.differential_execution
-                observation = target.slot.observation()
-                previous = target.slot.previous()
+                differential = runtime_target.policy.observation.differential_execution
+                observation = runtime_target.slot.observation()
+                previous = runtime_target.slot.previous()
                 if (
                     version.candidate_id is not None
                     and observation is not None
                     and previous is not None
                     and differential.mode.name != "DISABLED"
-                    and target.policy.retry.safety is ReplaySafety.PURE
+                    and runtime_target.policy.retry.safety is ReplaySafety.PURE
                     and observation.successful_executions < differential.observation_executions
                 ):
                     comparator = differential.comparator
@@ -214,9 +225,9 @@ def repair(
                         not result.original_succeeded or result.equivalent is True
                     ):
                         selected_engine.observation.record_success(
-                            slot=target.slot,
+                            slot=runtime_target.slot,
                             call_id=call_id,
-                            policy=target.policy.observation,
+                            policy=runtime_target.policy.observation,
                             output=result.result,
                             mode="differential",
                         )
@@ -257,7 +268,7 @@ def repair(
                         comparison_reason=result.decision_reason,
                     )
                     resolution = selected_engine.handle_differential_failure(
-                        target=target,
+                        target=runtime_target,
                         version=version,
                         function=version.implementation,
                         args=args,
@@ -272,10 +283,10 @@ def repair(
                     if resolution.kind == ResolutionKind.RETRY_SUCCEEDED:
                         return resolution.retry_output
                     selected_engine.observation.record_failure(
-                        slot=target.slot,
+                        slot=runtime_target.slot,
                         call_id=call_id,
                         exception=fallback,
-                        policy=target.policy.observation,
+                        policy=runtime_target.policy.observation,
                         mode="differential",
                     )
                     if result.original_succeeded and differential.return_original_if_candidate_fails:
@@ -286,18 +297,18 @@ def repair(
                     output = version.implementation(*args, **kwargs)
                 except BaseException as exc:
                     elapsed = time.perf_counter() - started_counter
-                    trigger = _matching_exception_trigger(target.policy, exc)
+                    trigger = _matching_exception_trigger(runtime_target.policy, exc)
                     if trigger is None:
                         if version.candidate_id is not None:
                             selected_engine.observation.record_failure(
-                                slot=target.slot,
+                                slot=runtime_target.slot,
                                 call_id=call_id,
                                 exception=exc,
-                                policy=target.policy.observation,
+                                policy=runtime_target.policy.observation,
                             )
                         raise
                     resolution = selected_engine.handle_exception(
-                        target=target,
+                        target=runtime_target,
                         version=version,
                         function=version.implementation,
                         args=args,
@@ -312,10 +323,10 @@ def repair(
                         return resolution.retry_output
                     if version.candidate_id is not None:
                         selected_engine.observation.record_failure(
-                            slot=target.slot,
+                            slot=runtime_target.slot,
                             call_id=call_id,
                             exception=resolution.retry_exception or exc,
-                            policy=target.policy.observation,
+                            policy=runtime_target.policy.observation,
                         )
                     if (
                         resolution.kind == ResolutionKind.RETRY_FAILED
@@ -336,7 +347,7 @@ def repair(
                     raise
 
                 elapsed = time.perf_counter() - started_counter
-                for trigger in _output_triggers(target.policy):
+                for trigger in _output_triggers(runtime_target.policy):
                     validator = (
                         trigger.validator
                         if trigger.validator is not None
@@ -365,7 +376,7 @@ def repair(
                         )
                     if not valid:
                         resolution = selected_engine.handle_invalid_output(
-                            target=target,
+                            target=runtime_target,
                             version=version,
                             function=version.implementation,
                             args=args,
@@ -382,17 +393,17 @@ def repair(
                             return resolution.retry_output
                         if version.candidate_id is not None:
                             selected_engine.observation.record_failure(
-                                slot=target.slot,
+                                slot=runtime_target.slot,
                                 call_id=call_id,
                                 exception=InvalidOutputError(
                                     validation_reason or "output validation failed"
                                 ),
-                                policy=target.policy.observation,
+                                policy=runtime_target.policy.observation,
                             )
-                        if target.policy.mode is RepairMode.OBSERVE:
+                        if runtime_target.policy.mode is RepairMode.OBSERVE:
                             return output
                         error = InvalidOutputError(
-                            f"Output from {target.target_id} failed validator "
+                            f"Output from {runtime_target.target_id} failed validator "
                             f"{trigger.name}: {validation_reason or 'validator returned false'}; "
                             f"incident {resolution.incident_id}"
                         )
@@ -400,10 +411,10 @@ def repair(
                             error.add_note(f"Validation evidence: {validation_evidence!r}")
                         raise error
 
-                timeout = _exceeded_soft_timeout(target.policy, elapsed)
+                timeout = _exceeded_soft_timeout(runtime_target.policy, elapsed)
                 if timeout is not None:
                     resolution = selected_engine.handle_timeout(
-                        target=target,
+                        target=runtime_target,
                         version=version,
                         function=version.implementation,
                         args=args,
@@ -419,19 +430,19 @@ def repair(
                         return resolution.retry_output
                     if version.candidate_id is not None:
                         selected_engine.observation.record_failure(
-                            slot=target.slot,
+                            slot=runtime_target.slot,
                             call_id=call_id,
                             exception=TimeoutError(
                                 f"soft timeout exceeded: {elapsed:g}s"
                             ),
-                            policy=target.policy.observation,
+                            policy=runtime_target.policy.observation,
                         )
 
                 if version.candidate_id is not None:
                     selected_engine.observation.record_success(
-                        slot=target.slot,
+                        slot=runtime_target.slot,
                         call_id=call_id,
-                        policy=target.policy.observation,
+                        policy=runtime_target.policy.observation,
                         output=output,
                     )
                 return output
@@ -440,29 +451,29 @@ def repair(
                 elapsed_for_logging = time.perf_counter() - started_counter
                 if guard_started and selected_engine.guard is not None:
                     selected_engine.guard.after_call(
-                        target.target_id,
+                        runtime_target.target_id,
                         version.implementation,
                         call_id,
                         candidate_id=version.candidate_id,
                         succeeded=succeeded,
                         elapsed_seconds=elapsed_for_logging,
                     )
-                if logging_runtime is not None and target.policy.logging.enabled and target.policy.logging.capture_calls:
+                if logging_runtime is not None and runtime_target.policy.logging.enabled and runtime_target.policy.logging.capture_calls:
                     logging_runtime.event(
                         logger_name=original.__module__,
                         severity=10 if succeeded else 40,
                         channel=LogChannel.REPAIR,
                         message=(
-                            f"Repair-enabled call completed: {target.target_id}"
-                            if succeeded else f"Repair-enabled call failed: {target.target_id}"
+                            f"Repair-enabled call completed: {runtime_target.target_id}"
+                            if succeeded else f"Repair-enabled call failed: {runtime_target.target_id}"
                         ),
                         fields={
                             "event": "repair.function.call.completed" if succeeded else "repair.function.call.failed",
-                            "target_id": target.target_id,
+                            "target_id": runtime_target.target_id,
                             "function_version": version.number,
                             "candidate_id": str(version.candidate_id) if version.candidate_id else None,
                             "succeeded": succeeded,
-                            "elapsed_seconds": elapsed_for_logging if target.policy.logging.capture_timing else None,
+                            "elapsed_seconds": elapsed_for_logging if runtime_target.policy.logging.capture_timing else None,
                         },
                         function_version=version.number,
                     )

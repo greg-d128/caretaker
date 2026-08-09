@@ -12,6 +12,10 @@ import time
 from pathlib import Path
 from uuid import UUID
 
+from .authority import (
+    PolicyAuthoritySupervisor,
+    PolicySetting,
+)
 from .logging import (
     CaretakerApplicationSupervisor,
     LogChannel,
@@ -24,7 +28,12 @@ from .logging import (
     WorkerState,
 )
 from .logging.handler import LoggingRuntime
-from .logging.ipc import ControlSocketServer, SocketLogServer, control_request
+from .logging.ipc import (
+    ControlSocketServer,
+    SocketLogServer,
+    control_request,
+    unix_socket_exists,
+)
 from .logging.policy import OperatorLoggingPolicy, load_operator_policy
 from .logging.segments import read_segment
 from .system import SystemCollectionPolicy, SystemDataCollector, SystemOutputPolicy, load_system_policy
@@ -35,15 +44,52 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--policy")
     parser.add_argument("--data-directory")
     parser.add_argument("--system-data", action="store_true")
+    parser.add_argument(
+        "--authority-stack",
+        help="TOML descriptor for signed/unsigned Caretaker policy authority layers",
+    )
     parser.add_argument("module")
     parser.add_argument("module_args", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     if args.policy:
-        policy, _ = load_operator_policy(args.policy)
+        declared_policy, _ = load_operator_policy(args.policy)
     else:
         directory = args.data_directory or f"./caretaker-data/{args.module}"
-        policy = OperatorLoggingPolicy.application_defaults(directory=directory, application_id=args.module)
-    runtime = LoggingRuntime(policy, source_path=args.policy, supervised=True)
+        declared_policy = OperatorLoggingPolicy.application_defaults(
+            directory=directory, application_id=args.module
+        )
+
+    authority = (
+        PolicyAuthoritySupervisor.from_stack_file(args.authority_stack)
+        if args.authority_stack
+        else PolicyAuthoritySupervisor()
+    )
+    policy_transform = lambda value: authority.effective.apply_dataclass(
+        value, prefix="logging"
+    )
+    policy = policy_transform(declared_policy)
+    authority.set_snapshot_path(
+        Path(policy.directory) / "policy" / "authority-effective.json"
+    )
+    runtime = LoggingRuntime(
+        declared_policy,
+        source_path=args.policy,
+        supervised=True,
+        policy_transform=policy_transform,
+    )
+    policy = runtime.active_policy
+    runtime.event(
+        logger_name="caretaker.authority",
+        severity=30 if authority.effective.overall_assurance in {"GUARANTEE_VIOLATED", "INVALID_AUTHORITY_CHAIN"} else 20,
+        channel=LogChannel.CARETAKER_INTERNAL,
+        message="Policy authority stack loaded",
+        fields={
+            "generation": authority.effective.generation,
+            "fingerprint": authority.effective.fingerprint,
+            "assurance": authority.effective.overall_assurance,
+            "layers": authority.effective.layer_status(),
+        },
+    )
     run_dir = Path(policy.directory) / "run"
     event_socket = run_dir / "events.sock"
     control_socket = run_dir / "control.sock"
@@ -56,6 +102,11 @@ def main(argv: list[str] | None = None) -> int:
     leases: dict[str, object] = {}
     child_holder: dict[str, subprocess.Popen] = {}
     supervisor_holder: dict[str, CaretakerApplicationSupervisor] = {}
+    authority_generation_holder = {"generation": authority.effective.generation}
+    authority_runtime_match_holder: dict[str, bool | None] = {"match": None}
+    authority_lease_holder = {
+        str(lease.lease_id): lease for lease in authority.effective.runtime_leases
+    }
 
     def recent_log_records(limit: int = 1000):
         event_directory = Path(policy.directory) / "application" / "events"
@@ -68,21 +119,43 @@ def main(argv: list[str] | None = None) -> int:
                 continue
         return records[-max(1, limit):]
 
+    def runtime_authority_match() -> tuple[bool | None, dict[str, object] | None]:
+        if not unix_socket_exists(runtime_control_socket):
+            return None, None
+        try:
+            child_status = control_request(runtime_control_socket, {"command": "status"})
+        except OSError:
+            return None, None
+        child_authority = child_status.get("authority_policy")
+        if not isinstance(child_authority, dict):
+            return False, child_status
+        expected = authority.effective
+        matches = (
+            int(child_authority.get("generation", -1)) == expected.generation
+            and str(child_authority.get("fingerprint", "")) == expected.fingerprint
+        )
+        return matches, child_status
+
+
     def control_handler(request, credentials):
         command = request.get("command")
         if command in {"status", "health"}:
             child = child_holder.get("child")
             supervisor = supervisor_holder.get("supervisor")
-            application_runtime = None
-            if runtime_control_socket.exists():
-                try:
-                    application_runtime = control_request(runtime_control_socket, {"command": "status"})
-                except OSError:
-                    application_runtime = None
+            runtime_policy_match, application_runtime = runtime_authority_match()
+            effective_authority = authority.effective
             return {"ok": True, "application_pid": child.pid if child else None,
                     "application_running": child.poll() is None if child else False,
                     "policy_generation": runtime.effective.generation,
                     "active_leases": list(leases),
+                    "authority_policy": {
+                        "generation": effective_authority.generation,
+                        "fingerprint": effective_authority.fingerprint,
+                        "overall_assurance": effective_authority.overall_assurance,
+                        "violations": len(effective_authority.violations),
+                        "layers": effective_authority.layer_status(),
+                        "runtime_matches_supervisor": runtime_policy_match,
+                    },
                     "workers": [asdict(item) for item in supervisor.workers.all()] if supervisor else [],
                     "runtime": application_runtime}
         if isinstance(command, str) and command.startswith("runtime-"):
@@ -122,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
                 objective=objective,
             )
             behavior = ()
-            if target and runtime_control_socket.exists():
+            if target and unix_socket_exists(runtime_control_socket):
                 try:
                     response = control_request(
                         runtime_control_socket,
@@ -156,6 +229,175 @@ def main(argv: list[str] | None = None) -> int:
                 "omitted_record_count": bundle.omitted_record_count,
                 "assessment": asdict(assessment),
             }
+        if command == "authority-status":
+            runtime_policy_match, _ = runtime_authority_match()
+            return {
+                "ok": True,
+                **authority.effective.snapshot_dict(),
+                "runtime_matches_supervisor": runtime_policy_match,
+            }
+
+        if command == "authority-lease-acquire-signed":
+            descriptor = str(request.get("descriptor") or "").strip()
+            if not descriptor:
+                return {
+                    "ok": False,
+                    "error": "authority-lease-acquire-signed requires a signed lease descriptor",
+                }
+            lease_directory = (
+                Path(runtime.active_policy.directory) / "policy" / "runtime-leases"
+            ).resolve()
+            descriptor_path = (lease_directory / descriptor).resolve()
+            try:
+                descriptor_path.relative_to(lease_directory)
+            except ValueError:
+                return {
+                    "ok": False,
+                    "error": "Signed runtime-lease descriptors must be below "
+                    f"{lease_directory}",
+                }
+            reason = str(request.get("reason") or "signed temporary incident policy escalation")
+            lease = authority.load_signed_runtime_lease_from_stack_file(
+                descriptor_path,
+                requested_by=f"uid:{credentials[1]}",
+                reason=reason,
+            )
+            try:
+                runtime.refresh_authority_policy()
+                if unix_socket_exists(runtime_control_socket):
+                    response = control_request(
+                        runtime_control_socket,
+                        {
+                            "command": "policy-authority-update",
+                            "snapshot": authority.effective.snapshot_dict(),
+                        },
+                    )
+                    if response.get("ok") is False:
+                        raise RuntimeError(
+                            str(response.get("error", "application rejected authority policy"))
+                        )
+            except Exception:
+                authority.release_runtime_lease(lease.lease_id)
+                runtime.refresh_authority_policy()
+                raise
+            runtime.event(
+                logger_name="caretaker.authority",
+                severity=30,
+                channel=LogChannel.CARETAKER_INTERNAL,
+                message="Signed temporary authority policy lease acquired",
+                fields={
+                    "lease_id": str(lease.lease_id),
+                    "requested_by": lease.requested_by,
+                    "reason": lease.reason,
+                    "expires_at": lease.expires_at.isoformat(),
+                    "signature_state": lease.signature_state.value,
+                    "source_layer_fingerprint": lease.source_layer_fingerprint,
+                    "authority_generation": authority.effective.generation,
+                    "authority_fingerprint": authority.effective.fingerprint,
+                    "assurance": authority.effective.overall_assurance,
+                },
+            )
+            return {
+                "ok": True,
+                "lease_id": str(lease.lease_id),
+                "expires_at": lease.expires_at.isoformat(),
+                "authority_policy": authority.effective.snapshot_dict(),
+            }
+
+        if command == "authority-lease-acquire":
+            path = str(request.get("path") or "").strip()
+            if not path:
+                return {"ok": False, "error": "authority-lease-acquire requires path"}
+            reason = str(request.get("reason") or "temporary incident policy escalation")
+            duration_seconds = max(1, int(request.get("duration_seconds", 3600)))
+            target_scope = str(request.get("target")) if request.get("target") else None
+            if path.startswith("repair.") and not target_scope:
+                return {
+                    "ok": False,
+                    "error": "Temporary repair.* authority leases require an explicit target id or glob",
+                }
+            setting = PolicySetting(
+                path=path,
+                value=request.get("value"),
+                target=target_scope,
+                override_constraints=bool(request.get("override_constraints", False)),
+                reason=reason,
+            )
+            lease = authority.acquire_runtime_lease(
+                settings=(setting,),
+                requested_by=f"uid:{credentials[1]}",
+                reason=reason,
+                duration_seconds=duration_seconds,
+            )
+            try:
+                runtime.refresh_authority_policy()
+                if unix_socket_exists(runtime_control_socket):
+                    response = control_request(
+                        runtime_control_socket,
+                        {
+                            "command": "policy-authority-update",
+                            "snapshot": authority.effective.snapshot_dict(),
+                        },
+                    )
+                    if response.get("ok") is False:
+                        raise RuntimeError(str(response.get("error", "application rejected authority policy")))
+            except Exception:
+                authority.release_runtime_lease(lease.lease_id)
+                runtime.refresh_authority_policy()
+                raise
+            runtime.event(
+                logger_name="caretaker.authority",
+                severity=30,
+                channel=LogChannel.CARETAKER_INTERNAL,
+                message="Temporary authority policy lease acquired",
+                fields={
+                    "lease_id": str(lease.lease_id),
+                    "requested_by": lease.requested_by,
+                    "reason": lease.reason,
+                    "expires_at": lease.expires_at.isoformat(),
+                    "path": setting.path,
+                    "target": setting.target,
+                    "value": setting.value,
+                    "override_constraints": setting.override_constraints,
+                    "authority_generation": authority.effective.generation,
+                    "authority_fingerprint": authority.effective.fingerprint,
+                    "assurance": authority.effective.overall_assurance,
+                },
+            )
+            return {
+                "ok": True,
+                "lease_id": str(lease.lease_id),
+                "expires_at": lease.expires_at.isoformat(),
+                "authority_policy": authority.effective.snapshot_dict(),
+            }
+
+        if command == "authority-lease-release":
+            lease_id = UUID(str(request["lease_id"]))
+            authority.release_runtime_lease(lease_id)
+            runtime.refresh_authority_policy()
+            if unix_socket_exists(runtime_control_socket):
+                response = control_request(
+                    runtime_control_socket,
+                    {
+                        "command": "policy-authority-update",
+                        "snapshot": authority.effective.snapshot_dict(),
+                    },
+                )
+                if response.get("ok") is False:
+                    return response
+            runtime.event(
+                logger_name="caretaker.authority",
+                severity=20,
+                channel=LogChannel.CARETAKER_INTERNAL,
+                message="Temporary authority policy lease released",
+                fields={
+                    "lease_id": str(lease_id),
+                    "authority_generation": authority.effective.generation,
+                    "authority_fingerprint": authority.effective.fingerprint,
+                },
+            )
+            return {"ok": True, "released": str(lease_id), "authority_policy": authority.effective.snapshot_dict()}
+
         if command == "policy-effective":
             return {"ok": True, "requested_modes": [item.name for item in runtime.effective.requested_modes],
                     "effective_modes": [item.name for item in runtime.effective.effective_modes],
@@ -185,6 +427,7 @@ def main(argv: list[str] | None = None) -> int:
         "CARETAKER_APPLICATION_ID": policy.application_id,
         "CARETAKER_DATA_DIR": policy.directory,
         "CARETAKER_RUNTIME_CONTROL_SOCKET": str(runtime_control_socket),
+        "CARETAKER_AUTHORITY_POLICY": str(authority.snapshot_path),
     })
     if args.policy:
         env["CARETAKER_LOGGING_POLICY"] = str(Path(args.policy).resolve())
@@ -209,6 +452,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.system_data and not system_policy.enabled:
         system_policy = replace(system_policy, enabled=True)
+    system_policy = authority.effective.apply_dataclass(system_policy, prefix="system")
     system_health = None
     if system_policy.enabled:
         collector = SystemDataCollector(system_policy, application_pid=child.pid)
@@ -222,6 +466,86 @@ def main(argv: list[str] | None = None) -> int:
     def health_loop() -> None:
         nonlocal collector, collector_thread
         while not health_stop.wait(1.0):
+            effective_authority = authority.effective
+            current_leases = {
+                str(lease.lease_id): lease for lease in effective_authority.runtime_leases
+            }
+            now_utc = datetime.now(timezone.utc)
+            for lease_id, previous_lease in tuple(authority_lease_holder.items()):
+                if lease_id not in current_leases and previous_lease.expires_at <= now_utc:
+                    runtime.event(
+                        logger_name="caretaker.authority",
+                        severity=20,
+                        channel=LogChannel.CARETAKER_INTERNAL,
+                        message="Temporary authority policy lease expired",
+                        fields={
+                            "lease_id": lease_id,
+                            "authority_id": previous_lease.authority_id,
+                            "requested_by": previous_lease.requested_by,
+                            "reason": previous_lease.reason,
+                            "expires_at": previous_lease.expires_at.isoformat(),
+                        },
+                    )
+            authority_lease_holder.clear()
+            authority_lease_holder.update(current_leases)
+            if effective_authority.generation != authority_generation_holder["generation"]:
+                runtime.refresh_authority_policy()
+                authority_generation_holder["generation"] = effective_authority.generation
+                if unix_socket_exists(runtime_control_socket):
+                    try:
+                        control_request(
+                            runtime_control_socket,
+                            {
+                                "command": "policy-authority-update",
+                                "snapshot": effective_authority.snapshot_dict(),
+                            },
+                        )
+                    except OSError:
+                        pass
+                runtime.event(
+                    logger_name="caretaker.authority",
+                    severity=20,
+                    channel=LogChannel.CARETAKER_INTERNAL,
+                    message="Authority policy generation changed",
+                    fields={
+                        "generation": effective_authority.generation,
+                        "fingerprint": effective_authority.fingerprint,
+                        "assurance": effective_authority.overall_assurance,
+                    },
+                )
+            runtime_match, _ = runtime_authority_match()
+            previous_match = authority_runtime_match_holder["match"]
+            if runtime_match is False and unix_socket_exists(runtime_control_socket):
+                try:
+                    control_request(
+                        runtime_control_socket,
+                        {
+                            "command": "policy-authority-update",
+                            "snapshot": effective_authority.snapshot_dict(),
+                        },
+                    )
+                except OSError:
+                    pass
+            if runtime_match is not None and runtime_match != previous_match:
+                authority_runtime_match_holder["match"] = runtime_match
+                runtime.event(
+                    logger_name="caretaker.authority",
+                    severity=50 if not runtime_match else 20,
+                    channel=LogChannel.CARETAKER_INTERNAL,
+                    message=(
+                        "Application authority policy fingerprint does not match supervisor"
+                        if not runtime_match
+                        else "Application authority policy fingerprint matches supervisor"
+                    ),
+                    fields={
+                        "runtime_matches_supervisor": runtime_match,
+                        "authority_generation": effective_authority.generation,
+                        "authority_fingerprint": effective_authority.fingerprint,
+                    },
+                )
+            elif runtime_match is None:
+                authority_runtime_match_holder["match"] = None
+
             supervisor.workers.heartbeat(supervisor.supervisor_health.worker_id, state=WorkerState.HEALTHY)
             if runtime.sink._thread.is_alive():
                 state = WorkerState.DEGRADED if runtime.sink.last_error else WorkerState.HEALTHY

@@ -253,7 +253,7 @@ class SystemDataCollector:
             stream_key, output_path = self._stream_for(source, process)
             header = (
                 "@@caretaker-system-record\n"
-                f"schema_version=1\nwriter_version=0.5.0a1\ncycle_id={cycle_id}\n"
+                f"schema_version=1\nwriter_version=0.6.0a1\ncycle_id={cycle_id}\n"
                 f"sequence={sequence}\ntimestamp_utc={timestamp.isoformat()}\n"
                 f"capture_clock_value={clock}\nread_started_offset_ns={started}\n"
                 f"read_completed_offset_ns={completed}\nsource={path_text}\n"

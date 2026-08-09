@@ -6,6 +6,7 @@ import sys
 import threading
 from pathlib import Path
 
+from .authority import load_authority_runtime_from_environment
 from .logging import ControlSocketServer, configure_remote
 from .logging.policy import OperatorLoggingPolicy, load_operator_policy
 from .operator import get_operator_runtime_registry
@@ -16,6 +17,7 @@ def main(argv: list[str] | None = None) -> int:
     if not argv:
         raise SystemExit("Usage: python -m caretaker.bootstrap <module> [args...]")
     module, *module_args = argv
+    authority_policy = load_authority_runtime_from_environment()
     policy_path = os.environ.get("CARETAKER_LOGGING_POLICY")
     if policy_path:
         policy, _ = load_operator_policy(policy_path)
@@ -24,8 +26,11 @@ def main(argv: list[str] | None = None) -> int:
             directory=os.environ.get("CARETAKER_DATA_DIR", "./caretaker-data"),
             application_id=os.environ.get("CARETAKER_APPLICATION_ID", module),
         )
+    declared_policy = policy
+    policy = authority_policy.apply_dataclass(policy, prefix="logging")
     socket_path = os.environ["CARETAKER_EVENT_SOCKET"]
     runtime = configure_remote(policy, socket_path)
+    runtime._declared_policy = declared_policy
 
     runtime_control = None
     runtime_control_thread = None

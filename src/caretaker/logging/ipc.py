@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import queue
+import stat
+import tempfile
 import socket
 import struct
 import threading
@@ -21,6 +24,72 @@ from .segments import SegmentWriter
 _PEERCRED = struct.Struct("3i")
 
 
+_UNIX_SOCKET_PATH_LIMIT = 100
+
+
+def unix_socket_path(path: str | Path) -> Path:
+    """Return a bindable pathname for a Unix-domain socket.
+
+    Unix-domain socket pathnames have a small platform limit (108 bytes on
+    Linux, including the terminating NUL).  Caretaker data directories can
+    legitimately live much deeper than that.  Keep short requested paths
+    unchanged; for long paths, place only the ephemeral socket under a
+    private per-user runtime directory using a deterministic hash of the
+    requested parent directory.
+
+    The persistent Caretaker data/evidence directory is never relocated.
+    """
+    requested = Path(path).expanduser()
+    absolute = Path(os.path.abspath(os.fspath(requested)))
+    if len(os.fsencode(os.fspath(absolute))) <= _UNIX_SOCKET_PATH_LIMIT:
+        return absolute
+
+    runtime_root = _private_ipc_root()
+    parent_key = hashlib.sha256(
+        os.fsencode(os.fspath(absolute.parent))
+    ).hexdigest()[:16]
+    socket_dir = runtime_root / parent_key
+    socket_dir.mkdir(mode=0o700, parents=False, exist_ok=True)
+    os.chmod(socket_dir, 0o700)
+    return socket_dir / absolute.name
+
+
+def unix_socket_exists(path: str | Path) -> bool:
+    """Return whether the physical socket corresponding to *path* exists."""
+    return unix_socket_path(path).exists()
+
+
+def _private_ipc_root() -> Path:
+    uid = os.getuid() if hasattr(os, "getuid") else 0
+    candidates: list[Path] = []
+    xdg_runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg_runtime:
+        candidates.append(Path(xdg_runtime) / "caretaker")
+    candidates.append(Path(tempfile.gettempdir()) / f"caretaker-{uid}")
+
+    last_error: OSError | None = None
+    for root in candidates:
+        try:
+            root.mkdir(mode=0o700, parents=True, exist_ok=True)
+            metadata = root.lstat()
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise OSError(f"Caretaker IPC runtime path is not a directory: {root}")
+            if hasattr(os, "getuid") and metadata.st_uid != uid:
+                raise PermissionError(
+                    f"Caretaker IPC runtime directory is not owned by uid {uid}: {root}"
+                )
+            if stat.S_IMODE(metadata.st_mode) != 0o700:
+                os.chmod(root, 0o700)
+            probe = root / ("x" * 16) / "control.sock"
+            if len(os.fsencode(os.fspath(probe))) <= _UNIX_SOCKET_PATH_LIMIT:
+                return root
+        except OSError as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise OSError("Unable to create a short private Caretaker IPC runtime directory")
+
+
 def peer_credentials(connection: socket.socket) -> tuple[int, int, int]:
     """Return (pid, uid, gid) for a local Unix-domain peer on Linux."""
     if not hasattr(socket, "SO_PEERCRED"):
@@ -31,7 +100,7 @@ def peer_credentials(connection: socket.socket) -> tuple[int, int, int]:
 
 class SocketLogClient:
     def __init__(self, path: str | Path, *, codec: TLVLogCodec | None = None, timeout: float = 1.0) -> None:
-        self.path = str(path)
+        self.path = str(unix_socket_path(path))
         self.codec = codec or TLVLogCodec()
         socket_type = getattr(socket, "SOCK_SEQPACKET", socket.SOCK_STREAM)
         self.socket = socket.socket(socket.AF_UNIX, socket_type)
@@ -103,7 +172,7 @@ class SocketLogServer:
         attachment_store: Any | None = None,
         maximum_packet_bytes: int = 64 * 1024 * 1024,
     ) -> None:
-        self.path = Path(path)
+        self.path = unix_socket_path(path)
         self.writer = writer
         self.allowed_uids = allowed_uids
         self.codec = codec or writer.codec
@@ -238,7 +307,7 @@ class ControlSocketServer:
         allowed_uids: set[int] | None = None,
         allowed_gids: set[int] | None = None,
     ) -> None:
-        self.path = Path(path)
+        self.path = unix_socket_path(path)
         self.handler = handler
         self.allowed_uids = allowed_uids
         self.allowed_gids = allowed_gids
@@ -297,7 +366,7 @@ def control_request(path: str | Path, request: dict[str, Any], *, timeout: float
     socket_type = getattr(socket, "SOCK_SEQPACKET", socket.SOCK_STREAM)
     connection = socket.socket(socket.AF_UNIX, socket_type)
     connection.settimeout(timeout)
-    connection.connect(str(path))
+    connection.connect(str(unix_socket_path(path)))
     connection.sendall(json.dumps(request).encode())
     response = connection.recv(1024 * 1024)
     connection.close()

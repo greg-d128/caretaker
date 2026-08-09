@@ -1,5 +1,7 @@
 # Repair policies
 
+Authority-layer constraints can further restrict or deliberately override these settings. See [`POLICY_AUTHORITY.md`](POLICY_AUTHORITY.md) for supervisor-owned signed/unsigned authority stacks and runtime leases.
+
 `RepairPolicy` is immutable configuration. A resolved policy is persisted as canonical data, a SHA-256 fingerprint, and a human-readable description.
 
 ## Trigger policy
@@ -86,7 +88,7 @@ authority: RepairAuthority
 
 ## Effective policy generation
 
-A repair episode records the effective logging-policy generation. Any policy change before activation marks the pending repair stale. Approval is refused until the candidate is evaluated under the current generation.
+A repair episode records both the effective logging-policy generation and the supervisor-owned authority-policy generation/fingerprint. Any relevant policy change before activation marks the pending repair stale. Approval is refused until the candidate is evaluated under the current generations.
 
 ## Caretaker-owned targets
 

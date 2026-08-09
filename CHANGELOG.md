@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.0a1
+
+### Policy authority
+
+- Add supervisor-owned framework, optional application-owner, deployment, and temporary runtime authority layers.
+- Add canonical signed/unsigned policy manifests containing settings, constraints, explicit overrides, parent fingerprints, generations, and provenance.
+- Reuse Caretaker's external GPG verifier and trust-role model for signed policy layers; unsigned operation remains supported and explicitly reported.
+- Require lower static layers and signed runtime leases to bind to the exact active upstream policy fingerprints.
+- Add conflict reconciliation in which lower authorities may deliberately override higher constraints while invalidating, rather than impersonating, the higher guarantee.
+- Add targeted runtime policy leases, unsigned by default, with a policy option requiring signed leases for higher-assurance environments.
+- Bind Repair incidents, candidates, attempts, validation work, and approvals to the effective authority generation/fingerprint so policy changes make pending work stale.
+- Add supervisor/application policy-fingerprint comparison, transactional child reconciliation, runtime tamper reporting, and automatic restoration attempts.
+- Add a Textual Policy view showing authority layers, signatures, guarantees, violations, runtime leases, and operator lease controls.
+- Document independent external GPG verification as the high-assurance trust anchor; policy authority does not claim to prevent a host owner from modifying open-source software.
+
 ## 0.5.0a1
 
 ### Logging subsystem

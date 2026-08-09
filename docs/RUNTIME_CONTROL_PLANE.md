@@ -99,3 +99,10 @@ The registry exposes a compact status snapshot suitable for an operator status
 line. It includes the current operational state, highest recent alert severity,
 active incidents, targets currently in candidate validation, pending approvals,
 and degraded Guard logging capabilities.
+
+
+## Policy authority control
+
+The supervisor, not the application process, owns the authoritative policy stack. The child runtime receives an immutable effective snapshot and reports its authority generation/fingerprint through `OperatorRuntimeRegistry.status()`. The supervisor compares that value with its own; a mismatch is a policy-tamper condition rather than a new valid policy generation.
+
+The administrative socket provides declarative operations for authority status and narrowly scoped runtime leases. It does not accept Python or shell code. Temporary `repair.*` leases require an explicit target selector. Signed runtime leases are loaded from descriptors under the deployment policy area and are verified with the existing external GPG authority model. See `POLICY_AUTHORITY.md`.

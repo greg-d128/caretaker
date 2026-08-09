@@ -1,5 +1,26 @@
 """Caretaker: experimental, policy-driven self-repair for Python functions."""
 
+from .authority import (
+    AuthorityKind,
+    AuthorityLayerSource,
+    AuthorityLayerVerification,
+    AuthorityPolicyConflictError,
+    AuthorityPolicyError,
+    AuthorityRuntimeLease,
+    AuthorityStackConfig,
+    ConstraintOperator,
+    EffectiveAuthorityPolicy,
+    GuaranteeState,
+    PolicyAuthorityLayer,
+    PolicyAuthoritySupervisor,
+    PolicyConstraint,
+    PolicySetting,
+    SignatureState,
+    get_authority_runtime_context,
+    load_authority_stack_config,
+    load_policy_authority_layer,
+    write_policy_authority_layer,
+)
 from .auxiliary import AuxiliaryFunctionManager, AuxiliaryRegistry
 from .decorators import (
     InvalidOutputError,
@@ -164,6 +185,25 @@ from .system import (
 )
 
 __all__ = [
+    "AuthorityKind",
+    "AuthorityLayerSource",
+    "AuthorityLayerVerification",
+    "AuthorityPolicyConflictError",
+    "AuthorityPolicyError",
+    "AuthorityRuntimeLease",
+    "AuthorityStackConfig",
+    "ConstraintOperator",
+    "EffectiveAuthorityPolicy",
+    "GuaranteeState",
+    "PolicyAuthorityLayer",
+    "PolicyAuthoritySupervisor",
+    "PolicyConstraint",
+    "PolicySetting",
+    "SignatureState",
+    "get_authority_runtime_context",
+    "load_authority_stack_config",
+    "load_policy_authority_layer",
+    "write_policy_authority_layer",
     "ApplicationLoggingBaseline",
     "AttachmentPolicy",
     "AttachmentReference",
@@ -317,4 +357,4 @@ __all__ = [
     "repair",
 ]
 
-__version__ = "0.5.0a2"
+__version__ = "0.6.0a1"

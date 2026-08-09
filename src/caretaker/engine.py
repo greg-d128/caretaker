@@ -15,6 +15,7 @@ from typing import Any, TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from .auxiliary import AuxiliaryRegistry
+from .authority import get_authority_runtime_context
 from .contracts import normalize_validation_result
 from .domain import (
     ActivationResult,
@@ -57,7 +58,7 @@ from .observation import ObservationManager
 from .policy import OutputValidationTrigger, RepairPolicy, TimeoutTrigger
 from .postmortem import PostMortemRecorder
 from .provider import CandidateBatch, CandidateProposal, RepairProvider, RepairRequest
-from .registry import RepairTarget, TargetRegistry
+from .registry import RepairTarget, TargetRegistry, build_target
 from .regression import RegressionCorpus
 from .runtime import current_episode_id, repair_depth, set_runtime_context
 from .selection import CandidateScorer, CandidateSelector, EvaluatedCandidate
@@ -105,6 +106,8 @@ class PendingRepairApproval:
     artifact_hash: str
     expected_function_version: int
     logging_policy_generation: int | None
+    authority_policy_generation: int
+    authority_policy_fingerprint: str
     reason: str
 
 
@@ -139,6 +142,7 @@ class RepairEngine:
         self._attempt_cache: dict[UUID, RepairAttempt] = {}
         self._pending_guard_deviations: dict[str, tuple[Any, ...]] = {}
         self._pending_approvals: dict[UUID, PendingRepairApproval] = {}
+        self._declared_policies: dict[str, RepairPolicy] = {}
         self._activity_lock = threading.RLock()
         self._active_incidents: dict[UUID, dict[str, Any]] = {}
         self._active_validations: dict[UUID, dict[str, Any]] = {}
@@ -155,15 +159,70 @@ class RepairEngine:
         from .operator import register_repair_engine
         register_repair_engine(self)
 
-    def register(self, target: RepairTarget) -> None:
+    def register(
+        self,
+        target: RepairTarget,
+        *,
+        declared_policy: RepairPolicy | None = None,
+    ) -> None:
+        declared = declared_policy or target.policy
+        self._declared_policies[target.target_id] = declared
+        effective_policy = get_authority_runtime_context().apply(
+            declared, prefix="repair", target_id=target.target_id
+        )
+        support_probe = build_target(
+            target.slot.original,
+            policy=effective_policy,
+            target_id=target.target_id,
+            registered_cases=target.registered_cases,
+            tags=target.tags,
+            metadata=target.metadata,
+            integrity_class=target.integrity_class,
+            mask_function=target.mask_function,
+        )
+        target = replace(
+            target, policy=effective_policy, support=support_probe.support
+        )
         self.registry.register(target)
         if self.guard is not None and target.policy.guard.enabled:
             self.guard.register_target(
                 target.target_id,
                 target.slot.load().implementation,
                 target.policy.guard,
-                function_resolver=lambda: target.slot.load().implementation,
+                function_resolver=lambda target_id=target.target_id: self.registry.get(target_id).slot.load().implementation,
             )
+
+    def refresh_authority_policy(self) -> None:
+        """Recompute every registered target from its declared policy."""
+        context = get_authority_runtime_context()
+        for current in self.registry.all():
+            declared = self._declared_policies.get(current.target_id, current.policy)
+            effective_policy = context.apply(
+                declared, prefix="repair", target_id=current.target_id
+            )
+            support_probe = build_target(
+                current.slot.original,
+                policy=effective_policy,
+                target_id=current.target_id,
+                registered_cases=current.registered_cases,
+                tags=current.tags,
+                metadata=current.metadata,
+                integrity_class=current.integrity_class,
+                mask_function=current.mask_function,
+            )
+            updated = replace(
+                current,
+                policy=effective_policy,
+                support=support_probe.support,
+            )
+            self.registry.register(updated)
+            if self.guard is not None:
+                self.guard.register_target(
+                    updated.target_id,
+                    updated.slot.load().implementation,
+                    updated.policy.guard,
+                    function_resolver=lambda target_id=updated.target_id: self.registry.get(target_id).slot.load().implementation,
+                )
 
     def pending_approvals(self) -> tuple[PendingRepairApproval, ...]:
         return tuple(self._pending_approvals.values())
@@ -186,6 +245,14 @@ class RepairEngine:
             raise RuntimeError("Repair approval is stale because the active function version changed")
         if pending.logging_policy_generation != current_generation:
             raise RuntimeError("Repair approval is stale because the effective logging policy changed")
+        authority = get_authority_runtime_context().effective
+        if (
+            pending.authority_policy_generation != authority.generation
+            or pending.authority_policy_fingerprint != authority.fingerprint
+        ):
+            raise RuntimeError(
+                "Repair approval is stale because the effective authority policy changed"
+            )
         lease = target.slot.begin_repair()
         try:
             implementation = self._compile_for_activation(pending.source, target, current)
@@ -481,6 +548,13 @@ class RepairEngine:
         ) if policy.state.include_diff_in_incident else ()
         replayable = call_state.runtime_snapshot.replayable or not policy.state.restore_before_retry
         replay_block_reason = None if replayable else "; ".join(call_state.runtime_snapshot.errors)
+        authority_policy = get_authority_runtime_context().effective
+        metadata = {
+            **metadata,
+            "authority_policy_generation": authority_policy.generation,
+            "authority_policy_fingerprint": authority_policy.fingerprint,
+            "authority_assurance": authority_policy.overall_assurance,
+        }
         incident = Incident(
             incident_id=uuid4(),
             run_id=self.run_id,
@@ -515,6 +589,8 @@ class RepairEngine:
             repair_depth=repair_depth.get(),
             fingerprint=self._fingerprint(target, version, trigger, failure),
             metadata=metadata,
+            authority_policy_generation=authority_policy.generation,
+            authority_policy_fingerprint=authority_policy.fingerprint,
         )
         self.store.record_incident(incident)
         self.store.append_event(
@@ -579,6 +655,8 @@ class RepairEngine:
                 "target_id": target.target_id,
                 "trigger": trigger.name,
                 "started_at": incident.occurred_at.isoformat(),
+                "authority_policy_generation": authority_policy.generation,
+                "authority_policy_fingerprint": authority_policy.fingerprint,
             }
         try:
             return self._repair_incident(
@@ -647,6 +725,9 @@ class RepairEngine:
 
         logging_runtime = get_logging_runtime()
         logging_policy_generation = logging_runtime.effective.generation if logging_runtime is not None else None
+        authority_policy = get_authority_runtime_context().effective
+        authority_policy_generation = authority_policy.generation
+        authority_policy_fingerprint = authority_policy.fingerprint
 
         episode = RepairEpisode(
             episode_id=uuid4(),
@@ -656,6 +737,8 @@ class RepairEngine:
             completed_at=None,
             policy_snapshot_id=policy_snapshot.policy_snapshot_id,
             outcome=RepairEpisodeOutcome.PENDING,
+            authority_policy_generation=authority_policy_generation,
+            authority_policy_fingerprint=authority_policy_fingerprint,
         )
         self.store.record_episode(episode)
         set_runtime_context(episode_id=episode.episode_id)
@@ -822,6 +905,30 @@ class RepairEngine:
         source = selected.candidate.artifact.files[0].content
         current_logging_runtime = get_logging_runtime()
         current_logging_generation = current_logging_runtime.effective.generation if current_logging_runtime is not None else None
+        current_authority_policy = get_authority_runtime_context().effective
+        if (
+            current_authority_policy.generation != authority_policy_generation
+            or current_authority_policy.fingerprint != authority_policy_fingerprint
+        ):
+            target.slot.abandon_repair(lease)
+            selected_attempt = replace(
+                selected_attempt, completed_at=utcnow(), stage=RepairAttemptStage.COMPLETE,
+                outcome=RepairAttemptOutcome.STALE_POLICY,
+            )
+            self.store.record_attempt(selected_attempt)
+            self._attempt_cache[selected_attempt.attempt_id] = selected_attempt
+            episode = replace(
+                episode, completed_at=utcnow(), outcome=RepairEpisodeOutcome.STALE_POLICY,
+                selected_candidate_id=selected.candidate.candidate_id,
+                selected_attempt_id=selected_attempt.attempt_id,
+                summary="Authority policy changed during repair; candidate revalidation is required.",
+            )
+            self.store.record_episode(episode)
+            return RepairResolution(
+                kind=ResolutionKind.STALE_POLICY, incident_id=incident.incident_id,
+                episode_id=episode.episode_id, attempt_ids=tuple(attempt_ids),
+                active_function_version=target.slot.load().number,
+            )
         if current_logging_generation != logging_policy_generation:
             target.slot.abandon_repair(lease)
             selected_attempt = replace(
@@ -851,6 +958,8 @@ class RepairEngine:
                 artifact_hash=selected.candidate.artifact.artifact_hash,
                 expected_function_version=version.number,
                 logging_policy_generation=logging_policy_generation,
+                authority_policy_generation=authority_policy_generation,
+                authority_policy_fingerprint=authority_policy_fingerprint,
                 reason=f"Repair authority is {target.policy.authority.name}",
             )
             self._pending_approvals[episode.episode_id] = pending
@@ -1292,6 +1401,8 @@ class RepairEngine:
                 generator_name=proposal.generator_name,
                 provider_name=batch.provider_name,
                 model_name=batch.model_name,
+                authority_policy_generation=incident.authority_policy_generation,
+                authority_policy_fingerprint=incident.authority_policy_fingerprint,
                 lineage=(
                     CandidateLineage(
                         parent_candidate_ids=parent_ids,
@@ -1352,6 +1463,8 @@ class RepairEngine:
             base_source_hash=candidate.base_source_hash,
             stage=RepairAttemptStage.VALIDATION,
             outcome=RepairAttemptOutcome.PENDING,
+            authority_policy_generation=incident.authority_policy_generation,
+            authority_policy_fingerprint=incident.authority_policy_fingerprint,
         )
         self.store.record_attempt(attempt)
         self._attempt_cache[attempt.attempt_id] = attempt
@@ -1363,6 +1476,8 @@ class RepairEngine:
                 "incident_id": str(incident.incident_id),
                 "target_id": target.target_id,
                 "started_at": attempt.created_at.isoformat(),
+                "authority_policy_generation": get_authority_runtime_context().effective.generation,
+                "authority_policy_fingerprint": get_authority_runtime_context().effective.fingerprint,
             }
         tokens = set_runtime_context(attempt_id=attempt.attempt_id, candidate_id=candidate.candidate_id, operation="candidate-validation")
         try:

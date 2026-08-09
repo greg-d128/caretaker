@@ -11,7 +11,7 @@ import time
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Protocol
+from typing import Any, Callable, Mapping, Protocol
 from uuid import UUID, uuid4
 
 from ..runtime import snapshot_context
@@ -71,7 +71,11 @@ class LoggingRuntime:
         *,
         source_path: str | None = None,
         supervised: bool | None = None,
+        policy_transform: Callable[[OperatorLoggingPolicy], OperatorLoggingPolicy] | None = None,
     ) -> None:
+        self._declared_policy = policy
+        self._policy_transform = policy_transform
+        policy = policy_transform(policy) if policy_transform is not None else policy
         self.policy = policy
         self.snapshot = policy_snapshot(policy, source_path=source_path)
         self.leases = ModeLeaseManager(policy, self.snapshot)
@@ -194,7 +198,7 @@ class LoggingRuntime:
             }
         envelope = LogEnvelope(
             schema_version=1,
-            writer_version="0.5.0a1",
+            writer_version="0.6.0a1",
             record_id=record_id,
             occurred_at=datetime.now(timezone.utc),
             monotonic_ns=time.monotonic_ns(),
@@ -223,6 +227,10 @@ class LoggingRuntime:
         return envelope
 
     def _on_policy_reload(self, policy: OperatorLoggingPolicy, snapshot) -> None:
+        self._declared_policy = policy
+        if self._policy_transform is not None:
+            policy = self._policy_transform(policy)
+            snapshot = policy_snapshot(policy, source_path=snapshot.source_path)
         old_hash = self.snapshot.content_hash
         # Record the request under the old effective policy before a new policy
         # can disable logging or protected channels.
@@ -249,6 +257,14 @@ class LoggingRuntime:
                 "restart_bound_changes": list(restart_warnings),
             },
         )
+
+
+    def refresh_authority_policy(self) -> None:
+        """Reapply the supervisor authority transform to the declared base policy."""
+        declared = self._declared_policy
+        transformed = self._policy_transform(declared) if self._policy_transform is not None else declared
+        snapshot = policy_snapshot(transformed, source_path=self.snapshot.source_path)
+        self._on_policy_reload(declared, snapshot)
 
     def _on_policy_reload_error(self, error: Exception) -> None:
         self.event(
@@ -435,6 +451,7 @@ class RemoteLoggingRuntime:
 
     def __init__(self, policy: OperatorLoggingPolicy, socket_path: str | Path) -> None:
         from .ipc import SocketLogClient
+        self._declared_policy = policy
         self.policy = policy
         self.snapshot = policy_snapshot(policy)
         self.leases = ModeLeaseManager(policy, self.snapshot)
@@ -491,7 +508,7 @@ class RemoteLoggingRuntime:
             sanitized_fields = _redact(sanitized_fields, names=active_policy.redaction.secret_field_names, replacement=active_policy.redaction.replacement)
             message = _redact(message, names=active_policy.redaction.secret_field_names, replacement=active_policy.redaction.replacement) if message else None
         envelope = LogEnvelope(
-            schema_version=1, writer_version="0.5.0a1", record_id=record_id,
+            schema_version=1, writer_version="0.6.0a1", record_id=record_id,
             occurred_at=datetime.now(timezone.utc), monotonic_ns=time.monotonic_ns(),
             process_start_id=self.process_start_id, sequence_number=sequence,
             channel=channel, severity=severity, logger_name=logger_name,
@@ -503,6 +520,18 @@ class RemoteLoggingRuntime:
         )
         self.client.write(envelope)
         return envelope
+
+    def apply_policy(self, policy: OperatorLoggingPolicy) -> None:
+        """Replace the remote emitter policy after a supervisor authority update."""
+        self.policy = policy
+        self.snapshot = policy_snapshot(policy)
+        self.leases = ModeLeaseManager(policy, self.snapshot)
+        self.effective = self.leases.effective
+
+    def apply_authority_policy(self, effective_authority: Any) -> None:
+        self.apply_policy(
+            effective_authority.apply_dataclass(self._declared_policy, prefix="logging")
+        )
 
     def flush(self) -> None:
         self.client.flush()

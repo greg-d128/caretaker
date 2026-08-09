@@ -8,17 +8,32 @@ from typing import Any
 
 from textual.app import App, ComposeResult
 from textual.containers import Grid, Horizontal, Vertical
-from textual.widgets import Button, DataTable, Footer, Header, Input, RichLog, Static, TabbedContent, TabPane
+from textual.widgets import (
+    Button,
+    Checkbox,
+    DataTable,
+    Footer,
+    Header,
+    Input,
+    RichLog,
+    Static,
+    TabbedContent,
+    TabPane,
+)
 
-from .logging.ipc import control_request
+from .logging.ipc import control_request, unix_socket_exists
 from .logging.segments import read_segment
 
 
 def discover_control_socket(data_directory: Path) -> Path | None:
     direct = data_directory / "run" / "control.sock"
-    if direct.exists():
+    if unix_socket_exists(direct):
         return direct.resolve()
-    candidates = sorted(data_directory.glob("*/run/control.sock"))
+    candidates = [
+        path / "run" / "control.sock"
+        for path in sorted(data_directory.iterdir())
+        if path.is_dir() and unix_socket_exists(path / "run" / "control.sock")
+    ] if data_directory.exists() else []
     if len(candidates) == 1:
         return candidates[0].resolve()
     if not candidates:
@@ -160,6 +175,54 @@ class CaretakerConsoleApp(App):
         min-width: 12;
         margin-left: 1;
     }
+
+    #policy-summary {
+        height: 4;
+        padding: 1 2;
+        border-bottom: solid $surface-lighten-2;
+    }
+    #policy-split {
+        height: 1fr;
+        min-height: 0;
+        grid-size: 2 1;
+        grid-columns: 3fr 2fr;
+        grid-rows: 1fr;
+        grid-gutter: 1;
+    }
+    .policy-pane {
+        height: 1fr;
+        min-height: 0;
+        border: solid $surface-lighten-2;
+        overflow: hidden hidden;
+    }
+    .policy-pane-title {
+        height: 3;
+        padding: 1 2;
+        text-style: bold;
+        border-bottom: solid $surface-lighten-2;
+    }
+    #policy-table, #policy-output {
+        height: 1fr;
+        min-height: 0;
+        border: none;
+    }
+    #policy-lease-row-1, #policy-lease-row-2, #policy-signed-row {
+        height: 4;
+        padding: 0 1;
+        align-vertical: middle;
+    }
+    #policy-target { width: 1fr; min-width: 18; }
+    #policy-path { width: 2fr; min-width: 24; }
+    #policy-value { width: 1fr; min-width: 18; }
+    #policy-duration { width: 12; }
+    #policy-reason { width: 1fr; min-width: 30; }
+    #policy-signed-descriptor { width: 1fr; min-width: 30; }
+    #policy-override { width: auto; margin: 0 1; }
+    #policy-apply, #policy-apply-signed, #policy-release, #policy-refresh {
+        width: auto;
+        min-width: 14;
+        margin-left: 1;
+    }
     """
 
     BINDINGS = [
@@ -177,6 +240,9 @@ class CaretakerConsoleApp(App):
         self._log_records: list[dict[str, Any]] = []
         self._repair_records: list[dict[str, Any]] = []
         self._selected_repair_approval: str | None = None
+        self._authority_snapshot: dict[str, Any] = {}
+        self._authority_rows: list[dict[str, Any]] = []
+        self._selected_authority_lease: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -239,6 +305,35 @@ class CaretakerConsoleApp(App):
                                 variant="error",
                                 disabled=True,
                             )
+            with TabPane("Policy", id="policy"):
+                yield Static("Authority policy state unavailable", id="policy-summary")
+                with Grid(id="policy-split"):
+                    with Vertical(classes="policy-pane"):
+                        yield Static("Authority layers and runtime leases", classes="policy-pane-title")
+                        table = DataTable(id="policy-table")
+                        table.cursor_type = "row"
+                        table.add_columns("#", "Kind", "Authority", "Signature", "Guarantee", "Violations")
+                        yield table
+                    with Vertical(classes="policy-pane"):
+                        yield Static("Selected policy authority record", id="policy-detail-title", classes="policy-pane-title")
+                        yield RichLog(id="policy-output", wrap=True, markup=True)
+                with Horizontal(id="policy-lease-row-1"):
+                    yield Input(placeholder="Target id / glob (required for repair.*)", id="policy-target")
+                    yield Input(placeholder="Policy path, e.g. repair.authority", id="policy-path")
+                    yield Input(placeholder='Value as JSON or text, e.g. "AUTOMATIC_ELIGIBLE_REPAIRS"', id="policy-value")
+                with Horizontal(id="policy-lease-row-2"):
+                    yield Input(value="3600", placeholder="Seconds", id="policy-duration")
+                    yield Input(placeholder="Incident reason / operator justification", id="policy-reason")
+                    yield Checkbox("Explicit override", id="policy-override")
+                    yield Button("Apply lease", id="policy-apply", variant="warning")
+                    yield Button("Release lease", id="policy-release", disabled=True)
+                    yield Button("Refresh", id="policy-refresh")
+                with Horizontal(id="policy-signed-row"):
+                    yield Input(
+                        placeholder="Signed lease descriptor below policy/runtime-leases/",
+                        id="policy-signed-descriptor",
+                    )
+                    yield Button("Apply signed lease", id="policy-apply-signed", variant="primary")
             with TabPane("Investigate", id="investigate"):
                 with Horizontal(classes="toolbar"):
                     yield Input(placeholder="Target id (optional)", id="investigate-target")
@@ -303,13 +398,16 @@ class CaretakerConsoleApp(App):
         ) if runtime else []
         validating = runtime.get("validating_functions", ()) if runtime else ()
         degraded = runtime.get("degraded_components", ()) if runtime else ()
+        authority = self._authority_snapshot
+        assurance = authority.get("overall_assurance", "-") if authority else "-"
+        violations = len(authority.get("violations", ())) if authority else "-"
         self.query_one("#operator-status", Static).update(
             f"Status {status_label}  |  "
             f"Last alert {self._metric(runtime, 'alert_level')}  |  "
             f"Last incidents {self._metric(runtime, 'active_incident_count')}  |  "
             f"Last validating {self._metric(runtime, 'validation_count')}  |  "
             f"Last approvals {self._metric(runtime, 'pending_approval_count')}  |  "
-            f"Last targets {self._metric(runtime, 'target_count')}"
+            f"Policy {assurance}  |  Violations {violations}"
         )
         self._selected_repair_approval = None
         self.query_one("#repair-approve", Button).disabled = True
@@ -363,13 +461,18 @@ class CaretakerConsoleApp(App):
             {str(item.get("target_id")) for item in incidents if item.get("target_id")}
         )
         degraded = runtime.get("degraded_components") or []
+        authority_summary = status.get("authority_policy") or {}
+        assurance = authority_summary.get("overall_assurance", "UNCONFIGURED")
+        runtime_policy_match = authority_summary.get("runtime_matches_supervisor")
+        displayed_assurance = "RUNTIME_TAMPER" if runtime_policy_match is False else assurance
+        policy_violations = authority_summary.get("violations", 0)
         line = (
             f"Status {runtime.get('current_status', 'STARTING')}  |  "
             f"Alert {runtime.get('alert_level', 'NONE')}  |  "
             f"Incidents {runtime.get('active_incident_count', 0)}  |  "
             f"Validating {runtime.get('validation_count', 0)}  |  "
             f"Approvals {runtime.get('pending_approval_count', 0)}  |  "
-            f"Targets {runtime.get('target_count', 0)}  |  "
+            f"Policy {displayed_assurance}  |  Violations {policy_violations}  |  "
             f"Worker issues {len(unhealthy)}"
         )
         self.query_one("#operator-status", Static).update(line)
@@ -378,6 +481,8 @@ class CaretakerConsoleApp(App):
             f"Active incident targets: {', '.join(incident_targets) if incident_targets else 'none'}",
             f"Validating functions: {', '.join(validating) if validating else 'none'}",
             f"Degraded capabilities: {', '.join(degraded) if degraded else 'none'}",
+            "Runtime policy matches supervisor: "
+            + ("yes" if runtime_policy_match is True else "NO - POLICY TAMPER DETECTED" if runtime_policy_match is False else "unknown"),
         ]
         self.query_one("#overview-details", Static).update("\n".join(details))
 
@@ -455,6 +560,23 @@ class CaretakerConsoleApp(App):
             self._write_json("#repair-output", record.get("payload", record))
             return
 
+        if event.data_table.id == "policy-table":
+            row = event.data_table.get_row(event.row_key)
+            if not row:
+                return
+            try:
+                record_number = int(row[0])
+                record = self._authority_rows[record_number - 1]
+            except (TypeError, ValueError, IndexError):
+                return
+            self._selected_authority_lease = str(record.get("lease_id")) if record.get("lease_id") else None
+            self.query_one("#policy-release", Button).disabled = self._selected_authority_lease is None
+            self.query_one("#policy-detail-title", Static).update(
+                f"{record.get('kind', 'policy')} | {record.get('authority_id') or 'not configured'}"
+            )
+            self._write_json("#policy-output", record)
+            return
+
         if event.data_table.id != "targets-table":
             return
         row = event.data_table.get_row(event.row_key)
@@ -489,6 +611,7 @@ class CaretakerConsoleApp(App):
             )
 
     async def refresh_all(self) -> None:
+        await self.refresh_authority()
         await self.refresh_status()
         if self._application_running:
             try:
@@ -737,6 +860,112 @@ class CaretakerConsoleApp(App):
             if records else "No Repair events or pending approvals were returned."
         )
 
+    def _local_authority_snapshot(self) -> dict[str, Any]:
+        candidates = [self.data_directory / "policy" / "authority-effective.json"]
+        candidates.extend(self.data_directory.glob("*/policy/authority-effective.json"))
+        for path in candidates:
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                continue
+            if isinstance(value, dict):
+                return value
+        return {}
+
+    async def refresh_authority(self) -> None:
+        try:
+            response = await self._request("authority-status")
+            snapshot = {key: value for key, value in response.items() if key != "ok"}
+        except Exception:
+            snapshot = self._local_authority_snapshot()
+        self._authority_snapshot = snapshot
+        statuses = [dict(item) for item in snapshot.get("layer_status", ()) if isinstance(item, dict)]
+        layers_by_id = {
+            str(item.get("authority_id")): dict(item)
+            for item in snapshot.get("layers", ())
+            if isinstance(item, dict) and item.get("authority_id")
+        }
+        verifications_by_id = {
+            str(item.get("authority_id")): dict(item)
+            for item in snapshot.get("verifications", ())
+            if isinstance(item, dict) and item.get("authority_id")
+        }
+        leases_by_id = {
+            str(item.get("lease_id")): dict(item)
+            for item in snapshot.get("runtime_leases", ())
+            if isinstance(item, dict) and item.get("lease_id")
+        }
+        violation_list = [
+            dict(item) for item in snapshot.get("violations", ()) if isinstance(item, dict)
+        ]
+        rows: list[dict[str, Any]] = []
+        for status in statuses:
+            record = dict(status)
+            authority_id = status.get("authority_id")
+            lease_id = status.get("lease_id")
+            if authority_id and str(authority_id) in layers_by_id:
+                record["layer"] = layers_by_id[str(authority_id)]
+                record["verification"] = verifications_by_id.get(str(authority_id))
+                record["constraint_violations"] = [
+                    item for item in violation_list
+                    if str(item.get("authority_id")) == str(authority_id)
+                ]
+            if lease_id and str(lease_id) in leases_by_id:
+                record["runtime_lease"] = leases_by_id[str(lease_id)]
+            rows.append(record)
+        self._authority_rows = rows
+        self._selected_authority_lease = None
+        self.query_one("#policy-release", Button).disabled = True
+
+        assurance = snapshot.get("overall_assurance", "UNCONFIGURED") if snapshot else "UNAVAILABLE"
+        generation = snapshot.get("generation", "-") if snapshot else "-"
+        fingerprint = str(snapshot.get("fingerprint", "-")) if snapshot else "-"
+        violations = snapshot.get("violations", ()) if snapshot else ()
+        runtime_match = snapshot.get("runtime_matches_supervisor") if snapshot else None
+        runtime_match_text = (
+            "MATCH" if runtime_match is True
+            else "MISMATCH - POLICY TAMPER" if runtime_match is False
+            else "UNAVAILABLE"
+        )
+        self.query_one("#policy-summary", Static).update(
+            f"Overall assurance: {assurance}   Generation: {generation}   "
+            f"Violations: {len(violations)}   Runtime: {runtime_match_text}\n"
+            f"Effective fingerprint: {fingerprint}"
+        )
+        table = self.query_one("#policy-table", DataTable)
+        table.clear()
+        for index, record in enumerate(rows, start=1):
+            table.add_row(
+                index,
+                str(record.get("kind") or "-"),
+                self._compact_log_text(record.get("authority_id"), limit=28) or "-",
+                str(record.get("signature") or "-"),
+                str(record.get("guarantee") or "-"),
+                str(record.get("violations", 0)),
+            )
+        output = self.query_one("#policy-output", RichLog)
+        output.clear()
+        if snapshot:
+            if violations:
+                output.write("Policy guarantee violations are present. Select a layer to inspect it; full violations follow.")
+                output.write(json.dumps(violations, indent=2, sort_keys=True, default=str))
+            elif rows:
+                output.write("Select an authority layer or runtime lease to inspect provenance and guarantee state.")
+            else:
+                output.write("No authority layers are configured. Caretaker is operating without policy-authority assurance.")
+        else:
+            output.write("No live or persisted authority-policy snapshot is available.")
+
+    @staticmethod
+    def _parse_policy_value(text: str) -> Any:
+        stripped = text.strip()
+        if not stripped:
+            raise ValueError("Enter a policy value")
+        try:
+            return json.loads(stripped)
+        except json.JSONDecodeError:
+            return stripped
+
     def _target(self, input_id: str) -> str:
         value = self.query_one(input_id, Input).value.strip()
         if not value:
@@ -786,6 +1015,62 @@ class CaretakerConsoleApp(App):
                 await self.refresh_status()
                 await self.refresh_repair()
                 return
+            if button == "policy-refresh":
+                await self.refresh_authority()
+                return
+            if button == "policy-apply":
+                path = self.query_one("#policy-path", Input).value.strip()
+                if not path:
+                    raise ValueError("Enter a policy path")
+                target = self.query_one("#policy-target", Input).value.strip()
+                value = self._parse_policy_value(self.query_one("#policy-value", Input).value)
+                reason = self.query_one("#policy-reason", Input).value.strip()
+                if not reason:
+                    raise ValueError("Temporary policy leases require an incident/operator reason")
+                duration = int(self.query_one("#policy-duration", Input).value.strip() or "3600")
+                override = self.query_one("#policy-override", Checkbox).value
+                response = await self._request(
+                    "authority-lease-acquire",
+                    path=path,
+                    value=value,
+                    target=target or None,
+                    reason=reason,
+                    duration_seconds=duration,
+                    override_constraints=override,
+                )
+                self._write_json("#policy-output", response)
+                await self.refresh_authority()
+                await self.refresh_status()
+                await self.refresh_targets()
+                return
+            if button == "policy-apply-signed":
+                descriptor = self.query_one("#policy-signed-descriptor", Input).value.strip()
+                if not descriptor:
+                    raise ValueError(
+                        "Enter a signed lease descriptor filename from policy/runtime-leases/"
+                    )
+                reason = self.query_one("#policy-reason", Input).value.strip()
+                response = await self._request(
+                    "authority-lease-acquire-signed",
+                    descriptor=descriptor,
+                    reason=reason or "signed runtime policy lease",
+                )
+                self._write_json("#policy-output", response)
+                await self.refresh_authority()
+                await self.refresh_status()
+                await self.refresh_targets()
+                return
+            if button == "policy-release":
+                if not self._selected_authority_lease:
+                    raise ValueError("Select a runtime policy lease first")
+                response = await self._request(
+                    "authority-lease-release", lease_id=self._selected_authority_lease
+                )
+                self._write_json("#policy-output", response)
+                await self.refresh_authority()
+                await self.refresh_status()
+                await self.refresh_targets()
+                return
             if button == "investigate-run":
                 target = self.query_one("#investigate-target", Input).value.strip()
                 model = self.query_one("#investigate-model", Input).value.strip()
@@ -807,6 +1092,8 @@ class CaretakerConsoleApp(App):
                 output = "#investigate-output"
             elif button == "logs-refresh":
                 output = "#logs-output"
+            elif button.startswith("policy-"):
+                output = "#policy-output"
             self._write_json(output, {"error": f"{type(exc).__name__}: {exc}"})
 
 
