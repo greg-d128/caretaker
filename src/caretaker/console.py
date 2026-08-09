@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, DataTable, Footer, Header, Input, Label, RichLog, Static, TabbedContent, TabPane
+from textual.containers import Grid, Horizontal, Vertical
+from textual.widgets import Button, DataTable, Footer, Header, Input, RichLog, Static, TabbedContent, TabPane
 
 from .logging.ipc import control_request
 
@@ -72,6 +72,44 @@ class CaretakerConsoleApp(App):
         height: 1fr;
         border: solid $surface-lighten-2;
     }
+    #logs-toolbar {
+        height: 3;
+        padding: 0 1;
+        align-vertical: middle;
+        overflow: hidden hidden;
+    }
+    #logs-refresh {
+        width: auto;
+        min-width: 16;
+        height: 3;
+        margin: 0;
+    }
+    #logs-split {
+        height: 1fr;
+        min-height: 0;
+        grid-size: 2 1;
+        grid-columns: 1fr 1fr;
+        grid-rows: 1fr;
+        grid-gutter: 1;
+    }
+    .logs-pane {
+        width: 1fr;
+        height: 1fr;
+        min-height: 0;
+        border: solid $surface-lighten-2;
+        overflow: hidden hidden;
+    }
+    .logs-pane-title {
+        height: 3;
+        padding: 1 2;
+        text-style: bold;
+        border-bottom: solid $surface-lighten-2;
+    }
+    #logs-table, #logs-output {
+        height: 1fr;
+        min-height: 0;
+        border: none;
+    }
     #repair-episode, #repair-reason {
         width: 1fr;
     }
@@ -86,6 +124,7 @@ class CaretakerConsoleApp(App):
         super().__init__()
         self.socket_path = socket_path
         self._last_status: dict[str, Any] = {}
+        self._log_records: list[dict[str, Any]] = []
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -139,9 +178,22 @@ class CaretakerConsoleApp(App):
                 )
                 yield RichLog(id="investigate-output", wrap=True, markup=True)
             with TabPane("Logs", id="logs"):
-                with Horizontal(classes="toolbar"):
+                with Horizontal(id="logs-toolbar"):
                     yield Button("Refresh logs", id="logs-refresh")
-                yield RichLog(id="logs-output", wrap=True, markup=True)
+                with Grid(id="logs-split"):
+                    with Vertical(classes="logs-pane"):
+                        yield Static("Log records (newest first)", classes="logs-pane-title")
+                        table = DataTable(id="logs-table")
+                        table.cursor_type = "row"
+                        table.add_columns("#", "Time", "Level", "Channel", "Target", "Message")
+                        yield table
+                    with Vertical(classes="logs-pane"):
+                        yield Static(
+                            "Selected log record",
+                            id="logs-detail-title",
+                            classes="logs-pane-title",
+                        )
+                        yield RichLog(id="logs-output", wrap=True, markup=True)
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -211,6 +263,22 @@ class CaretakerConsoleApp(App):
             )
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if event.data_table.id == "logs-table":
+            row = event.data_table.get_row(event.row_key)
+            if not row:
+                return
+            try:
+                record_number = int(row[0])
+                record = self._log_records[record_number - 1]
+            except (TypeError, ValueError, IndexError):
+                return
+            self.query_one("#logs-detail-title", Static).update(
+                f"Log record {record_number} | "
+                f"{record.get('channel', '-')} | {record.get('target_id') or 'no target'}"
+            )
+            self._write_json("#logs-output", record)
+            return
+
         if event.data_table.id != "targets-table":
             return
         row = event.data_table.get_row(event.row_key)
@@ -247,6 +315,59 @@ class CaretakerConsoleApp(App):
 
     async def action_refresh(self) -> None:
         await self.refresh_all()
+
+    @staticmethod
+    def _log_level(severity: Any) -> str:
+        try:
+            value = int(severity)
+        except (TypeError, ValueError):
+            return str(severity or "-")
+        if value >= 50:
+            return "CRIT"
+        if value >= 40:
+            return "ERROR"
+        if value >= 30:
+            return "WARN"
+        if value >= 20:
+            return "INFO"
+        if value >= 10:
+            return "DEBUG"
+        return str(value)
+
+    @staticmethod
+    def _compact_log_text(value: Any, *, limit: int) -> str:
+        text = " ".join(str(value or "").split())
+        if len(text) <= limit:
+            return text
+        return text[: max(0, limit - 1)] + "…"
+
+    async def refresh_logs(self) -> None:
+        response = await self._request("logs", limit=200)
+        records = response.get("records", [])
+        self._log_records = [dict(record) for record in records if isinstance(record, dict)]
+
+        table = self.query_one("#logs-table", DataTable)
+        table.clear()
+        for index in range(len(self._log_records) - 1, -1, -1):
+            record = self._log_records[index]
+            occurred_at = str(record.get("occurred_at") or "")
+            timestamp = occurred_at[:19].replace("T", " ") if occurred_at else "-"
+            table.add_row(
+                index + 1,
+                timestamp,
+                self._log_level(record.get("severity")),
+                self._compact_log_text(record.get("channel"), limit=18) or "-",
+                self._compact_log_text(record.get("target_id"), limit=28) or "-",
+                self._compact_log_text(record.get("message"), limit=80) or "-",
+            )
+
+        detail = self.query_one("#logs-output", RichLog)
+        detail.clear()
+        self.query_one("#logs-detail-title", Static).update("Selected log record")
+        if self._log_records:
+            detail.write("Select a log record from the list to inspect its full JSON.")
+        else:
+            detail.write("No log records were returned.")
 
     def _target(self, input_id: str) -> str:
         value = self.query_one(input_id, Input).value.strip()
@@ -314,8 +435,7 @@ class CaretakerConsoleApp(App):
                 self._write_json("#investigate-output", response)
                 return
             if button == "logs-refresh":
-                response = await self._request("logs", limit=200)
-                self._write_json("#logs-output", response.get("records", []))
+                await self.refresh_logs()
         except Exception as exc:
             output = "#guard-output" if button.startswith("guard-") else "#repair-output"
             if button == "investigate-run":
