@@ -32,6 +32,9 @@ where = ["src"]
 [tool.pytest.ini_options]
 addopts = "-ra"
 testpaths = ["tests"]
+markers = [
+  "repository: tests that require files from the source repository rather than the installed package",
+]
 
 [project.scripts]
 caretaker-integrity = "caretaker.integrity.cli:main"

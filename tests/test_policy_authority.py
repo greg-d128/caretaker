@@ -397,6 +397,93 @@ def test_layer_expiration_creates_new_invalid_generation(monkeypatch) -> None:
     assert effective.overall_assurance == "INVALID_AUTHORITY_CHAIN"
 
 
+def test_unsigned_authority_stack_file_is_self_consistent(tmp_path: Path) -> None:
+    framework = _layer(
+        "example-caretaker-project",
+        AuthorityKind.FRAMEWORK,
+        constraints=(
+            PolicyConstraint(
+                "repair.validation.isolate_validation",
+                ConstraintOperator.REQUIRED_TRUE,
+            ),
+        ),
+    )
+    application = _layer(
+        "example-application-owner",
+        AuthorityKind.APPLICATION,
+        constraints=(
+            PolicyConstraint(
+                "repair.authority",
+                ConstraintOperator.ALLOWED_VALUES,
+                [
+                    "ANALYZE_ONLY",
+                    "PROPOSE_ONLY",
+                    "REQUIRE_OPERATOR_APPROVAL",
+                ],
+                target="example.critical.*",
+            ),
+        ),
+        parents={"framework": framework.fingerprint},
+    )
+    deployment = _layer(
+        "example-deployment",
+        AuthorityKind.DEPLOYMENT,
+        settings=(
+            PolicySetting(
+                "repair.authority",
+                "REQUIRE_OPERATOR_APPROVAL",
+                target="example.critical.*",
+            ),
+        ),
+        parents={
+            "framework": framework.fingerprint,
+            "application": application.fingerprint,
+        },
+    )
+
+    for name, layer in (
+        ("framework-policy.json", framework),
+        ("application-policy.json", application),
+        ("deployment-policy.json", deployment),
+    ):
+        write_policy_authority_layer(tmp_path / name, layer)
+
+    stack_path = tmp_path / "stack-unsigned.toml"
+    stack_path.write_text(
+        "\n".join(
+            [
+                "schema_version = 1",
+                "",
+                "[[layers]]",
+                'kind = "framework"',
+                'path = "framework-policy.json"',
+                "require_signature = false",
+                "",
+                "[[layers]]",
+                'kind = "application"',
+                'path = "application-policy.json"',
+                "require_signature = false",
+                "",
+                "[[layers]]",
+                'kind = "deployment"',
+                'path = "deployment-policy.json"',
+                "require_signature = false",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    supervisor = PolicyAuthoritySupervisor.from_stack_file(stack_path)
+
+    assert supervisor.effective.overall_assurance == "PARTIAL_OR_UNSIGNED"
+    policy = supervisor.effective.apply_dataclass(
+        RepairPolicy(), prefix="repair", target_id="example.critical.payment"
+    )
+    assert policy.authority is RepairAuthority.REQUIRE_OPERATOR_APPROVAL
+
+
+@pytest.mark.repository
 def test_repository_unsigned_authority_example_is_self_consistent() -> None:
     root = Path(__file__).resolve().parents[1]
     supervisor = PolicyAuthoritySupervisor.from_stack_file(

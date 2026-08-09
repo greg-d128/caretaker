@@ -42,10 +42,11 @@ verify-wheel: wheel ## Install and test the wheel in a temporary virtual environ
 	$(PYTHON) -m venv "$$tmp/venv"; \
 	"$$tmp/venv/bin/python" -m pip install --quiet --upgrade pip pytest; \
 	"$$tmp/venv/bin/python" -m pip install --quiet "$$wheel" cryptography; \
+	cp pyproject.toml "$$tmp/pyproject.toml"; \
 	cp -a tests "$$tmp/tests"; \
 	cd "$$tmp"; \
 	"$$tmp/venv/bin/python" -c 'import caretaker; print("Version:", caretaker.__version__); print("Loaded from:", caretaker.__file__)'; \
-	"$$tmp/venv/bin/python" -m pytest -q tests
+	"$$tmp/venv/bin/python" -m pytest -q -m "not repository" tests
 
 clean: ## Remove generated build and test files
 	rm -rf build dist .pytest_cache
