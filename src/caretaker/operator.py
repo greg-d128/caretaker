@@ -3,14 +3,15 @@ from __future__ import annotations
 import dataclasses
 import os
 import threading
+import traceback
 import weakref
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from .authority import get_authority_runtime_context
+from .authority import AuthorityPolicyError, get_authority_runtime_context
 from .control_plane import SignalSeverity
 
 
@@ -33,6 +34,99 @@ def _jsonable(value: Any) -> Any:
     if callable(value):
         return f"{getattr(value, '__module__', '')}.{getattr(value, '__qualname__', repr(value))}"
     return value
+
+
+def _request_value(request: dict[str, Any], key: str) -> str | None:
+    value = request.get(key)
+    if value in (None, ""):
+        return None
+    return str(value)
+
+
+def _bounded_message(exception: BaseException, limit: int = 2048) -> str:
+    message = str(exception)
+    return message if len(message) <= limit else message[: limit - 3] + "..."
+
+
+def control_failure_response(
+    request: dict[str, Any],
+    credentials: tuple[int, int, int],
+    exception: BaseException,
+    *,
+    include_debug: bool = False,
+) -> dict[str, Any]:
+    """Build a stable JSON diagnostic for a failed runtime-control operation.
+
+    This helper deliberately does not persist evidence itself. The bootstrap
+    socket boundary owns persistence so direct registry callers keep their
+    existing exception semantics.
+    """
+    command = str(request.get("command", "")).strip().lower() or "<missing>"
+
+    if isinstance(exception, AuthorityPolicyError):
+        failure_domain = "POLICY"
+        failure_kind = "policy-rejection"
+        event_name = "caretaker.operator.policy_rejected"
+        severity = 30
+        decision = "rejected"
+    elif isinstance(exception, (ValueError, KeyError)):
+        failure_domain = "CONTROL_PLANE"
+        failure_kind = "request-rejected"
+        event_name = "caretaker.operator.request_rejected"
+        severity = 30
+        decision = "rejected"
+    else:
+        failure_domain = "CARETAKER_INTERNAL"
+        failure_kind = "internal-exception"
+        event_name = "caretaker.internal.operation.failed"
+        severity = 40
+        decision = "failed"
+
+    authority = get_authority_runtime_context().effective
+    message = _bounded_message(exception)
+    error: dict[str, Any] = {
+        "diagnostic_id": str(uuid4()),
+        "occurred_at": datetime.now(timezone.utc).isoformat(),
+        "event": event_name,
+        "severity": severity,
+        "failure_domain": failure_domain,
+        "failure_kind": failure_kind,
+        "component": "operator.runtime",
+        "operation": command,
+        "stage": "control-request",
+        "outcome": "failed",
+        "decision": decision,
+        "reason": message,
+        "exception_type": type(exception).__name__,
+        "exception_module": type(exception).__module__,
+        "message": message,
+        "target_id": _request_value(request, "target"),
+        "call_id": _request_value(request, "call_id"),
+        "incident_id": _request_value(request, "incident_id"),
+        "episode_id": _request_value(request, "episode_id"),
+        "attempt_id": _request_value(request, "attempt_id"),
+        "candidate_id": _request_value(request, "candidate_id"),
+        "authority_policy_generation": authority.generation,
+        "authority_policy_fingerprint": authority.fingerprint,
+        "authority_policy_assurance": authority.overall_assurance,
+        "authority_policy_violation_count": len(authority.violations),
+        "peer_pid": credentials[0],
+        "peer_uid": credentials[1],
+        "peer_gid": credentials[2],
+        "retryable": False,
+        "diagnostic_persisted": False,
+    }
+    if include_debug:
+        rendered_traceback = "".join(
+            traceback.format_exception(
+                type(exception), exception, exception.__traceback__
+            )
+        )
+        error["debug"] = {
+            "traceback": rendered_traceback[-8192:],
+            "request_keys": sorted(str(key) for key in request),
+        }
+    return {"ok": False, "error": error}
 
 
 _SEVERITY_RANK = {
@@ -346,7 +440,7 @@ class OperatorRuntimeRegistry:
             )
             for engine in engines:
                 events.extend(engine.store.recent_events(target_id, limit=limit))
-            events.sort(key=lambda item: item.created_at)
+            events.sort(key=lambda item: item.timestamp)
             return {"ok": True, "target": target_id, "events": _jsonable(events[-limit:])}
 
         if command == "repair-approvals":
@@ -378,7 +472,9 @@ class OperatorRuntimeRegistry:
             engine.reject_repair(episode_id, reason)
             return {"ok": True, "episode_id": str(episode_id), "reason": reason}
 
-        return {"ok": False, "error": f"unsupported runtime command: {command!r}"}
+        return control_failure_response(
+            request, credentials, ValueError(f"unsupported runtime command: {command!r}")
+        )
 
 
 _RUNTIME_REGISTRY = OperatorRuntimeRegistry()

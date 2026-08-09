@@ -15,6 +15,21 @@
 - Add a Textual Policy view showing authority layers, signatures, guarantees, violations, runtime leases, and operator lease controls.
 - Document independent external GPG verification as the high-assurance trust anchor; policy authority does not claim to prevent a host owner from modifying open-source software.
 
+### Operator console usability
+
+- Add a Repair approval source viewer that renders the proposed replacement as syntax-highlighted Python with line numbers and toggles back to the full JSON approval payload.
+- Show a per-target lifecycle status in Overview. Active post-repair candidate probation is labeled `VALIDATING`, while exact FunctionSlot and candidate states remain available in target details.
+- Add compact Overview target filtering with free-text search and `target:`, `status:`, `state:`, `mode:`, `authority:`, `guard:`, and `version:` selectors.
+- Refresh the target snapshot immediately after approving or rejecting a Repair so lifecycle changes are visible without leaving the Repair workflow.
+
+### Diagnostic robustness
+
+- Fix live operator Repair event ordering to use `RepairEvent.timestamp` rather than the unrelated `created_at` field used by Guard decisions.
+- Return structured runtime-control failure diagnostics with component/operation, exception identity, Repair correlation fields, authority generation/fingerprint, peer credentials, and a diagnostic ID.
+- Emit unexpected child-runtime control failures on the `CARETAKER_INTERNAL` channel when durable logging remains available; optional bounded traceback/request-key detail is enabled only by `CARETAKER_DIAGNOSTIC_DEBUG` and may be stored as DEBUG-priority attachment evidence.
+- Preserve structured control errors in `caretaker-console` and query Repair events and pending approvals independently so an event-history failure cannot hide an actionable approval.
+- Avoid recursive diagnostic logging when the logging path itself fails; propagate persistence status through the control response and use a best-effort stderr fallback.
+
 ## 0.5.0a1
 
 ### Logging subsystem

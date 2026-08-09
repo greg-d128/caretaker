@@ -90,6 +90,38 @@ warning, error, and critical records. Supported selectors are `level`,
 `channel`, `target`, `logger`, and `message`; unqualified text searches the full
 JSON record.
 
+### Structured control-plane failure evidence
+
+The child runtime control boundary is part of Caretaker's diagnostic surface.
+If a runtime handler raises, the socket response contains a structured `error`
+object rather than only a formatted exception string. The record identifies a
+diagnostic ID, failure domain and kind, component, operation and stage, exception
+type/module/message, target and Repair correlation IDs when present, authority
+generation/fingerprint/assurance, peer PID/UID/GID, and whether durable
+diagnostic persistence succeeded.
+
+Unexpected Caretaker exceptions are also emitted at error severity on the
+`CARETAKER_INTERNAL` channel when the logging path remains available. Invalid
+control requests and authority-policy rejections are classified separately so a
+policy decision is not reported as a Caretaker implementation defect.
+
+Set `CARETAKER_DIAGNOSTIC_DEBUG=1` only during controlled diagnosis. It adds a
+bounded traceback and request-key inventory to the control response and stores
+that supplemental detail as DEBUG-priority attachment evidence when attachment
+persistence is available. The underlying failure event and its core diagnostic
+fields are emitted independently of this setting. The request body itself is not
+copied into diagnostic detail.
+
+The Repair console queries recent events and pending approvals independently.
+If event-history retrieval fails, an actionable pending approval remains visible
+as long as the approval query succeeds. The failed query appears as a
+non-actionable `ERROR` row whose JSON retains the structured control diagnostic.
+
+If diagnostic logging itself fails, Caretaker does not recursively send another
+logging event. The control response reports `diagnostic_persisted=false` and a
+bounded `diagnostic_persistence_error`, and the bootstrap path makes a best-effort
+JSON write to standard error.
+
 ### Incident investigation and LLM assistance
 
 The Textual console includes an **Investigate** view. It builds a bounded logging

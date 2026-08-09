@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from rich.syntax import Syntax
 from textual.app import App, ComposeResult
 from textual.containers import Grid, Horizontal, Vertical
 from textual.widgets import (
@@ -44,6 +45,23 @@ def discover_control_socket(data_directory: Path) -> Path | None:
         "Multiple Caretaker control sockets were found. Pass --socket or "
         f"--data-directory explicitly:\n  {rendered}"
     )
+
+
+class ControlRequestError(RuntimeError):
+    """Control failure that preserves the structured runtime error object."""
+
+    def __init__(self, error: Any) -> None:
+        if isinstance(error, dict):
+            self.details = dict(error)
+            message = str(
+                self.details.get("message")
+                or self.details.get("reason")
+                or "Caretaker control request failed"
+            )
+        else:
+            message = str(error or "Caretaker control request failed")
+            self.details = {"message": message}
+        super().__init__(message)
 
 
 class CaretakerConsoleApp(App):
@@ -85,6 +103,12 @@ class CaretakerConsoleApp(App):
     DataTable, RichLog {
         height: 1fr;
         border: solid $surface-lighten-2;
+    }
+    #targets-filter {
+        height: 3;
+        border: none;
+        padding: 0 1;
+        background: $surface;
     }
     #logs-split {
         height: 1fr;
@@ -234,8 +258,12 @@ class CaretakerConsoleApp(App):
         self._application_running: bool | None = None
         self._log_records: list[dict[str, Any]] = []
         self._displayed_log_records: list[dict[str, Any]] = []
+        self._target_records: list[dict[str, Any]] = []
+        self._displayed_target_records: list[dict[str, Any]] = []
         self._repair_records: list[dict[str, Any]] = []
         self._selected_repair_approval: str | None = None
+        self._selected_repair_record: dict[str, Any] | None = None
+        self._repair_source_view = False
         self._authority_snapshot: dict[str, Any] = {}
         self._authority_rows: list[dict[str, Any]] = []
         self._selected_authority_lease: str | None = None
@@ -246,10 +274,17 @@ class CaretakerConsoleApp(App):
         with TabbedContent(initial="overview"):
             with TabPane("Overview", id="overview"):
                 yield Static("", id="overview-details")
+                yield Input(
+                    placeholder=(
+                        "Filter targets: text, status:validating, mode:automatic, "
+                        "authority:approval, guard:yes"
+                    ),
+                    id="targets-filter",
+                )
                 table = DataTable(id="targets-table")
                 table.cursor_type = "row"
                 table.add_columns(
-                    "Target", "Mode", "Authority", "Version", "Guard", "Slot state"
+                    "Target", "Mode", "Authority", "Version", "Guard", "Status"
                 )
                 yield table
                 yield RichLog(id="target-details", wrap=True, markup=True)
@@ -283,11 +318,16 @@ class CaretakerConsoleApp(App):
                             id="repair-detail-title",
                             classes="repair-pane-title",
                         )
-                        yield RichLog(id="repair-output", wrap=True, markup=True)
+                        yield RichLog(id="repair-output", wrap=False, markup=True)
                         with Horizontal(id="repair-actions"):
                             yield Input(
                                 placeholder="Rejection reason (used only for Reject)",
                                 id="repair-reason",
+                            )
+                            yield Button(
+                                "View source",
+                                id="repair-source",
+                                disabled=True,
                             )
                             yield Button(
                                 "Approve",
@@ -380,8 +420,31 @@ class CaretakerConsoleApp(App):
         request = {"command": command, **payload}
         response = await asyncio.to_thread(control_request, self.socket_path, request)
         if response.get("ok") is False:
-            raise RuntimeError(str(response.get("error", "Caretaker control request failed")))
+            raise ControlRequestError(
+                response.get("error", "Caretaker control request failed")
+            )
         return response
+
+    @staticmethod
+    def _control_error_payload(
+        error: Exception,
+        *,
+        operation: str,
+    ) -> dict[str, Any]:
+        if isinstance(error, ControlRequestError):
+            payload = dict(error.details)
+        else:
+            payload = {
+                "failure_domain": "CONTROL_TRANSPORT",
+                "failure_kind": "transport-error",
+                "component": "caretaker.console",
+                "stage": "control-request",
+                "exception_type": type(error).__name__,
+                "message": str(error),
+            }
+        payload.setdefault("operation", operation)
+        payload.setdefault("outcome", "failed")
+        return payload
 
     @staticmethod
     def _metric(runtime: dict[str, Any], key: str) -> Any:
@@ -409,9 +472,7 @@ class CaretakerConsoleApp(App):
             f"Last approvals {self._metric(runtime, 'pending_approval_count')}  |  "
             f"Policy {assurance}  |  Violations {violations}"
         )
-        self._selected_repair_approval = None
-        self.query_one("#repair-approve", Button).disabled = True
-        self.query_one("#repair-reject", Button).disabled = True
+        self._clear_repair_selection()
         details = [
             f"Application: stopped / unavailable ({reason})",
             "Live runtime state is unavailable. Last successfully read runtime data is retained on screen.",
@@ -486,11 +547,159 @@ class CaretakerConsoleApp(App):
         ]
         self.query_one("#overview-details", Static).update("\n".join(details))
 
+    @staticmethod
+    def _enum_name(value: Any) -> str:
+        text = str(value or "").strip()
+        if "." in text:
+            text = text.rsplit(".", 1)[-1]
+        return text.upper()
+
+    @classmethod
+    def _target_runtime_states(
+        cls, state_response: dict[str, Any] | None
+    ) -> tuple[str, str]:
+        if not isinstance(state_response, dict):
+            return "", ""
+        state = state_response.get("state")
+        if not isinstance(state, dict):
+            return "", ""
+        slot = state.get("slot")
+        if not isinstance(slot, dict):
+            return "", ""
+
+        slot_state = cls._enum_name(slot.get("state"))
+        candidate_state = cls._enum_name(
+            slot.get("candidate_state") or slot.get("current_candidate_state")
+        )
+
+        current = slot.get("current") or slot.get("current_version")
+        if not candidate_state and isinstance(current, dict):
+            candidate_state = cls._enum_name(current.get("candidate_state"))
+
+        observation = slot.get("observation")
+        if isinstance(observation, dict):
+            observation_state = cls._enum_name(observation.get("state"))
+            if observation_state:
+                candidate_state = observation_state
+        elif not candidate_state:
+            candidate_state = cls._enum_name(slot.get("observation_state"))
+
+        return slot_state, candidate_state
+
+    @classmethod
+    def _target_status(cls, target: dict[str, Any]) -> str:
+        slot_state = cls._enum_name(target.get("slot_state"))
+        candidate_state = cls._enum_name(target.get("candidate_state"))
+        if target.get("repair_in_progress") or slot_state == "REPAIRING":
+            return "REPAIRING"
+        if slot_state == "CANDIDATE_ACTIVE" or candidate_state == "ACTIVE_PROBATION":
+            # CANDIDATE_ACTIVE is the live post-activation observation period. Present it
+            # as VALIDATING in the operator overview while preserving the raw states in
+            # target-detail JSON.
+            return "VALIDATING"
+        if slot_state:
+            return slot_state
+        if candidate_state:
+            return candidate_state
+        return "READY"
+
+    @classmethod
+    def _target_matches_filter(cls, target: dict[str, Any], expression: str) -> bool:
+        tokens = [token for token in expression.casefold().split() if token]
+        if not tokens:
+            return True
+        fields = {
+            "target": str(target.get("target_id") or "").casefold(),
+            "status": str(target.get("status") or "").casefold(),
+            "state": " ".join(
+                (
+                    str(target.get("slot_state") or ""),
+                    str(target.get("candidate_state") or ""),
+                )
+            ).casefold(),
+            "mode": str(target.get("repair_mode") or "").casefold(),
+            "authority": str(target.get("repair_authority") or "").casefold(),
+            "guard": ("yes" if target.get("guard_enabled") else "no"),
+            "version": str(
+                target.get("function_version")
+                if target.get("function_version") is not None
+                else ""
+            ).casefold(),
+        }
+        searchable = " ".join(
+            (
+                fields["target"],
+                fields["status"],
+                fields["state"],
+                fields["mode"],
+                fields["authority"],
+                fields["guard"],
+                fields["version"],
+                str(target.get("display_name") or "").casefold(),
+                str(target.get("module") or "").casefold(),
+                str(target.get("qualified_name") or "").casefold(),
+            )
+        )
+        for token in tokens:
+            if ":" not in token:
+                if token not in searchable:
+                    return False
+                continue
+            field, value = token.split(":", 1)
+            if not value:
+                continue
+            if field in fields:
+                if value not in fields[field]:
+                    return False
+                continue
+            if token not in searchable:
+                return False
+        return True
+
+    def _apply_target_filter(self) -> None:
+        expression = self.query_one("#targets-filter", Input).value.strip()
+        self._displayed_target_records = [
+            target
+            for target in self._target_records
+            if self._target_matches_filter(target, expression)
+        ]
+        table = self.query_one("#targets-table", DataTable)
+        table.clear()
+        for target in self._displayed_target_records:
+            target_id = str(target.get("target_id", ""))
+            table.add_row(
+                target_id,
+                str(target.get("repair_mode") or "-"),
+                str(target.get("repair_authority") or "-"),
+                str(
+                    target.get("function_version")
+                    if target.get("function_version") is not None
+                    else "-"
+                ),
+                "yes" if target.get("guard_enabled") else "no",
+                str(target.get("status") or "READY"),
+                key=target_id,
+            )
+
+        details = self.query_one("#target-details", RichLog)
+        details.clear()
+        shown = len(self._displayed_target_records)
+        total = len(self._target_records)
+        if shown:
+            details.write(
+                f"Showing {shown}/{total} targets. Select a target to inspect its exact "
+                "FunctionSlot state and effective policy."
+            )
+        elif total:
+            details.write("No targets match the current filter.")
+        else:
+            details.write("No runtime targets were returned.")
+
     async def refresh_targets(self) -> None:
         if not self._application_running:
             details = self.query_one("#target-details", RichLog)
-            if self.query_one("#targets-table", DataTable).row_count:
-                details.clear()
+            if self._target_records:
+                self._apply_target_filter()
                 details.write(
                     "Application is stopped. The target table contains the last live snapshot "
                     "captured by this console; live target state and policy inspection are unavailable."
@@ -503,19 +712,39 @@ class CaretakerConsoleApp(App):
                 )
             return
         response = await self._request("runtime-targets")
-        table = self.query_one("#targets-table", DataTable)
-        table.clear()
-        for target in response.get("targets", []):
-            target_id = str(target.get("target_id", ""))
-            table.add_row(
-                target_id,
-                str(target.get("repair_mode") or "-"),
-                str(target.get("repair_authority") or "-"),
-                str(target.get("function_version") if target.get("function_version") is not None else "-"),
-                "yes" if target.get("guard_enabled") else "no",
-                "repairing" if target.get("repair_in_progress") else "ready",
-                key=target_id,
-            )
+        self._target_records = [
+            dict(target)
+            for target in response.get("targets", ())
+            if isinstance(target, dict)
+        ]
+        state_results = await asyncio.gather(
+            *(
+                self._request(
+                    "runtime-target-state",
+                    target=str(target.get("target_id") or ""),
+                )
+                for target in self._target_records
+                if target.get("target_id")
+            ),
+            return_exceptions=True,
+        )
+        state_index = 0
+        for target in self._target_records:
+            if not target.get("target_id"):
+                target["slot_state"] = ""
+                target["candidate_state"] = ""
+                target["status"] = self._target_status(target)
+                continue
+            state_result = state_results[state_index]
+            state_index += 1
+            if isinstance(state_result, Exception):
+                slot_state, candidate_state = "", ""
+            else:
+                slot_state, candidate_state = self._target_runtime_states(state_result)
+            target["slot_state"] = slot_state
+            target["candidate_state"] = candidate_state
+            target["status"] = self._target_status(target)
+        self._apply_target_filter()
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.data_table.id == "logs-table":
@@ -543,6 +772,8 @@ class CaretakerConsoleApp(App):
                 record = self._repair_records[record_number - 1]
             except (TypeError, ValueError, IndexError):
                 return
+            self._selected_repair_record = record
+            self._repair_source_view = False
             self._selected_repair_approval = (
                 str(record.get("episode_id"))
                 if record.get("record_kind") == "pending_approval" and record.get("episode_id")
@@ -551,11 +782,15 @@ class CaretakerConsoleApp(App):
             actionable = self._selected_repair_approval is not None and bool(self._application_running)
             self.query_one("#repair-approve", Button).disabled = not actionable
             self.query_one("#repair-reject", Button).disabled = not actionable
-            title = (
-                f"Pending approval | {record.get('target_id', '-')}"
-                if record.get("record_kind") == "pending_approval"
-                else f"Repair event | {record.get('target_id', '-')}"
-            )
+            source_button = self.query_one("#repair-source", Button)
+            source_button.label = "View source"
+            source_button.disabled = self._repair_source(record) is None
+            if record.get("record_kind") == "pending_approval":
+                title = f"Pending approval | {record.get('target_id', '-')}"
+            elif record.get("record_kind") == "control_error":
+                title = f"Repair query error | {record.get('target_id', '-')}"
+            else:
+                title = f"Repair event | {record.get('target_id', '-')}"
             self.query_one("#repair-detail-title", Static).update(title)
             self._write_json("#repair-output", record.get("payload", record))
             return
@@ -637,6 +872,8 @@ class CaretakerConsoleApp(App):
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "logs-filter":
             self._apply_log_filter()
+        elif event.input.id == "targets-filter":
+            self._apply_target_filter()
 
     @staticmethod
     def _log_level(severity: Any) -> str:
@@ -883,6 +1120,50 @@ class CaretakerConsoleApp(App):
             return str(explanations[0]) if explanations else "Guard queued a Repair episode"
         return event_type.replace(".", " / ")
 
+    @staticmethod
+    def _repair_source(record: dict[str, Any] | None) -> str | None:
+        if not isinstance(record, dict):
+            return None
+        payload = record.get("payload", record)
+        if not isinstance(payload, dict):
+            return None
+        source = payload.get("source")
+        return source if isinstance(source, str) and source.strip() else None
+
+    def _clear_repair_selection(self) -> None:
+        self._selected_repair_approval = None
+        self._selected_repair_record = None
+        self._repair_source_view = False
+        self.query_one("#repair-approve", Button).disabled = True
+        self.query_one("#repair-reject", Button).disabled = True
+        source_button = self.query_one("#repair-source", Button)
+        source_button.disabled = True
+        source_button.label = "View source"
+
+    def _show_selected_repair_json(self) -> None:
+        if self._selected_repair_record is None:
+            return
+        payload = self._selected_repair_record.get(
+            "payload", self._selected_repair_record
+        )
+        self._write_json("#repair-output", payload)
+
+    def _show_selected_repair_source(self) -> None:
+        source = self._repair_source(self._selected_repair_record)
+        if source is None:
+            return
+        output = self.query_one("#repair-output", RichLog)
+        output.clear()
+        output.write(
+            Syntax(
+                source,
+                "python",
+                line_numbers=True,
+                word_wrap=False,
+                indent_guides=True,
+            )
+        )
+
     def _show_repair_message(self, message: str) -> None:
         output = self.query_one("#repair-output", RichLog)
         output.clear()
@@ -890,9 +1171,7 @@ class CaretakerConsoleApp(App):
 
     async def refresh_repair(self) -> None:
         if not self._application_running:
-            self.query_one("#repair-approve", Button).disabled = True
-            self.query_one("#repair-reject", Button).disabled = True
-            self._selected_repair_approval = None
+            self._clear_repair_selection()
             if self._repair_records:
                 self.query_one("#repair-list-title", Static).update(
                     "Last live Repair activity (application stopped)"
@@ -912,12 +1191,30 @@ class CaretakerConsoleApp(App):
                 )
             return
 
-        events_response, approvals_response = await asyncio.gather(
+        events_result, approvals_result = await asyncio.gather(
             self._request("runtime-repair-events", limit=100),
             self._request("runtime-repair-approvals"),
+            return_exceptions=True,
         )
-        events = [item for item in events_response.get("events", ()) if isinstance(item, dict)]
-        approvals = [item for item in approvals_response.get("approvals", ()) if isinstance(item, dict)]
+
+        errors: list[tuple[str, Exception]] = []
+        if isinstance(events_result, Exception):
+            events: list[dict[str, Any]] = []
+            errors.append(("runtime-repair-events", events_result))
+        else:
+            events = [
+                item for item in events_result.get("events", ()) if isinstance(item, dict)
+            ]
+
+        if isinstance(approvals_result, Exception):
+            approvals: list[dict[str, Any]] = []
+            errors.append(("runtime-repair-approvals", approvals_result))
+        else:
+            approvals = [
+                item
+                for item in approvals_result.get("approvals", ())
+                if isinstance(item, dict)
+            ]
 
         records: list[dict[str, Any]] = []
         for approval in approvals:
@@ -934,6 +1231,21 @@ class CaretakerConsoleApp(App):
                 "episode_id": episode_id,
                 "payload": approval,
             })
+        for operation, error in errors:
+            payload = self._control_error_payload(error, operation=operation)
+            records.append({
+                "record_kind": "control_error",
+                "state": "ERROR",
+                "timestamp": str(payload.get("occurred_at") or ""),
+                "target_id": str(payload.get("target_id") or "-"),
+                "description": (
+                    f"{operation} failed: "
+                    f"{payload.get('exception_type', 'error')}: "
+                    f"{payload.get('message', 'Caretaker control request failed')}"
+                ),
+                "episode_id": str(payload.get("episode_id") or ""),
+                "payload": payload,
+            })
         for item in reversed(events):
             records.append({
                 "record_kind": "event",
@@ -945,10 +1257,12 @@ class CaretakerConsoleApp(App):
                 "payload": item,
             })
         self._repair_records = records
-        self._selected_repair_approval = None
-        self.query_one("#repair-approve", Button).disabled = True
-        self.query_one("#repair-reject", Button).disabled = True
-        self.query_one("#repair-list-title", Static).update("Recent and waiting Repair activity")
+        self._clear_repair_selection()
+        self.query_one("#repair-list-title", Static).update(
+            "Repair activity (partial results; inspect ERROR record)"
+            if errors
+            else "Recent and waiting Repair activity"
+        )
         self.query_one("#repair-detail-title", Static).update("Selected Repair record")
 
         table = self.query_one("#repair-table", DataTable)
@@ -965,11 +1279,17 @@ class CaretakerConsoleApp(App):
                 self._compact_log_text(record["episode_id"], limit=12) or "-",
             )
 
-        self._show_repair_message(
-            "Select a waiting approval or recent Repair event to inspect it. "
-            "Approve and Reject are enabled only for the selected pending approval."
-            if records else "No Repair events or pending approvals were returned."
-        )
+        if errors:
+            self._show_repair_message(
+                "Partial Repair data returned. Pending approvals remain available when "
+                "their query succeeded; select an ERROR row for structured diagnostics."
+            )
+        else:
+            self._show_repair_message(
+                "Select a waiting approval or recent Repair event to inspect it. "
+                "Validated replacement source can be reviewed as formatted Python before approval."
+                if records else "No Repair events or pending approvals were returned."
+            )
 
     def _local_authority_snapshot(self) -> dict[str, Any]:
         candidates = [self.data_directory / "policy" / "authority-effective.json"]
@@ -1107,6 +1427,19 @@ class CaretakerConsoleApp(App):
             if button == "repair-refresh":
                 await self.refresh_repair()
                 return
+            if button == "repair-source":
+                source = self._repair_source(self._selected_repair_record)
+                if source is None:
+                    raise ValueError("Selected Repair record does not contain replacement source")
+                if self._repair_source_view:
+                    self._repair_source_view = False
+                    event.button.label = "View source"
+                    self._show_selected_repair_json()
+                else:
+                    self._repair_source_view = True
+                    event.button.label = "View JSON"
+                    self._show_selected_repair_source()
+                return
             if button in {"repair-approve", "repair-reject"}:
                 episode = self._selected_repair_approval
                 if not episode:
@@ -1124,6 +1457,7 @@ class CaretakerConsoleApp(App):
                     )
                 self._write_json("#repair-output", response)
                 await self.refresh_status()
+                await self.refresh_targets()
                 await self.refresh_repair()
                 return
             if button == "policy-refresh":

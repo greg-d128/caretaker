@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import runpy
 import sys
@@ -7,9 +8,14 @@ import threading
 from pathlib import Path
 
 from .authority import load_authority_runtime_from_environment
-from .logging import ControlSocketServer, configure_remote
+from .logging import (
+    ControlSocketServer,
+    EvidencePriority,
+    LogChannel,
+    configure_remote,
+)
 from .logging.policy import OperatorLoggingPolicy, load_operator_policy
-from .operator import get_operator_runtime_registry
+from .operator import control_failure_response, get_operator_runtime_registry
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -31,6 +37,69 @@ def main(argv: list[str] | None = None) -> int:
     socket_path = os.environ["CARETAKER_EVENT_SOCKET"]
     runtime = configure_remote(policy, socket_path)
     runtime._declared_policy = declared_policy
+    registry = get_operator_runtime_registry()
+    diagnostic_debug = os.environ.get(
+        "CARETAKER_DIAGNOSTIC_DEBUG", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+    def runtime_control_handler(request, credentials):
+        try:
+            return registry.handle_request(request, credentials)
+        except Exception as exc:
+            response = control_failure_response(
+                request,
+                credentials,
+                exc,
+                include_debug=diagnostic_debug,
+            )
+            error = response["error"]
+            debug = error.get("debug")
+            fields = {
+                key: value
+                for key, value in error.items()
+                if key not in {"debug", "diagnostic_persisted"}
+            }
+            try:
+                envelope = runtime.event(
+                    logger_name="caretaker.operator",
+                    severity=int(error["severity"]),
+                    channel=LogChannel.CARETAKER_INTERNAL,
+                    message=str(error["message"]),
+                    fields=fields,
+                    attachment_payload=(
+                        json.dumps(debug, sort_keys=True, default=str).encode("utf-8")
+                        if debug
+                        else None
+                    ),
+                    attachment_content_type="application/json",
+                    attachment_priority=EvidencePriority.DEBUG,
+                    origin="caretaker",
+                )
+                error["diagnostic_persisted"] = envelope is not None
+            except Exception as logging_exc:
+                # Never recurse through logging while reporting a logging failure.
+                error["diagnostic_persisted"] = False
+                error["diagnostic_persistence_error"] = {
+                    "exception_type": type(logging_exc).__name__,
+                    "message": str(logging_exc)[:2048],
+                }
+                try:
+                    print(
+                        json.dumps(
+                            {
+                                "event": "caretaker.diagnostic.persistence.failed",
+                                "diagnostic_id": error["diagnostic_id"],
+                                "operation": error["operation"],
+                                "exception_type": type(logging_exc).__name__,
+                                "message": str(logging_exc)[:2048],
+                            },
+                            sort_keys=True,
+                        ),
+                        file=sys.stderr,
+                    )
+                except Exception:
+                    pass
+            return response
 
     runtime_control = None
     runtime_control_thread = None
@@ -38,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
     if runtime_control_path:
         runtime_control = ControlSocketServer(
             runtime_control_path,
-            get_operator_runtime_registry().handle_request,
+            runtime_control_handler,
             allowed_uids={os.getuid()},
         )
         runtime_control.start()
