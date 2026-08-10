@@ -15,6 +15,15 @@
 - Add a Textual Policy view showing authority layers, signatures, guarantees, violations, runtime leases, and operator lease controls.
 - Document independent external GPG verification as the high-assurance trust anchor; policy authority does not claim to prevent a host owner from modifying open-source software.
 
+### Policy profiles
+
+- Add named, descriptive, versioned framework profiles with stable lineage IDs, exact predecessor fingerprints, and explicit `based_on` provenance for organizational derivatives.
+- Add a policy-surface capability catalog so older profiles can report newly introduced policy-controlled Caretaker functionality that they have not reviewed.
+- Add strict profile controls that can refuse startup when policy-surface coverage is incomplete or when a high-assurance profile was not reviewed for the exact running Caretaker version.
+- Reserve a delegated `profile-signing` role for official profile provenance, separate from Caretaker's core/release signing identities; profile signing remains external/offline.
+- Add semantic `caretaker-profile show`, `compare`, `coverage`, `catalog`, and `pin` commands. Profile selection pins reuse the existing deployment-layer `parents.framework` fingerprint binding.
+- Add a Textual Profile Editor, available as `caretaker-profile` or `make profile`, for creating/continuing profiles, editing settings/constraints, reviewing new capabilities, comparing semantic consequences, and writing canonical unsigned output for external signing.
+
 ### Operator console usability
 
 - Add a Repair approval source viewer that renders the proposed replacement as syntax-highlighted Python with line numbers and toggles back to the full JSON approval payload.

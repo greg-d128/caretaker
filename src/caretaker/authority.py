@@ -548,6 +548,16 @@ class PolicyAuthoritySupervisor:
                 )
             if layer.expired:
                 raise AuthorityPolicyError(f"Authority layer {layer.authority_id!r} is expired")
+            if (
+                layer.kind is AuthorityKind.FRAMEWORK
+                and layer.metadata.get("caretaker.profile.lineage")
+            ):
+                # Named profiles are ordinary framework authority layers. Runtime
+                # validation checks signed metadata and policy-surface coverage;
+                # exact profile selection remains bound by lower-layer parent hashes.
+                from .profiles import validate_runtime_profile
+
+                validate_runtime_profile(layer, source_role=source.role)
             layers.append(layer)
             verifications.append(verification)
         return cls(layers, verifications, snapshot_path=snapshot_path)

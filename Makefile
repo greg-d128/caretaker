@@ -4,7 +4,7 @@ BIN     := $(VENV)/bin
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup test compile check wheel build verify-wheel lab lab-console clean distclean
+.PHONY: help setup test compile check wheel build verify-wheel lab lab-console profile clean distclean
 
 help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <command>\n\nCommands:\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -32,6 +32,9 @@ lab: ## Run the interactive Caretaker lab under caretaker-run
 
 lab-console: ## Open the Caretaker console for the interactive lab
 	PYTHONPATH=src:. $(BIN)/python -m caretaker.console --data-directory ./examples/.caretaker-interactive-lab/caretaker-data
+
+profile: ## Open the Textual Caretaker Profile Editor
+	PYTHONPATH=src $(BIN)/python -m caretaker.profile_editor
 
 verify-wheel: wheel ## Install and test the wheel in a temporary virtual environment
 	@tmp="$$(mktemp -d)"; \

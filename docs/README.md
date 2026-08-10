@@ -13,6 +13,7 @@
 - `LOGGING_INTERROGATION.md` — outliers, hypotheses, and LLM authority
 - `ADMIN_CONTROL.md` — local socket authentication and mode control
 - `POLICY_AUTHORITY.md` — signed authority layers, constraints, overrides, and runtime leases
+- `PROFILES.md` — named/versioned profiles, policy-surface coverage, comparison, pinning, and the Profile Editor 
 
 ## Shared runtime and Guard
 
