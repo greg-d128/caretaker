@@ -85,3 +85,91 @@ def test_sqlite_evidence_store_supports_interactive_queries(tmp_path: Path) -> N
     )
     assert rows[0]["module_name"] == "tests.guard_targets"
     assert rows[0]["qualified_name"] == "stable"
+
+
+def test_audit_sampling_rejects_before_expensive_attribution() -> None:
+    from uuid import uuid4
+    from caretaker.guard.policy import SamplingPolicy
+
+    events = []
+    collector = AuditEventCollector(
+        run_id=uuid4(),
+        sink=events.append,
+        collectors=CollectorPolicy(),
+        sampling=SamplingPolicy(
+            event_sample_rate=0.0,
+            stack_sample_rate=1.0,
+            always_capture_novel_resources=False,
+            maximum_events_per_second=100,
+        ),
+    )
+
+    def should_not_run(*args, **kwargs):
+        raise AssertionError("attribution occurred before sampling rejection")
+
+    collector._attribute = should_not_run  # type: ignore[method-assign]
+    collector._handle("open", ("/tmp/rejected.txt", "r", 0))
+    assert events == []
+
+
+def test_stack_sampling_can_capture_event_without_stack() -> None:
+    from uuid import uuid4
+    from caretaker.guard.policy import SamplingPolicy
+
+    events = []
+    collector = AuditEventCollector(
+        run_id=uuid4(),
+        sink=events.append,
+        collectors=CollectorPolicy(),
+        sampling=SamplingPolicy(
+            event_sample_rate=1.0,
+            stack_sample_rate=0.0,
+            always_capture_novel_resources=False,
+            maximum_events_per_second=100,
+        ),
+    )
+    collector._handle("open", ("/tmp/no-stack.txt", "r", 0))
+    assert len(events) == 1
+    assert events[0].stack_summary == ()
+
+
+def test_novel_resource_can_bypass_event_sampling_but_not_repeat_forever() -> None:
+    from uuid import uuid4
+    from caretaker.guard.policy import SamplingPolicy
+
+    events = []
+    collector = AuditEventCollector(
+        run_id=uuid4(),
+        sink=events.append,
+        collectors=CollectorPolicy(),
+        sampling=SamplingPolicy(
+            event_sample_rate=0.0,
+            stack_sample_rate=0.0,
+            always_capture_novel_resources=True,
+            maximum_events_per_second=100,
+        ),
+    )
+    collector._handle("open", ("/tmp/novel.txt", "r", 0))
+    collector._handle("open", ("/tmp/novel.txt", "r", 0))
+    assert len(events) == 1
+
+
+def test_audit_rate_limit_is_enforced_before_normalization() -> None:
+    from uuid import uuid4
+    from caretaker.guard.policy import SamplingPolicy
+
+    events = []
+    collector = AuditEventCollector(
+        run_id=uuid4(),
+        sink=events.append,
+        collectors=CollectorPolicy(),
+        sampling=SamplingPolicy(
+            event_sample_rate=1.0,
+            stack_sample_rate=0.0,
+            always_capture_novel_resources=False,
+            maximum_events_per_second=1,
+        ),
+    )
+    collector._handle("open", ("/tmp/first.txt", "r", 0))
+    collector._handle("open", ("/tmp/second.txt", "r", 0))
+    assert len(events) == 1

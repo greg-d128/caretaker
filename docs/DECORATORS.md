@@ -215,6 +215,12 @@ code, or replacement of the live function `__code__`, starts a new adaptive gene
 and resets the sampling counter rather than inheriting escalation or sampling state
 from older code. Rolling threshold state is persisted only on noteworthy events;
 healthy LIGHTWEIGHT calls do not perform Caretaker adaptive-state file writes.
+Promoted-state progress is also checkpointed in batches rather than fsynced after every
+successful execution. Threshold violations and lifecycle transitions remain immediate
+durable writes; routine behavior/acceptance progress is checkpointed periodically.
+
+When soft timing is disabled, the ordinary lightweight wrapper does not read a
+performance clock merely to support unused timing policy.
 
 ## Repair decorator
 

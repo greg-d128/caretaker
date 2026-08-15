@@ -58,3 +58,41 @@ def test_baseline_and_deviation_detection_highlight_new_resources() -> None:
 
     assert any(item.category is DeviationCategory.NEW_NETWORK_DESTINATION for item in deviations)
     assert max(item.significance_score for item in deviations) > 60
+
+
+def test_baseline_policy_can_disable_automatic_candidate_creation() -> None:
+    store = InMemoryEvidenceStore()
+    aggregator = BehaviorAggregator(
+        store,
+        AggregationPolicy(close_after_events=1, close_after_calls=1, close_after_seconds=999),
+    )
+    baselines = BaselineManager(
+        BaselinePolicy(minimum_windows=1, automatic_candidate_creation=False)
+    )
+    window = aggregator.consume(_event(ResourceIdentity("network", "api.example:443")))
+    assert window is not None
+    assert baselines.observe(window) is None
+
+    accepted = baselines.accept(window.subject)
+    assert accepted.state is BaselineState.ACCEPTED
+
+
+def test_baseline_policy_can_automatically_accept_materialized_candidate() -> None:
+    store = InMemoryEvidenceStore()
+    aggregator = BehaviorAggregator(
+        store,
+        AggregationPolicy(close_after_events=1, close_after_calls=1, close_after_seconds=999),
+    )
+    baselines = BaselineManager(
+        BaselinePolicy(
+            minimum_windows=1,
+            automatic_candidate_creation=True,
+            automatic_acceptance=True,
+        )
+    )
+    window = aggregator.consume(_event(ResourceIdentity("network", "api.example:443")))
+    assert window is not None
+    baseline = baselines.observe(window)
+    assert baseline is not None
+    assert baseline.state is BaselineState.ACCEPTED
+    assert baseline.accepted_at is not None

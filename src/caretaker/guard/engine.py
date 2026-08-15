@@ -557,8 +557,18 @@ class GuardEngine(GuardFacade):
             return None
         baseline = self.baselines.summary(binding.identity)
         observed = self.recent_summary(target_id, calls=calls)
-        events = tuple(self._events_by_target.get(target_id, [])[-20:])
-        deviations = tuple(self._deviations_by_target.get(target_id, [])[-20:])
+        maximum_events = max(0, self.policy.llm_review.maximum_representative_events)
+        events = (
+            tuple(self._events_by_target.get(target_id, [])[-maximum_events:])
+            if maximum_events
+            else ()
+        )
+        maximum_deviations = max(0, self.policy.llm_review.maximum_deviations)
+        deviations = (
+            tuple(self._deviations_by_target.get(target_id, [])[-maximum_deviations:])
+            if maximum_deviations
+            else ()
+        )
         payload = {
             "subject": binding.identity.logical_name,
             "baseline": repr(baseline),

@@ -39,19 +39,31 @@ Audit callbacks are intentionally small and send normalized events to a sink.
 
 ## Sampling and aggregation
 
-`SamplingPolicy` and `AggregationPolicy` control overhead. High-value novelty events should normally be retained even when routine known events are sampled.
+`SamplingPolicy` and `AggregationPolicy` control overhead. Sampling decisions are made
+**before** Guard performs code attribution, stack construction, value snapshots, or
+`BehaviorEvent` creation. Disabled audit categories are discarded even earlier.
+
+`event_sample_rate` controls routine event retention. `always_capture_novel_resources`
+allows the first retained occurrence of a resource identity to bypass that probability
+so a low routine sampling rate does not hide new files/network destinations/subprocesses.
+`stack_sample_rate` independently controls whether a retained event receives a full
+stack summary. `maximum_events_per_second` is a hard per-collector processing cap and
+is applied before expensive normalization.
 
 Useful strategies include:
 
 - always retain first-seen resources;
 - aggregate repeated known activity;
-- sample complete stacks;
-- rate-limit forensic evidence;
+- sample complete stacks independently from event sampling;
+- rate-limit forensic evidence before normalization;
 - retain bounded representative events.
 
 ## Baselines
 
-`BaselinePolicy` defines the minimum evidence required to create and accept a baseline. Acceptance must remain explicit.
+`BaselinePolicy` defines the minimum evidence required to create and accept a baseline.
+Candidate creation is automatic only when `automatic_candidate_creation=True`.
+Acceptance is explicit by default; `automatic_acceptance=True` is a deliberate policy
+choice and causes a materialized candidate to become accepted immediately.
 
 A baseline should normally be scoped by:
 
@@ -81,7 +93,12 @@ A baseline should normally be scoped by:
 
 ## Actions
 
-`GuardActionPolicy` maps deviations and assessment severity to actions. Deterministic policy violations may deny or quarantine. Statistical or LLM-only concerns should normally alert, escalate instrumentation, or require review.
+`GuardActionPolicy` maps deviations and assessment severity to control-plane actions.
+CPython audit-hook observation is post-event telemetry, not a pre-operation sandbox; a
+Guard decision must not be described as having prevented an operation that already
+occurred. Deterministic policy violations may trigger quarantine, rollback, repair, or
+other configured responses. Statistical or LLM-only concerns should normally alert,
+escalate instrumentation, or require review.
 
 ## Periodic target policy
 

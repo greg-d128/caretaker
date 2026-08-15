@@ -36,6 +36,8 @@ from .runtime import set_runtime_context
 F = TypeVar("F", bound=Callable[..., Any])
 _DEPENDENCY_BINDING = object()
 _DEPENDENCY_RUNTIME = threading.local()
+_STATE_CHECKPOINT_CALLS = 100
+_STATE_CHECKPOINT_SECONDS = 30.0
 
 
 def _authority_context():
@@ -355,7 +357,9 @@ class _AdaptiveController:
         self._timing_events: deque[float] = deque()
         self._managed_wrapper: Callable[..., Any] | None = None
         self._behavior_registered = False
-        self._behavior_lease_requested = False
+        self._behavior_lease_remaining = 0
+        self._dirty_state_calls = 0
+        self._last_checkpoint_monotonic = time.monotonic()
         self._authority_fingerprint: str | None = None
         self.policy = self._effective_policy()
         validate_lightweight_policy(self.policy)
@@ -397,7 +401,8 @@ class _AdaptiveController:
                 if level is InstrumentationLevel.BEHAVIOR:
                     self.state.behavior_observation_calls += 1
 
-            started = time.perf_counter()
+            timing_enabled = self.policy.soft_timing.enabled
+            started = time.perf_counter() if timing_enabled else None
             failed = False
             transitioned_during_call = False
             try:
@@ -425,8 +430,12 @@ class _AdaptiveController:
                 transitioned_during_call = self._observe_exception(exc, observed_level=level)
                 raise
             finally:
-                elapsed = time.perf_counter() - started
-                timing_breach, timing_transition = self._observe_timing(elapsed, observed_level=level)
+                elapsed = (time.perf_counter() - started) if started is not None else 0.0
+                timing_breach, timing_transition = (
+                    self._observe_timing(elapsed, observed_level=level)
+                    if timing_enabled
+                    else (False, False)
+                )
                 transitioned_during_call = transitioned_during_call or timing_transition
                 repair_transition = self._maybe_promote_repair()
                 transitioned_during_call = transitioned_during_call or repair_transition
@@ -501,7 +510,7 @@ class _AdaptiveController:
                 periodic=self.allow_repair_promotion,
             )
             self._behavior_registered = True
-        if not self._behavior_lease_requested:
+        if self._behavior_lease_remaining <= 0:
             from .guard.models import GuardMode
             guard.request_instrumentation(
                 self.target_id,
@@ -509,7 +518,7 @@ class _AdaptiveController:
                 execution_count=self.policy.behavior_executions,
                 reason=self.state.promotion_reason or "adaptive lightweight behavior sample",
             )
-            self._behavior_lease_requested = True
+            self._behavior_lease_remaining = max(1, self.policy.behavior_executions)
         return True
 
     def _behavior_call(self, observed_level: InstrumentationLevel, *args: Any, **kwargs: Any) -> Any:
@@ -525,6 +534,7 @@ class _AdaptiveController:
         started = time.perf_counter()
         succeeded = False
         guard.before_call(self.target_id, self.function, call_id, candidate_id=None)
+        self._behavior_lease_remaining = max(0, self._behavior_lease_remaining - 1)
         self._record_behavior_sample(observed_level)
         try:
             result = self.function(*args, **kwargs)
@@ -663,7 +673,7 @@ class _AdaptiveController:
         self.state.last_transition_at = now
         self.state.promotion_reason = reason
         self.state.sampling_call_counter = 0
-        self._behavior_lease_requested = False
+        self._behavior_lease_remaining = 0
 
         if stage is AdaptiveLifecycleStage.PRE_REPAIR_BEHAVIOR:
             self.state.behavior_started_at = now
@@ -856,7 +866,7 @@ class _AdaptiveController:
         self.state.long_term_failures = 0
         self.state.last_transition_at = now
         self.state.sampling_call_counter = 0
-        self._behavior_lease_requested = False
+        self._behavior_lease_remaining = 0
         if previous is InstrumentationLevel.LIGHTWEIGHT and requested is InstrumentationLevel.BEHAVIOR:
             self.state.behavior_started_at = now
             self.state.behavior_observation_calls = 0
@@ -907,7 +917,7 @@ class _AdaptiveController:
             self.state.behavior_samples += 1
             if observed_level is InstrumentationLevel.BEHAVIOR:
                 self.state.repair_evidence_samples += 1
-                self._persist()
+                self._checkpoint_state()
             self._publish_state()
 
     def _observe_acceptance(self, *, success: bool) -> None:
@@ -924,7 +934,7 @@ class _AdaptiveController:
                 self._record_acceptance_success()
             else:
                 self._record_acceptance_failure()
-            self._persist()
+            self._checkpoint_state()
             self._publish_state()
 
     def _record_acceptance_success(self) -> None:
@@ -1025,7 +1035,7 @@ class _AdaptiveController:
         self.state.repair_evidence_samples = 0
         self.state.problem_reproductions = 0
         self.state.behavior_started_at = now if next_level is InstrumentationLevel.BEHAVIOR else None
-        self._behavior_lease_requested = False
+        self._behavior_lease_remaining = 0
         self._persist()
         self._publish_state()
 
@@ -1044,7 +1054,7 @@ class _AdaptiveController:
         self._timing_events.clear()
         self._managed_wrapper = None
         self._behavior_registered = False
-        self._behavior_lease_requested = False
+        self._behavior_lease_remaining = 0
         self._state_path = (
             _state_path(self.target_id, self.code_hash, self._state_directory)
             if self.policy.persist_state
@@ -1140,6 +1150,27 @@ class _AdaptiveController:
         except Exception:
             return None
 
+    def _checkpoint_state(self, *, force: bool = False) -> None:
+        """Batch durable progress checkpoints off the ordinary promoted hot path.
+
+        Transitions and threshold violations still call ``_persist`` immediately.
+        Routine behavior-sample and acceptance progress is checkpointed periodically
+        so promoted instrumentation does not perform an fsync on every successful call.
+        """
+        if self._state_path is None:
+            return
+        self._dirty_state_calls += 1
+        now = time.monotonic()
+        if (
+            not force
+            and self._dirty_state_calls < _STATE_CHECKPOINT_CALLS
+            and (now - self._last_checkpoint_monotonic) < _STATE_CHECKPOINT_SECONDS
+        ):
+            return
+        self._persist()
+        self._dirty_state_calls = 0
+        self._last_checkpoint_monotonic = now
+
     def _persist_event_state(self) -> None:
         # Persist only noteworthy threshold events. Healthy LIGHTWEIGHT calls still
         # perform no Caretaker filesystem I/O, while rolling windows survive restart.
@@ -1148,6 +1179,8 @@ class _AdaptiveController:
     def _persist(self) -> None:
         if self._state_path is None:
             return
+        self._dirty_state_calls = 0
+        self._last_checkpoint_monotonic = time.monotonic()
         self._state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         payload = self.state.public_dict()
         payload["policy_fingerprint"] = _policy_hash(self.policy)

@@ -178,16 +178,26 @@ class BaselineManager:
                 return existing
             if len(self._windows[key]) < self.policy.minimum_windows:
                 return None
+            if existing is None and not self.policy.automatic_candidate_creation:
+                # Preserve the observations so an operator can still materialize and
+                # accept a baseline explicitly, but do not silently create a policy
+                # artifact when automatic candidate creation is disabled.
+                return None
+            accepted_at = existing.accepted_at if existing else None
+            state = BaselineState.CANDIDATE if existing is None else existing.state
+            if self.policy.automatic_acceptance and state is not BaselineState.ACCEPTED:
+                state = BaselineState.ACCEPTED
+                accepted_at = utcnow()
             baseline = BehaviorBaseline(
                 baseline_id=existing.baseline_id if existing else uuid4(),
                 subject=window.subject,
                 workload_label=self.policy.workload_label,
                 environment_fingerprint=self.policy.environment_fingerprint,
                 created_at=existing.created_at if existing else utcnow(),
-                accepted_at=existing.accepted_at if existing else None,
+                accepted_at=accepted_at,
                 observations=len(self._windows[key]),
                 profile=self._profile(self._windows[key]),
-                state=BaselineState.CANDIDATE if existing is None else existing.state,
+                state=state,
             )
             self._baselines[key] = baseline
             return baseline

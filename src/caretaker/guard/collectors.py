@@ -6,6 +6,7 @@ import os
 import random
 import sys
 import threading
+import time
 from contextvars import ContextVar
 from pathlib import Path
 from types import FrameType
@@ -66,6 +67,9 @@ class AuditEventCollector:
         self.sampling = sampling or SamplingPolicy()
         self._random = random.SystemRandom()
         self._identity_cache: dict[str, CodeIdentity] = {}
+        self._seen_resources: set[tuple[str, str, str | None]] = set()
+        self._rate_second: int | None = None
+        self._events_this_second = 0
         self._enabled = True
 
     def install(self) -> None:
@@ -95,24 +99,74 @@ class AuditEventCollector:
             _in_audit_hook.reset(token)
 
     def _handle(self, event: str, args: tuple[Any, ...]) -> None:
-        normalized = self._normalize(event, args)
-        if normalized is None:
+        # Map the event before sampling because mapping is cheap and tells us whether
+        # the event category is enabled. Expensive attribution, stack construction,
+        # value snapshots, and BehaviorEvent creation happen only after the sample
+        # and rate-limit decisions.
+        mapping = self._event_mapping(event, args)
+        if mapping is None:
             return
-        if self._random.random() > self.sampling.event_sample_rate:
+        event_kind, resource, attributes = mapping
+        resource_key = self._resource_key(resource)
+        novel = resource_key is not None and resource_key not in self._seen_resources
+
+        if not self._within_rate_limit():
             return
+
+        always_novel = self.sampling.always_capture_novel_resources and novel
+        rate = min(1.0, max(0.0, self.sampling.event_sample_rate))
+        if not always_novel and (rate <= 0.0 or self._random.random() > rate):
+            return
+
+        stack_rate = min(1.0, max(0.0, self.sampling.stack_sample_rate))
+        capture_stack = bool(
+            self.attribution.capture_stack
+            and (
+                always_novel
+                or stack_rate >= 1.0
+                or (stack_rate > 0.0 and self._random.random() <= stack_rate)
+            )
+        )
+        normalized = self._normalize_mapping(
+            event,
+            event_kind,
+            resource,
+            attributes,
+            capture_stack=capture_stack,
+        )
         try:
             self.sink(normalized)
         except Exception:
             # Audit callbacks must never recursively break the application.
             return
+        if resource_key is not None:
+            self._seen_resources.add(resource_key)
 
     def _normalize(self, event: str, args: tuple[Any, ...]) -> BehaviorEvent | None:
+        """Normalize one event directly, bypassing sampling (test/introspection API)."""
         mapping = self._event_mapping(event, args)
         if mapping is None:
             return None
         event_kind, resource, attributes = mapping
+        return self._normalize_mapping(
+            event,
+            event_kind,
+            resource,
+            attributes,
+            capture_stack=self.attribution.capture_stack,
+        )
+
+    def _normalize_mapping(
+        self,
+        event: str,
+        event_kind: BehaviorEventKind,
+        resource: ResourceIdentity | None,
+        attributes: dict[str, Any],
+        *,
+        capture_stack: bool,
+    ) -> BehaviorEvent:
         context = snapshot_context()
-        executing, initiating, stack = self._attribute()
+        executing, initiating, stack = self._attribute(capture_stack=capture_stack)
         identity = initiating or executing or self._identity_for_module("<unknown>")
         return BehaviorEvent.create(
             event_kind=event_kind,
@@ -131,6 +185,25 @@ class AuditEventCollector:
             outcome=EventOutcome.OBSERVED,
             stack_summary=stack,
         )
+
+    @staticmethod
+    def _resource_key(resource: ResourceIdentity | None) -> tuple[str, str, str | None] | None:
+        if resource is None:
+            return None
+        return (resource.kind, resource.value, resource.category)
+
+    def _within_rate_limit(self) -> bool:
+        maximum = self.sampling.maximum_events_per_second
+        if maximum <= 0:
+            return False
+        second = int(time.monotonic())
+        if second != self._rate_second:
+            self._rate_second = second
+            self._events_this_second = 0
+        if self._events_this_second >= maximum:
+            return False
+        self._events_this_second += 1
+        return True
 
     def _event_mapping(
         self,
@@ -169,13 +242,19 @@ class AuditEventCollector:
             return BehaviorEventKind.DYNAMIC_CODE, ResourceIdentity("dynamic-code", event), {}
         return None
 
-    def _attribute(self) -> tuple[CodeIdentity | None, CodeIdentity | None, tuple[FrameIdentity, ...]]:
+    def _attribute(
+        self,
+        *,
+        capture_stack: bool = True,
+    ) -> tuple[CodeIdentity | None, CodeIdentity | None, tuple[FrameIdentity, ...]]:
         frame = sys._getframe(3)
         stack: list[FrameIdentity] = []
         executing: CodeIdentity | None = None
         initiating: CodeIdentity | None = None
-        maximum = self.attribution.maximum_stack_frames if self.attribution.capture_stack else 2
-        while frame is not None and len(stack) < maximum:
+        scanned = 0
+        maximum = max(2, self.attribution.maximum_stack_frames)
+        while frame is not None and scanned < maximum:
+            scanned += 1
             module_name = frame.f_globals.get("__name__")
             if isinstance(module_name, str):
                 identity = self._identity_for_module(module_name)
@@ -183,15 +262,16 @@ class AuditEventCollector:
                     executing = identity
                 if initiating is None and not self._skip_module(module_name):
                     initiating = identity
-                stack.append(
-                    FrameIdentity(
-                        module_name=module_name,
-                        qualified_name=frame.f_code.co_qualname,
-                        filename=frame.f_code.co_filename,
-                        line_number=frame.f_lineno,
-                        distribution_name=identity.distribution_name,
+                if capture_stack:
+                    stack.append(
+                        FrameIdentity(
+                            module_name=module_name,
+                            qualified_name=frame.f_code.co_qualname,
+                            filename=frame.f_code.co_filename,
+                            line_number=frame.f_lineno,
+                            distribution_name=identity.distribution_name,
+                        )
                     )
-                )
             frame = frame.f_back
         return executing, initiating, tuple(stack)
 

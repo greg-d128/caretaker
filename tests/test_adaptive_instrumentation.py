@@ -998,3 +998,103 @@ def test_observation_and_demotion_share_acceptance_criteria_type() -> None:
 
     assert isinstance(ObservationPolicy(), AcceptanceCriteria)
     assert isinstance(InstrumentationDemotionPolicy(), AcceptanceCriteria)
+
+
+def test_behavior_instrumentation_lease_is_renewed_after_execution_budget() -> None:
+    guard = _FakeGuard()
+    policy = LightweightPolicy(
+        exception=ExceptionPromotionPolicy(enabled=False),
+        soft_timing=SoftTimingPromotionPolicy(enabled=False),
+        sampling=BehaviorSamplingPolicy(
+            lightweight_every_calls=0,
+            behavior_every_calls=1,
+            randomize_initial_offset=False,
+        ),
+        demotion=InstrumentationDemotionPolicy(enabled=False),
+        initial_level=InstrumentationLevel.BEHAVIOR,
+        behavior_executions=2,
+        persist_state=False,
+    )
+
+    @lightweight(
+        policy=policy,
+        engine=_FakeEngine(guard),
+        target_id="test.adaptive.renew-lease",
+        behavior_binding=GuardBinding(enabled=True),
+    )
+    def healthy() -> str:
+        return "ok"
+
+    for _ in range(5):
+        assert healthy() == "ok"
+
+    assert len(guard.leases) == 3
+    assert len(guard.before) == 5
+
+
+def test_promoted_acceptance_progress_is_checkpointed_not_fsynced_per_call(tmp_path, monkeypatch) -> None:
+    policy = LightweightPolicy(
+        exception=ExceptionPromotionPolicy(enabled=False),
+        soft_timing=SoftTimingPromotionPolicy(enabled=False),
+        sampling=BehaviorSamplingPolicy(
+            lightweight_every_calls=0,
+            behavior_every_calls=0,
+            randomize_initial_offset=False,
+        ),
+        initial_level=InstrumentationLevel.BEHAVIOR,
+        demotion=InstrumentationDemotionPolicy(
+            enabled=False,
+            initial_successful_executions=1_000,
+            long_term_successful_executions=2_000,
+        ),
+        persist_state=True,
+    )
+
+    @lightweight(
+        policy=policy,
+        engine=_FakeEngine(),
+        target_id="test.adaptive.checkpoint",
+        behavior_binding=GuardBinding(enabled=False),
+        state_directory=tmp_path,
+    )
+    def healthy() -> int:
+        return 1
+
+    controller = healthy.__caretaker_adaptive__
+    writes = 0
+    original_persist = controller._persist
+
+    def counted_persist():
+        nonlocal writes
+        writes += 1
+        return original_persist()
+
+    monkeypatch.setattr(controller, "_persist", counted_persist)
+    for _ in range(99):
+        assert healthy() == 1
+    assert writes == 0
+
+    assert healthy() == 1
+    assert writes == 1
+
+
+def test_exception_only_lightweight_path_does_not_read_performance_clock(monkeypatch) -> None:
+    import caretaker.adaptive as adaptive_module
+
+    @lightweight(
+        policy=LightweightPolicy(
+            exception=ExceptionPromotionPolicy(enabled=True, occurrences=2, window_seconds=60),
+            soft_timing=SoftTimingPromotionPolicy(enabled=False),
+            sampling=BehaviorSamplingPolicy(enabled=False),
+            persist_state=False,
+        ),
+        target_id="test.adaptive.no-clock",
+    )
+    def healthy(value: int) -> int:
+        return value + 1
+
+    def clock_should_not_run():
+        raise AssertionError("perf_counter is unnecessary when soft timing is disabled")
+
+    monkeypatch.setattr(adaptive_module.time, "perf_counter", clock_should_not_run)
+    assert healthy(1) == 2
