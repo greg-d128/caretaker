@@ -222,7 +222,7 @@ A runtime lease records:
 All acquisitions, releases, expirations, generation changes, and detected runtime-policy mismatches
 are written to Caretaker evidence.
 
-Temporary `repair.*` leases require an explicit target ID or glob. They cannot silently escalate
+Temporary `repair.*` and `lightweight.*` leases require an explicit target ID or glob. They cannot silently escalate
 all Repair targets. Some startup-bound settings, including `system.*` and `logging.directory`, are
 not accepted as runtime leases; make those changes in a deployment layer and restart Caretaker.
 
@@ -330,14 +330,16 @@ V1 authority paths are limited to:
 ```text
 authority.*
 repair.*
+lightweight.*
 guard.*
 logging.*
 system.*
 ```
 
-Target selectors are currently supported for `repair.*` paths; per-target Guard bindings are under
-`repair.guard.*`. Unknown top-level namespaces are rejected so a misspelled security policy cannot
-silently become a no-op.
+Target selectors are currently supported for `repair.*` and `lightweight.*` paths; per-target Guard
+bindings remain under `repair.guard.*`. This allows deployment authority to constrain adaptive
+promotion/demotion independently for individual functions or target globs. Unknown top-level
+namespaces are rejected so a misspelled security policy cannot silently become a no-op.
 
 Static layers are applied at startup. Runtime leases are intentionally narrower. Some policy fields
 represent construction-time topology and require a restart; Caretaker rejects known restart-bound

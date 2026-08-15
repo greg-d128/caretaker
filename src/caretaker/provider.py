@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .adaptive import lightweight_dependency
 import hashlib
 import json
 import urllib.error
@@ -165,6 +166,7 @@ class OllamaRepairProvider:
             ).hexdigest(),
         )
 
+    @lightweight_dependency(target_id="caretaker.dependency.ollama.repair")
     def _chat(self, prompt: str) -> dict[str, Any]:
         body = json.dumps(
             {

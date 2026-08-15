@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .adaptive import lightweight_dependency
 import ast
 import json
 import os
@@ -166,6 +167,7 @@ class SubprocessValidationBackend:
         }
         return self._run_worker(payload, timeout_seconds=timeout_seconds)
 
+    @lightweight_dependency(target_id="caretaker.dependency.subprocess.validation-worker")
     def _run_worker(self, payload: dict[str, Any], *, timeout_seconds: float) -> dict[str, Any]:
         with tempfile.TemporaryDirectory(prefix="caretaker-validation-") as temporary:
             temp = Path(temporary)

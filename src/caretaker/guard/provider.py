@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ..adaptive import lightweight_dependency
 import hashlib
 import json
 import urllib.error
@@ -93,6 +94,7 @@ class OllamaBehaviorAssessmentProvider:
             response_hash=hashlib.sha256(content.encode("utf-8")).hexdigest(),
         )
 
+    @lightweight_dependency(target_id="caretaker.dependency.ollama.guard")
     def _chat(self, prompt: str) -> dict:
         body = json.dumps(
             {

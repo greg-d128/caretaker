@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .adaptive import lightweight_dependency
 import hashlib
 import io
 import json
@@ -399,6 +400,7 @@ class OllamaBehaviorSnapshotAnalyst:
             objective=objective or "Assess the overall behavior snapshot history and identify meaningful changes or trends",
         )
 
+    @lightweight_dependency(target_id="caretaker.dependency.ollama.behavior-snapshot")
     def _assess_evidence(self, kind: str, evidence: Any, *, objective: str) -> dict[str, Any]:
         prompt = (
             "You are an advisory behavioral-change analyst for Python runtime evidence. "

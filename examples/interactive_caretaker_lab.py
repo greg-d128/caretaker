@@ -7,10 +7,12 @@ from a second terminal. The application UI drives inputs and controlled behavior
 changes; Guard/Repair inspection and operator approval live in Caretaker's own
 console.
 
-The contained ``malicious`` variants never intentionally transmit data off-host
-and operate only on synthetic lab-owned data, loopback endpoints, and a fixed
-harmless subprocess. Do not enter real secrets because argument/result evidence
-is intentionally enabled for this example.
+Most contained ``malicious`` variants operate only on synthetic lab-owned data,
+loopback endpoints, and a fixed harmless subprocess.  The dedicated behavior-change
+probe is the deliberate exception: its highest-change mode enumerates home-directory
+metadata and attempts an HTTPS request to www.google.com without transmitting local
+file contents. Do not enter real secrets because argument/result evidence is
+intentionally enabled for this example.
 """
 
 from __future__ import annotations
@@ -82,6 +84,8 @@ SYNTHETIC_SECRET = WORKSPACE / "demo-secret.txt"
 COLLECTOR_EVENTS: list[dict[str, str]] = []
 
 SEARCH_FILE_LIMIT = 2_000
+BEHAVIOR_HOME_SCAN_LIMIT = 500
+BEHAVIOR_HOME_SCAN_DEPTH = 2
 HTTP_TIMEOUT_SECONDS = 4.0
 
 
@@ -449,6 +453,75 @@ def slow_operation_malicious(delay_seconds):
     return {"slept_seconds": delay, "variant": "malicious"}
 
 
+def behavior_probe_benign():
+    # Stable, intentionally boring behavior used to establish a baseline.
+    return {
+        "mode": "benign",
+        "home_scan": False,
+        "external_network": False,
+    }
+
+
+def _bounded_home_scan() -> dict[str, int | str]:
+    """Enumerate home-directory metadata without opening arbitrary user files."""
+    home = Path.home().expanduser().resolve()
+    directory_count = 0
+    entry_count = 0
+    for root, directories, files in os.walk(home, topdown=True, followlinks=False):
+        root_path = Path(root)
+        try:
+            relative_depth = len(root_path.relative_to(home).parts)
+        except ValueError:
+            relative_depth = 0
+        directory_count += 1
+        entry_count += len(directories) + len(files)
+        if relative_depth >= BEHAVIOR_HOME_SCAN_DEPTH:
+            directories[:] = []
+        if entry_count >= BEHAVIOR_HOME_SCAN_LIMIT:
+            break
+    return {
+        "home": str(home),
+        "directories_seen": directory_count,
+        "entries_seen": min(entry_count, BEHAVIOR_HOME_SCAN_LIMIT),
+    }
+
+
+def behavior_probe_bad():
+    # Same function hash as the benign mode at the Caretaker target boundary, but
+    # runtime behavior now enumerates the user's home directory.
+    return {
+        "mode": "bad",
+        "home_scan": _bounded_home_scan(),
+        "external_network": False,
+    }
+
+
+def behavior_probe_malicious():
+    # Deliberately produces both filesystem and network novelty.  No local file
+    # contents are read or attached to the request.
+    result = {
+        "mode": "malicious",
+        "home_scan": _bounded_home_scan(),
+        "external_network": True,
+    }
+    request = urllib.request.Request(
+        "https://www.google.com/",
+        method="HEAD",
+        headers={"User-Agent": "Caretaker-Behavior-Lab/1.0"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+            result["network_result"] = {
+                "status": getattr(response, "status", None),
+                "url": response.geturl(),
+            }
+    except Exception as exc:
+        # A blocked network is still useful behavior evidence because Guard sees the
+        # attempted DNS/connect activity. Keep the lab itself usable offline.
+        result["network_result"] = {"error": type(exc).__name__}
+    return result
+
+
 VARIANTS: dict[str, dict[str, Callable[..., Any]]] = {
     "divide": {
         "benign": divide_benign,
@@ -489,6 +562,11 @@ VARIANTS: dict[str, dict[str, Callable[..., Any]]] = {
         "benign": slow_operation_benign,
         "bad": slow_operation_bad,
         "malicious": slow_operation_malicious,
+    },
+    "behavior": {
+        "benign": behavior_probe_benign,
+        "bad": behavior_probe_bad,
+        "malicious": behavior_probe_malicious,
     },
 }
 ACTIVE_VARIANTS: dict[str, str] = {name: "benign" for name in VARIANTS}
@@ -823,6 +901,19 @@ def slow_operation(delay_seconds):
     return VARIANTS["slow"][ACTIVE_VARIANTS["slow"]](delay_seconds)
 
 
+@caretaker(
+    policy=DIAGNOSE_IO_POLICY,
+    engine=ENGINE,
+    target_id="lab.behavior_probe",
+)
+@_importable_lab_target
+def behavior_probe():
+    # ACTIVE_VARIANTS is intentionally a global behavior switch. The target source
+    # itself does not change, allowing snapshots with the same code hash to reveal
+    # runtime filesystem/network novelty directly.
+    return VARIANTS["behavior"][ACTIVE_VARIANTS["behavior"]]()
+
+
 # ---------------------------------------------------------------------------
 # Textual laboratory UI
 # ---------------------------------------------------------------------------
@@ -863,6 +954,7 @@ def _default_arguments(spec: TargetSpec) -> tuple[str, ...]:
         "transform": ("Caretaker test",),
         "write": ("notes/user-note.txt", "Caretaker interactive lab note"),
         "slow": ("0.10",),
+        "behavior": (),
     }
     return values[spec.variant_key]
 
@@ -949,6 +1041,18 @@ def _build_target_specs() -> None:
                 "The target has a 0.5 second soft-timeout trigger. Try 0.10, 0.75, or "
                 "a nonnumeric value. The bad implementation adds 0.75 seconds. A soft "
                 "timeout is detected only after the function returns; it does not interrupt sleep."
+            ),
+        ),
+        TargetSpec(
+            key="9", title="Change behavior without changing code", target_id="lab.behavior_probe",
+            function=behavior_probe, variant_key="behavior",
+            parameter_labels=(),
+            hints=(
+                "Use Benign to establish a behavior baseline. Bad enumerates home-directory "
+                "metadata to a bounded depth without opening file contents. Malicious performs "
+                "the same bounded scan and attempts an HTTPS HEAD request to www.google.com. "
+                "Use Substitute behavior rather than Mutate __code__ so the target code hash "
+                "stays constant while its observed behavior changes."
             ),
         ),
     )

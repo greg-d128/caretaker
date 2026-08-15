@@ -4,6 +4,43 @@ Authority-layer constraints can further restrict or deliberately override these 
 
 `RepairPolicy` is immutable configuration. A resolved policy is persisted as canonical data, a SHA-256 fingerprint, and a human-readable description.
 
+## Lightweight adaptive instrumentation policy
+
+`LightweightPolicy` is separate from `RepairPolicy`. It controls when a low-cost
+wrapper is promoted and, independently, whether a promoted wrapper may later be
+demoted. The signed authority namespace is `lightweight.*`.
+
+Promotion policy is split by signal:
+
+- `exception.occurrences` and `exception.window_seconds`;
+- `exception.promote_to`;
+- `soft_timing.seconds`;
+- `soft_timing.occurrences` and `soft_timing.window_seconds`;
+- `soft_timing.promote_to`.
+
+Demotion is never implied by promotion. `InstrumentationDemotionPolicy.enabled` is
+the explicit switch. Its acceptance fields deliberately mirror repaired-function
+observation semantics:
+
+- `initial_successful_executions`;
+- `long_term_successful_executions`;
+- `long_term_minimum_duration_seconds`;
+- `probation_failure_budget`;
+- `long_term_maximum_failures`;
+- `long_term_failure_rate`;
+- `stepwise`.
+
+A promoted level first enters probation, then short-term acceptance, then long-term
+acceptance. Only after long-term acceptance may an enabled demotion policy step the
+target down. With `stepwise=True`, `REPAIR` demotes to `BEHAVIOR` first and must pass
+a new acceptance cycle before returning to `LIGHTWEIGHT`. Exceptions and configured
+soft-timing breaches count against acceptance; a target that remains slow cannot
+demote merely because it continues to return successfully.
+
+The lightweight policy decides *when* to promote. If promotion reaches `REPAIR`, the
+ordinary `RepairPolicy` still decides what evidence, validation, authority, retry,
+Guard, and activation behavior is permitted at that level.
+
 ## Trigger policy
 
 - `ExceptionTrigger`

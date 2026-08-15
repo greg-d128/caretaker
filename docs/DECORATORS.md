@@ -35,6 +35,78 @@ the intent:
 `RepairPolicy` remains the single policy composition used by the Repair
 execution boundary.
 
+## Lightweight adaptive decorators
+
+Use `@lightweight` when the normal execution path should pay only for threshold
+tracking until policy decides that more instrumentation is justified. Healthy
+LIGHTWEIGHT calls do not capture arguments, locals, tracebacks, Guard state, or
+Repair state.
+
+```python
+from caretaker import (
+    ExceptionPromotionPolicy,
+    InstrumentationDemotionPolicy,
+    InstrumentationLevel,
+    LightweightPolicy,
+    SoftTimingPromotionPolicy,
+    lightweight,
+)
+
+policy = LightweightPolicy(
+    exception=ExceptionPromotionPolicy(
+        occurrences=2,
+        window_seconds=3600,
+        promote_to=InstrumentationLevel.REPAIR,
+    ),
+    soft_timing=SoftTimingPromotionPolicy(
+        enabled=True,
+        seconds=0.250,
+        occurrences=5,
+        window_seconds=1800,
+        promote_to=InstrumentationLevel.BEHAVIOR,
+    ),
+    demotion=InstrumentationDemotionPolicy(
+        enabled=True,
+        initial_successful_executions=10,
+        long_term_successful_executions=100,
+        long_term_minimum_duration_seconds=3600,
+    ),
+)
+
+@lightweight(policy=policy, target_id="payments.lookup")
+def lookup(...):
+    ...
+```
+
+Instrumentation levels are ordered:
+
+1. `LIGHTWEIGHT` — rolling exception/timing threshold state only;
+2. `BEHAVIOR` — richer diagnostics plus Guard call/resource observation when a Guard engine is available;
+3. `REPAIR` — the existing full Repair wrapper is created lazily and subsequent calls use it.
+
+The call that reaches a promotion threshold completes under the old level. For
+example, with `occurrences=2`, the first two exceptions are not retroactively
+reconstructed as full incidents; the third call runs under the promoted level.
+
+Convenience forms are also available:
+
+- `@lightweight_on_exception(...)`;
+- `@lightweight_on_soft_timeout(...)`;
+- `@lightweight_dependency(...)` for Caretaker-owned dependency boundaries.
+
+`@lightweight_dependency` never permits generated self-repair. It may promote to
+behavioral diagnostics, which avoids recursive repair loops when a dependency used
+by Caretaker itself is unhealthy. Dependency observation also has a thread-local
+re-entrancy escape path: telemetry calls made while observing a dependency execute
+the inner dependency without adaptive instrumentation. Core Ollama, SQLite, and
+validation-subprocess boundaries use this decorator by default.
+
+Adaptive state is keyed by target ID and function code hash. Re-decoration with new
+code, or replacement of the live function `__code__`, starts a new adaptive
+generation rather than inheriting escalation state caused by older code. Rolling
+threshold state is persisted only on noteworthy events; healthy LIGHTWEIGHT calls do
+not perform Caretaker state-file writes.
+
 ## Repair decorator
 
 ```python

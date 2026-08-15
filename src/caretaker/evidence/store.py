@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ..adaptive import lightweight_dependency
 import dataclasses
 import json
 import sqlite3
@@ -142,6 +143,7 @@ class SQLiteEvidenceStore:
         self._lock = RLock()
         self._initialize()
 
+    @lightweight_dependency(target_id="caretaker.dependency.sqlite.evidence-store")
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=30)
         connection.row_factory = sqlite3.Row

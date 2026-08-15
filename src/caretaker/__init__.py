@@ -1,5 +1,23 @@
 """Caretaker: experimental, policy-driven self-repair for Python functions."""
 
+from .adaptive import (
+    AcceptanceState,
+    AdaptiveInstrumentationState,
+    DEFAULT_DEPENDENCY_POLICY,
+    DEFAULT_LIGHTWEIGHT_POLICY,
+    ExceptionPromotionPolicy,
+    InstrumentationDemotionPolicy,
+    InstrumentationLevel,
+    LightweightPolicy,
+    SoftTimingPromotionPolicy,
+    adaptive_states,
+    get_adaptive_state,
+    lightweight,
+    lightweight_dependency,
+    lightweight_on_exception,
+    lightweight_on_soft_timeout,
+    validate_lightweight_policy,
+)
 from .authority import (
     AuthorityKind,
     AuthorityLayerSource,
@@ -185,6 +203,22 @@ from .system import (
 )
 
 __all__ = [
+    "AcceptanceState",
+    "AdaptiveInstrumentationState",
+    "DEFAULT_DEPENDENCY_POLICY",
+    "DEFAULT_LIGHTWEIGHT_POLICY",
+    "ExceptionPromotionPolicy",
+    "InstrumentationDemotionPolicy",
+    "InstrumentationLevel",
+    "LightweightPolicy",
+    "SoftTimingPromotionPolicy",
+    "adaptive_states",
+    "get_adaptive_state",
+    "lightweight",
+    "lightweight_dependency",
+    "lightweight_on_exception",
+    "lightweight_on_soft_timeout",
+    "validate_lightweight_policy",
     "AuthorityKind",
     "AuthorityLayerSource",
     "AuthorityLayerVerification",

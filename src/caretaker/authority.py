@@ -39,7 +39,7 @@ _AUTHORITY_ORDER = {
 }
 
 
-SUPPORTED_POLICY_PREFIXES = frozenset({"authority", "repair", "guard", "logging", "system"})
+SUPPORTED_POLICY_PREFIXES = frozenset({"authority", "repair", "guard", "logging", "system", "lightweight"})
 RUNTIME_RESTART_BOUND_PREFIXES = (
     "system.",
     "logging.application_id",
@@ -591,9 +591,9 @@ class PolicyAuthoritySupervisor:
         if not settings:
             raise AuthorityPolicyError("Runtime authority lease requires at least one setting")
         for setting in settings:
-            if setting.path.startswith("repair.") and not setting.target:
+            if setting.path.startswith(("repair.", "lightweight.")) and not setting.target:
                 raise AuthorityPolicyError(
-                    "Temporary repair.* authority leases require an explicit target id or glob"
+                    "Temporary repair.* and lightweight.* authority leases require an explicit target id or glob"
                 )
             if runtime_lease_requires_restart(setting.path):
                 raise AuthorityPolicyError(
@@ -1205,10 +1205,10 @@ def _validate_policy_path(path: str, *, target: str | None = None) -> None:
             f"Unsupported authority policy prefix {prefix!r}; supported prefixes are "
             + ", ".join(sorted(SUPPORTED_POLICY_PREFIXES))
         )
-    if target is not None and prefix != "repair":
+    if target is not None and prefix not in {"repair", "lightweight"}:
         raise AuthorityPolicyError(
-            "Target-scoped authority settings are currently supported only for repair.* paths; "
-            "Guard target bindings are configured through repair.guard.*"
+            "Target-scoped authority settings are currently supported only for repair.* "
+            "and lightweight.* paths; Guard target bindings are configured through repair.guard.*"
         )
 
 
