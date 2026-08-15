@@ -16,6 +16,13 @@ from .authority import (
     PolicyAuthoritySupervisor,
     PolicySetting,
 )
+from .behavior import (
+    BehaviorSnapshotStore,
+    OllamaBehaviorSnapshotAnalyst,
+    compare_snapshots,
+    snapshot_payload,
+    wrap_snapshot,
+)
 from .logging import (
     CaretakerApplicationSupervisor,
     LogChannel,
@@ -78,6 +85,7 @@ def main(argv: list[str] | None = None) -> int:
         policy_transform=policy_transform,
     )
     policy = runtime.active_policy
+    behavior_store = BehaviorSnapshotStore(policy.directory)
     runtime.event(
         logger_name="caretaker.authority",
         severity=30 if authority.effective.overall_assurance in {"GUARANTEE_VIOLATED", "INVALID_AUTHORITY_CHAIN"} else 20,
@@ -158,6 +166,189 @@ def main(argv: list[str] | None = None) -> int:
                     },
                     "workers": [asdict(item) for item in supervisor.workers.all()] if supervisor else [],
                     "runtime": application_runtime}
+        if command == "behavior-list":
+            return {"ok": True, "snapshots": list(behavior_store.list())}
+
+        if command == "behavior-get":
+            snapshot_id = str(request.get("snapshot_id") or "").strip()
+            if not snapshot_id:
+                raise ValueError("behavior-get requires snapshot_id")
+            return {"ok": True, "envelope": behavior_store.load(snapshot_id)}
+
+        if command == "behavior-capture":
+            if not unix_socket_exists(runtime_control_socket):
+                raise RuntimeError("Application runtime is unavailable for behavior capture")
+            scope = str(request.get("scope") or "function").strip().lower()
+            subject = str(request.get("subject") or "").strip()
+            if not subject:
+                raise ValueError("behavior-capture requires subject")
+            response = control_request(
+                runtime_control_socket,
+                {
+                    "command": "behavior-capture",
+                    "scope": scope,
+                    "subject": subject,
+                    "calls": int(request.get("calls", 50)),
+                },
+            )
+            if response.get("ok") is False:
+                return response
+            deployment_layer = next(
+                (
+                    item
+                    for item in authority.effective.layers
+                    if getattr(getattr(item, "kind", None), "value", None) == "deployment"
+                ),
+                None,
+            )
+            envelope = behavior_store.create(
+                response["capture"],
+                authority_fingerprint=authority.effective.fingerprint,
+                deployment_fingerprint=(deployment_layer.fingerprint if deployment_layer else None),
+            )
+            snapshot = envelope["snapshot"]
+            runtime.event(
+                logger_name="caretaker.behavior",
+                severity=20,
+                channel=LogChannel.GUARD,
+                message="Behavior snapshot captured",
+                fields={
+                    "snapshot_id": snapshot["snapshot_id"],
+                    "scope": snapshot["scope"],
+                    "subject_key": snapshot["subject_key"],
+                    "code_hash": snapshot.get("code_hash"),
+                    "content_sha256": envelope["integrity"]["content_sha256"],
+                    "signature_state": envelope["integrity"]["signature_state"],
+                },
+            )
+            return {"ok": True, "envelope": envelope}
+
+        if command in {"behavior-compare", "behavior-previous-compare"}:
+            snapshot_a_id = str(request.get("snapshot_a_id") or request.get("snapshot_id") or "").strip()
+            if not snapshot_a_id:
+                raise ValueError(f"{command} requires snapshot_a_id/snapshot_id")
+            left = behavior_store.load(snapshot_a_id)
+            if command == "behavior-previous-compare":
+                current = left["snapshot"]
+                candidates = [
+                    item
+                    for item in behavior_store.list()
+                    if item.get("subject_key") == current.get("subject_key")
+                    and str(item.get("created_at") or "") < str(current.get("created_at") or "")
+                ]
+                if not candidates:
+                    raise KeyError("No earlier snapshot exists for this behavior subject")
+                right_id = candidates[0]["snapshot_id"]
+                right = left
+                left = behavior_store.load(right_id)
+            else:
+                snapshot_b_id = str(request.get("snapshot_b_id") or "").strip()
+                if not snapshot_b_id:
+                    raise ValueError("behavior-compare requires snapshot_b_id")
+                right = behavior_store.load(snapshot_b_id)
+            return {"ok": True, "comparison": compare_snapshots(left, right)}
+
+        if command == "behavior-live-compare":
+            snapshot_id = str(request.get("snapshot_id") or "").strip()
+            if not snapshot_id:
+                raise ValueError("behavior-live-compare requires snapshot_id")
+            if not unix_socket_exists(runtime_control_socket):
+                raise RuntimeError("Application runtime is unavailable for live behavior comparison")
+            left = behavior_store.load(snapshot_id)
+            snapshot = left["snapshot"]
+            scope = snapshot["scope"]
+            subject_data = snapshot.get("subject") or {}
+            subject = (
+                subject_data.get("module_name")
+                if scope == "module"
+                else subject_data.get("target_id")
+            )
+            if not subject:
+                raise ValueError("Stored snapshot does not identify a live comparison subject")
+            response = control_request(
+                runtime_control_socket,
+                {
+                    "command": "behavior-capture",
+                    "scope": scope,
+                    "subject": subject,
+                    "calls": int(request.get("calls", 50)),
+                },
+            )
+            if response.get("ok") is False:
+                return response
+            current = wrap_snapshot(
+                snapshot_payload(
+                    response["capture"],
+                    authority_fingerprint=authority.effective.fingerprint,
+                    deployment_fingerprint=snapshot.get("deployment_fingerprint"),
+                )
+            )
+            return {
+                "ok": True,
+                "comparison": compare_snapshots(left, current),
+                "live_snapshot": current["snapshot"],
+            }
+
+        if command == "behavior-archive":
+            snapshot_ids = request.get("snapshot_ids") or ()
+            if isinstance(snapshot_ids, str):
+                snapshot_ids = [snapshot_ids]
+            path = behavior_store.archive(snapshot_ids, remove=True)
+            runtime.event(
+                logger_name="caretaker.behavior",
+                severity=20,
+                channel=LogChannel.GUARD,
+                message="Behavior snapshots archived",
+                fields={"snapshot_ids": list(snapshot_ids), "archive_path": str(path)},
+            )
+            return {"ok": True, "archive": str(path)}
+
+        if command == "behavior-delete":
+            snapshot_id = str(request.get("snapshot_id") or "").strip()
+            if not snapshot_id:
+                raise ValueError("behavior-delete requires snapshot_id")
+            behavior_store.delete(snapshot_id)
+            runtime.event(
+                logger_name="caretaker.behavior",
+                severity=30,
+                channel=LogChannel.GUARD,
+                message="Behavior snapshot deleted",
+                fields={"snapshot_id": snapshot_id},
+            )
+            return {"ok": True, "deleted": snapshot_id}
+
+        if command == "behavior-assess-history":
+            model = str(request.get("model") or "").strip()
+            if not model:
+                raise ValueError("behavior-assess-history requires an Ollama model")
+            analyst = OllamaBehaviorSnapshotAnalyst(model)
+            return {
+                "ok": True,
+                "assessment": analyst.assess_history(
+                    behavior_store.list(),
+                    objective=str(
+                        request.get("objective")
+                        or "Assess overall behavior snapshot history and identify meaningful changes or trends"
+                    ),
+                ),
+            }
+
+        if command == "behavior-assess":
+            comparison = request.get("comparison")
+            if not isinstance(comparison, dict):
+                raise ValueError("behavior-assess requires comparison object")
+            model = str(request.get("model") or "").strip()
+            if not model:
+                raise ValueError("behavior-assess requires an Ollama model")
+            analyst = OllamaBehaviorSnapshotAnalyst(model)
+            return {
+                "ok": True,
+                "assessment": analyst.assess(
+                    comparison,
+                    objective=str(request.get("objective") or "Assess behavior changes"),
+                ),
+            }
+
         if isinstance(command, str) and command.startswith("runtime-"):
             forwarded = dict(request)
             forwarded["command"] = command.removeprefix("runtime-")

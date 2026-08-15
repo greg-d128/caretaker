@@ -195,6 +195,44 @@ class CaretakerConsoleApp(App):
         margin-left: 1;
     }
 
+    #behavior-toolbar, #behavior-compare-actions, #behavior-manage-actions {
+        height: 4;
+        padding: 0 1;
+        align-vertical: middle;
+    }
+    #behavior-subject { width: 1fr; min-width: 24; }
+    #behavior-model { width: 1fr; min-width: 18; }
+    #behavior-toolbar Button, #behavior-compare-actions Button, #behavior-manage-actions Button {
+        width: auto;
+        min-width: 12;
+        margin-left: 1;
+    }
+    #behavior-split {
+        height: 1fr;
+        min-height: 0;
+        grid-size: 2 1;
+        grid-columns: 3fr 2fr;
+        grid-rows: 1fr;
+        grid-gutter: 1;
+    }
+    .behavior-pane {
+        height: 1fr;
+        min-height: 0;
+        border: solid $surface-lighten-2;
+        overflow: hidden hidden;
+    }
+    .behavior-pane-title {
+        height: 3;
+        padding: 1 2;
+        text-style: bold;
+        border-bottom: solid $surface-lighten-2;
+    }
+    #behavior-table, #behavior-output {
+        height: 1fr;
+        min-height: 0;
+        border: none;
+    }
+
     #policy-summary {
         height: 4;
         padding: 1 2;
@@ -267,6 +305,10 @@ class CaretakerConsoleApp(App):
         self._authority_snapshot: dict[str, Any] = {}
         self._authority_rows: list[dict[str, Any]] = []
         self._selected_authority_lease: str | None = None
+        self._behavior_records: list[dict[str, Any]] = []
+        self._selected_behavior_snapshot: str | None = None
+        self._behavior_compare_anchor: str | None = None
+        self._behavior_last_comparison: dict[str, Any] | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -298,6 +340,37 @@ class CaretakerConsoleApp(App):
                     yield Button("Accept baseline", id="guard-baseline")
                     yield Button("LLM assist", id="guard-assess")
                 yield RichLog(id="guard-output", wrap=True, markup=True)
+            with TabPane("Behavior", id="behavior"):
+                with Horizontal(id="behavior-toolbar"):
+                    yield Input(
+                        placeholder="Target id for function capture, or module name for module capture",
+                        id="behavior-subject",
+                    )
+                    yield Button("Capture function", id="behavior-capture-function", variant="primary")
+                    yield Button("Capture module", id="behavior-capture-module", variant="primary")
+                    yield Button("Refresh", id="behavior-refresh")
+                with Grid(id="behavior-split"):
+                    with Vertical(classes="behavior-pane"):
+                        yield Static("Behavior snapshots", classes="behavior-pane-title")
+                        table = DataTable(id="behavior-table")
+                        table.cursor_type = "row"
+                        table.add_columns("#", "Created", "Scope", "Subject", "Hash", "Calls", "Events", "Signature")
+                        yield table
+                    with Vertical(classes="behavior-pane"):
+                        yield Static("Selected snapshot / comparison", id="behavior-detail-title", classes="behavior-pane-title")
+                        yield RichLog(id="behavior-output", wrap=True, markup=True)
+                with Horizontal(id="behavior-compare-actions"):
+                    yield Input(placeholder="Ollama model for advisory analysis", id="behavior-model")
+                    yield Button("Compare live", id="behavior-compare-live")
+                    yield Button("Compare previous", id="behavior-compare-previous")
+                    yield Button("Set A", id="behavior-set-a")
+                    yield Button("Compare to A", id="behavior-compare-a")
+                    yield Button("LLM compare", id="behavior-assess-comparison")
+                with Horizontal(id="behavior-manage-actions"):
+                    yield Button("LLM history", id="behavior-assess-history")
+                    yield Button("Archive", id="behavior-archive", variant="warning")
+                    yield Button("Delete", id="behavior-delete", variant="error")
+
             with TabPane("Repair", id="repair"):
                 with Horizontal(id="repair-toolbar"):
                     yield Button("Refresh repair", id="repair-refresh")
@@ -418,7 +491,14 @@ class CaretakerConsoleApp(App):
         if self.socket_path is None:
             raise ConnectionError("Caretaker supervisor is not running")
         request = {"command": command, **payload}
-        response = await asyncio.to_thread(control_request, self.socket_path, request)
+        timeout = 360.0 if command in {
+            "investigate",
+            "behavior-assess",
+            "behavior-assess-history",
+        } else 5.0
+        response = await asyncio.to_thread(
+            control_request, self.socket_path, request, timeout=timeout
+        )
         if response.get("ok") is False:
             raise ControlRequestError(
                 response.get("error", "Caretaker control request failed")
@@ -763,6 +843,37 @@ class CaretakerConsoleApp(App):
             self._write_json("#logs-output", record)
             return
 
+        if event.data_table.id == "behavior-table":
+            row = event.data_table.get_row(event.row_key)
+            if not row:
+                return
+            try:
+                record_number = int(row[0])
+                record = self._behavior_records[record_number - 1]
+            except (TypeError, ValueError, IndexError):
+                return
+            snapshot_id = str(record.get("snapshot_id") or "")
+            if not snapshot_id:
+                return
+            self._selected_behavior_snapshot = snapshot_id
+            subject = record.get("subject") or {}
+            subject_value = (
+                subject.get("module_name")
+                if record.get("scope") == "module"
+                else subject.get("target_id")
+            )
+            if subject_value:
+                self.query_one("#behavior-subject", Input).value = str(subject_value)
+            try:
+                response = await self._request("behavior-get", snapshot_id=snapshot_id)
+                self._show_behavior_snapshot(response.get("envelope") or {})
+            except Exception as exc:
+                self._write_json(
+                    "#behavior-output",
+                    {"error": f"{type(exc).__name__}: {exc}", "snapshot_id": snapshot_id},
+                )
+            return
+
         if event.data_table.id == "repair-table":
             row = event.data_table.get_row(event.row_key)
             if not row:
@@ -845,6 +956,175 @@ class CaretakerConsoleApp(App):
                 {"error": f"{type(exc).__name__}: {exc}", "target": target_id},
             )
 
+    @staticmethod
+    def _behavior_short_hash(value: Any) -> str:
+        text = str(value or "-")
+        return text[:12] if text != "-" else text
+
+    async def refresh_behavior(self) -> None:
+        table = self.query_one("#behavior-table", DataTable)
+        response = await self._request("behavior-list")
+        self._behavior_records = [
+            dict(item) for item in response.get("snapshots", ()) if isinstance(item, dict)
+        ]
+        table.clear()
+        for index, record in enumerate(self._behavior_records, start=1):
+            profile = record.get("profile") or {}
+            subject = record.get("subject") or {}
+            label = (
+                subject.get("module_name")
+                if record.get("scope") == "module"
+                else subject.get("target_id") or record.get("subject_key")
+            )
+            created = str(record.get("created_at") or "-")
+            if "T" in created:
+                created = created.replace("T", " ").replace("+00:00", "Z")[:19]
+            signature = (record.get("integrity") or {}).get("signature_state") or "-"
+            if record.get("verified") is False:
+                signature = "INVALID"
+            table.add_row(
+                str(index),
+                created,
+                str(record.get("scope") or "-"),
+                str(label or "-"),
+                self._behavior_short_hash(record.get("code_hash")),
+                str(profile.get("call_count", 0)),
+                str(profile.get("event_count", 0)),
+                str(signature),
+            )
+        if not self._behavior_records:
+            self.query_one("#behavior-detail-title", Static).update("Behavior snapshots")
+            output = self.query_one("#behavior-output", RichLog)
+            output.clear()
+            output.write(
+                "No behavior snapshots have been captured. Capture a function target or module to begin a code-hash-scoped behavior history."
+            )
+
+    @staticmethod
+    def _behavior_bar(value: float, maximum: float, *, width: int = 18) -> str:
+        if maximum <= 0:
+            return "·" * width
+        filled = max(0, min(width, round(width * value / maximum)))
+        return "█" * filled + "·" * (width - filled)
+
+    @staticmethod
+    def _behavior_delta(change: dict[str, Any]) -> str:
+        relative = change.get("relative")
+        absolute = change.get("absolute", 0)
+        if relative is None:
+            return f"{absolute:+} (new base)"
+        return f"{absolute:+} ({relative * 100:+.1f}%)"
+
+    def _show_behavior_snapshot(self, envelope: dict[str, Any]) -> None:
+        snapshot = envelope.get("snapshot") or {}
+        integrity = envelope.get("integrity") or {}
+        subject = snapshot.get("subject") or {}
+        profile = snapshot.get("profile") or {}
+        title = str(snapshot.get("subject_key") or snapshot.get("snapshot_id") or "Behavior snapshot")
+        self.query_one("#behavior-detail-title", Static).update(title)
+        output = self.query_one("#behavior-output", RichLog)
+        output.clear()
+        output.write(
+            f"[b]Snapshot[/b] {snapshot.get('snapshot_id', '-')}\n"
+            f"[b]Created[/b] {snapshot.get('created_at', '-')}\n"
+            f"[b]Scope[/b] {snapshot.get('scope', '-')}\n"
+            f"[b]Subject[/b] {subject.get('module_name', '-')}{':' + str(subject.get('qualified_name')) if subject.get('qualified_name') else ''}\n"
+            f"[b]Code hash[/b] {snapshot.get('code_hash_kind', '-')}: {snapshot.get('code_hash', '-')}\n"
+            f"[b]Snapshot SHA-256[/b] {integrity.get('content_sha256', '-')}\n"
+            f"[b]Signature[/b] {integrity.get('signature_state', '-')}"
+        )
+        output.write(
+            f"\n[b]Behavior[/b] calls={profile.get('call_count', 0)} events={profile.get('event_count', 0)}"
+        )
+        for kind, count in sorted((profile.get("event_kind_counts") or {}).items()):
+            output.write(f"  {kind}: {count}")
+        for key, label in (
+            ("network_destinations", "Network"),
+            ("filesystem_roots", "Filesystem"),
+            ("subprocesses", "Subprocesses"),
+            ("imports", "Imports"),
+            ("dynamic_code_operations", "Dynamic code"),
+        ):
+            values = profile.get(key) or ()
+            if values:
+                output.write(f"\n[b]{label}[/b]")
+                for value in values[:30]:
+                    output.write(f"  • {value}")
+                if len(values) > 30:
+                    output.write(f"  … {len(values) - 30} more")
+        children = snapshot.get("children") or ()
+        if children:
+            output.write("\n[b]Module behavior tree[/b]")
+            for child in children:
+                child_subject = child.get("subject") or {}
+                child_profile = child.get("profile") or {}
+                output.write(
+                    f"  ├─ {child_subject.get('target_id') or child.get('subject_key')} "
+                    f"[{self._behavior_short_hash(child.get('code_hash'))}] "
+                    f"calls={child_profile.get('call_count', 0)} events={child_profile.get('event_count', 0)}"
+                )
+
+    def _show_behavior_comparison(self, comparison: dict[str, Any]) -> None:
+        self._behavior_last_comparison = comparison
+        self.query_one("#behavior-detail-title", Static).update(
+            f"Comparison {comparison.get('snapshot_a_id', '-')} → {comparison.get('snapshot_b_id', 'live')}"
+        )
+        output = self.query_one("#behavior-output", RichLog)
+        output.clear()
+        code_changed = bool(comparison.get("code_hash_changed"))
+        output.write(
+            f"[b]Code generation[/b] {'CHANGED' if code_changed else 'same'}\n"
+            f"A {self._behavior_short_hash(comparison.get('code_hash_a'))}  →  "
+            f"B {self._behavior_short_hash(comparison.get('code_hash_b'))}"
+        )
+        if comparison.get("cross_subject"):
+            output.write("[yellow]Cross-subject comparison: interpret deltas as exploratory, not baseline drift.[/yellow]")
+        for label in ("calls", "events", "events_per_call"):
+            change = comparison.get(label) or {}
+            before = float(change.get("before") or 0)
+            after = float(change.get("after") or 0)
+            maximum = max(before, after, 1.0)
+            output.write(
+                f"\n[b]{label}[/b]  {self._behavior_delta(change)}\n"
+                f" A {self._behavior_bar(before, maximum)} {before:.2f}\n"
+                f" B {self._behavior_bar(after, maximum)} {after:.2f}"
+            )
+        kind_changes = comparison.get("event_kind_changes") or ()
+        if kind_changes:
+            output.write("\n[b]Event-kind changes[/b]")
+            for change in kind_changes:
+                before = float(change.get("before") or 0)
+                after = float(change.get("after") or 0)
+                maximum = max(before, after, 1.0)
+                output.write(
+                    f" {change.get('label')}: {self._behavior_delta(change)}\n"
+                    f"   A {self._behavior_bar(before, maximum, width=14)} {before:.0f}\n"
+                    f"   B {self._behavior_bar(after, maximum, width=14)} {after:.0f}"
+                )
+        resource_changes = comparison.get("resource_changes") or {}
+        changed_resources = False
+        for key, values in resource_changes.items():
+            added = values.get("added") or ()
+            removed = values.get("removed") or ()
+            if not added and not removed:
+                continue
+            if not changed_resources:
+                output.write("\n[b]Resource novelty[/b]")
+                changed_resources = True
+            if added:
+                output.write(f" {key}: + {', '.join(map(str, added[:12]))}")
+            if removed:
+                output.write(f" {key}: - {', '.join(map(str, removed[:12]))}")
+        tree = comparison.get("tree_changes") or ()
+        if tree:
+            output.write("\n[b]Function tree[/b]")
+            for item in tree:
+                marker = "*" if item.get("state") != "unchanged" or item.get("code_hash_changed") else " "
+                output.write(
+                    f" {marker} {item.get('subject_key')}: {item.get('state')}"
+                    + (" [code changed]" if item.get("code_hash_changed") else "")
+                )
+
     async def refresh_all(self) -> None:
         await self.refresh_authority()
         await self.refresh_status()
@@ -864,6 +1144,13 @@ class CaretakerConsoleApp(App):
         else:
             await self.refresh_targets()
             await self.refresh_repair()
+        try:
+            await self.refresh_behavior()
+        except Exception as exc:
+            self._write_json(
+                "#behavior-output",
+                {"error": f"Unable to refresh behavior snapshots: {type(exc).__name__}: {exc}"},
+            )
         await self.refresh_logs()
 
     async def action_refresh(self) -> None:
@@ -1411,6 +1698,100 @@ class CaretakerConsoleApp(App):
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button = event.button.id or ""
         try:
+            if button.startswith("behavior-"):
+                if button == "behavior-refresh":
+                    await self.refresh_behavior()
+                    return
+                if button in {"behavior-capture-function", "behavior-capture-module"}:
+                    subject = self.query_one("#behavior-subject", Input).value.strip()
+                    if not subject:
+                        raise ValueError("Enter a target id or module name first")
+                    scope = "function" if button.endswith("function") else "module"
+                    response = await self._request(
+                        "behavior-capture", scope=scope, subject=subject, calls=50
+                    )
+                    self._show_behavior_snapshot(response.get("envelope") or {})
+                    await self.refresh_behavior()
+                    return
+                snapshot_id = self._selected_behavior_snapshot
+                if button in {
+                    "behavior-compare-live",
+                    "behavior-compare-previous",
+                    "behavior-set-a",
+                    "behavior-compare-a",
+                    "behavior-archive",
+                    "behavior-delete",
+                } and not snapshot_id:
+                    raise ValueError("Select a behavior snapshot first")
+                if button == "behavior-compare-live":
+                    response = await self._request(
+                        "behavior-live-compare", snapshot_id=snapshot_id, calls=50
+                    )
+                    self._show_behavior_comparison(response.get("comparison") or {})
+                    return
+                if button == "behavior-compare-previous":
+                    response = await self._request(
+                        "behavior-previous-compare", snapshot_id=snapshot_id
+                    )
+                    self._show_behavior_comparison(response.get("comparison") or {})
+                    return
+                if button == "behavior-set-a":
+                    self._behavior_compare_anchor = snapshot_id
+                    self.query_one("#behavior-detail-title", Static).update(
+                        f"Comparison A set to {snapshot_id}"
+                    )
+                    return
+                if button == "behavior-compare-a":
+                    if not self._behavior_compare_anchor:
+                        raise ValueError("Use Set A on the first snapshot, then select the second snapshot")
+                    if self._behavior_compare_anchor == snapshot_id:
+                        raise ValueError("Select a different snapshot to compare with A")
+                    response = await self._request(
+                        "behavior-compare",
+                        snapshot_a_id=self._behavior_compare_anchor,
+                        snapshot_b_id=snapshot_id,
+                    )
+                    self._show_behavior_comparison(response.get("comparison") or {})
+                    return
+                if button == "behavior-assess-comparison":
+                    if self._behavior_last_comparison is None:
+                        raise ValueError("Run a behavior comparison before requesting an LLM opinion")
+                    model = self.query_one("#behavior-model", Input).value.strip()
+                    if not model:
+                        raise ValueError("Enter an Ollama model for the advisory opinion")
+                    response = await self._request(
+                        "behavior-assess",
+                        comparison=self._behavior_last_comparison,
+                        model=model,
+                        objective="Assess whether the observed behavior changes are significant, suspicious, or plausibly benign",
+                    )
+                    self._write_json("#behavior-output", response.get("assessment") or response)
+                    return
+                if button == "behavior-assess-history":
+                    model = self.query_one("#behavior-model", Input).value.strip()
+                    if not model:
+                        raise ValueError("Enter an Ollama model for the advisory history analysis")
+                    response = await self._request(
+                        "behavior-assess-history",
+                        model=model,
+                        objective="Assess overall behavior history and identify meaningful code-generation or runtime behavior changes",
+                    )
+                    self._write_json("#behavior-output", response.get("assessment") or response)
+                    return
+                if button == "behavior-archive":
+                    response = await self._request(
+                        "behavior-archive", snapshot_ids=[snapshot_id]
+                    )
+                    self._selected_behavior_snapshot = None
+                    self._write_json("#behavior-output", response)
+                    await self.refresh_behavior()
+                    return
+                if button == "behavior-delete":
+                    response = await self._request("behavior-delete", snapshot_id=snapshot_id)
+                    self._selected_behavior_snapshot = None
+                    self._write_json("#behavior-output", response)
+                    await self.refresh_behavior()
+                    return
             if button.startswith("guard-"):
                 target = self._target("#guard-target")
                 command_map = {
@@ -1531,7 +1912,9 @@ class CaretakerConsoleApp(App):
                 return
         except Exception as exc:
             output = "#guard-output" if button.startswith("guard-") else "#repair-output"
-            if button == "investigate-run":
+            if button.startswith("behavior-"):
+                output = "#behavior-output"
+            elif button == "investigate-run":
                 output = "#investigate-output"
             elif button.startswith("policy-"):
                 output = "#policy-output"

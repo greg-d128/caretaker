@@ -55,6 +55,15 @@ def _distribution_for_module(module_name: str) -> tuple[str | None, str | None]:
         return name, None
 
 
+def function_source_hash(function: Callable[..., Any]) -> str | None:
+    """Hash only the inspected function source, avoiding unrelated module-file edits."""
+    try:
+        source = inspect.getsource(function)
+    except (OSError, TypeError):
+        return None
+    return _sha256_bytes(source.encode("utf-8"))
+
+
 def _code_hash(function: Callable[..., Any]) -> str | None:
     code = getattr(function, "__code__", None)
     if code is None:
@@ -98,7 +107,7 @@ def identify_function(function: Callable[..., Any]) -> CodeIdentity:
     module_name = getattr(function, "__module__", "<unknown>")
     distribution_name, distribution_version = _distribution_for_module(module_name)
     source_path = inspect.getsourcefile(function)
-    source_hash = _hash_path(source_path)
+    source_hash = function_source_hash(function) or _hash_path(source_path)
     suffix = Path(source_path).suffix.lower() if source_path else ""
     return CodeIdentity(
         distribution_name=distribution_name,

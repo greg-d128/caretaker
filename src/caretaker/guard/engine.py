@@ -441,6 +441,114 @@ class GuardEngine(GuardFacade):
             dynamic_code_operations=tuple(sorted(dynamic)),
         )
 
+    def current_behavior_summary(
+        self, target_id: str, *, calls: int = 50
+    ) -> BehaviorProfileSummary | None:
+        """Return observed behavior for the target's current code generation.
+
+        Unlike ``recent_summary``, this method never substitutes an accepted Guard
+        baseline. It is intended for operator snapshots and comparisons.
+        """
+        binding = self._targets.get(target_id)
+        if binding is None:
+            return None
+        function = binding.function
+        if binding.function_resolver is not None:
+            try:
+                function = binding.function_resolver()
+            except Exception:
+                function = binding.function
+        identity = identify_function(function)
+        events = [
+            event
+            for event in self._events_by_target.get(target_id, ())
+            if event.code_identity.module_name == identity.module_name
+            and event.code_identity.qualified_name == identity.qualified_name
+            and (identity.source_hash is None or event.code_identity.source_hash == identity.source_hash)
+            and (identity.bytecode_hash is None or event.code_identity.bytecode_hash == identity.bytecode_hash)
+        ][-max(1, calls * 10):]
+        if not events:
+            return BehaviorProfileSummary(
+                subject=identity,
+                window_count=0,
+                call_count=0,
+                event_count=0,
+                event_kind_counts={},
+                network_destinations=(),
+                filesystem_roots=(),
+                subprocesses=(),
+                imports=(),
+                dynamic_code_operations=(),
+            )
+        kinds: dict[str, int] = defaultdict(int)
+        network: set[str] = set()
+        filesystem: set[str] = set()
+        subprocesses: set[str] = set()
+        imports: set[str] = set()
+        dynamic: set[str] = set()
+        call_ids = set()
+        for event in events:
+            kinds[event.event_kind.name] += 1
+            if event.call_id:
+                call_ids.add(event.call_id)
+            if event.resource:
+                if event.resource.kind == "network":
+                    network.add(event.resource.value)
+                elif event.resource.kind in {"file", "directory"}:
+                    filesystem.add(event.resource.value)
+                elif event.resource.kind == "subprocess":
+                    subprocesses.add(event.resource.value)
+                elif event.resource.kind == "import":
+                    imports.add(event.resource.value)
+                elif event.resource.kind == "dynamic-code":
+                    dynamic.add(event.resource.value)
+        return BehaviorProfileSummary(
+            subject=identity,
+            window_count=0,
+            call_count=len(call_ids),
+            event_count=len(events),
+            event_kind_counts=dict(kinds),
+            network_destinations=tuple(sorted(network)),
+            filesystem_roots=tuple(sorted(filesystem)),
+            subprocesses=tuple(sorted(subprocesses)),
+            imports=tuple(sorted(imports)),
+            dynamic_code_operations=tuple(sorted(dynamic)),
+        )
+
+    def behavior_capture(self, target_id: str, *, calls: int = 50) -> dict[str, object]:
+        summary = self.current_behavior_summary(target_id, calls=calls)
+        if summary is None:
+            raise KeyError(f"Unknown Guard target {target_id}")
+        identity = summary.subject
+        code_hash = identity.source_hash or identity.bytecode_hash
+        code_hash_kind = (
+            "function-source-sha256" if identity.source_hash else "function-bytecode-sha256"
+        )
+        return {
+            "scope": "function",
+            "subject_key": f"function:{target_id}",
+            "subject": {
+                "target_id": target_id,
+                "module_name": identity.module_name,
+                "qualified_name": identity.qualified_name,
+                "source_path": identity.source_path,
+            },
+            "code_hash": code_hash,
+            "code_hash_kind": code_hash_kind,
+            "profile": {
+                "window_count": summary.window_count,
+                "call_count": summary.call_count,
+                "event_count": summary.event_count,
+                "event_kind_counts": dict(summary.event_kind_counts),
+                "network_destinations": list(summary.network_destinations),
+                "filesystem_roots": list(summary.filesystem_roots),
+                "subprocesses": list(summary.subprocesses),
+                "imports": list(summary.imports),
+                "dynamic_code_operations": list(summary.dynamic_code_operations),
+            },
+            "children": [],
+        }
+
     def evidence_bundle(self, target_id: str, *, calls: int = 20) -> GuardEvidenceBundle | None:
         binding = self._targets.get(target_id)
         if binding is None:
