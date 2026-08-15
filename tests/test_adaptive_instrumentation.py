@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import math
 import time
+from types import ModuleType
 
 import pytest
 
@@ -19,6 +21,7 @@ from caretaker import (
     PolicySetting,
     SoftTimingPromotionPolicy,
     get_adaptive_state,
+    instrument_dependencies,
     get_authority_runtime_context,
     lightweight,
     lightweight_dependency,
@@ -32,9 +35,13 @@ class _FakeGuard:
         self.leases: list[tuple[str, object, int, str]] = []
         self.before: list[str] = []
         self.after: list[tuple[str, bool]] = []
+        self.register_periodic: list[bool] = []
 
-    def register_target(self, target_id, function, binding, function_resolver=None):
+    def register_target(
+        self, target_id, function, binding, function_resolver=None, *, periodic=True
+    ):
         self.registered.append(target_id)
+        self.register_periodic.append(periodic)
 
     def request_instrumentation(self, target_id, mode, *, execution_count, reason):
         self.leases.append((target_id, mode, execution_count, reason))
@@ -704,3 +711,141 @@ def test_threshold_call_cannot_count_as_post_promotion_problem_reproduction(tmp_
     assert state["level"] == "BEHAVIOR"
     assert state["repair_requested"] is True
     assert state["problem_reproductions"] == 0
+
+
+def test_instrument_dependencies_wraps_module_owned_functions_and_prepares_guard(tmp_path) -> None:
+    module = ModuleType("caretaker_test_dependency_module")
+    exec(
+        "def alpha(value):\n    return value + 1\n\ndef _hidden(value):\n    return value - 1\n",
+        module.__dict__,
+    )
+    module.imported_len = len
+    original_alpha = module.alpha
+    guard = _FakeGuard()
+    policy = LightweightPolicy(
+        exception=ExceptionPromotionPolicy(enabled=False),
+        soft_timing=SoftTimingPromotionPolicy(enabled=False),
+        sampling=BehaviorSamplingPolicy(
+            lightweight_every_calls=1,
+            behavior_every_calls=1,
+            randomize_initial_offset=False,
+        ),
+        demotion=InstrumentationDemotionPolicy(enabled=False),
+        persist_state=False,
+    )
+
+    instrumentation = instrument_dependencies(
+        modules=(module,),
+        policy=policy,
+        engine=_FakeEngine(guard),
+        target_prefix="test.dependency",
+        prepare_guard=True,
+    )
+
+    assert [slot.attribute_name for slot in instrumentation.slots] == ["alpha"]
+    assert module.alpha is not original_alpha
+    assert module._hidden.__name__ == "_hidden"
+    assert module.imported_len is len
+    assert guard.registered == ["test.dependency.caretaker_test_dependency_module.alpha"]
+
+    assert module.alpha(4) == 5
+    assert guard.registered == ["test.dependency.caretaker_test_dependency_module.alpha"]
+    assert guard.before == ["test.dependency.caretaker_test_dependency_module.alpha"]
+    assert len(guard.leases) == 1
+
+    assert instrumentation.restore() == 1
+    assert module.alpha is original_alpha
+    assert instrumentation.restore() == 0
+
+
+def test_instrument_dependencies_can_select_reexported_and_builtin_functions() -> None:
+    module = ModuleType("caretaker_test_explicit_dependency")
+    module.length = len
+    original_length = module.length
+    original_sqrt = math.sqrt
+    policy = LightweightPolicy(
+        exception=ExceptionPromotionPolicy(enabled=False),
+        soft_timing=SoftTimingPromotionPolicy(enabled=False),
+        sampling=BehaviorSamplingPolicy(enabled=False),
+        demotion=InstrumentationDemotionPolicy(enabled=False),
+        persist_state=False,
+    )
+
+    instrumentation = instrument_dependencies(
+        functions=((module, "length"), math.sqrt),
+        policy=policy,
+        target_prefix="test.explicit",
+        prepare_guard=False,
+    )
+    try:
+        assert module.length is not original_length
+        assert math.sqrt is not original_sqrt
+        assert module.length([1, 2, 3]) == 3
+        assert math.sqrt(9.0) == 3.0
+        assert instrumentation.target_ids == (
+            "test.explicit.caretaker_test_explicit_dependency.length",
+            "test.explicit.math.sqrt",
+        )
+    finally:
+        assert instrumentation.restore() == 2
+
+    assert module.length is original_length
+    assert math.sqrt is original_sqrt
+
+
+def test_dependency_instrumentation_skips_existing_adaptive_wrapper() -> None:
+    module = ModuleType("caretaker_test_existing_dependency")
+
+    def dependency(value):
+        return value
+
+    dependency.__module__ = module.__name__
+    module.dependency = lightweight_dependency(
+        policy=LightweightPolicy(persist_state=False),
+        target_id="test.existing.dependency",
+    )(dependency)
+
+    instrumentation = instrument_dependencies(
+        modules=(module,),
+        policy=LightweightPolicy(persist_state=False),
+        prepare_guard=False,
+    )
+
+    assert instrumentation.slots == ()
+    assert instrumentation.skipped == (
+        "caretaker_test_existing_dependency.dependency: already adaptively instrumented",
+    )
+
+
+def test_dependency_instrumentation_registers_with_real_guard_before_install() -> None:
+    from caretaker import GuardEngine, GuardPolicy, RepairEngine
+
+    module = ModuleType("caretaker_test_guard_init_dependency")
+    exec("def ping(value):\n    return value\n", module.__dict__)
+    original = module.ping
+    guard = GuardEngine(policy=GuardPolicy())
+    engine = RepairEngine(guard=guard)
+    policy = LightweightPolicy(
+        exception=ExceptionPromotionPolicy(enabled=False),
+        soft_timing=SoftTimingPromotionPolicy(enabled=False),
+        sampling=BehaviorSamplingPolicy(enabled=False),
+        demotion=InstrumentationDemotionPolicy(enabled=False),
+        persist_state=False,
+    )
+
+    instrumentation = instrument_dependencies(
+        modules=(module,),
+        policy=policy,
+        engine=engine,
+        target_prefix="test.guard-init",
+        prepare_guard=True,
+    )
+    try:
+        target_id = "test.guard-init.caretaker_test_guard_init_dependency.ping"
+        assert target_id in guard.registered_target_ids()
+        assert guard.periodic._targets == {}
+        assert module.ping("ok") == "ok"
+    finally:
+        instrumentation.restore()
+        guard.close()
+    assert module.ping is original

@@ -262,13 +262,15 @@ class GuardEngine(GuardFacade):
         function: Callable,
         binding: GuardBinding,
         function_resolver: Callable[[], Callable] | None = None,
+        *,
+        periodic: bool = True,
     ) -> None:
         identity = identify_function(function)
         with self._lock:
             self._targets[target_id] = _TargetBinding(function, binding, identity, function_resolver)
         self.store.record_code_identity(identity)
         self.inspector.inspect_function(function, kind=InspectionKind.POST_LOAD)
-        if binding.enabled:
+        if binding.enabled and periodic:
             if function_resolver is not None:
                 self.periodic.register_function_resolver(
                     f"target:{target_id}",

@@ -36,12 +36,17 @@ import urllib.request
 from uuid import uuid4
 
 from caretaker import (
+    BehaviorSamplingPolicy,
     CandidateGuardPolicy,
     CandidateProposal,
+    ExceptionPromotionPolicy,
     ExceptionTrigger,
     GuardBinding,
     GuardEngine,
     GuardPolicy,
+    InstrumentationDemotionPolicy,
+    InstrumentationLevel,
+    LightweightPolicy,
     LoggingBinding,
     ObservationPolicy,
     OllamaBehaviorAssessmentProvider,
@@ -54,10 +59,12 @@ from caretaker import (
     RepairPolicy,
     ReplaySafety,
     RetryPolicy,
+    SoftTimingPromotionPolicy,
     StatePolicy,
     TimeoutTrigger,
     ValidationPolicy,
     caretaker,
+    instrument_dependencies,
 )
 from caretaker.guard.models import GuardDeviationAction
 from caretaker.guard.policy import LLMReviewPolicy
@@ -645,6 +652,73 @@ if LAB_OLLAMA_MODEL:
 else:
     GUARD = GuardEngine(policy=GuardPolicy())
 ENGINE = RepairEngine(provider=LabRepairProvider(), guard=GUARD)
+
+# The lab intentionally instruments a small slice of its standard-library dependency
+# surface.  Module-wide wrapping is demonstrated with json; C-backed/re-exported
+# functions are selected explicitly so we do not blanket-wrap Python's entire stdlib.
+LAB_DEPENDENCY_POLICY = LightweightPolicy(
+    exception=ExceptionPromotionPolicy(
+        enabled=True,
+        occurrences=2,
+        window_seconds=3600.0,
+        promote_to=InstrumentationLevel.BEHAVIOR,
+    ),
+    soft_timing=SoftTimingPromotionPolicy(
+        enabled=True,
+        seconds=0.5,
+        occurrences=2,
+        window_seconds=300.0,
+        promote_to=InstrumentationLevel.BEHAVIOR,
+    ),
+    sampling=BehaviorSamplingPolicy(
+        lightweight_every_calls=50,
+        behavior_every_calls=1,
+        randomize_initial_offset=True,
+    ),
+    demotion=InstrumentationDemotionPolicy(
+        enabled=True,
+        initial_successful_executions=10,
+        long_term_successful_executions=50,
+        long_term_minimum_duration_seconds=60.0,
+        probation_failure_budget=0,
+        long_term_maximum_failures=1,
+        long_term_failure_rate=0.02,
+        stepwise=True,
+    ),
+    behavior_executions=100,
+    persist_state=True,
+)
+LAB_DEPENDENCY_INSTRUMENTATION = None
+
+
+def initialize_dependency_instrumentation():
+    """Install dependency slots before Guard's global hooks are activated."""
+    global LAB_DEPENDENCY_INSTRUMENTATION
+    if (
+        LAB_DEPENDENCY_INSTRUMENTATION is not None
+        and any(slot.installed for slot in LAB_DEPENDENCY_INSTRUMENTATION.slots)
+    ):
+        return LAB_DEPENDENCY_INSTRUMENTATION
+    LAB_DEPENDENCY_INSTRUMENTATION = instrument_dependencies(
+        modules=(json,),
+        functions=(
+            (os, "walk"),
+            (subprocess, "run"),
+            (urllib.request, "urlopen"),
+        ),
+        policy=LAB_DEPENDENCY_POLICY,
+        engine=ENGINE,
+        target_prefix="lab.dependency",
+        state_directory=LOCAL_LOG_DIRECTORY / "adaptive",
+        prepare_guard=True,
+    )
+    LOGGER.info(
+        "installed %d lightweight dependency slots: %s",
+        len(LAB_DEPENDENCY_INSTRUMENTATION.slots),
+        ", ".join(LAB_DEPENDENCY_INSTRUMENTATION.target_ids),
+    )
+    return LAB_DEPENDENCY_INSTRUMENTATION
+
 
 COMMON_LOGGING = LoggingBinding(
     enabled=True,
@@ -1396,6 +1470,7 @@ def main() -> None:
     runtime, owns_runtime = initialize_logging()
     logging.getLogger().setLevel(logging.INFO)
 
+    dependency_instrumentation = initialize_dependency_instrumentation()
     SERVERS = LabServers()
     SERVERS.start()
     _build_target_specs()
@@ -1407,6 +1482,7 @@ def main() -> None:
         GUARD.close()
         if SERVERS is not None:
             SERVERS.close()
+        dependency_instrumentation.restore()
         if owns_runtime:
             runtime.close()
 

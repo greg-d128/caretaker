@@ -137,6 +137,68 @@ re-entrancy escape path: telemetry calls made while observing a dependency execu
 the inner dependency without adaptive instrumentation. Core Ollama, SQLite, and
 validation-subprocess boundaries use this decorator by default.
 
+### Dependency module instrumentation
+
+`instrument_dependencies(...)` installs the same lightweight dependency boundary over
+selected imported module attributes and returns reversible slot metadata. It is
+intended to run during application initialization, after the Guard/Repair engines are
+constructed but before Guard installs global hooks or normal application work begins.
+
+```python
+import json
+import os
+import subprocess
+
+from caretaker import GuardEngine, RepairEngine, instrument_dependencies
+
+guard = GuardEngine()
+engine = RepairEngine(guard=guard)
+
+dependencies = instrument_dependencies(
+    modules=(json,),
+    functions=(
+        (os, "walk"),
+        subprocess.run,
+    ),
+    engine=engine,
+    target_prefix="myapp.dependency",
+    prepare_guard=True,
+)
+
+guard.install()
+try:
+    run_application()
+finally:
+    guard.close()
+    dependencies.restore()
+```
+
+A bare module instruments public Python/builtin functions whose `__module__` matches
+the supplied module. This avoids silently wrapping imported aliases and classes.
+Explicit entries in `functions=` can instrument re-exported or C-backed functions and
+accept a callable, `(module, attribute_name)`, or `"module:attribute"` reference.
+Already adaptive/dependency-instrumented callables are skipped rather than wrapped a
+second time.
+
+Each `LightweightDependencySlot` retains the module, attribute name, original callable,
+wrapper, adaptive controller, and stable target ID. `DependencyInstrumentation.restore()`
+restores only attributes still owned by its wrapper, so it does not overwrite a later
+application monkey patch. Dependency slots remain repair-disabled: they can escalate
+from LIGHTWEIGHT to BEHAVIOR and contribute evidence about a failing application path,
+but Caretaker does not generate replacement source for Python/third-party dependency
+functions themselves.
+
+`prepare_guard=True` pre-registers the original callable with Guard for post-load code
+identity and inspection. Dependency preparation deliberately does not add the callable
+to Guard's periodic-inspection scheduler, request a Guard research lease, or cause every
+dependency call to be observed. The lightweight/behavior sampling policy remains the
+gate for per-call Guard observation.
+
+Module patching affects future lookups such as `module.function(...)`. A callable copied
+before initialization with `from module import function` cannot be rewritten by changing
+the module attribute, which is another reason to perform dependency instrumentation as
+early as practical during program initialization.
+
 Adaptive state is keyed by target ID and function code hash. Re-decoration with new
 code, or replacement of the live function `__code__`, starts a new adaptive generation
 and resets the sampling counter rather than inheriting escalation or sampling state

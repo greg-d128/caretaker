@@ -21,6 +21,8 @@ class GuardFacade(Protocol):
         function: Callable,
         binding: GuardBinding,
         function_resolver: Callable[[], Callable] | None = None,
+        *,
+        periodic: bool = True,
     ) -> None: ...
 
     def before_call(

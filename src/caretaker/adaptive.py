@@ -11,6 +11,7 @@ and long-term acceptance criteria analogous to repaired-function acceptance.
 import functools
 import hashlib
 import inspect
+import importlib
 import json
 import os
 import re
@@ -19,11 +20,12 @@ import tempfile
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
+from types import ModuleType
 from typing import Any, TypeVar, overload
 from uuid import uuid4
 
@@ -272,6 +274,7 @@ class _AdaptiveController:
         self._timing_events: deque[float] = deque()
         self._managed_wrapper: Callable[..., Any] | None = None
         self._behavior_registered = False
+        self._behavior_lease_requested = False
         self._authority_fingerprint: str | None = None
         self.policy = self._effective_policy()
         validate_lightweight_policy(self.policy)
@@ -344,7 +347,7 @@ class _AdaptiveController:
         self.engine = get_default_engine()
         return self.engine
 
-    def _behavior_call(self, observed_level: InstrumentationLevel, *args: Any, **kwargs: Any) -> Any:
+    def _resolve_guard_binding(self) -> tuple[Any | None, Any]:
         engine = self._engine()
         guard = getattr(engine, "guard", None)
         if guard is None:
@@ -365,18 +368,56 @@ class _AdaptiveController:
                 observe_imports=True,
             )
             self.behavior_binding = binding
+        return guard, binding
+
+    def prepare_guard_registration(self) -> bool:
+        """Register the behavior target before Guard hooks are installed.
+
+        Dependency-module instrumentation is normally installed during application
+        initialization.  Pre-registering the original callable lets Guard build its
+        post-load identity and inspection state before global hooks become active,
+        while still leaving the dependency on the cheap LIGHTWEIGHT call path.
+        """
+        with self._lock:
+            guard, binding = self._resolve_guard_binding()
+            if guard is None or not binding.enabled:
+                return False
+            if not self._behavior_registered:
+                guard.register_target(
+                    self.target_id,
+                    self.function,
+                    binding,
+                    periodic=self.allow_repair_promotion,
+                )
+                self._behavior_registered = True
+            return True
+
+    def _ensure_behavior_lease(self, guard: Any, binding: Any) -> bool:
         if guard is None or not binding.enabled:
-            return self.function(*args, **kwargs)
+            return False
         if not self._behavior_registered:
-            guard.register_target(self.target_id, self.function, binding)
+            guard.register_target(
+                self.target_id,
+                self.function,
+                binding,
+                periodic=self.allow_repair_promotion,
+            )
+            self._behavior_registered = True
+        if not self._behavior_lease_requested:
             from .guard.models import GuardMode
             guard.request_instrumentation(
                 self.target_id,
                 GuardMode.RESEARCH,
                 execution_count=self.policy.behavior_executions,
-                reason=self.state.promotion_reason or "adaptive lightweight promotion",
+                reason=self.state.promotion_reason or "adaptive lightweight behavior sample",
             )
-            self._behavior_registered = True
+            self._behavior_lease_requested = True
+        return True
+
+    def _behavior_call(self, observed_level: InstrumentationLevel, *args: Any, **kwargs: Any) -> Any:
+        guard, binding = self._resolve_guard_binding()
+        if not self._ensure_behavior_lease(guard, binding):
+            return self.function(*args, **kwargs)
         call_id = uuid4()
         tokens = set_runtime_context(
             target_id=self.target_id,
@@ -729,6 +770,7 @@ class _AdaptiveController:
         self._timing_events.clear()
         self._managed_wrapper = None
         self._behavior_registered = False
+        self._behavior_lease_requested = False
         self._state_path = (
             _state_path(self.target_id, self.code_hash, self._state_directory)
             if self.policy.persist_state
@@ -1020,6 +1062,7 @@ def lightweight_dependency(
     policy: LightweightPolicy | None = None,
     target_id: str | None = None,
     engine: Any | None = None,
+    state_directory: str | Path | None = None,
 ) -> F | Callable[[F], F]:
     """Instrument a Caretaker dependency boundary without permitting self-repair.
 
@@ -1032,6 +1075,241 @@ def lightweight_dependency(
         policy=policy or DEFAULT_DEPENDENCY_POLICY,
         target_id=target_id,
         engine=engine,
+        state_directory=state_directory,
         behavior_binding=_DEPENDENCY_BINDING,
         allow_repair_promotion=False,
     )
+
+
+DependencyFunctionReference = (
+    Callable[..., Any]
+    | tuple[ModuleType | str, str]
+    | str
+)
+
+
+@dataclass(slots=True)
+class LightweightDependencySlot:
+    """A reversible module attribute replaced by a lightweight dependency wrapper."""
+
+    module: ModuleType
+    attribute_name: str
+    target_id: str
+    original: Callable[..., Any]
+    wrapper: Callable[..., Any]
+    controller: _AdaptiveController
+    active: bool = True
+
+    @property
+    def module_name(self) -> str:
+        return self.module.__name__
+
+    @property
+    def installed(self) -> bool:
+        return self.active and getattr(self.module, self.attribute_name, None) is self.wrapper
+
+    def restore(self) -> bool:
+        """Restore the original only if this slot still owns the module attribute."""
+        if not self.active:
+            return False
+        restored = False
+        if getattr(self.module, self.attribute_name, None) is self.wrapper:
+            setattr(self.module, self.attribute_name, self.original)
+            restored = True
+        self.active = False
+        return restored
+
+
+@dataclass(slots=True)
+class DependencyInstrumentation:
+    """Installed lightweight dependency slots created during application startup."""
+
+    slots: tuple[LightweightDependencySlot, ...]
+    skipped: tuple[str, ...] = ()
+
+    @property
+    def target_ids(self) -> tuple[str, ...]:
+        return tuple(slot.target_id for slot in self.slots)
+
+    def restore(self) -> int:
+        restored = 0
+        for slot in reversed(self.slots):
+            restored += int(slot.restore())
+        return restored
+
+    def __enter__(self) -> DependencyInstrumentation:
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        self.restore()
+
+
+def _resolve_dependency_module(module: ModuleType | str) -> ModuleType:
+    if isinstance(module, ModuleType):
+        return module
+    if isinstance(module, str) and module:
+        return importlib.import_module(module)
+    raise TypeError("dependency modules must be module objects or importable module names")
+
+
+def _module_function_candidates(
+    module: ModuleType,
+    *,
+    include_private: bool,
+    owned_only: bool,
+    exclude: frozenset[str],
+) -> tuple[tuple[str, Callable[..., Any]], ...]:
+    candidates: list[tuple[str, Callable[..., Any]]] = []
+    for name, value in tuple(vars(module).items()):
+        if name in exclude or (name.startswith("_") and not include_private):
+            continue
+        if not (inspect.isfunction(value) or inspect.isbuiltin(value)):
+            continue
+        if owned_only and getattr(value, "__module__", None) != module.__name__:
+            continue
+        candidates.append((name, value))
+    return tuple(candidates)
+
+
+def _resolve_dependency_function(
+    reference: DependencyFunctionReference,
+) -> tuple[ModuleType, str, Callable[..., Any]]:
+    if isinstance(reference, tuple):
+        if len(reference) != 2:
+            raise ValueError("dependency function tuples must be (module, attribute_name)")
+        module = _resolve_dependency_module(reference[0])
+        name = reference[1]
+        if not isinstance(name, str) or not name:
+            raise TypeError("dependency function attribute names must be non-empty strings")
+        function = getattr(module, name)
+        if not callable(function) or inspect.isclass(function):
+            raise TypeError(f"{module.__name__}.{name} is not an instrumentable function")
+        return module, name, function
+
+    if isinstance(reference, str):
+        if ":" not in reference:
+            raise ValueError(
+                "string dependency function references must use 'module:attribute' syntax"
+            )
+        module_name, name = reference.rsplit(":", 1)
+        return _resolve_dependency_function((module_name, name))
+
+    if not callable(reference) or inspect.isclass(reference):
+        raise TypeError("dependency functions must be callables, module/name tuples, or module:attribute strings")
+
+    module_name = getattr(reference, "__module__", None)
+    if not isinstance(module_name, str) or not module_name:
+        raise ValueError(
+            "cannot infer the defining module for this callable; pass (module, attribute_name) instead"
+        )
+    module = _resolve_dependency_module(module_name)
+    preferred_name = getattr(reference, "__name__", None)
+    if isinstance(preferred_name, str) and getattr(module, preferred_name, None) is reference:
+        return module, preferred_name, reference
+    matches = [name for name, value in vars(module).items() if value is reference]
+    if len(matches) == 1:
+        return module, matches[0], reference
+    raise ValueError(
+        f"cannot identify a unique module attribute for {reference!r}; "
+        "pass (module, attribute_name) instead"
+    )
+
+
+def instrument_dependencies(
+    modules: Iterable[ModuleType | str] = (),
+    *,
+    functions: Iterable[DependencyFunctionReference] = (),
+    policy: LightweightPolicy | None = None,
+    engine: Any | None = None,
+    target_prefix: str = "dependency",
+    state_directory: str | Path | None = None,
+    include_private: bool = False,
+    owned_only: bool = True,
+    exclude: Iterable[str] = (),
+    prepare_guard: bool = True,
+) -> DependencyInstrumentation:
+    """Install lightweight slots over dependency module functions.
+
+    Bare modules instrument their public module-owned Python/builtin functions.
+    ``functions`` can name selected dependency boundaries as callables,
+    ``(module, attribute)`` pairs, or ``"module:attribute"`` strings.  Explicitly
+    selected functions are instrumented even when their implementation originates
+    in another module (for example ``os.stat`` implemented by ``posix``).
+
+    This function is intended for application initialization: construct the Guard
+    and Repair engines, call ``instrument_dependencies(..., engine=engine)``, then
+    install Guard hooks and begin application work.  When ``prepare_guard`` is true,
+    each original callable is registered with Guard immediately without enabling
+    heavyweight per-call observation; the call-count sampler still controls when a
+    behavior sample is taken.
+    """
+    selected_policy = policy or DEFAULT_DEPENDENCY_POLICY
+    validate_lightweight_policy(selected_policy)
+    prefix = target_prefix.strip(".") or "dependency"
+    excluded = frozenset(str(name) for name in exclude)
+    candidates: list[tuple[ModuleType, str, Callable[..., Any]]] = []
+
+    for module_reference in modules:
+        module = _resolve_dependency_module(module_reference)
+        for name, function in _module_function_candidates(
+            module,
+            include_private=include_private,
+            owned_only=owned_only,
+            exclude=excluded,
+        ):
+            candidates.append((module, name, function))
+
+    for reference in functions:
+        candidates.append(_resolve_dependency_function(reference))
+
+    installed: list[LightweightDependencySlot] = []
+    skipped: list[str] = []
+    seen: set[tuple[int, str]] = set()
+    for module, name, original in candidates:
+        key = (id(module), name)
+        label = f"{module.__name__}.{name}"
+        if key in seen:
+            continue
+        seen.add(key)
+
+        current = getattr(module, name, None)
+        if current is not original:
+            skipped.append(f"{label}: module attribute changed during instrumentation")
+            continue
+        if hasattr(current, "__caretaker_dependency_slot__"):
+            skipped.append(f"{label}: already dependency-instrumented")
+            continue
+        if hasattr(current, "__caretaker_adaptive__"):
+            skipped.append(f"{label}: already adaptively instrumented")
+            continue
+
+        target_id = f"{prefix}.{module.__name__}.{name}"
+        wrapper = lightweight_dependency(
+            policy=selected_policy,
+            target_id=target_id,
+            engine=engine,
+            state_directory=state_directory,
+        )(original)
+        controller = getattr(wrapper, "__caretaker_adaptive__")
+        slot = LightweightDependencySlot(
+            module=module,
+            attribute_name=name,
+            target_id=target_id,
+            original=original,
+            wrapper=wrapper,
+            controller=controller,
+        )
+        setattr(wrapper, "__caretaker_dependency_slot__", slot)
+        setattr(module, name, wrapper)
+        installed.append(slot)
+
+        if prepare_guard:
+            # Keep Guard registration itself on a non-instrumented dependency path.
+            previous_depth = int(getattr(_DEPENDENCY_RUNTIME, "depth", 0))
+            _DEPENDENCY_RUNTIME.depth = previous_depth + 1
+            try:
+                controller.prepare_guard_registration()
+            finally:
+                _DEPENDENCY_RUNTIME.depth = previous_depth
+
+    return DependencyInstrumentation(slots=tuple(installed), skipped=tuple(skipped))

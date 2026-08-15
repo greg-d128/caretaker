@@ -1,4 +1,7 @@
 from ..adaptive import (
+    DependencyInstrumentation,
+    LightweightDependencySlot,
+    instrument_dependencies,
     lightweight,
     lightweight_dependency,
     lightweight_on_exception,
@@ -22,6 +25,9 @@ from .decorators import exception_handler, input_validator
 
 __all__ = [
     "InvalidOutputError",
+    "DependencyInstrumentation",
+    "LightweightDependencySlot",
+    "instrument_dependencies",
     "lightweight_on_soft_timeout",
     "lightweight_on_exception",
     "lightweight_dependency",
