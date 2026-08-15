@@ -882,12 +882,80 @@ class RepairEngine:
 
         selected = self.selector.select(evaluated, target.policy)
         if selected is None:
+            # A validation policy may deliberately allow an operator to decide
+            # whether to proceed when the required isolation backend is unavailable.
+            # This path never activates automatically; it preserves the candidate
+            # and the missing-isolation evidence for explicit approval.
+            approval_candidate = next(
+                (
+                    item
+                    for item in evaluated
+                    if item.report.requires_operator_approval
+                    and not item.report.hard_disqualifications
+                ),
+                None,
+            )
+            if approval_candidate is not None:
+                target.slot.abandon_repair(lease)
+                selected_attempt = next(
+                    attempt for attempt in self._attempt_records(attempt_ids)
+                    if attempt.candidate_id == approval_candidate.candidate.candidate_id
+                )
+                source = approval_candidate.candidate.artifact.files[0].content
+                pending = PendingRepairApproval(
+                    episode_id=episode.episode_id,
+                    target_id=target.target_id,
+                    candidate_id=approval_candidate.candidate.candidate_id,
+                    attempt_id=selected_attempt.attempt_id,
+                    source=source,
+                    artifact_hash=approval_candidate.candidate.artifact.artifact_hash,
+                    expected_function_version=version.number,
+                    logging_policy_generation=logging_policy_generation,
+                    authority_policy_generation=authority_policy_generation,
+                    authority_policy_fingerprint=authority_policy_fingerprint,
+                    reason=(
+                        "Required validation isolation backend is unavailable and "
+                        "validation.backend_unavailable_action requires operator approval"
+                    ),
+                )
+                self._pending_approvals[episode.episode_id] = pending
+                selected_attempt = replace(
+                    selected_attempt, completed_at=utcnow(),
+                    stage=RepairAttemptStage.COMPLETE,
+                    outcome=RepairAttemptOutcome.AWAITING_APPROVAL,
+                )
+                self.store.record_attempt(selected_attempt)
+                self._attempt_cache[selected_attempt.attempt_id] = selected_attempt
+                episode = replace(
+                    episode, completed_at=utcnow(),
+                    outcome=RepairEpisodeOutcome.AWAITING_APPROVAL,
+                    selected_candidate_id=approval_candidate.candidate.candidate_id,
+                    selected_attempt_id=selected_attempt.attempt_id,
+                    summary=(
+                        "Candidate could not be validated at the policy-required isolation "
+                        "level and is awaiting explicit operator approval. It has not been deployed."
+                    ),
+                )
+                self.store.record_episode(episode)
+                return RepairResolution(
+                    kind=ResolutionKind.AWAITING_APPROVAL,
+                    incident_id=incident.incident_id,
+                    episode_id=episode.episode_id,
+                    attempt_ids=tuple(attempt_ids),
+                    active_function_version=target.slot.load().number,
+                )
+
             target.slot.abandon_repair(lease)
+            proposal_only = any(item.report.proposal_only for item in evaluated)
             episode = replace(
                 episode,
                 completed_at=utcnow(),
                 outcome=RepairEpisodeOutcome.NO_ACCEPTABLE_CANDIDATE,
-                summary="No candidate passed validation and scoring thresholds.",
+                summary=(
+                    "Candidate retained as proposal only because the required validation isolation backend is unavailable."
+                    if proposal_only
+                    else "No candidate passed validation and scoring thresholds."
+                ),
             )
             self.store.record_episode(episode)
             return RepairResolution(

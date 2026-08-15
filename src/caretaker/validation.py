@@ -11,7 +11,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from .domain import (
     CheckOutcome,
@@ -19,6 +19,8 @@ from .domain import (
     RepairCandidate,
     ValidationCheckKind,
     ValidationCheckResult,
+    ValidationBackendUnavailableAction,
+    ValidationIsolationLevel,
     utcnow,
 )
 from .registry import RepairTarget
@@ -42,11 +44,108 @@ class ValidationReport:
     review_required_findings: tuple[str, ...] = ()
     worker_stdout: str = ""
     worker_stderr: str = ""
+    backend_name: str = "process"
+    isolation_level: ValidationIsolationLevel = ValidationIsolationLevel.PROCESS
+    backend_available: bool = True
+    requires_operator_approval: bool = False
+    proposal_only: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationBackendCapabilities:
+    name: str
+    isolation_level: ValidationIsolationLevel
+    separate_kernel: bool = False
+    rootless: bool | None = None
+    network_control: bool = False
+    resource_control: bool = False
+    ephemeral_workspace: bool = True
+    details: dict[str, Any] | None = None
+
+
+class ValidationBackend(Protocol):
+    def capabilities(self) -> ValidationBackendCapabilities: ...
+    def available(self) -> tuple[bool, str | None]: ...
+    def validate_candidate(
+        self, candidate: RepairCandidate, target: RepairTarget, *, timeout_seconds: float,
+        regression_cases: tuple[Any, ...] = (),
+    ) -> ValidationReport: ...
 
 
 class SubprocessValidationBackend:
     def __init__(self, python_executable: str | None = None) -> None:
         self.python_executable = python_executable or sys.executable
+
+    def capabilities(self) -> ValidationBackendCapabilities:
+        return ValidationBackendCapabilities(
+            name="process",
+            isolation_level=ValidationIsolationLevel.PROCESS,
+            separate_kernel=False,
+            rootless=None,
+            network_control=False,
+            resource_control=True,
+            ephemeral_workspace=True,
+            details={"python_executable": self.python_executable},
+        )
+
+    def available(self) -> tuple[bool, str | None]:
+        return True, None
+
+    def _backend_unavailable_report(
+        self,
+        candidate: RepairCandidate,
+        target: RepairTarget,
+        *,
+        reason: str,
+        assessment: StaticAssessment,
+    ) -> ValidationReport:
+        capabilities = self.capabilities()
+        required = target.policy.validation.minimum_isolation
+        action = target.policy.validation.backend_unavailable_action
+        now = utcnow()
+        summary = (
+            f"Validation backend {capabilities.name!r} cannot satisfy required isolation "
+            f"{required.name}: {reason}"
+        )
+        check = ValidationCheckResult(
+            kind=ValidationCheckKind.STATIC_POLICY,
+            outcome=CheckOutcome.FAILED,
+            started_at=now,
+            finished_at=now,
+            summary=summary,
+            details={
+                "backend": capabilities.name,
+                "backend_isolation": capabilities.isolation_level.name,
+                "required_isolation": required.name,
+                "unavailable_action": action.name,
+            },
+        )
+        hard = list(assessment.hard_disqualifications)
+        review = list(assessment.review_required_findings)
+        requires_approval = False
+        proposal_only = False
+        if action is ValidationBackendUnavailableAction.FAIL_REPAIR:
+            hard.append(summary)
+        elif action is ValidationBackendUnavailableAction.PROPOSE_ONLY:
+            proposal_only = True
+            review.append(summary + "; candidate retained as proposal only")
+        elif action is ValidationBackendUnavailableAction.REQUIRE_OPERATOR_APPROVAL:
+            requires_approval = not hard
+            review.append(summary + "; explicit operator approval is required to proceed without this backend")
+        return ValidationReport(
+            candidate_id=candidate.candidate_id,
+            eligible=False,
+            checks=(check,),
+            measurements={},
+            risk_findings=assessment.risk_findings + (summary,),
+            hard_disqualifications=tuple(dict.fromkeys(hard)),
+            review_required_findings=tuple(dict.fromkeys(review)),
+            backend_name=capabilities.name,
+            isolation_level=capabilities.isolation_level,
+            backend_available=False,
+            requires_operator_approval=requires_approval,
+            proposal_only=proposal_only,
+        )
 
     def validate_candidate(
         self,
@@ -72,10 +171,28 @@ class SubprocessValidationBackend:
                 measurements={},
                 risk_findings=(),
                 hard_disqualifications=(check.summary,),
+                backend_name=self.capabilities().name,
+                isolation_level=self.capabilities().isolation_level,
             )
 
         source = candidate.artifact.files[0].content
         assessment = assess_candidate_source(source)
+        capabilities = self.capabilities()
+        available, unavailable_reason = self.available()
+        if not available:
+            return self._backend_unavailable_report(
+                candidate, target, reason=unavailable_reason or "backend is unavailable", assessment=assessment
+            )
+        if capabilities.isolation_level < target.policy.validation.minimum_isolation:
+            return self._backend_unavailable_report(
+                candidate,
+                target,
+                reason=(
+                    f"backend provides {capabilities.isolation_level.name}, "
+                    f"policy requires at least {target.policy.validation.minimum_isolation.name}"
+                ),
+                assessment=assessment,
+            )
         registered_cases = (
             target.registered_cases + tuple(regression_cases)
             if target.policy.validation.run_registered_tests
@@ -145,6 +262,9 @@ class SubprocessValidationBackend:
             review_required_findings=review,
             worker_stdout=result.get("worker_stdout", ""),
             worker_stderr=result.get("worker_stderr", ""),
+            backend_name=capabilities.name,
+            isolation_level=capabilities.isolation_level,
+            backend_available=True,
         )
 
     def validate_auxiliary(
@@ -260,6 +380,10 @@ class SubprocessValidationBackend:
                     f"validation worker exited with status {completed.returncode}"
                 )
             return result
+
+
+# Explicit name for new code; keep SubprocessValidationBackend for compatibility.
+ProcessValidationBackend = SubprocessValidationBackend
 
 
 _DANGEROUS_CALLS = {

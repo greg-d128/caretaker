@@ -23,6 +23,8 @@ from .domain import (
     SnapshotStrategy,
     ValidatorErrorBehavior,
     TimeoutMode,
+    ValidationBackendUnavailableAction,
+    ValidationIsolationLevel,
 )
 
 
@@ -114,6 +116,10 @@ class ValidationPolicy:
     replay_failed_call: bool = False
     run_generated_tests: bool = False
     isolate_validation: bool = True
+    minimum_isolation: ValidationIsolationLevel = ValidationIsolationLevel.PROCESS
+    backend_unavailable_action: ValidationBackendUnavailableAction = (
+        ValidationBackendUnavailableAction.FAIL_REPAIR
+    )
     validation_timeout_seconds: float = 30.0
     allow_imports: bool = False
     allow_network: bool = False
@@ -490,6 +496,8 @@ def _human_readable(policy: RepairPolicy) -> str:
             "Validation:",
             f"  profile: {policy.validation.profile_id}",
             f"  isolated: {policy.validation.isolate_validation}",
+            f"  minimum isolation: {policy.validation.minimum_isolation.name}",
+            f"  backend unavailable: {policy.validation.backend_unavailable_action.name}",
             f"  registered tests: {policy.validation.run_registered_tests}",
             f"  generated tests: {policy.validation.run_generated_tests}",
             "Selection:",

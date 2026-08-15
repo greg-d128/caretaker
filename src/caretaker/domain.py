@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import Enum, auto
+from enum import Enum, IntEnum, auto
 from pathlib import Path
 from typing import Any, Mapping
 from uuid import UUID, uuid4
@@ -21,6 +21,19 @@ class RepairMode(Enum):
 class ValidatorErrorBehavior(Enum):
     FAIL_CLOSED = auto()
     FAIL_OPEN = auto()
+
+
+class ValidationIsolationLevel(IntEnum):
+    PROCESS = 1
+    CONTAINER = 2
+    VM = 3
+    EXTERNAL = 4
+
+
+class ValidationBackendUnavailableAction(Enum):
+    FAIL_REPAIR = auto()
+    PROPOSE_ONLY = auto()
+    REQUIRE_OPERATOR_APPROVAL = auto()
 
 
 class TimeoutMode(Enum):
