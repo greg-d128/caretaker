@@ -338,7 +338,8 @@ system.*
 
 Target selectors are currently supported for `repair.*` and `lightweight.*` paths; per-target Guard
 bindings remain under `repair.guard.*`. This allows deployment authority to constrain adaptive
-promotion/demotion independently for individual functions or target globs. Unknown top-level
+promotion/demotion, call-count sampling (`lightweight.sampling.*`), and repair-evidence
+gates (`lightweight.repair_evidence.*`) independently for individual functions or target globs. Unknown top-level
 namespaces are rejected so a misspelled security policy cannot silently become a no-op.
 
 Static layers are applied at startup. Runtime leases are intentionally narrower. Some policy fields

@@ -8,11 +8,13 @@ import pytest
 from caretaker import (
     AcceptanceState,
     AuthorityKind,
+    BehaviorSamplingPolicy,
     ExceptionPromotionPolicy,
     InstrumentationDemotionPolicy,
     InstrumentationLevel,
     LightweightPolicy,
     PolicyAuthorityLayer,
+    RepairEvidencePolicy,
     PolicyAuthoritySupervisor,
     PolicySetting,
     SoftTimingPromotionPolicy,
@@ -78,9 +80,10 @@ def _restore_authority_context():
     context.update_from_snapshot(previous)
 
 
-def test_exception_threshold_promotes_lazily_to_full_repair(monkeypatch, tmp_path) -> None:
+def test_exception_repair_request_observes_behavior_before_full_repair(monkeypatch, tmp_path) -> None:
     original_calls = 0
     managed_calls = 0
+    guard = _FakeGuard()
 
     def fragile() -> str:
         nonlocal original_calls
@@ -93,10 +96,23 @@ def test_exception_threshold_promotes_lazily_to_full_repair(monkeypatch, tmp_pat
             window_seconds=3600,
             promote_to=InstrumentationLevel.REPAIR,
         ),
+        sampling=BehaviorSamplingPolicy(
+            lightweight_every_calls=0,
+            behavior_every_calls=1,
+            randomize_initial_offset=False,
+        ),
+        repair_evidence=RepairEvidencePolicy(
+            minimum_behavior_samples=1,
+            minimum_observation_calls=1,
+            minimum_duration_seconds=0,
+            require_problem_reproduction=True,
+        ),
         demotion=InstrumentationDemotionPolicy(enabled=False),
     )
     wrapped = lightweight(
         policy=policy,
+        engine=_FakeEngine(guard),
+        behavior_binding=GuardBinding(enabled=True, observe_filesystem=True),
         target_id="test.adaptive.exception",
         state_directory=tmp_path,
     )(fragile)
@@ -108,8 +124,18 @@ def test_exception_threshold_promotes_lazily_to_full_repair(monkeypatch, tmp_pat
     with pytest.raises(ValueError):
         wrapped()
     promoted = get_adaptive_state("test.adaptive.exception")
-    assert promoted["level"] == "REPAIR"
+    assert promoted["level"] == "BEHAVIOR"
+    assert promoted["repair_requested"] is True
+    assert promoted["repair_evidence_samples"] == 0
     assert promoted["recent_diagnostics"] == []
+
+    with pytest.raises(ValueError):
+        wrapped()
+    evidence_state = get_adaptive_state("test.adaptive.exception")
+    assert evidence_state["level"] == "REPAIR"
+    assert evidence_state["repair_evidence_samples"] == 1
+    assert evidence_state["problem_reproductions"] >= 1
+    assert guard.before == ["test.adaptive.exception"]
 
     def fake_repair(*, policy, engine, target_id):
         def decorate(function):
@@ -124,7 +150,7 @@ def test_exception_threshold_promotes_lazily_to_full_repair(monkeypatch, tmp_pat
 
     monkeypatch.setattr(decorator_api, "repair", fake_repair)
     assert wrapped() == "managed-result"
-    assert original_calls == 2
+    assert original_calls == 3
     assert managed_calls == 1
 
 
@@ -139,6 +165,11 @@ def test_soft_timing_promotes_to_behavior_and_guard_begins_on_next_call(tmp_path
             occurrences=2,
             window_seconds=60,
             promote_to=InstrumentationLevel.BEHAVIOR,
+        ),
+        sampling=BehaviorSamplingPolicy(
+            lightweight_every_calls=0,
+            behavior_every_calls=1,
+            randomize_initial_offset=False,
         ),
     )
 
@@ -255,7 +286,8 @@ def test_code_hash_change_starts_a_new_adaptive_generation(tmp_path) -> None:
     with pytest.raises(RuntimeError):
         first()
     first_state = dict(get_adaptive_state("test.adaptive.generation"))
-    assert first_state["level"] == "REPAIR"
+    assert first_state["level"] == "BEHAVIOR"
+    assert first_state["repair_requested"] is True
 
     def second_version() -> str:
         return "v2"
@@ -375,7 +407,8 @@ def test_runtime_code_object_change_starts_new_generation(tmp_path) -> None:
     with pytest.raises(RuntimeError):
         wrapped()
     old_state = dict(get_adaptive_state("test.adaptive.runtime-code-change"))
-    assert old_state["level"] == "REPAIR"
+    assert old_state["level"] == "BEHAVIOR"
+    assert old_state["repair_requested"] is True
 
     target.__code__ = replacement.__code__
     assert wrapped() == "new implementation"
@@ -400,6 +433,11 @@ def test_dependency_behavior_instrumentation_has_reentrant_escape_path() -> None
     policy = LightweightPolicy(
         exception=ExceptionPromotionPolicy(enabled=False),
         soft_timing=SoftTimingPromotionPolicy(enabled=False),
+        sampling=BehaviorSamplingPolicy(
+            lightweight_every_calls=0,
+            behavior_every_calls=1,
+            randomize_initial_offset=False,
+        ),
         demotion=InstrumentationDemotionPolicy(enabled=False),
         initial_level=InstrumentationLevel.BEHAVIOR,
         persist_state=False,
@@ -439,3 +477,230 @@ def test_core_dependency_boundaries_use_lightweight_instrumentation() -> None:
         SubprocessValidationBackend._run_worker,
     )
     assert all(hasattr(item, "__caretaker_adaptive__") for item in boundaries)
+
+
+def test_call_count_sampling_collects_periodic_behavior_without_promotion(tmp_path) -> None:
+    guard = _FakeGuard()
+    policy = LightweightPolicy(
+        exception=ExceptionPromotionPolicy(enabled=False),
+        soft_timing=SoftTimingPromotionPolicy(enabled=False),
+        sampling=BehaviorSamplingPolicy(
+            lightweight_every_calls=3,
+            behavior_every_calls=1,
+            randomize_initial_offset=False,
+        ),
+        demotion=InstrumentationDemotionPolicy(enabled=False),
+    )
+
+    @lightweight(
+        policy=policy,
+        engine=_FakeEngine(guard),
+        target_id="test.adaptive.periodic-sampling",
+        behavior_binding=GuardBinding(enabled=True, observe_filesystem=True),
+        state_directory=tmp_path,
+    )
+    def healthy(value: int) -> int:
+        return value + 1
+
+    assert healthy(1) == 2
+    assert healthy(2) == 3
+    state = get_adaptive_state("test.adaptive.periodic-sampling")
+    assert state["sampling_call_counter"] == 2
+    assert state["behavior_samples"] == 0
+    assert guard.before == []
+
+    assert healthy(3) == 4
+    state = get_adaptive_state("test.adaptive.periodic-sampling")
+    assert state["level"] == "LIGHTWEIGHT"
+    assert state["sampling_call_counter"] == 0
+    assert state["behavior_samples"] == 1
+    assert guard.before == ["test.adaptive.periodic-sampling"]
+
+    healthy(4)
+    healthy(5)
+    healthy(6)
+    state = get_adaptive_state("test.adaptive.periodic-sampling")
+    assert state["behavior_samples"] == 2
+    assert guard.before == [
+        "test.adaptive.periodic-sampling",
+        "test.adaptive.periodic-sampling",
+    ]
+
+
+def test_soft_timing_can_request_repair_but_must_gather_behavior_first(tmp_path) -> None:
+    guard = _FakeGuard()
+    policy = LightweightPolicy(
+        exception=ExceptionPromotionPolicy(enabled=False),
+        soft_timing=SoftTimingPromotionPolicy(
+            enabled=True,
+            seconds=0.001,
+            occurrences=1,
+            window_seconds=60,
+            promote_to=InstrumentationLevel.REPAIR,
+        ),
+        sampling=BehaviorSamplingPolicy(
+            lightweight_every_calls=0,
+            behavior_every_calls=1,
+            randomize_initial_offset=False,
+        ),
+        repair_evidence=RepairEvidencePolicy(
+            minimum_behavior_samples=1,
+            minimum_observation_calls=1,
+            minimum_duration_seconds=0,
+            require_problem_reproduction=True,
+        ),
+        demotion=InstrumentationDemotionPolicy(enabled=False),
+    )
+
+    @lightweight(
+        policy=policy,
+        engine=_FakeEngine(guard),
+        target_id="test.adaptive.soft-timing-repair",
+        behavior_binding=GuardBinding(enabled=True, observe_filesystem=True),
+        state_directory=tmp_path,
+    )
+    def slow() -> str:
+        time.sleep(0.003)
+        return "ok"
+
+    assert slow() == "ok"
+    state = get_adaptive_state("test.adaptive.soft-timing-repair")
+    assert state["level"] == "BEHAVIOR"
+    assert state["repair_requested"] is True
+    assert state["repair_evidence_samples"] == 0
+
+    assert slow() == "ok"
+    state = get_adaptive_state("test.adaptive.soft-timing-repair")
+    assert state["level"] == "REPAIR"
+    assert state["repair_evidence_samples"] == 1
+    assert state["problem_reproductions"] >= 1
+
+
+def test_sampling_counter_resets_for_new_code_generation(tmp_path) -> None:
+    guard = _FakeGuard()
+    policy = LightweightPolicy(
+        exception=ExceptionPromotionPolicy(enabled=False),
+        soft_timing=SoftTimingPromotionPolicy(enabled=False),
+        sampling=BehaviorSamplingPolicy(
+            lightweight_every_calls=3,
+            behavior_every_calls=1,
+            randomize_initial_offset=False,
+        ),
+        demotion=InstrumentationDemotionPolicy(enabled=False),
+    )
+
+    def target() -> str:
+        return "old"
+
+    def replacement() -> str:
+        return "new"
+
+    wrapped = lightweight(
+        policy=policy,
+        engine=_FakeEngine(guard),
+        target_id="test.adaptive.sample-generation",
+        behavior_binding=GuardBinding(enabled=True),
+        state_directory=tmp_path,
+    )(target)
+
+    assert wrapped() == "old"
+    assert wrapped() == "old"
+    assert get_adaptive_state("test.adaptive.sample-generation")["sampling_call_counter"] == 2
+
+    target.__code__ = replacement.__code__
+    assert wrapped() == "new"
+    state = get_adaptive_state("test.adaptive.sample-generation")
+    assert state["sampling_call_counter"] == 1
+    assert state["behavior_samples"] == 0
+    assert guard.before == []
+
+
+def test_deployment_authority_can_control_sampling_and_repair_evidence(tmp_path) -> None:
+    deployment = PolicyAuthorityLayer(
+        schema_version=1,
+        authority_id="test-sampling-deployment",
+        kind=AuthorityKind.DEPLOYMENT,
+        generation=1,
+        created_at=datetime.now(timezone.utc).isoformat(),
+        settings=(
+            PolicySetting("lightweight.sampling.lightweight_every_calls", 2, target="test.sampling.*"),
+            PolicySetting("lightweight.sampling.randomize_initial_offset", False, target="test.sampling.*"),
+            PolicySetting("lightweight.repair_evidence.minimum_behavior_samples", 3, target="test.sampling.*"),
+        ),
+    )
+    supervisor = PolicyAuthoritySupervisor((deployment,))
+    get_authority_runtime_context().update_from_snapshot(supervisor.effective.snapshot_dict())
+    guard = _FakeGuard()
+
+    @lightweight(
+        policy=LightweightPolicy(
+            exception=ExceptionPromotionPolicy(enabled=False),
+            soft_timing=SoftTimingPromotionPolicy(enabled=False),
+            sampling=BehaviorSamplingPolicy(
+                lightweight_every_calls=10_000,
+                behavior_every_calls=10,
+                randomize_initial_offset=True,
+            ),
+            repair_evidence=RepairEvidencePolicy(minimum_behavior_samples=20),
+            demotion=InstrumentationDemotionPolicy(enabled=False),
+        ),
+        engine=_FakeEngine(guard),
+        target_id="test.sampling.target",
+        behavior_binding=GuardBinding(enabled=True),
+        state_directory=tmp_path,
+    )
+    def healthy() -> str:
+        return "ok"
+
+    assert healthy() == "ok"
+    assert guard.before == []
+    assert healthy() == "ok"
+    assert guard.before == ["test.sampling.target"]
+    controller = healthy.__caretaker_adaptive__
+    assert controller.policy.repair_evidence.minimum_behavior_samples == 3
+
+
+def test_threshold_call_cannot_count_as_post_promotion_problem_reproduction(tmp_path) -> None:
+    policy = LightweightPolicy(
+        exception=ExceptionPromotionPolicy(
+            occurrences=1,
+            window_seconds=60,
+            promote_to=InstrumentationLevel.REPAIR,
+        ),
+        soft_timing=SoftTimingPromotionPolicy(
+            enabled=True,
+            seconds=0.001,
+            occurrences=1,
+            window_seconds=60,
+            promote_to=InstrumentationLevel.REPAIR,
+        ),
+        sampling=BehaviorSamplingPolicy(
+            lightweight_every_calls=0,
+            behavior_every_calls=1,
+            randomize_initial_offset=False,
+        ),
+        repair_evidence=RepairEvidencePolicy(
+            minimum_behavior_samples=0,
+            minimum_observation_calls=0,
+            minimum_duration_seconds=0,
+            require_problem_reproduction=True,
+        ),
+        demotion=InstrumentationDemotionPolicy(enabled=False),
+    )
+
+    @lightweight(
+        policy=policy,
+        target_id="test.adaptive.same-call-signal",
+        state_directory=tmp_path,
+    )
+    def slow_failure() -> None:
+        time.sleep(0.003)
+        raise RuntimeError("both exception and timing signal occur on the threshold call")
+
+    with pytest.raises(RuntimeError):
+        slow_failure()
+
+    state = get_adaptive_state("test.adaptive.same-call-signal")
+    assert state["level"] == "BEHAVIOR"
+    assert state["repair_requested"] is True
+    assert state["problem_reproductions"] == 0

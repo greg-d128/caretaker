@@ -6,17 +6,40 @@ Authority-layer constraints can further restrict or deliberately override these 
 
 ## Lightweight adaptive instrumentation policy
 
-`LightweightPolicy` is separate from `RepairPolicy`. It controls when a low-cost
-wrapper is promoted and, independently, whether a promoted wrapper may later be
-demoted. The signed authority namespace is `lightweight.*`.
+`LightweightPolicy` is separate from `RepairPolicy`. It controls low-cost problem
+detection, behavior sampling, evidence-gated promotion, and independently controlled
+demotion. The signed authority namespace is `lightweight.*`.
 
-Promotion policy is split by signal:
+Signal policies include exception and soft-timing thresholds. Their `promote_to` field
+expresses the desired terminal capability. `promote_to=REPAIR` is repair eligibility,
+not permission to skip observation: automatic escalation is always
+`LIGHTWEIGHT -> BEHAVIOR -> REPAIR`. Both exceptions and soft-timing breaches may be
+repair-eligible.
 
-- `exception.occurrences` and `exception.window_seconds`;
-- `exception.promote_to`;
-- `soft_timing.seconds`;
-- `soft_timing.occurrences` and `soft_timing.window_seconds`;
-- `soft_timing.promote_to`.
+`BehaviorSamplingPolicy` provides generation-scoped call-count sampling:
+
+- `enabled`;
+- `lightweight_every_calls`;
+- `behavior_every_calls`;
+- `randomize_initial_offset`.
+
+A zero call interval disables sampling at that level. The initial offset is randomized
+once per code generation when enabled; each ordinary call then needs only an integer
+increment and comparison. A sample contributes Guard behavior evidence but does not
+materialize a signed behavior snapshot by itself.
+
+`RepairEvidencePolicy` gates `BEHAVIOR -> REPAIR`:
+
+- `enabled`;
+- `minimum_behavior_samples`;
+- `minimum_observation_calls`;
+- `minimum_duration_seconds`;
+- `require_problem_reproduction`.
+
+Only behavior samples collected while already in BEHAVIOR count toward repair evidence.
+A threshold-triggering LIGHTWEIGHT call cannot satisfy the post-promotion reproduction
+requirement, even if multiple signals occur during that same execution. Disabling the
+repair-evidence policy disables automatic promotion from BEHAVIOR to REPAIR.
 
 Demotion is never implied by promotion. `InstrumentationDemotionPolicy.enabled` is
 the explicit switch. Its acceptance fields deliberately mirror repaired-function
@@ -37,9 +60,9 @@ a new acceptance cycle before returning to `LIGHTWEIGHT`. Exceptions and configu
 soft-timing breaches count against acceptance; a target that remains slow cannot
 demote merely because it continues to return successfully.
 
-The lightweight policy decides *when* to promote. If promotion reaches `REPAIR`, the
-ordinary `RepairPolicy` still decides what evidence, validation, authority, retry,
-Guard, and activation behavior is permitted at that level.
+Once the evidence gate reaches `REPAIR`, the ordinary `RepairPolicy` still decides
+what evidence, validation, authority, retry, Guard, and activation behavior is
+permitted at that level.
 
 ## Trigger policy
 

@@ -14,6 +14,7 @@ import inspect
 import json
 import os
 import re
+import secrets
 import tempfile
 import threading
 import time
@@ -73,6 +74,32 @@ class SoftTimingPromotionPolicy:
 
 
 @dataclass(frozen=True, slots=True)
+class BehaviorSamplingPolicy:
+    """Call-count sampling rates for low-overhead behavioral observation.
+
+    A value of zero disables periodic sampling at that level. Randomization is
+    applied only once per code generation so the hot path is an integer increment
+    and comparison rather than a clock or random-number operation.
+    """
+
+    enabled: bool = True
+    lightweight_every_calls: int = 10_000
+    behavior_every_calls: int = 10
+    randomize_initial_offset: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class RepairEvidencePolicy:
+    """Evidence required before a repair-requesting signal may enter REPAIR."""
+
+    enabled: bool = True
+    minimum_behavior_samples: int = 20
+    minimum_observation_calls: int = 100
+    minimum_duration_seconds: float = 30.0
+    require_problem_reproduction: bool = True
+
+
+@dataclass(frozen=True, slots=True)
 class InstrumentationDemotionPolicy:
     """Acceptance criteria required before promoted instrumentation may step down.
 
@@ -95,6 +122,8 @@ class InstrumentationDemotionPolicy:
 class LightweightPolicy:
     exception: ExceptionPromotionPolicy = field(default_factory=ExceptionPromotionPolicy)
     soft_timing: SoftTimingPromotionPolicy = field(default_factory=SoftTimingPromotionPolicy)
+    sampling: BehaviorSamplingPolicy = field(default_factory=BehaviorSamplingPolicy)
+    repair_evidence: RepairEvidencePolicy = field(default_factory=RepairEvidencePolicy)
     demotion: InstrumentationDemotionPolicy = field(default_factory=InstrumentationDemotionPolicy)
     initial_level: InstrumentationLevel = InstrumentationLevel.LIGHTWEIGHT
     behavior_executions: int = 100
@@ -116,6 +145,15 @@ class AdaptiveInstrumentationState:
     long_term_successes: int = 0
     long_term_failures: int = 0
     last_transition_at: str | None = None
+    behavior_started_at: str | None = None
+    behavior_observation_calls: int = 0
+    behavior_samples: int = 0
+    repair_evidence_samples: int = 0
+    problem_reproductions: int = 0
+    repair_requested: bool = False
+    repair_request_reason: str | None = None
+    repair_evidence_satisfied_at: str | None = None
+    sampling_call_counter: int = 0
     recent_diagnostics: list[dict[str, Any]] = field(default_factory=list)
 
     def public_dict(self) -> dict[str, Any]:
@@ -133,6 +171,15 @@ class AdaptiveInstrumentationState:
             "long_term_successes": self.long_term_successes,
             "long_term_failures": self.long_term_failures,
             "last_transition_at": self.last_transition_at,
+            "behavior_started_at": self.behavior_started_at,
+            "behavior_observation_calls": self.behavior_observation_calls,
+            "behavior_samples": self.behavior_samples,
+            "repair_evidence_samples": self.repair_evidence_samples,
+            "problem_reproductions": self.problem_reproductions,
+            "repair_requested": self.repair_requested,
+            "repair_request_reason": self.repair_request_reason,
+            "repair_evidence_satisfied_at": self.repair_evidence_satisfied_at,
+            "sampling_call_counter": self.sampling_call_counter,
             "recent_diagnostics": list(self.recent_diagnostics),
         }
 
@@ -168,6 +215,18 @@ def validate_lightweight_policy(policy: LightweightPolicy) -> None:
         errors.append("soft_timing.seconds must be greater than zero")
     if policy.behavior_executions <= 0:
         errors.append("behavior_executions must be greater than zero")
+    sampling = policy.sampling
+    if sampling.lightweight_every_calls < 0:
+        errors.append("sampling.lightweight_every_calls cannot be negative")
+    if sampling.behavior_every_calls < 0:
+        errors.append("sampling.behavior_every_calls cannot be negative")
+    evidence = policy.repair_evidence
+    if evidence.minimum_behavior_samples < 0:
+        errors.append("repair_evidence.minimum_behavior_samples cannot be negative")
+    if evidence.minimum_observation_calls < 0:
+        errors.append("repair_evidence.minimum_observation_calls cannot be negative")
+    if evidence.minimum_duration_seconds < 0:
+        errors.append("repair_evidence.minimum_duration_seconds cannot be negative")
     demotion = policy.demotion
     if demotion.initial_successful_executions < 0:
         errors.append("demotion.initial_successful_executions cannot be negative")
@@ -217,11 +276,18 @@ class _AdaptiveController:
         self.policy = self._effective_policy()
         validate_lightweight_policy(self.policy)
         self._state_path = _state_path(target_id, self.code_hash, self._state_directory) if self.policy.persist_state else None
-        self.state = self._load_state() or AdaptiveInstrumentationState(
-            target_id=target_id,
-            code_hash=self.code_hash,
-            level=self.policy.initial_level,
-        )
+        loaded = self._load_state()
+        if loaded is None:
+            self.state = AdaptiveInstrumentationState(
+                target_id=target_id,
+                code_hash=self.code_hash,
+                level=self.policy.initial_level,
+            )
+            self._initialize_generation_state()
+        else:
+            self.state = loaded
+            if self.state.level.value >= InstrumentationLevel.BEHAVIOR.value and self.state.behavior_started_at is None:
+                self.state.behavior_started_at = utcnow_iso()
         self._publish_state()
 
     def invoke(self, *args: Any, **kwargs: Any) -> Any:
@@ -240,6 +306,9 @@ class _AdaptiveController:
                 self._refresh_generation_if_needed()
                 self._refresh_policy_if_needed()
                 level = self.state.level
+                sample_behavior = self._advance_sampling_counter(level)
+                if level is InstrumentationLevel.BEHAVIOR:
+                    self.state.behavior_observation_calls += 1
 
             started = time.perf_counter()
             failed = False
@@ -247,19 +316,21 @@ class _AdaptiveController:
             try:
                 if level is InstrumentationLevel.REPAIR and self.allow_repair_promotion:
                     result = self._repair_call(*args, **kwargs)
-                elif level.value >= InstrumentationLevel.BEHAVIOR.value:
-                    result = self._behavior_call(*args, **kwargs)
+                elif sample_behavior:
+                    result = self._behavior_call(level, *args, **kwargs)
                 else:
                     result = self.function(*args, **kwargs)
                 return result
             except BaseException as exc:
                 failed = True
-                promoted_during_call = self._observe_exception(exc)
+                promoted_during_call = self._observe_exception(exc, observed_level=level)
                 raise
             finally:
                 elapsed = time.perf_counter() - started
-                timing_breach, timing_promoted = self._observe_timing(elapsed)
+                timing_breach, timing_promoted = self._observe_timing(elapsed, observed_level=level)
                 promoted_during_call = promoted_during_call or timing_promoted
+                repair_promoted = self._maybe_promote_repair()
+                promoted_during_call = promoted_during_call or repair_promoted
                 if not promoted_during_call:
                     self._observe_acceptance(success=(not failed and not timing_breach))
         finally:
@@ -273,7 +344,7 @@ class _AdaptiveController:
         self.engine = get_default_engine()
         return self.engine
 
-    def _behavior_call(self, *args: Any, **kwargs: Any) -> Any:
+    def _behavior_call(self, observed_level: InstrumentationLevel, *args: Any, **kwargs: Any) -> Any:
         engine = self._engine()
         guard = getattr(engine, "guard", None)
         if guard is None:
@@ -315,6 +386,7 @@ class _AdaptiveController:
         started = time.perf_counter()
         succeeded = False
         guard.before_call(self.target_id, self.function, call_id, candidate_id=None)
+        self._record_behavior_sample(observed_level)
         try:
             result = self.function(*args, **kwargs)
             succeeded = True
@@ -345,49 +417,122 @@ class _AdaptiveController:
             )(self.function)
         return self._managed_wrapper(*args, **kwargs)
 
-    def _observe_exception(self, exception: BaseException) -> bool:
+    def _observe_exception(
+        self,
+        exception: BaseException,
+        *,
+        observed_level: InstrumentationLevel,
+    ) -> bool:
         now = time.time()
-        promoted = False
+        transitioned = False
         with self._lock:
-            if self.state.level.value >= InstrumentationLevel.BEHAVIOR.value:
+            if observed_level.value >= InstrumentationLevel.BEHAVIOR.value:
                 self._diagnostic({
                     "timestamp": utcnow_iso(),
                     "kind": "exception",
                     "exception_type": type(exception).__name__,
                 })
+                if observed_level is InstrumentationLevel.BEHAVIOR:
+                    self._record_problem_reproduction("exception")
             policy = self.policy.exception
             if policy.enabled:
                 self._append_window(self._exception_events, now, policy.window_seconds)
                 self._persist_event_state()
                 if len(self._exception_events) >= policy.occurrences:
-                    promoted = self._promote(
+                    transitioned = self._request_signal_escalation(
                         policy.promote_to,
                         f"{policy.occurrences} exceptions within {policy.window_seconds:g}s",
                     )
-        return promoted
+        return transitioned
 
-    def _observe_timing(self, elapsed: float) -> tuple[bool, bool]:
+    def _observe_timing(
+        self,
+        elapsed: float,
+        *,
+        observed_level: InstrumentationLevel,
+    ) -> tuple[bool, bool]:
         policy = self.policy.soft_timing
         if not policy.enabled or elapsed <= policy.seconds:
             return False, False
         now = time.time()
-        promoted = False
+        transitioned = False
         with self._lock:
-            if self.state.level.value >= InstrumentationLevel.BEHAVIOR.value:
+            if observed_level.value >= InstrumentationLevel.BEHAVIOR.value:
                 self._diagnostic({
                     "timestamp": utcnow_iso(),
                     "kind": "soft-timing-breach",
                     "elapsed_seconds": elapsed,
                     "threshold_seconds": policy.seconds,
                 })
+                if observed_level is InstrumentationLevel.BEHAVIOR:
+                    self._record_problem_reproduction("soft-timing-breach")
             self._append_window(self._timing_events, now, policy.window_seconds)
             self._persist_event_state()
             if len(self._timing_events) >= policy.occurrences:
-                promoted = self._promote(
+                transitioned = self._request_signal_escalation(
                     policy.promote_to,
                     f"{policy.occurrences} soft timing breaches > {policy.seconds:g}s within {policy.window_seconds:g}s",
                 )
-        return True, promoted
+        return True, transitioned
+
+    def _request_signal_escalation(self, requested: InstrumentationLevel, reason: str) -> bool:
+        """Turn a lightweight signal into observation first, never directly into repair."""
+        if requested is InstrumentationLevel.REPAIR and self.allow_repair_promotion:
+            self.state.repair_requested = True
+            self.state.repair_request_reason = reason
+        elif requested is InstrumentationLevel.REPAIR:
+            requested = InstrumentationLevel.BEHAVIOR
+
+        if self.state.level is InstrumentationLevel.LIGHTWEIGHT:
+            return self._promote(InstrumentationLevel.BEHAVIOR, reason)
+        if self.state.level is InstrumentationLevel.BEHAVIOR:
+            self._persist()
+            self._publish_state()
+        return False
+
+    def _maybe_promote_repair(self) -> bool:
+        with self._lock:
+            if (
+                self.state.level is not InstrumentationLevel.BEHAVIOR
+                or not self.state.repair_requested
+                or not self.allow_repair_promotion
+            ):
+                return False
+            evidence = self.policy.repair_evidence
+            if not evidence.enabled or not self._repair_evidence_sufficient(evidence):
+                return False
+            now = utcnow_iso()
+            self.state.repair_evidence_satisfied_at = now
+            reason = self.state.repair_request_reason or "repair-requesting lightweight signal"
+            return self._promote(
+                InstrumentationLevel.REPAIR,
+                f"evidence sufficient after behavioral observation: {reason}",
+            )
+
+    def _repair_evidence_sufficient(self, policy: RepairEvidencePolicy) -> bool:
+        if self.state.repair_evidence_samples < policy.minimum_behavior_samples:
+            return False
+        if self.state.behavior_observation_calls < policy.minimum_observation_calls:
+            return False
+        if policy.require_problem_reproduction and self.state.problem_reproductions <= 0:
+            return False
+        started = self.state.behavior_started_at
+        if started is None:
+            return False
+        try:
+            started_at = datetime.fromisoformat(started).timestamp()
+        except ValueError:
+            return False
+        return (time.time() - started_at) >= policy.minimum_duration_seconds
+
+    def _record_problem_reproduction(self, kind: str) -> None:
+        self.state.problem_reproductions += 1
+        self._diagnostic({
+            "timestamp": utcnow_iso(),
+            "kind": "repair-evidence-reproduction",
+            "signal": kind,
+            "count": self.state.problem_reproductions,
+        })
 
     def _promote(self, requested: InstrumentationLevel, reason: str) -> bool:
         if requested is InstrumentationLevel.REPAIR and not self.allow_repair_promotion:
@@ -395,6 +540,7 @@ class _AdaptiveController:
         if requested.value <= self.state.level.value:
             return False
         now = utcnow_iso()
+        previous = self.state.level
         self.state.level = requested
         self.state.acceptance = AcceptanceState.PROBATION
         self.state.promoted_at = now
@@ -406,11 +552,59 @@ class _AdaptiveController:
         self.state.long_term_successes = 0
         self.state.long_term_failures = 0
         self.state.last_transition_at = now
+        self.state.sampling_call_counter = 0
+        if previous is InstrumentationLevel.LIGHTWEIGHT and requested is InstrumentationLevel.BEHAVIOR:
+            self.state.behavior_started_at = now
+            self.state.behavior_observation_calls = 0
+            self.state.repair_evidence_samples = 0
+            self.state.problem_reproductions = 0
+            self.state.repair_evidence_satisfied_at = None
+        if requested is InstrumentationLevel.REPAIR:
+            self.state.repair_requested = False
         self._exception_events.clear()
         self._timing_events.clear()
         self._persist()
         self._publish_state()
         return True
+
+    def _initialize_generation_state(self) -> None:
+        if self.state.level.value >= InstrumentationLevel.BEHAVIOR.value:
+            self.state.behavior_started_at = utcnow_iso()
+        interval = self._sample_interval(self.state.level)
+        if (
+            self.policy.sampling.enabled
+            and self.policy.sampling.randomize_initial_offset
+            and interval > 1
+        ):
+            self.state.sampling_call_counter = secrets.randbelow(interval)
+
+    def _sample_interval(self, level: InstrumentationLevel) -> int:
+        sampling = self.policy.sampling
+        if not sampling.enabled:
+            return 0
+        if level is InstrumentationLevel.LIGHTWEIGHT:
+            return sampling.lightweight_every_calls
+        if level is InstrumentationLevel.BEHAVIOR:
+            return sampling.behavior_every_calls
+        return 0
+
+    def _advance_sampling_counter(self, level: InstrumentationLevel) -> bool:
+        interval = self._sample_interval(level)
+        if interval <= 0:
+            return False
+        self.state.sampling_call_counter += 1
+        if self.state.sampling_call_counter < interval:
+            return False
+        self.state.sampling_call_counter = 0
+        return True
+
+    def _record_behavior_sample(self, observed_level: InstrumentationLevel) -> None:
+        with self._lock:
+            self.state.behavior_samples += 1
+            if observed_level is InstrumentationLevel.BEHAVIOR:
+                self.state.repair_evidence_samples += 1
+                self._persist()
+            self._publish_state()
 
     def _observe_acceptance(self, *, success: bool) -> None:
         with self._lock:
@@ -509,6 +703,14 @@ class _AdaptiveController:
         self.state.long_term_successes = 0
         self.state.long_term_failures = 0
         self.state.last_transition_at = now
+        self.state.sampling_call_counter = 0
+        self.state.repair_requested = False
+        self.state.repair_request_reason = None
+        self.state.repair_evidence_satisfied_at = None
+        self.state.behavior_observation_calls = 0
+        self.state.repair_evidence_samples = 0
+        self.state.problem_reproductions = 0
+        self.state.behavior_started_at = now if next_level is InstrumentationLevel.BEHAVIOR else None
         self._persist()
         self._publish_state()
 
@@ -532,11 +734,18 @@ class _AdaptiveController:
             if self.policy.persist_state
             else None
         )
-        self.state = self._load_state() or AdaptiveInstrumentationState(
-            target_id=self.target_id,
-            code_hash=self.code_hash,
-            level=self.policy.initial_level,
-        )
+        loaded = self._load_state()
+        if loaded is None:
+            self.state = AdaptiveInstrumentationState(
+                target_id=self.target_id,
+                code_hash=self.code_hash,
+                level=self.policy.initial_level,
+            )
+            self._initialize_generation_state()
+        else:
+            self.state = loaded
+            if self.state.level.value >= InstrumentationLevel.BEHAVIOR.value and self.state.behavior_started_at is None:
+                self.state.behavior_started_at = utcnow_iso()
         self._publish_state()
 
     def _refresh_policy_if_needed(self) -> None:
@@ -591,6 +800,15 @@ class _AdaptiveController:
                 long_term_successes=int(data.get("long_term_successes", 0)),
                 long_term_failures=int(data.get("long_term_failures", 0)),
                 last_transition_at=data.get("last_transition_at"),
+                behavior_started_at=data.get("behavior_started_at"),
+                behavior_observation_calls=int(data.get("behavior_observation_calls", 0)),
+                behavior_samples=int(data.get("behavior_samples", 0)),
+                repair_evidence_samples=int(data.get("repair_evidence_samples", 0)),
+                problem_reproductions=int(data.get("problem_reproductions", 0)),
+                repair_requested=bool(data.get("repair_requested", False)),
+                repair_request_reason=data.get("repair_request_reason"),
+                repair_evidence_satisfied_at=data.get("repair_evidence_satisfied_at"),
+                sampling_call_counter=int(data.get("sampling_call_counter", 0)),
                 recent_diagnostics=[dict(item) for item in data.get("recent_diagnostics", ())][-20:],
             )
         except Exception:
@@ -777,7 +995,7 @@ def lightweight_on_soft_timeout(
     *,
     occurrences: int = 3,
     window_seconds: float = 1800.0,
-    promote_to: InstrumentationLevel = InstrumentationLevel.BEHAVIOR,
+    promote_to: InstrumentationLevel = InstrumentationLevel.REPAIR,
     policy: LightweightPolicy | None = None,
     **kwargs: Any,
 ) -> Callable[[F], F]:

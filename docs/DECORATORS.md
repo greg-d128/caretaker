@@ -37,17 +37,19 @@ execution boundary.
 
 ## Lightweight adaptive decorators
 
-Use `@lightweight` when the normal execution path should pay only for threshold
-tracking until policy decides that more instrumentation is justified. Healthy
-LIGHTWEIGHT calls do not capture arguments, locals, tracebacks, Guard state, or
-Repair state.
+Use `@lightweight` when the normal execution path should pay only for inexpensive
+problem detection plus sparse behavior sampling. Healthy LIGHTWEIGHT calls do not
+capture arguments, locals, tracebacks, or Repair state. Sampling is call-count based,
+so the hot path is an integer increment and comparison rather than a clock lookup.
 
 ```python
 from caretaker import (
+    BehaviorSamplingPolicy,
     ExceptionPromotionPolicy,
     InstrumentationDemotionPolicy,
     InstrumentationLevel,
     LightweightPolicy,
+    RepairEvidencePolicy,
     SoftTimingPromotionPolicy,
     lightweight,
 )
@@ -63,7 +65,18 @@ policy = LightweightPolicy(
         seconds=0.250,
         occurrences=5,
         window_seconds=1800,
-        promote_to=InstrumentationLevel.BEHAVIOR,
+        promote_to=InstrumentationLevel.REPAIR,
+    ),
+    sampling=BehaviorSamplingPolicy(
+        lightweight_every_calls=10_000,
+        behavior_every_calls=10,
+        randomize_initial_offset=True,
+    ),
+    repair_evidence=RepairEvidencePolicy(
+        minimum_behavior_samples=20,
+        minimum_observation_calls=100,
+        minimum_duration_seconds=30,
+        require_problem_reproduction=True,
     ),
     demotion=InstrumentationDemotionPolicy(
         enabled=True,
@@ -78,21 +91,44 @@ def lookup(...):
     ...
 ```
 
-Instrumentation levels are ordered:
+Instrumentation levels are ordered and automatic escalation never skips the middle
+observation phase:
 
-1. `LIGHTWEIGHT` — rolling exception/timing threshold state only;
-2. `BEHAVIOR` — richer diagnostics plus Guard call/resource observation when a Guard engine is available;
-3. `REPAIR` — the existing full Repair wrapper is created lazily and subsequent calls use it.
+1. `LIGHTWEIGHT` — rolling exception/timing threshold state plus sparse behavior samples;
+2. `BEHAVIOR` — increased behavior sampling and richer diagnostics while evidence is gathered;
+3. `REPAIR` — the existing full Repair wrapper is created lazily only after the evidence gate passes.
 
-The call that reaches a promotion threshold completes under the old level. For
-example, with `occurrences=2`, the first two exceptions are not retroactively
-reconstructed as full incidents; the third call runs under the promoted level.
+`promote_to=REPAIR` on an exception or soft-timing policy means that the signal is
+repair-eligible. It does **not** mean LIGHTWEIGHT jumps directly to REPAIR. The
+threshold first transitions the target to BEHAVIOR and records a repair request.
+`RepairEvidencePolicy` then controls when enough post-promotion evidence exists to
+enter REPAIR. Requiring reproduction prevents a transient threshold from immediately
+triggering repair if the problem disappears during observation.
+
+The call that reaches a LIGHTWEIGHT promotion threshold still completes under the old
+level. For example, with `occurrences=2`, the first two exceptions are not
+retroactively reconstructed as full incidents. Subsequent BEHAVIOR calls collect the
+evidence on which a repair can be based.
+
+`BehaviorSamplingPolicy` controls periodic behavior contribution independently of
+promotion. A `lightweight_every_calls=10_000` policy increments a generation-local
+counter and observes one call when the threshold is reached, then resets the counter.
+`behavior_every_calls` normally uses a much smaller value so evidence accumulates
+quickly after a suspected problem. Zero disables periodic sampling at that level.
+When `randomize_initial_offset=True`, one random offset is chosen only when the code
+generation starts, preventing identically configured workers from sampling on the same
+invocation without adding random-number overhead to ordinary calls. Behavior samples
+feed Guard evidence and can therefore be incorporated into operator-created behavior
+snapshots; sampling does not materialize/sign a new snapshot on every sampled call.
 
 Convenience forms are also available:
 
 - `@lightweight_on_exception(...)`;
 - `@lightweight_on_soft_timeout(...)`;
 - `@lightweight_dependency(...)` for Caretaker-owned dependency boundaries.
+
+The soft-timeout convenience decorator is repair-eligible by default, but still passes
+through BEHAVIOR and the repair-evidence gate before REPAIR.
 
 `@lightweight_dependency` never permits generated self-repair. It may promote to
 behavioral diagnostics, which avoids recursive repair loops when a dependency used
@@ -102,10 +138,10 @@ the inner dependency without adaptive instrumentation. Core Ollama, SQLite, and
 validation-subprocess boundaries use this decorator by default.
 
 Adaptive state is keyed by target ID and function code hash. Re-decoration with new
-code, or replacement of the live function `__code__`, starts a new adaptive
-generation rather than inheriting escalation state caused by older code. Rolling
-threshold state is persisted only on noteworthy events; healthy LIGHTWEIGHT calls do
-not perform Caretaker state-file writes.
+code, or replacement of the live function `__code__`, starts a new adaptive generation
+and resets the sampling counter rather than inheriting escalation or sampling state
+from older code. Rolling threshold state is persisted only on noteworthy events;
+healthy LIGHTWEIGHT calls do not perform Caretaker adaptive-state file writes.
 
 ## Repair decorator
 
