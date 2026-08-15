@@ -179,6 +179,7 @@ def test_guard_restores_signed_snapshot_baseline_after_restart(tmp_path: Path, m
 
     first = GuardEngine(policy=policy)
     first.register_target(target_id, failing, binding)
+    first.record_event(_completed(target_id, 0.25, stage="BEHAVIOR"))
     first.record_event(_network(target_id, "api.example:443"))
     accepted = first.accept_baseline(target_id)
     assert accepted.state is BaselineState.ACCEPTED
@@ -195,7 +196,16 @@ def test_guard_restores_signed_snapshot_baseline_after_restart(tmp_path: Path, m
         root=tmp_path,
     )
     store = BehaviorSnapshotStore(tmp_path, artifact_signer=signer)
-    assert first.behavior_statistics.materialize_pending(store)
+    materialized = first.behavior_statistics.materialize_pending(store)
+    assert materialized
+    accepted_snapshot = next(
+        envelope
+        for envelope in materialized
+        if envelope["snapshot"].get("seal_reason") == "guard-baseline-accepted"
+    )
+    duration = accepted_snapshot["snapshot"]["profile"]["statistics"]["duration_seconds"]
+    assert duration["p50"] == 0.25
+    assert accepted_snapshot["snapshot"]["profile"]["sampling_provenance"]["strata"]["BEHAVIOR"]["sample_count"] == 1
     signer.close()
 
     restarted = GuardEngine(policy=policy)

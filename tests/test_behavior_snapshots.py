@@ -74,3 +74,23 @@ def test_archive_contains_manifest_and_removes_snapshot(tmp_path: Path):
         assert manifest_file is not None
         manifest = json.loads(manifest_file.read())
         assert manifest["snapshots"][0]["snapshot_id"] == snapshot_id
+
+
+def test_snapshot_chain_survives_archive_and_delete(tmp_path):
+    store = BehaviorSnapshotStore(tmp_path)
+    first = store.create(_capture(code_hash="a" * 64, events=10))
+    first_snapshot = first["snapshot"]
+    first_hash = first["integrity"]["content_sha256"]
+
+    archive = store.archive([first_snapshot["snapshot_id"]], remove=True)
+    assert archive.exists()
+    second = store.create(_capture(code_hash="a" * 64, events=10))
+    assert second["snapshot"]["snapshot_sequence"] == first_snapshot["snapshot_sequence"] + 1
+    assert second["snapshot"]["previous_snapshot_hash"] == first_hash
+
+    second_hash = second["integrity"]["content_sha256"]
+    store.delete(second["snapshot"]["snapshot_id"])
+    third = store.create(_capture(code_hash="a" * 64, events=10))
+    assert third["snapshot"]["snapshot_sequence"] == second["snapshot"]["snapshot_sequence"] + 1
+    assert third["snapshot"]["previous_snapshot_hash"] == second_hash
+    assert (store.tombstone_directory / f"{second['snapshot']['snapshot_id']}.json").exists()

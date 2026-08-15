@@ -113,6 +113,23 @@ def test_semantic_compare_explains_increased_repair_authority() -> None:
     assert "Increases Repair authority/autonomy" in change.consequence
 
 
+
+def test_policy_surface_two_requires_review_of_adaptive_instrumentation() -> None:
+    layer = _profile()
+    metadata = dict(layer.metadata)
+    metadata[PROFILE_SURFACE_VERSION] = "1"
+    old_surface = replace(layer, metadata=metadata)
+
+    report = profile_coverage(old_surface)
+
+    assert report.complete is False
+    assert [item.capability_id for item in report.missing_capabilities] == [
+        "adaptive.instrumentation",
+        "guard.behavior-snapshots",
+        "repair.validation-isolation",
+        "logging.signing-identity-journal",
+    ]
+
 def test_policy_surface_reports_capabilities_added_after_profile(monkeypatch) -> None:
     layer = _profile()
     extra = PolicyCapability(

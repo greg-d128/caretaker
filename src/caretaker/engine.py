@@ -72,7 +72,7 @@ from .state import (
 )
 from .store import InMemoryRepairStore, RepairStore
 from .telemetry import CorrelatedLogHandler, logger
-from .validation import SubprocessValidationBackend, sanitized_function_tree
+from .validation import ValidationBackend, SubprocessValidationBackend, sanitized_function_tree
 
 
 class ResolutionKind:
@@ -119,7 +119,7 @@ class RepairEngine:
         provider: RepairProvider | None = None,
         registry: TargetRegistry | None = None,
         store: RepairStore | None = None,
-        validation_backend: SubprocessValidationBackend | None = None,
+        validation_backend: ValidationBackend | None = None,
         log_handler: CorrelatedLogHandler | None = None,
         auxiliary_registry: AuxiliaryRegistry | None = None,
         guard: "GuardFacade | None" = None,
@@ -1536,6 +1536,7 @@ class RepairEngine:
         )
         self.store.record_attempt(attempt)
         self._attempt_cache[attempt.attempt_id] = attempt
+        validation_capabilities = self.validation_backend.capabilities()
         with self._activity_lock:
             self._active_validations[attempt.attempt_id] = {
                 "attempt_id": str(attempt.attempt_id),
@@ -1544,6 +1545,9 @@ class RepairEngine:
                 "incident_id": str(incident.incident_id),
                 "target_id": target.target_id,
                 "started_at": attempt.created_at.isoformat(),
+                "validation_backend": validation_capabilities.name,
+                "validation_isolation": validation_capabilities.isolation_level.name,
+                "validation_separate_kernel": validation_capabilities.separate_kernel,
                 "authority_policy_generation": get_authority_runtime_context().effective.generation,
                 "authority_policy_fingerprint": get_authority_runtime_context().effective.fingerprint,
             }

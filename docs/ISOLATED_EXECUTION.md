@@ -1,9 +1,9 @@
-# Isolated Execution for Caretaker 0.5.0a1
+# Isolated Execution for Caretaker 0.6.0a1
 
-**Applies to:** Caretaker `0.5.0a1`  
-**Status:** operator and research deployment guidance  
-**Scope:** isolation of the complete application and Caretaker runtime  
-**Important limitation:** Caretaker `0.5.0a1` does not provide a built-in Docker, Multipass, container, VM, seccomp, or Landlock validation backend.
+**Applies to:** Caretaker `0.6.0a1`
+**Status:** operator, validation-backend, and research deployment guidance
+**Scope:** candidate-validation isolation plus isolation of the complete application and Caretaker runtime
+**Built-in validation backends:** PROCESS, rootless Podman CONTAINER, and Multipass VM. Docker-rootless and EXTERNAL adapters remain future work.
 
 ## 1. Purpose
 
@@ -23,7 +23,12 @@ The child process can inherit resources available to the application account, in
 
 After activation, the candidate executes inside the application process and has the application's runtime objects and privileges.
 
-Docker and Multipass can place a stronger boundary around the complete subject environment:
+There are now two distinct isolation uses:
+
+1. **Candidate-validation isolation**, where Caretaker remains on the host/supervised application boundary and sends only a validation request into a rootless Podman container or pre-provisioned Multipass validator VM.
+2. **Whole-subject isolation**, where the application, Caretaker supervisor, Guard, evidence store, and validation worker all run inside a Docker container or Multipass VM.
+
+Docker and Multipass can still place a stronger boundary around the complete subject environment:
 
 ```text
 Host or trusted controller
@@ -38,6 +43,44 @@ Host or trusted controller
 ```
 
 These environments reduce risk during development, research, adversarial testing, dependency comparison, and demonstration. They do not convert Caretaker into a formally verified sandbox.
+
+## Built-in candidate-validation backends
+
+The repair engine accepts a validation backend implementing the common capability contract. Policy chooses a minimum isolation level rather than a product name:
+
+```python
+from caretaker import RepairEngine, ValidationIsolationLevel, ValidationPolicy
+from caretaker.validation import (
+    MultipassValidationBackend,
+    RootlessPodmanValidationBackend,
+)
+
+podman = RootlessPodmanValidationBackend(
+    "caretaker-validator:local",
+    workspace="/srv/invoice-service",
+)
+
+multipass = MultipassValidationBackend(
+    instance_name="caretaker-validator",
+    clean_snapshot="caretaker-clean",
+)
+
+engine = RepairEngine(validation_backend=multipass)
+```
+
+A repair policy can require the VM tier independently of which backend object is installed:
+
+```python
+ValidationPolicy(minimum_isolation=ValidationIsolationLevel.VM)
+```
+
+If only PROCESS or CONTAINER validation is available, Caretaker does not silently weaken the requirement. `backend_unavailable_action` determines whether the candidate fails, remains proposal-only, or enters explicit operator approval.
+
+`RootlessPodmanValidationBackend` requires a locally present image and verified rootless Podman. It does not pull images automatically. The validation container uses no network, a read-only root filesystem, dropped Linux capabilities, `no-new-privileges`, bounded PID/CPU/memory settings, a private writable request/result directory, and read-only source inputs.
+
+`MultipassValidationBackend` requires a pre-provisioned validator guest and refuses instances with host-directory mounts. Request/result artifacts move with `multipass transfer`. In normal mode Caretaker can restore a configured clean snapshot before each validation. `disposable_clone=True` instead clones a stopped clean template for one validation and purges the clone afterward.
+
+The VM backend does not infer that guest egress is safe merely because Multipass is in use. By default it requires a root-owned `/etc/caretaker/validation-network-isolated` provisioning marker. Create that marker only after the guest firewall/egress policy has been installed and enabled.
 
 ## 2. Isolation levels
 
@@ -69,9 +112,9 @@ Apply these rules to every isolated environment:
 
 ## 4. Caretaker-specific limitations
 
-The environment described here does not change these `0.5.0a1` properties:
+The environment described here does not change these `0.6.0a1` properties:
 
-- candidate validation uses a subprocess;
+- PROCESS candidate validation uses a subprocess; CONTAINER and VM backends provide stronger configured boundaries;
 - arbitrary hard interruption remains deferred;
 - `@repair_on_timeout` uses a soft timeout;
 - activated candidates run in the application interpreter;
@@ -101,7 +144,7 @@ isolated/
         README.md
 
 dist/
-    caretaker-0.5.0a1-py3-none-any.whl
+    caretaker-0.6.0a1-py3-none-any.whl
 
 policy/
     application.toml
@@ -166,7 +209,7 @@ Save as `isolated/docker/Dockerfile`:
 ```dockerfile
 FROM python:3.13-slim
 
-ARG CARETAKER_WHEEL=caretaker-0.5.0a1-py3-none-any.whl
+ARG CARETAKER_WHEEL=caretaker-0.6.0a1-py3-none-any.whl
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -228,9 +271,9 @@ services:
       context: ../..
       dockerfile: isolated/docker/Dockerfile
       args:
-        CARETAKER_WHEEL: caretaker-0.5.0a1-py3-none-any.whl
+        CARETAKER_WHEEL: caretaker-0.6.0a1-py3-none-any.whl
 
-    image: caretaker-subject:0.5.0a1
+    image: caretaker-subject:0.6.0a1
     container_name: caretaker-subject
 
     user: "10001:10001"
@@ -451,7 +494,7 @@ docker compose \
   -f isolated/docker/compose.yaml \
   down --volumes --remove-orphans
 
-docker image rm caretaker-subject:0.5.0a1
+docker image rm caretaker-subject:0.6.0a1
 rm -rf exported-evidence
 ```
 
@@ -548,11 +591,14 @@ runcmd:
   - [chmod, "0700", /var/lib/caretaker]
   - [chmod, "0700", /run/caretaker]
   - [systemctl, enable, --now, nftables]
+  - [touch, /etc/caretaker/validation-network-isolated]
+  - [chown, root:root, /etc/caretaker/validation-network-isolated]
+  - [chmod, "0644", /etc/caretaker/validation-network-isolated]
 ```
 
 The subject account has no password and no sudo rule.
 
-The `nftables` policy permits loopback traffic for the subject UID and rejects other outbound traffic. This allows a local Ollama or controlled loopback service while blocking ordinary guest-network egress from the Caretaker subject.
+The `nftables` policy permits loopback traffic for the subject UID and rejects other outbound traffic. This allows a local Ollama or controlled loopback service while blocking ordinary guest-network egress from the Caretaker subject. The root-owned `validation-network-isolated` file is a provisioning assertion consumed by the built-in Multipass validation backend; create it only after the firewall policy is active.
 
 ## 18. Launch the VM
 
@@ -586,7 +632,7 @@ Transfer the wheel:
 
 ```bash
 multipass transfer \
-  dist/caretaker-0.5.0a1-py3-none-any.whl \
+  dist/caretaker-0.6.0a1-py3-none-any.whl \
   caretaker-lab:/tmp/caretaker.whl
 ```
 
@@ -749,7 +795,7 @@ Use a new VM or a restored clean snapshot for each version.
 Recommended sequence:
 
 1. Launch and provision the clean VM.
-2. Install Caretaker `0.5.0a1`.
+2. Install Caretaker `0.6.0a1`.
 3. Install application or dependency version A.
 4. Verify integrity and record exact identities.
 5. Run representative workloads in Research mode.
@@ -771,7 +817,7 @@ Recommended sequence:
 11. Correlate Guard's internal attribution with an external observer.
 12. Treat differences as evidence requiring interpretation, not proof of compromise.
 
-Caretaker `0.5.0a1` contains the identity, baseline, deviation, inspection, and evidence contracts for this workflow. A complete automated old-versus-new environment runner remains future work.
+Caretaker `0.6.0a1` contains the identity, baseline, deviation, inspection, and evidence contracts for this workflow. A complete automated old-versus-new environment runner remains future work.
 
 ## 25. External packet observation
 
@@ -842,13 +888,13 @@ After provisioning and before running the subject:
 
 ```bash
 multipass snapshot caretaker-lab \
-  --name clean-caretaker-0.5.0a1
+  --name clean-caretaker-0.6.0a1
 ```
 
 Restore between campaigns when supported by the installed Multipass release:
 
 ```bash
-multipass restore caretaker-lab.clean-caretaker-0.5.0a1
+multipass restore caretaker-lab.clean-caretaker-0.6.0a1
 ```
 
 A new VM remains preferable when testing persistence, rollback, root continuity, or suspected environment compromise.
@@ -908,7 +954,7 @@ Export the runtime public-key fingerprint or manifest commitment to a location t
 
 ### Strongest supported architecture
 
-Use the external signer protocol or independent evidence witnessing. The built-in `0.5.0a1` event writer remains local, so reliable remote shipping requires an operator-supplied process or future `LogSink`.
+Use the external signer protocol or independent evidence witnessing. The built-in `0.6.0a1` event writer remains local, so reliable remote shipping requires an operator-supplied process or future `LogSink`.
 
 ## 31. Incident workflow in an isolated environment
 

@@ -6,6 +6,7 @@ Last reviewed: 2026-08-15
 
 ## Status vocabulary
 
+- **Implemented in development tree**: code, policy semantics, tests, and documentation exist in the current development tree; retained here for review traceability until release.
 - **Design direction agreed**: the intended architecture is sufficiently defined for implementation.
 - **Proposal pending decision**: alternatives are documented, but an implementation choice has not been approved.
 - **Explicitly deferred**: intentionally omitted from the current test/research scope.
@@ -13,15 +14,15 @@ Last reviewed: 2026-08-15
 
 ## Deployment-authorized behavior snapshot signing
 
-**Status: Design direction agreed; implementation pending.**
+**Status: Implemented in development tree.**
 
-Behavior snapshots currently have content hashing but are not authenticated artifacts. Snapshot signing should reuse the secure runtime event-signing infrastructure rather than introduce an independent private-key mechanism.
+Behavior snapshots are authenticated runtime artifacts that reuse the secure runtime event-signing infrastructure rather than introducing an independent private-key mechanism.
 
 ### Signing service
 
-Introduce one supervisor-owned `RuntimeArtifactSigner` abstraction used for event-segment manifests, behavior snapshots, behavior archives, and other runtime-derived artifacts that require authenticity.
+The supervisor-owned runtime artifact signing service is shared by event-segment manifests, behavior snapshots, behavior archives, and other runtime-derived artifacts that require authenticity.
 
-The signer should support domain-separated signatures so a valid signature for one artifact type cannot be replayed as another artifact type. The signed payload should include an explicit artifact kind and schema version.
+The signer uses domain-separated artifact payloads so a valid signature for one artifact type cannot be replayed as another artifact type. The signed payload should include an explicit artifact kind and schema version.
 
 Signing selection:
 
@@ -33,7 +34,7 @@ Caretaker should continue to avoid directly exposing deployment/private signing-
 
 ### Signing identity journal
 
-Runtime signing identity information is important enough to have an independent append-only log with independent retention.
+Runtime signing identity information is stored in an independent append-only hash-chained Signing Identity Journal with independent retention.
 
 The signing-identity stream should record at least:
 
@@ -47,13 +48,13 @@ The signing-identity stream should record at least:
 - external anchor references;
 - signer closure/termination where available.
 
-The identity stream should use the existing framed/hash-chained event machinery where practical, but its retention policy must be independent of ordinary application logs. Its retention must be at least as long as any retained artifact that depends on it for verification unless the required identity records are copied into that artifact's archive.
+The identity journal is independently hash-chained and has retention policy independent of ordinary application logs. Its retention must be at least as long as any retained artifact that depends on it for verification unless the required identity records are copied into that artifact's archive.
 
 For ephemeral signing, the first public identity is self-recorded unless an external anchor exists. The key-transition chain proves continuity from that retained starting identity, but does not by itself prevent wholesale replacement of both the artifact corpus and its initial self-recorded identity by an attacker with equivalent storage authority. External anchoring remains the stronger assurance mode.
 
 ### Snapshot signature envelope
 
-A signed behavior snapshot should bind at least:
+The signed behavior snapshot envelope binds:
 
 - snapshot ID;
 - canonical content hash;
@@ -76,9 +77,9 @@ Behavior archives should contain the identity/key-transition records required to
 
 ## Guard baseline reconstruction after restart
 
-**Status: Design direction proposed; implementation pending.**
+**Status: Implemented in development tree.**
 
-An accepted Guard baseline should survive process restart without replaying the entire raw behavior-event history.
+An accepted Guard baseline survives process restart without replaying the entire raw behavior-event history.
 
 ### Core objects
 
@@ -125,25 +126,17 @@ When Guard registers a target after startup:
 
 If baseline verification fails, policy decides whether Guard continues without an accepted baseline, enters a degraded state, requires operator action, or prevents an operation that explicitly requires an accepted baseline.
 
-### Evidence-store changes
+### Persistence implementation
 
-The evidence store should gain indexed operations similar to:
+The current implementation uses the dedicated behavior snapshot/baseline store and active-statistics checkpoint files as the restart index. Guard resolves the exact code hash and monitoring fingerprint, verifies the accepted baseline reference and sealed snapshot, and hydrates `BaselineManager` directly. Raw behavior windows remain evidence/debugging material and are not replayed during restart.
 
-- `latest_accepted_guard_baseline(generation_key)`;
-- `behavior_snapshot(snapshot_id)`;
-- `latest_active_behavior_checkpoint(generation_key)`;
-- `store_active_behavior_checkpoint(state)`;
-- `seal_behavior_snapshot(state, reason)`.
-
-SQLite rows should expose the generation key and state as indexed columns rather than requiring a full JSON scan.
-
-Raw behavior windows remain useful evidence and debugging material, but restart reconstruction should not require replaying them.
+A future storage optimization may move the behavior-generation lookup into indexed SQLite columns so very large installations do not depend on filesystem metadata scans. This is an optimization, not a correctness dependency.
 
 ## Behavior statistics and automatic snapshot materialization
 
-**Status: Design direction proposed; implementation pending.**
+**Status: Implemented in development tree.**
 
-Behavior statistics should be continuously updateable while a behavior generation remains compatible. The design should resemble database statistics collection: bounded representative sampling and compact statistical summaries rather than indefinite retention of every observation.
+Behavior statistics are continuously updateable while a behavior generation remains compatible. The design should resemble database statistics collection: bounded representative sampling and compact statistical summaries rather than indefinite retention of every observation.
 
 ### Compatibility and rotation
 
@@ -283,64 +276,27 @@ A future import-aware facility should allow instrumentation intent to be registe
 
 This should remain explicit and policy-controlled. Caretaker should not globally instrument every import by default.
 
-## Container validation backend
+## Validation isolation backends
 
-**Status: Proposal pending decision.**
+**Status: Implemented in development tree for PROCESS, rootless Podman CONTAINER, and Multipass VM. Docker and EXTERNAL adapters remain future work.**
 
-The existing validation subprocess is a process-isolation mechanism, not a hostile-code sandbox. A stronger backend should preserve the existing validation contract while allowing policy to require a minimum isolation capability.
+Validation uses a common capability-based backend contract. Policy specifies a minimum isolation level rather than a product name:
 
-### Backend contract
+- **PROCESS**: the existing subprocess worker; fast and portable, but not a hostile-code sandbox.
+- **CONTAINER**: `RootlessPodmanValidationBackend`, which requires rootless Podman and a pre-provisioned local image. It uses no network, a read-only root filesystem, dropped capabilities, `no-new-privileges`, PID/CPU/memory limits, an isolated writable request/result directory, and read-only Caretaker/application inputs. It never pulls an image automatically.
+- **VM**: `MultipassValidationBackend`, which uses a pre-provisioned guest with no host-directory mounts. Artifacts cross the boundary through `multipass transfer`. Normal mode can restore a configured clean snapshot before validation; suspicious scenarios can use a disposable clone of a stopped clean template and purge it afterward.
+- **EXTERNAL**: reserved for a future dedicated remote/disposable validation service.
 
-Introduce a backend interface conceptually similar to:
+If a configured backend cannot meet `ValidationPolicy.minimum_isolation`, Caretaker does not silently downgrade. `backend_unavailable_action` controls whether repair fails, remains proposal-only, or enters the explicit operator-approval workflow.
 
-- `capabilities()` reports effective isolation features;
-- `prepare(validation_bundle)` creates the isolated environment;
-- `run(request, limits)` executes deterministic validation;
-- `collect()` returns validation evidence and effective isolation metadata;
-- `destroy()` reliably removes the environment.
+Multipass candidate validation is distinct from the existing whole-subject Multipass deployment documented in `ISOLATED_EXECUTION.md`. The built-in VM backend requires the validator guest to contain Caretaker/application dependencies, refuses host mounts, and by default requires a root-owned network-isolation provisioning marker before advertising guest network control.
 
-The validation result must record the backend and actual isolation properties that were applied. Policy should compare required capabilities with actual capabilities rather than trust only a backend name.
+Outstanding isolation work:
 
-### Proposed isolation levels
-
-- **PROCESS**: current subprocess validation. Fast and portable, but not a hostile-code security boundary.
-- **CONTAINER**: rootless container with explicit restrictions and no host control socket exposure.
-- **VM_OR_EXTERNAL**: reserved for a future stronger isolation backend.
-
-A deployment policy may require a minimum isolation level. If the requirement cannot be satisfied, Caretaker should become proposal-only or follow another explicit failure action. It must not silently downgrade isolation.
-
-### Recommended first implementation
-
-The recommended first container adapter is rootless Podman on Linux. A Docker-rootless adapter can follow as a compatibility backend using the same `ValidationBackend` contract.
-
-Default container restrictions should include:
-
-- rootless/user-namespace execution;
-- no network unless explicitly enabled/allowlisted by policy;
-- read-only root filesystem where practical;
-- read-only source and dependency inputs;
-- isolated writable temporary workspace;
-- no host Docker/Podman socket mounted into the validator;
-- all unnecessary Linux capabilities dropped;
-- `no-new-privileges`;
-- seccomp enabled;
-- bounded CPU, memory, PID count, output size, file size, and wall-clock time;
-- explicit environment-variable allowlist;
-- no implicit access to Caretaker signing keys, authority files, evidence stores, control sockets, or application secrets.
-
-Validation should use an explicit **validation bundle** rather than exposing the entire application host filesystem. The bundle can contain the candidate, required source/module material, deterministic test/replay input, dependency/release metadata, and validation policy. The result records the container image digest/runtime identity, mounts, network mode, resource limits, and security-profile fingerprints used during validation.
-
-A container still shares the host kernel and must not be described as equivalent to a VM boundary. High-assurance policy should eventually be able to require `VM_OR_EXTERNAL` instead of `CONTAINER`.
-
-### Decision still required
-
-Before implementation, choose whether the initial supported runtime is:
-
-1. Podman only, keeping the implementation small;
-2. Podman plus Docker through a common CLI adapter from the start; or
-3. a generic OCI abstraction with more implementation complexity.
-
-The current recommendation is option 1: implement and harden rootless Podman first, then add Docker compatibility after the evidence/isolation contract is stable.
+- Docker-rootless compatibility adapter using the same CONTAINER contract;
+- EXTERNAL/remote validator backend;
+- richer capability attestation (seccomp/profile hashes, guest firewall policy hash, image provenance);
+- optional stronger VM technologies when a deployment requires them.
 
 ## Runtime repair graduation to source/repository workflow
 

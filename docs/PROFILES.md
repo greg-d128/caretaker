@@ -50,6 +50,8 @@ Package version, authority-manifest schema, profile version, and **policy-surfac
 
 The policy-surface generation advances when Caretaker introduces new policy-controlled functionality that an older profile could not have reviewed. Caretaker maintains a catalog of capabilities with stable IDs, their introduction version, affected policy paths, and a review explanation.
 
+Caretaker 0.6 advances the policy surface to generation 2. The new review capabilities cover adaptive `lightweight.*` instrumentation, persistent Guard behavior snapshots, minimum Repair validation-isolation requirements, and retention of the runtime signing-identity journal. A strict surface-1 profile must therefore be reviewed and continued before it can claim complete coverage under 0.6.
+
 This makes the following state detectable:
 
 ```text

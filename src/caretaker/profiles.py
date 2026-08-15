@@ -114,6 +114,45 @@ POLICY_CAPABILITIES: tuple[PolicyCapability, ...] = (
         "Review changes for collection scope, privacy, storage volume, and failure behavior.",
         ("system.",),
     ),
+    PolicyCapability(
+        "adaptive.instrumentation",
+        2,
+        "0.6.0a1",
+        "Adaptive lightweight instrumentation",
+        "Controls lightweight dependency/function observation, promotion, evidence-gated repair escalation, sampling, and demotion.",
+        "Review changes for hot-path overhead, observation scope, repair eligibility, evidence sufficiency, and demotion behavior.",
+        ("lightweight.",),
+    ),
+    PolicyCapability(
+        "guard.behavior-snapshots",
+        2,
+        "0.6.0a1",
+        "Persistent behavior statistics and snapshots",
+        "Controls bounded behavior statistics, automatic materialization, restart reconstruction, and accepted-baseline snapshot handling.",
+        "Review sampling/statistics cost, generation compatibility, automatic materialization, and baseline persistence semantics.",
+        ("guard.snapshots.",),
+    ),
+    PolicyCapability(
+        "repair.validation-isolation",
+        2,
+        "0.6.0a1",
+        "Validation isolation requirements",
+        "Controls the minimum isolation capability required before a repair candidate may pass validation and the fail-closed action when that backend is unavailable.",
+        "Review whether automatic repair can run with PROCESS, CONTAINER, VM, or EXTERNAL isolation and how unavailable stronger isolation is handled.",
+        (
+            "repair.validation.minimum_isolation",
+            "repair.validation.backend_unavailable_action",
+        ),
+    ),
+    PolicyCapability(
+        "logging.signing-identity-journal",
+        2,
+        "0.6.0a1",
+        "Runtime signing identity retention",
+        "Controls the independent signing-identity journal used to retain public identities and ephemeral key transitions required to verify signed runtime artifacts.",
+        "Review identity retention against the longest retained signed artifact and the configured runtime signing assurance mode.",
+        ("logging.signing.identity_journal_",),
+    ),
 )
 
 CURRENT_POLICY_SURFACE_VERSION = max(

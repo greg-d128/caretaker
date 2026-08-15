@@ -369,6 +369,7 @@ class KeyTransition:
     new_public_key_fingerprint: str
     created_at: datetime
     signature: bytes
+    next_event_sequence: int = 0
 
 
 @dataclass(frozen=True, slots=True)

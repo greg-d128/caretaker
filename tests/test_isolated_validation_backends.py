@@ -86,6 +86,27 @@ def test_rootless_podman_command_has_strict_container_boundary(tmp_path: Path) -
     assert f"src={request},dst=/work,rw=true" in text
 
 
+
+def test_rootless_podman_worker_preserves_rootless_host_environment(monkeypatch, tmp_path: Path) -> None:
+    backend = RootlessPodmanValidationBackend("caretaker-validator:local", workspace=tmp_path)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setenv("HOME", "/home/demo")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus")
+
+    def fake_run_worker(command, *, output_path, timeout_seconds, cwd, env):
+        captured["env"] = dict(env)
+        return {"eligible": True, "checks": []}
+
+    monkeypatch.setattr("caretaker.validation._run_worker_command", fake_run_worker)
+    result = backend._run_worker.__wrapped__(backend, {}, timeout_seconds=1.0)
+
+    assert result["eligible"] is True
+    assert captured["env"]["HOME"] == "/home/demo"
+    assert captured["env"]["XDG_RUNTIME_DIR"] == "/run/user/1000"
+    assert captured["env"]["DBUS_SESSION_BUS_ADDRESS"] == "unix:path=/run/user/1000/bus"
+
 def test_multipass_rejects_host_directory_mounts(monkeypatch) -> None:
     monkeypatch.setattr("caretaker.validation.shutil.which", lambda executable: f"/usr/bin/{executable}")
     backend = MultipassValidationBackend(require_network_isolation=False)

@@ -25,6 +25,8 @@ from .logging.signing import (
     deserialize_signed_artifact,
     serialize_signed_artifact,
     verify_signed_artifact,
+    public_key_from_identity_records,
+    verify_identity_record_set,
 )
 
 
@@ -195,6 +197,9 @@ def verify_envelope(
         return False, "snapshot signature context does not match snapshot identity"
     if identity_journal is None or not artifact.public_key_fingerprint:
         return False, "snapshot signing identity is unavailable for verification"
+    identity_ok, identity_error = identity_journal.verify_identity(artifact.public_key_fingerprint)
+    if not identity_ok:
+        return False, f"snapshot signing identity chain is invalid: {identity_error}"
     public_key = identity_journal.public_key(artifact.public_key_fingerprint)
     if public_key is None:
         return False, "snapshot public signing key is not present in the signing identity journal"
@@ -220,13 +225,19 @@ class BehaviorSnapshotStore:
         self.snapshot_directory = self.root / "behavior" / "snapshots"
         self.archive_directory = self.root / "behavior" / "archives"
         self.baseline_directory = self.root / "behavior" / "baselines"
+        self.chain_directory = self.root / "behavior" / "chains"
+        self.tombstone_directory = self.root / "behavior" / "tombstones"
         self.snapshot_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.archive_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.baseline_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.chain_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.tombstone_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         try:
             self.snapshot_directory.chmod(0o700)
             self.archive_directory.chmod(0o700)
             self.baseline_directory.chmod(0o700)
+            self.chain_directory.chmod(0o700)
+            self.tombstone_directory.chmod(0o700)
         except OSError:
             pass
 
@@ -243,6 +254,7 @@ class BehaviorSnapshotStore:
         except OSError:
             pass
         temporary.replace(path)
+        self._update_chain_head(envelope)
         return path
 
     def create(
@@ -279,7 +291,53 @@ class BehaviorSnapshotStore:
         self.save(envelope)
         return envelope
 
+    def _chain_path(self, subject_key: str) -> Path:
+        digest = hashlib.sha256(subject_key.encode("utf-8")).hexdigest()
+        return self.chain_directory / f"{digest}.json"
+
+    def _update_chain_head(self, envelope: Mapping[str, Any]) -> None:
+        snapshot = envelope.get("snapshot") or {}
+        integrity = envelope.get("integrity") or {}
+        subject_key = str(snapshot.get("subject_key") or "")
+        digest = str(integrity.get("content_sha256") or "")
+        sequence = int(snapshot.get("snapshot_sequence") or 0)
+        if not subject_key or not digest or sequence < 1:
+            return
+        path = self._chain_path(subject_key)
+        if path.exists():
+            try:
+                current = json.loads(path.read_text(encoding="utf-8"))
+                if int(current.get("snapshot_sequence") or 0) > sequence:
+                    return
+            except Exception:
+                pass
+        record = {
+            "schema_version": 1,
+            "subject_key": subject_key,
+            "snapshot_id": snapshot.get("snapshot_id"),
+            "snapshot_sequence": sequence,
+            "content_sha256": digest,
+            "updated_at": utcnow().isoformat(),
+        }
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_bytes(canonical_json_bytes(record))
+        try:
+            temporary.chmod(0o600)
+        except OSError:
+            pass
+        temporary.replace(path)
+
     def _previous_snapshot_commitment(self, subject_key: str) -> tuple[str | None, int]:
+        chain_path = self._chain_path(subject_key)
+        if chain_path.exists():
+            try:
+                record = json.loads(chain_path.read_text(encoding="utf-8"))
+                digest = str(record.get("content_sha256") or "")
+                sequence = int(record.get("snapshot_sequence") or 0)
+                if digest and sequence >= 1:
+                    return digest, sequence + 1
+            except Exception:
+                pass
         latest: tuple[str, str, int] | None = None
         for path in self.snapshot_directory.glob("*.json"):
             try:
@@ -432,6 +490,27 @@ class BehaviorSnapshotStore:
     def delete(self, snapshot_id: UUID | str) -> None:
         identifier = UUID(str(snapshot_id))
         path = self.snapshot_directory / f"{identifier}.json"
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+        ok, error = verify_envelope(envelope, identity_journal=self.identity_journal)
+        if not ok:
+            raise ValueError(f"Cannot delete invalid behavior snapshot {identifier}: {error}")
+        snapshot = envelope["snapshot"]
+        tombstone = {
+            "schema_version": 1,
+            "snapshot_id": str(identifier),
+            "subject_key": snapshot.get("subject_key"),
+            "snapshot_sequence": snapshot.get("snapshot_sequence"),
+            "content_sha256": envelope["integrity"].get("content_sha256"),
+            "deleted_at": utcnow().isoformat(),
+        }
+        tombstone_path = self.tombstone_directory / f"{identifier}.json"
+        temporary = tombstone_path.with_suffix(".json.tmp")
+        temporary.write_bytes(canonical_json_bytes(tombstone))
+        try:
+            temporary.chmod(0o600)
+        except OSError:
+            pass
+        temporary.replace(tombstone_path)
         path.unlink()
 
     def archive(self, snapshot_ids: Iterable[UUID | str], *, remove: bool = True) -> Path:
@@ -465,6 +544,18 @@ class BehaviorSnapshotStore:
             for item in members
             if (item[1].get("integrity") or {}).get("signer_fingerprint")
         }
+        archive_signature: RuntimeSignedArtifact | None = None
+        if self.artifact_signer is not None:
+            archive_signature = self.artifact_signer.sign_artifact(
+                artifact_kind="behavior-archive",
+                content_hash=content_hash(manifest),
+                context={
+                    "archive_id": str(archive_id),
+                    "snapshot_count": len(members),
+                },
+            )
+            if archive_signature is not None and archive_signature.public_key_fingerprint:
+                fingerprints.add(archive_signature.public_key_fingerprint)
         identity_records = self.identity_journal.export_records(fingerprints)
         path = self.archive_directory / f"behavior-{archive_id}.tar.gz"
         with tarfile.open(path, "w:gz") as archive:
@@ -473,6 +564,14 @@ class BehaviorSnapshotStore:
             info.size = len(manifest_bytes)
             info.mtime = int(utcnow().timestamp())
             archive.addfile(info, io.BytesIO(manifest_bytes))
+            if archive_signature is not None:
+                signature_bytes = canonical_json_bytes(
+                    {"artifact_signature": serialize_signed_artifact(archive_signature)}
+                )
+                signature_info = tarfile.TarInfo("archive-signature.json")
+                signature_info.size = len(signature_bytes)
+                signature_info.mtime = int(utcnow().timestamp())
+                archive.addfile(signature_info, io.BytesIO(signature_bytes))
             if identity_records:
                 identity_bytes = canonical_json_bytes({"records": identity_records})
                 identity_info = tarfile.TarInfo("signing-identities.json")
@@ -490,6 +589,192 @@ class BehaviorSnapshotStore:
                 member.unlink()
         return path
 
+    def list_archives(self) -> tuple[dict[str, Any], ...]:
+        rows: list[dict[str, Any]] = []
+        for path in sorted(
+            self.archive_directory.glob("behavior-*.tar.gz"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        ):
+            stat = path.stat()
+            rows.append(
+                {
+                    "name": path.name,
+                    "size_bytes": stat.st_size,
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+                }
+            )
+        return tuple(rows)
+
+    def resolve_archive(self, name: str) -> Path:
+        candidate = self.archive_directory / Path(name).name
+        if candidate.parent != self.archive_directory or not candidate.name.startswith("behavior-"):
+            raise ValueError("Invalid behavior archive name")
+        if candidate.suffixes[-2:] != [".tar", ".gz"]:
+            raise ValueError("Behavior archive must be a .tar.gz file")
+        return candidate
+
+    def verify_archive(self, archive_path: str | Path) -> dict[str, Any]:
+        """Verify an archive without extracting it to the filesystem."""
+        path = Path(archive_path)
+        errors: list[str] = []
+        with tarfile.open(path, "r:gz") as archive:
+            members = archive.getmembers()
+            for member in members:
+                if (
+                    member.name.startswith("/")
+                    or ".." in Path(member.name).parts
+                    or member.issym()
+                    or member.islnk()
+                    or member.isdev()
+                ):
+                    errors.append(f"unsafe archive member: {member.name}")
+            manifest = _tar_json(archive, "manifest.json")
+            identity_value = _tar_json(archive, "signing-identities.json", required=False) or {}
+            identity_records = tuple(identity_value.get("records") or ())
+            signature_value = _tar_json(archive, "archive-signature.json", required=False)
+            if signature_value is not None:
+                try:
+                    artifact = deserialize_signed_artifact(signature_value["artifact_signature"])
+                except Exception as exc:
+                    errors.append(f"archive signature cannot be decoded: {type(exc).__name__}: {exc}")
+                else:
+                    if artifact.artifact_kind != "behavior-archive":
+                        errors.append(f"unexpected archive artifact kind: {artifact.artifact_kind}")
+                    if artifact.content_hash != content_hash(manifest):
+                        errors.append("archive signature does not bind the manifest hash")
+                    if str(artifact.context.get("archive_id") or "") != str(manifest.get("archive_id") or ""):
+                        errors.append("archive signature context does not match archive ID")
+                    fingerprint = artifact.public_key_fingerprint
+                    if not fingerprint:
+                        errors.append("archive signature has no public-key fingerprint")
+                    else:
+                        identity_ok, identity_error = verify_identity_record_set(
+                            identity_records, fingerprint
+                        )
+                        if not identity_ok:
+                            errors.append(f"archive signing identity is invalid: {identity_error}")
+                        public_key = public_key_from_identity_records(identity_records, fingerprint)
+                        if public_key is None or not verify_signed_artifact(artifact, public_key):
+                            errors.append("archive artifact signature is invalid")
+            elif self.artifact_signer is not None:
+                errors.append("archive is missing the expected runtime artifact signature")
+
+            verified_snapshots = 0
+            for item in manifest.get("snapshots") or ():
+                filename = str(item.get("filename") or "")
+                member_name = f"snapshots/{filename}"
+                try:
+                    envelope = _tar_json(archive, member_name)
+                except Exception as exc:
+                    errors.append(f"{member_name}: {exc}")
+                    continue
+                expected = str(item.get("content_sha256") or "")
+                observed = str((envelope.get("integrity") or {}).get("content_sha256") or "")
+                if expected != observed:
+                    errors.append(f"{member_name}: manifest content hash mismatch")
+                    continue
+                ok, error = _verify_envelope_with_identity_records(envelope, identity_records)
+                if not ok:
+                    errors.append(f"{member_name}: {error}")
+                    continue
+                verified_snapshots += 1
+        return {
+            "archive": str(path),
+            "verified": not errors,
+            "errors": errors,
+            "snapshot_count": len(manifest.get("snapshots") or ()),
+            "verified_snapshots": verified_snapshots,
+            "archive_id": manifest.get("archive_id"),
+            "signed": signature_value is not None,
+        }
+
+    def restore_archive(self, archive_path: str | Path) -> tuple[str, ...]:
+        report = self.verify_archive(archive_path)
+        if not report["verified"]:
+            raise ValueError("Behavior archive verification failed: " + "; ".join(report["errors"]))
+        restored: list[str] = []
+        with tarfile.open(Path(archive_path), "r:gz") as archive:
+            manifest = _tar_json(archive, "manifest.json")
+            for item in manifest.get("snapshots") or ():
+                filename = str(item["filename"])
+                envelope = _tar_json(archive, f"snapshots/{filename}")
+                snapshot_id = str(envelope["snapshot"]["snapshot_id"])
+                target = self.snapshot_directory / f"{UUID(snapshot_id)}.json"
+                encoded = canonical_json_bytes(envelope)
+                if target.exists():
+                    existing = target.read_bytes()
+                    if existing != encoded:
+                        raise ValueError(
+                            f"Behavior snapshot {snapshot_id} already exists with different content"
+                        )
+                    self._update_chain_head(envelope)
+                    restored.append(snapshot_id)
+                    continue
+                temporary = target.with_suffix(".json.tmp")
+                temporary.write_bytes(encoded)
+                try:
+                    temporary.chmod(0o600)
+                except OSError:
+                    pass
+                temporary.replace(target)
+                self._update_chain_head(envelope)
+                restored.append(snapshot_id)
+        return tuple(restored)
+
+
+def _tar_json(archive: tarfile.TarFile, name: str, *, required: bool = True) -> dict[str, Any] | None:
+    try:
+        member = archive.getmember(name)
+    except KeyError:
+        if required:
+            raise ValueError(f"archive is missing {name}")
+        return None
+    if not member.isfile():
+        raise ValueError(f"archive member {name} is not a regular file")
+    handle = archive.extractfile(member)
+    if handle is None:
+        raise ValueError(f"archive member {name} cannot be read")
+    value = json.loads(handle.read().decode("utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"archive member {name} does not contain a JSON object")
+    return value
+
+
+def _verify_envelope_with_identity_records(
+    envelope: Mapping[str, Any],
+    identity_records: tuple[Mapping[str, Any], ...],
+) -> tuple[bool, str | None]:
+    snapshot = envelope.get("snapshot")
+    integrity = envelope.get("integrity")
+    if not isinstance(snapshot, Mapping) or not isinstance(integrity, Mapping):
+        return False, "snapshot envelope is missing snapshot/integrity objects"
+    expected = str(integrity.get("content_sha256") or "")
+    if not expected or content_hash(snapshot) != expected:
+        return False, "snapshot content hash does not match the integrity envelope"
+    signed_value = integrity.get("artifact_signature")
+    if signed_value is None:
+        return True, None
+    if not isinstance(signed_value, Mapping):
+        return False, "snapshot artifact signature is malformed"
+    try:
+        artifact = deserialize_signed_artifact(signed_value)
+    except Exception as exc:
+        return False, f"snapshot artifact signature cannot be decoded: {type(exc).__name__}: {exc}"
+    if artifact.artifact_kind != "behavior-snapshot" or artifact.content_hash != expected:
+        return False, "snapshot artifact signature binds the wrong artifact or content hash"
+    if str(artifact.context.get("snapshot_id") or "") != str(snapshot.get("snapshot_id") or ""):
+        return False, "snapshot artifact signature context does not match snapshot identity"
+    fingerprint = artifact.public_key_fingerprint
+    if not fingerprint:
+        return False, "snapshot artifact signature has no public-key fingerprint"
+    identity_ok, identity_error = verify_identity_record_set(identity_records, fingerprint)
+    if not identity_ok:
+        return False, f"snapshot signing identity is invalid: {identity_error}"
+    public_key = public_key_from_identity_records(identity_records, fingerprint)
+    if public_key is None or not verify_signed_artifact(artifact, public_key):
+        return False, "snapshot artifact signature is invalid"
+    return True, None
 
 
 def monitoring_configuration_fingerprint(configuration: Mapping[str, Any]) -> str:

@@ -335,6 +335,31 @@ def main(argv: list[str] | None = None) -> int:
             )
             return {"ok": True, "archive": str(path)}
 
+        if command == "behavior-archive-list":
+            return {"ok": True, "archives": list(behavior_store.list_archives())}
+
+        if command == "behavior-archive-verify":
+            name = str(request.get("archive") or "").strip()
+            if not name:
+                raise ValueError("behavior-archive-verify requires archive")
+            path = behavior_store.resolve_archive(name)
+            return {"ok": True, "verification": behavior_store.verify_archive(path)}
+
+        if command == "behavior-archive-restore":
+            name = str(request.get("archive") or "").strip()
+            if not name:
+                raise ValueError("behavior-archive-restore requires archive")
+            path = behavior_store.resolve_archive(name)
+            restored = behavior_store.restore_archive(path)
+            runtime.event(
+                logger_name="caretaker.behavior",
+                severity=20,
+                channel=LogChannel.GUARD,
+                message="Behavior archive restored",
+                fields={"archive": path.name, "snapshot_ids": list(restored)},
+            )
+            return {"ok": True, "archive": path.name, "restored": list(restored)}
+
         if command == "behavior-delete":
             snapshot_id = str(request.get("snapshot_id") or "").strip()
             if not snapshot_id:

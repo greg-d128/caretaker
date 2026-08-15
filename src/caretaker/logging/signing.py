@@ -156,6 +156,124 @@ def verify_signed_artifact(artifact: RuntimeSignedArtifact, public_key: bytes) -
         return False
 
 
+def public_key_from_identity_records(
+    records: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]],
+    fingerprint: str,
+) -> bytes | None:
+    for row in reversed(tuple(records)):
+        record = row.get("record") or {}
+        if str(record.get("public_key_fingerprint") or "") != fingerprint:
+            continue
+        public_key = _record_public_key(record)
+        if public_key is not None:
+            return public_key
+    return None
+
+
+def verify_identity_record_set(
+    records: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]],
+    fingerprint: str,
+    *,
+    require_complete_hash_chain: bool = True,
+) -> tuple[bool, str | None]:
+    """Verify exported public identity records without requiring the original journal path."""
+    rows = sorted(
+        (dict(row) for row in records),
+        key=lambda row: int(row.get("sequence") or 0),
+    )
+    if require_complete_hash_chain:
+        previous: str | None = None
+        for row in rows:
+            if row.get("previous_record_hash") != previous:
+                return False, "exported signing identity records do not form a complete hash chain"
+            unsigned = {key: value for key, value in row.items() if key != "record_sha256"}
+            expected = hashlib.sha256(_canonical(unsigned)).hexdigest()
+            observed = str(row.get("record_sha256") or "")
+            if expected != observed:
+                return False, "exported signing identity record SHA-256 is invalid"
+            previous = observed
+
+    target_row: Mapping[str, Any] | None = None
+    for row in rows:
+        record = row.get("record") or {}
+        if (
+            row.get("record_type") in {"IDENTITY_CREATED", "IDENTITY_EPOCH", "EXTERNAL_IDENTITY"}
+            and str(record.get("public_key_fingerprint") or "") == fingerprint
+        ):
+            target_row = row
+    if target_row is None:
+        return False, "signing identity fingerprint is absent from exported identity records"
+    if target_row.get("record_type") == "EXTERNAL_IDENTITY":
+        return (
+            True,
+            None,
+        ) if public_key_from_identity_records(rows, fingerprint) is not None else (
+            False,
+            "external signing identity has no locally verifiable public key",
+        )
+
+    target = target_row.get("record") or {}
+    identity_id = str(target.get("identity_id") or "")
+    target_epoch = int(target.get("key_epoch") or 0)
+    identities: dict[int, Mapping[str, Any]] = {}
+    transitions: dict[tuple[int, int], Mapping[str, Any]] = {}
+    for row in rows:
+        record = row.get("record") or {}
+        if str(record.get("identity_id") or "") != identity_id:
+            continue
+        if row.get("record_type") in {"IDENTITY_CREATED", "IDENTITY_EPOCH"}:
+            identities[int(record.get("key_epoch") or 0)] = record
+        elif row.get("record_type") == "KEY_TRANSITION":
+            transitions[(int(record.get("from_epoch") or 0), int(record.get("to_epoch") or 0))] = record
+    if not identity_id or target_epoch < 1 or 1 not in identities:
+        return False, "ephemeral signing identity chain is incomplete"
+    current_key = _record_public_key(identities[1])
+    if current_key is None:
+        return False, "ephemeral signing identity epoch 1 has no public key"
+    if hashlib.sha256(current_key).hexdigest() != str(identities[1].get("public_key_fingerprint") or ""):
+        return False, "ephemeral signing identity epoch 1 fingerprint is invalid"
+    try:
+        identity_uuid = UUID(identity_id)
+        run_uuid = UUID(str(identities[1].get("run_id") or target.get("run_id")))
+    except ValueError:
+        return False, "ephemeral signing identity contains an invalid UUID"
+    for epoch in range(1, target_epoch):
+        record = transitions.get((epoch, epoch + 1))
+        next_identity = identities.get(epoch + 1)
+        if record is None or next_identity is None:
+            return False, f"ephemeral signing identity chain is incomplete at epoch {epoch}"
+        new_key = _record_public_key(record, field="new_public_key")
+        signature = _record_public_key(record, field="signature")
+        if new_key is None or signature is None:
+            return False, f"ephemeral key transition {epoch}->{epoch + 1} is malformed"
+        transition = KeyTransition(
+            from_epoch=epoch,
+            to_epoch=epoch + 1,
+            old_public_key_fingerprint=str(record.get("old_public_key_fingerprint") or ""),
+            new_public_key=new_key,
+            new_public_key_fingerprint=str(record.get("new_public_key_fingerprint") or ""),
+            created_at=datetime.fromisoformat(str(record.get("created_at"))),
+            signature=signature,
+            next_event_sequence=int(record.get("next_event_sequence") or 0),
+        )
+        if transition.old_public_key_fingerprint != hashlib.sha256(current_key).hexdigest():
+            return False, f"ephemeral key transition {epoch}->{epoch + 1} has the wrong old-key fingerprint"
+        if transition.new_public_key_fingerprint != hashlib.sha256(new_key).hexdigest():
+            return False, f"ephemeral key transition {epoch}->{epoch + 1} has the wrong new-key fingerprint"
+        if not KeyEvolutionSigner.verify_transition(
+            transition, current_key, identity_id=identity_uuid, run_id=run_uuid
+        ):
+            return False, f"ephemeral key transition {epoch}->{epoch + 1} signature is invalid"
+        if _record_public_key(next_identity) != new_key:
+            return False, f"ephemeral identity epoch {epoch + 1} does not match its signed transition"
+        if int(next_identity.get("first_event_sequence") or 0) != transition.next_event_sequence:
+            return False, f"ephemeral identity epoch {epoch + 1} has the wrong first event sequence"
+        current_key = new_key
+    if hashlib.sha256(current_key).hexdigest() != fingerprint:
+        return False, "ephemeral signing identity chain does not terminate at the requested key"
+    return True, None
+
+
 class SigningIdentityJournal:
     """Independent hash-chained public signing-identity log.
 
@@ -312,7 +430,7 @@ class SigningIdentityJournal:
                 "new_public_key": transition.new_public_key,
                 "new_public_key_fingerprint": transition.new_public_key_fingerprint,
                 "created_at": transition.created_at,
-                "next_event_sequence": identity.first_event_sequence,
+                "next_event_sequence": transition.next_event_sequence,
                 "signature": transition.signature,
             },
         )
@@ -352,6 +470,50 @@ class SigningIdentityJournal:
                 except Exception:
                     return None
         return None
+
+    def verify_journal(self) -> tuple[bool, tuple[str, ...]]:
+        """Verify the append-only hash chain of every retained identity journal."""
+        errors: list[str] = []
+        if not self.directory.exists():
+            return True, ()
+        for path in sorted(self.directory.glob("*.jsonl")):
+            previous: str | None = None
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except OSError as exc:
+                errors.append(f"{path.name}: cannot read journal: {exc}")
+                continue
+            for line_number, line in enumerate(lines, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    errors.append(f"{path.name}:{line_number}: invalid JSON: {exc}")
+                    continue
+                observed_previous = row.get("previous_record_hash")
+                if observed_previous != previous:
+                    errors.append(
+                        f"{path.name}:{line_number}: previous_record_hash does not match retained chain"
+                    )
+                unsigned = {key: value for key, value in row.items() if key != "record_sha256"}
+                expected = hashlib.sha256(_canonical(unsigned)).hexdigest()
+                observed = str(row.get("record_sha256") or "")
+                if expected != observed:
+                    errors.append(f"{path.name}:{line_number}: record SHA-256 is invalid")
+                previous = observed or expected
+        return not errors, tuple(errors)
+
+    def verify_identity(self, fingerprint: str) -> tuple[bool, str | None]:
+        """Verify a retained signing identity and its ephemeral key-evolution chain."""
+        valid, errors = self.verify_journal()
+        if not valid:
+            return False, errors[0] if errors else "signing identity journal is invalid"
+        return verify_identity_record_set(
+            self.records(),
+            fingerprint,
+            require_complete_hash_chain=False,
+        )
 
     def export_records(self, fingerprints: set[str]) -> tuple[dict[str, Any], ...]:
         if not fingerprints:
@@ -473,6 +635,7 @@ class KeyEvolutionSigner:
             new_public_key_fingerprint=unsigned["new_public_key_fingerprint"],
             created_at=now,
             signature=signature,
+            next_event_sequence=next_event_sequence,
         )
         self.transitions.append(transition)
         self._private_key = new_key
@@ -583,7 +746,7 @@ class KeyEvolutionSigner:
         *,
         identity_id: UUID,
         run_id: UUID,
-        next_event_sequence: int,
+        next_event_sequence: int | None = None,
     ) -> bool:
         _, Ed25519PublicKey, _ = _crypto()
         unsigned = {
@@ -595,7 +758,11 @@ class KeyEvolutionSigner:
             "new_public_key": transition.new_public_key,
             "new_public_key_fingerprint": transition.new_public_key_fingerprint,
             "created_at": transition.created_at,
-            "next_event_sequence": next_event_sequence,
+            "next_event_sequence": (
+                transition.next_event_sequence
+                if next_event_sequence is None
+                else next_event_sequence
+            ),
         }
         try:
             Ed25519PublicKey.from_public_bytes(old_public_key).verify(
@@ -709,6 +876,18 @@ class EphemeralSignerProcess:
         self._connection.close()
 
 
+def _record_public_key(record: Mapping[str, Any], *, field: str = "public_key") -> bytes | None:
+    value = record.get(field)
+    if not value:
+        return None
+    if isinstance(value, bytes):
+        return value
+    try:
+        return base64.b64decode(str(value))
+    except Exception:
+        return None
+
+
 def _external_public_key(identity: Mapping[str, Any]) -> bytes | None:
     value = identity.get("public_key")
     if isinstance(value, bytes):
@@ -783,9 +962,6 @@ class RuntimeArtifactSigningService:
             return
         identity = self._backend.identity
         for transition in transitions:
-            # identity points at the current epoch.  For older transitions the
-            # next event sequence is not used for snapshot verification, but the
-            # journal preserves the signed transition bytes and both key IDs.
             self.journal.record_transition(identity=identity, transition=transition)
         self.journal.record_identity(identity)
 

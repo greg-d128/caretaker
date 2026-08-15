@@ -35,7 +35,7 @@ Every repair episode captures the effective logging-policy generation. A change 
 
 ## Worker health and restart
 
-The supervised runtime maintains heartbeats for its writer, event server, control server, and optional system collector. `WorkerRestartPolicy` controls bounded exponential-backoff restart of restartable components. In 0.5.0a1 the system collector is automatically restartable; writer and socket failures are detected and surfaced as degraded or failed health because safe reconnection and open-segment recovery must take precedence over blind restart.
+The supervised runtime maintains heartbeats for its writer, event server, control server, and optional system collector. `WorkerRestartPolicy` controls bounded exponential-backoff restart of restartable components. In 0.6.0a1 the system collector is automatically restartable; writer and socket failures are detected and surfaced as degraded or failed health because safe reconnection and open-segment recovery must take precedence over blind restart.
 
 Restart exhaustion may continue degraded, disable the affected component, or stop the supervised application. Caretaker workers do not elect a replacement supervisor; they remain subordinate to the application-scoped supervisor.
 

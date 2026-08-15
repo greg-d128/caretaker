@@ -1,7 +1,7 @@
-# Interactive Isolation Testing for Caretaker 0.5.0a1
+# Interactive Isolation Testing for Caretaker 0.6.0a1
 
-**Applies to:** Caretaker `0.5.0a1`  
-**Environment:** Multipass instance named `caretaker-lab`  
+**Applies to:** Caretaker `0.6.0a1`
+**Environment:** Multipass instance named `caretaker-lab`
 **Purpose:** inspect Caretaker interactively inside an isolated environment, first as an installed Python package and then as an initialized supervised runtime.
 
 ## 1. Scope
@@ -17,7 +17,7 @@ This guide describes how to:
 - open an interactive Python console after the Caretaker runtime has initialized;
 - distinguish static package inspection from live runtime inspection.
 
-This guide assumes the isolation layout used by the Caretaker `0.5.0a1` Multipass setup:
+This guide assumes the isolation layout used by the Caretaker `0.6.0a1` Multipass setup:
 
 ```text
 Instance:             caretaker-lab
@@ -474,7 +474,7 @@ sudo -u caretaker-subject \
   --file /etc/caretaker/application.toml
 ```
 
-The exact command names depend on the installed `0.5.0a1` implementation. Confirm the available commands with:
+The exact command names depend on the installed `0.6.0a1` implementation. Confirm the available commands with:
 
 ```bash
 /opt/caretaker/venv/bin/caretaker-logging --help
@@ -651,7 +651,7 @@ sudo -u caretaker-subject \
 
 If the module is installed into the virtual environment, omit `PYTHONPATH`.
 
-Whether `caretaker.run` accepts an arbitrary standalone module in exactly this form depends on the installed `0.5.0a1` entry-point implementation. Use the same application-entry convention already used by your working Caretaker deployment.
+Whether `caretaker.run` accepts an arbitrary standalone module in exactly this form depends on the installed `0.6.0a1` entry-point implementation. Use the same application-entry convention already used by your working Caretaker deployment.
 
 ## 21. Expand the interactive namespace carefully
 
@@ -799,7 +799,7 @@ Record the installed wheel or distribution files when available:
 When the original wheel remains available:
 
 ```bash
-sha256sum /path/to/caretaker-0.5.0a1-py3-none-any.whl
+sha256sum /path/to/caretaker-0.6.0a1-py3-none-any.whl
 ```
 
 ## 26. Avoid modifying the installed package

@@ -597,6 +597,12 @@ class CaretakerConsoleApp(App):
             if str(item.get("state", "")).upper() not in {"HEALTHY", "WORKERSTATE.HEALTHY"}
         ]
         validating = runtime.get("validating_functions") or []
+        validation_backends = sorted(
+            {
+                f"{item.get('validation_backend', 'unknown')}:{item.get('validation_isolation', 'unknown')}"
+                for item in runtime.get("active_validations") or []
+            }
+        )
         incidents = runtime.get("active_incidents") or []
         incident_targets = sorted(
             {str(item.get("target_id")) for item in incidents if item.get("target_id")}
@@ -621,6 +627,7 @@ class CaretakerConsoleApp(App):
             f"Application PID: {status.get('application_pid')}   running=True",
             f"Active incident targets: {', '.join(incident_targets) if incident_targets else 'none'}",
             f"Validating functions: {', '.join(validating) if validating else 'none'}",
+            f"Validation backends: {', '.join(validation_backends) if validation_backends else 'none'}",
             f"Degraded capabilities: {', '.join(degraded) if degraded else 'none'}",
             "Runtime policy matches supervisor: "
             + ("yes" if runtime_policy_match is True else "NO - POLICY TAMPER DETECTED" if runtime_policy_match is False else "unknown"),
@@ -1024,18 +1031,54 @@ class CaretakerConsoleApp(App):
         self.query_one("#behavior-detail-title", Static).update(title)
         output = self.query_one("#behavior-output", RichLog)
         output.clear()
+        signature_state = integrity.get("signature_state", "-")
+        signature_detail = (
+            f"{signature_state} (verified on load)"
+            if integrity.get("artifact_signature")
+            else str(signature_state)
+        )
         output.write(
             f"[b]Snapshot[/b] {snapshot.get('snapshot_id', '-')}\n"
             f"[b]Created[/b] {snapshot.get('created_at', '-')}\n"
             f"[b]Scope[/b] {snapshot.get('scope', '-')}\n"
             f"[b]Subject[/b] {subject.get('module_name', '-')}{':' + str(subject.get('qualified_name')) if subject.get('qualified_name') else ''}\n"
             f"[b]Code hash[/b] {snapshot.get('code_hash_kind', '-')}: {snapshot.get('code_hash', '-')}\n"
+            f"[b]Generation[/b] {self._behavior_short_hash(snapshot.get('generation_id'))}\n"
+            f"[b]Monitoring[/b] {self._behavior_short_hash(snapshot.get('monitoring_fingerprint'))}\n"
+            f"[b]Seal reason[/b] {snapshot.get('seal_reason') or '-'}\n"
             f"[b]Snapshot SHA-256[/b] {integrity.get('content_sha256', '-')}\n"
-            f"[b]Signature[/b] {integrity.get('signature_state', '-')}"
+            f"[b]Signature[/b] {signature_detail}"
         )
         output.write(
             f"\n[b]Behavior[/b] calls={profile.get('call_count', 0)} events={profile.get('event_count', 0)}"
+            f" success={profile.get('success_count', 0)} failure={profile.get('failure_count', 0)}"
         )
+        duration = dict((profile.get("statistics") or {}).get("duration_seconds") or {})
+        if duration:
+            output.write("\n[b]Duration statistics (seconds)[/b]")
+            values = []
+            for key in ("minimum", "p10", "p50", "average", "p90", "p95", "p99", "maximum"):
+                value = duration.get(key)
+                if value is not None:
+                    values.append(f"{key}={float(value):.6g}")
+            if values:
+                output.write("  " + "  ".join(values))
+            output.write(
+                f"  observations={duration.get('count', 0)} reservoir={duration.get('reservoir_size', 0)}"
+            )
+        provenance = profile.get("sampling_provenance") or {}
+        strata = provenance.get("strata") or {}
+        if strata:
+            output.write("\n[b]Sampling strata[/b]")
+            for stage, details in sorted(strata.items()):
+                output.write(
+                    f"  {stage}: samples={details.get('sample_count', 0)} "
+                    f"success={details.get('success_count', 0)} failure={details.get('failure_count', 0)}"
+                )
+        if profile.get("resource_coverage_complete") is False:
+            output.write(
+                "[yellow]Resource set is truncated; omitted resources must not be interpreted as never observed.[/yellow]"
+            )
         for kind, count in sorted((profile.get("event_kind_counts") or {}).items()):
             output.write(f"  {kind}: {count}")
         for key, label in (
@@ -1077,6 +1120,8 @@ class CaretakerConsoleApp(App):
             f"A {self._behavior_short_hash(comparison.get('code_hash_a'))}  →  "
             f"B {self._behavior_short_hash(comparison.get('code_hash_b'))}"
         )
+        if comparison.get("monitoring_changed"):
+            output.write("[yellow]Monitoring configuration changed; this comparison spans behavior generations.[/yellow]")
         if comparison.get("cross_subject"):
             output.write("[yellow]Cross-subject comparison: interpret deltas as exploratory, not baseline drift.[/yellow]")
         for label in ("calls", "events", "events_per_call"):
@@ -1089,6 +1134,21 @@ class CaretakerConsoleApp(App):
                 f" A {self._behavior_bar(before, maximum)} {before:.2f}\n"
                 f" B {self._behavior_bar(after, maximum)} {after:.2f}"
             )
+        duration_changes = comparison.get("duration_statistics") or {}
+        if duration_changes:
+            output.write("\n[b]Duration distribution changes[/b]")
+            for key in ("minimum", "p10", "p50", "average", "p90", "p95", "p99", "maximum"):
+                change = duration_changes.get(key)
+                if not change:
+                    continue
+                before = float(change.get("before") or 0)
+                after = float(change.get("after") or 0)
+                maximum = max(abs(before), abs(after), 1e-12)
+                output.write(
+                    f" {key}: {self._behavior_delta(change)}\n"
+                    f"   A {self._behavior_bar(before, maximum, width=14)} {before:.6g}\n"
+                    f"   B {self._behavior_bar(after, maximum, width=14)} {after:.6g}"
+                )
         kind_changes = comparison.get("event_kind_changes") or ()
         if kind_changes:
             output.write("\n[b]Event-kind changes[/b]")

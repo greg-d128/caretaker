@@ -121,3 +121,86 @@ def test_behavior_archive_contains_signing_identity_records(tmp_path):
     with tarfile.open(archive_path, "r:gz") as archive:
         assert "signing-identities.json" in archive.getnames()
     service.close()
+
+
+def test_ephemeral_identity_journal_verifies_key_transition_sequence(tmp_path):
+    service = RuntimeArtifactSigningService(
+        policy=RuntimeSigningPolicy(
+            mode=RuntimeRecordIntegrityMode.EPHEMERAL_SIGNED,
+            run_signer_in_separate_process=False,
+            key_epoch_maximum_seconds=0,
+        ),
+        application_id="demo",
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        root=tmp_path,
+    )
+    store = BehaviorSnapshotStore(tmp_path, artifact_signer=service)
+    first = store.create(_capture())
+    second_capture = _capture()
+    second_capture["profile"] = {"call_count": 20, "event_count": 3}
+    second = store.create(second_capture)
+
+    assert store.load(first["snapshot"]["snapshot_id"])["snapshot"]["snapshot_id"] == first["snapshot"]["snapshot_id"]
+    assert store.load(second["snapshot"]["snapshot_id"])["snapshot"]["snapshot_id"] == second["snapshot"]["snapshot_id"]
+    current = service.identity
+    valid, error = service.journal.verify_identity(current.public_key_fingerprint)
+    assert valid is True
+    assert error is None
+    transition_records = [
+        row for row in service.journal.records() if row["record_type"] == "KEY_TRANSITION"
+    ]
+    assert transition_records
+    assert all("next_event_sequence" in row["record"] for row in transition_records)
+    service.close()
+
+
+def test_signed_behavior_archive_verifies_and_restores_without_local_journal(tmp_path):
+    service = RuntimeArtifactSigningService(
+        policy=RuntimeSigningPolicy(
+            mode=RuntimeRecordIntegrityMode.EPHEMERAL_SIGNED,
+            run_signer_in_separate_process=False,
+        ),
+        application_id="demo",
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        root=tmp_path,
+    )
+    store = BehaviorSnapshotStore(tmp_path, artifact_signer=service)
+    envelope = store.create(_capture())
+    snapshot_id = envelope["snapshot"]["snapshot_id"]
+    archive_path = store.archive([snapshot_id], remove=True)
+
+    report = store.verify_archive(archive_path)
+    assert report["verified"] is True
+    assert report["signed"] is True
+    assert report["verified_snapshots"] == 1
+    assert not (store.snapshot_directory / f"{snapshot_id}.json").exists()
+
+    restored = store.restore_archive(archive_path)
+    assert restored == (snapshot_id,)
+    assert store.load(snapshot_id)["snapshot"]["snapshot_id"] == snapshot_id
+    service.close()
+
+
+def test_archive_restore_refuses_snapshot_id_collision(tmp_path):
+    service = RuntimeArtifactSigningService(
+        policy=RuntimeSigningPolicy(
+            mode=RuntimeRecordIntegrityMode.EPHEMERAL_SIGNED,
+            run_signer_in_separate_process=False,
+        ),
+        application_id="demo",
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        root=tmp_path,
+    )
+    store = BehaviorSnapshotStore(tmp_path, artifact_signer=service)
+    envelope = store.create(_capture())
+    snapshot_id = envelope["snapshot"]["snapshot_id"]
+    archive_path = store.archive([snapshot_id], remove=False)
+    target = store.snapshot_directory / f"{snapshot_id}.json"
+    target.write_text('{"different":true}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="already exists with different content"):
+        store.restore_archive(archive_path)
+    service.close()

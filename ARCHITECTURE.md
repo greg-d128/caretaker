@@ -2,7 +2,7 @@
 
 ## Application-scoped runtime
 
-Caretaker 0.5.0a1 contains four cooperating top-level subsystems over a shared evidence and runtime-control foundation:
+Caretaker 0.6.0a1 contains four cooperating top-level subsystems over a shared evidence and runtime-control foundation:
 
 ```text
                               Application process tree
@@ -66,6 +66,34 @@ accepted candidate identity. Repair candidate observation and adaptive demotion 
 one `AcceptanceCriteria` definition for success counts, duration, failure budgets, and
 failure rate; lifecycle-specific actions remain separate.
 
+## Behavior generations and restart reconstruction
+
+Guard keeps an updateable statistical accumulator separate from immutable trust decisions. A behavior generation is keyed by target identity, code hash, monitoring-configuration fingerprint, and statistics schema version. Runtime transitions between LIGHTWEIGHT and BEHAVIOR are recorded as sampling strata inside the generation; changing the configured monitoring semantics seals the old generation.
+
+```text
+behavior samples
+      ↓
+active statistical snapshot          mutable/checkpointed
+      ↓ seal/materialize
+sealed behavior snapshot             immutable + hash + runtime signature
+      ↓ accept
+accepted Guard baseline              immutable reference
+```
+
+Numeric distributions maintain exact online count/min/max/mean/variance plus a bounded reservoir used to derive p10/p50/p90/p95/p99. Categorical resources retain bounded frequency information and explicitly report incomplete coverage when truncated.
+
+On restart, Guard computes the current code and monitoring fingerprints, loads the exact accepted-baseline reference, verifies the sealed snapshot and signing identity chain, and hydrates `BaselineManager` directly. It never promotes a merely observed active accumulator into an accepted baseline because the process restarted.
+
+## Runtime artifact signing
+
+Secure event manifests, sealed behavior snapshots, accepted-baseline references, and behavior archives share the runtime artifact signing service. External signing mode requires the configured external signer and does not silently fall back to ephemeral keys. Ephemeral mode uses the current key-evolution identity. Public identities and old-key-signed transitions are retained in the independent Signing Identity Journal so event-log retention can differ from signature-identity retention.
+
+## Validation isolation
+
+Repair policy expresses a minimum isolation capability: PROCESS, CONTAINER, VM, or EXTERNAL. Backend product selection is deployment configuration, not policy semantics. The development tree includes the subprocess PROCESS backend, a rootless Podman CONTAINER backend, and a Multipass VM backend. If the installed backend cannot satisfy policy, Caretaker fails, remains proposal-only, or enters explicit operator approval according to policy; it never silently downgrades.
+
+Multipass whole-subject deployment and Multipass candidate validation are distinct. Candidate validation transfers only request/result artifacts into a pre-provisioned guest, refuses host-directory mounts, can restore a clean snapshot between ordinary validations, and can use a disposable clone for more suspicious candidates.
+
 ## Preferred process topology
 
 The supervised entry point starts before application imports:
@@ -91,8 +119,10 @@ Primary event segment files        authoritative event record
 Attachment segment files           authoritative supplemental bodies
 System-data streams                 authoritative raw system captures
 SQLite indexes                      derived and rebuildable
-Baselines                           immutable derived artifacts
-LLM assessments                     interpretations only
+Sealed behavior snapshots           immutable signed derived artifacts
+Accepted Guard baselines             immutable references to sealed snapshots
+Active behavior statistics           checkpointed mutable accumulators
+LLM assessments                      interpretations only
 ```
 
 A damaged index can be rebuilt from complete segment records. A derived baseline never replaces its source records.

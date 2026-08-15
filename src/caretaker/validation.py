@@ -492,12 +492,25 @@ class RootlessPodmanValidationBackend(SubprocessValidationBackend):
             temp = Path(temporary)
             _, output_path = _write_worker_request(temp, payload)
             command = self._build_command(temp)
+            host_environment = {
+                key: os.environ[key]
+                for key in (
+                    "PATH",
+                    "HOME",
+                    "XDG_RUNTIME_DIR",
+                    "DBUS_SESSION_BUS_ADDRESS",
+                    "CONTAINERS_CONF",
+                    "CONTAINERS_STORAGE_CONF",
+                    "REGISTRY_AUTH_FILE",
+                )
+                if key in os.environ
+            }
             return _run_worker_command(
                 command,
                 output_path=output_path,
                 timeout_seconds=timeout_seconds,
                 cwd=temporary,
-                env={"PATH": os.environ.get("PATH", "")},
+                env=host_environment,
             )
 
 

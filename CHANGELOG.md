@@ -39,6 +39,36 @@
 - Preserve structured control errors in `caretaker-console` and query Repair events and pending approvals independently so an event-history failure cannot hide an actionable approval.
 - Avoid recursive diagnostic logging when the logging path itself fails; propagate persistence status through the control response and use a best-effort stderr fallback.
 
+### Adaptive behavior and persistent baselines
+
+- Add lightweight adaptive instrumentation with policy-controlled promotion through pre-repair BEHAVIOR evidence collection and policy-controlled demotion after accepted repair lifecycle stages.
+- Separate repair lifecycle from observation intensity and use `LIGHTWEIGHT -> BEHAVIOR -> REPAIR -> BEHAVIOR -> VALIDATION -> LONG_TERM_ACCEPTANCE` as the operator lifecycle.
+- Add generation-scoped call-count behavior sampling, bounded online duration statistics, reservoir-backed p10/p50/p90/p95/p99 estimates, sampling-stage provenance, and automatic snapshot materialization.
+- Rotate behavior generations when code or monitoring semantics change while retaining LIGHTWEIGHT/BEHAVIOR observations as strata under one compatible configured generation.
+- Persist accepted Guard baselines as immutable references to sealed behavior snapshots and reconstruct exact compatible baselines after restart without replaying raw audit events.
+- Add the Behavior console view for snapshot history, comparison, statistical changes, resource novelty, archive management, and advisory LLM analysis.
+
+### Runtime artifact signing
+
+- Reuse runtime event signing for domain-separated behavior snapshots, accepted-baseline references, and behavior archives.
+- Refuse silent fallback from configured external signing to ephemeral signing.
+- Add an independent hash-chained Signing Identity Journal with separate retention, public ephemeral identities, exact signed key-transition sequence metadata, and identity-chain verification.
+- Include required public identity records in behavior archives and add archive verification and safe snapshot restoration.
+
+### Validation isolation
+
+- Add a common validation-backend capability contract and policy-controlled minimum isolation levels: PROCESS, CONTAINER, VM, and EXTERNAL.
+- Preserve the existing subprocess validator as the PROCESS backend.
+- Add a rootless Podman CONTAINER backend with no network, read-only root filesystem, dropped capabilities, `no-new-privileges`, user namespaces, resource limits, and explicit read-only source mounts.
+- Add a Multipass VM backend that refuses host mounts, transfers validation artifacts explicitly, supports clean-snapshot restoration, and can use disposable clones for higher-risk validation.
+- Make insufficient/unavailable isolation fail, remain proposal-only, or require explicit operator approval according to policy; never silently downgrade.
+
+### Dependency instrumentation and consolidation
+
+- Add reversible module/function dependency instrumentation through lightweight dependency slots, including Guard-aware initialization and self-instrumentation re-entrancy protection.
+- Consolidate shared acceptance criteria, renewable behavior leases, policy-bound adaptive state, bounded Guard caches, early event sampling/rate limiting, and scoped unattributed-audit collection.
+- Record supervisor-owned multiprocess adaptive aggregation and runtime-repair graduation into source patches as explicit future work.
+
 ## 0.5.0a1
 
 ### Logging subsystem

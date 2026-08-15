@@ -1,8 +1,8 @@
-# Caretaker 0.5.0a1
+# Caretaker 0.6.0a1
 
 Caretaker is an experimental Python 3.11+ runtime framework for application-scoped logging, behavioral analysis, guarded self-repair, and publicly verifiable code integrity.
 
-Version 0.5.0a1 adds a lightweight logging subsystem that can be deployed independently or used as the evidence foundation for Guard, Repair, Research, and Forensic operation.
+Version 0.6.0a1 combines lightweight adaptive instrumentation with persistent behavioral statistics, signed behavior snapshots, restartable Guard baselines, and capability-based validation isolation. Logging can still be deployed independently and remains the evidence foundation for Guard and Repair.
 
 ## Subsystems
 
@@ -35,6 +35,43 @@ The console-script equivalent is:
 ```bash
 caretaker-run --policy /etc/caretaker/invoice-service.toml invoice_service
 ```
+
+## Adaptive instrumentation and behavior snapshots
+
+Caretaker can start selected application functions and dependency boundaries with low-cost instrumentation and escalate observation when policy detects repeated exceptions or soft-timing breaches:
+
+```text
+LIGHTWEIGHT → BEHAVIOR → REPAIR → BEHAVIOR → VALIDATION → LONG_TERM_ACCEPTANCE
+```
+
+The lifecycle stage and observation intensity are separate. Repair cannot skip the pre-repair BEHAVIOR evidence gate, and an accepted repaired function may later return to LIGHTWEIGHT observation without losing its accepted lifecycle state.
+
+Behavior samples update a bounded statistical accumulator. Code changes or changes to monitoring semantics seal the active generation and start another. Sealed snapshots contain online statistics and bounded distribution samples, including p10/p50/p90/p95/p99 duration summaries, sampling-stage provenance, resource observations, code identity, and monitoring fingerprints. Accepted Guard baselines reference immutable sealed snapshots and can be reconstructed after restart without replaying all raw events.
+
+When secure runtime signing is configured, snapshots and behavior archives use the same runtime artifact signer as secure event manifests. External-signed mode never silently falls back to ephemeral signing. Ephemeral public identities and signed key transitions are retained in a separate Signing Identity Journal with independent retention.
+
+## Validation isolation backends
+
+Repair validation is capability-based. `ValidationPolicy.minimum_isolation` can require PROCESS, CONTAINER, VM, or EXTERNAL isolation. The current development tree provides PROCESS, rootless Podman CONTAINER, and Multipass VM backends:
+
+```python
+from caretaker import RepairEngine, ValidationIsolationLevel, ValidationPolicy
+from caretaker.validation import MultipassValidationBackend, RootlessPodmanValidationBackend
+
+podman = RootlessPodmanValidationBackend(
+    "caretaker-validator:local",
+    workspace="/srv/my-application",
+)
+
+vm = MultipassValidationBackend(
+    instance_name="caretaker-validator",
+    clean_snapshot="caretaker-clean",
+)
+
+engine = RepairEngine(validation_backend=vm)
+```
+
+A required isolation level is never silently downgraded. See [`docs/ISOLATED_EXECUTION.md`](docs/ISOLATED_EXECUTION.md) for the rootless-container and Multipass provisioning model and for the distinction between candidate validation and whole-subject isolation.
 
 ## Operator console
 
@@ -260,7 +297,7 @@ Add `--ollama-model <model>` to request an advisory structured assessment. The L
 ## Installation
 
 ```bash
-python -m pip install caretaker-0.5.0a1-py3-none-any.whl
+python -m pip install caretaker-0.6.0a1-py3-none-any.whl
 ```
 
 Ephemeral Ed25519 signing requires the optional cryptography backend:

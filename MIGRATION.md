@@ -1,3 +1,41 @@
+# Migration to Caretaker 0.6.0a1
+
+## Compatibility
+
+The 0.5 logging, Repair, Guard, Integrity, and authority APIs remain available. Caretaker 0.6 adds adaptive lightweight instrumentation, persistent behavior statistics/snapshots, runtime-artifact signing, and selectable validation-isolation backends. These features remain policy-controlled and do not silently broaden repair authority.
+
+## Adaptive instrumentation
+
+New `lightweight.*` policy controls govern low-cost detection, behavior sampling, evidence-gated escalation, and policy-controlled demotion. The intended repair lifecycle is:
+
+```text
+LIGHTWEIGHT -> BEHAVIOR -> REPAIR -> BEHAVIOR -> VALIDATION -> LONG_TERM_ACCEPTANCE
+```
+
+Instrumentation intensity and repair lifecycle are distinct internally. Older strict profiles created for policy surface 1 must be reviewed/continued for policy surface 2 before they can claim complete coverage of adaptive instrumentation, persistent behavior snapshots, validation-isolation requirements, and signing-identity retention.
+
+## Behavior snapshots and Guard restart
+
+Behavior statistics are accumulated online in bounded active snapshots. Code identity or monitoring-configuration changes seal the active generation. Sealed snapshots are immutable; accepted Guard baselines reference a compatible sealed snapshot and can be reconstructed after restart without replaying the complete raw event history.
+
+When runtime artifact signing is enabled, sealed behavior snapshots and behavior archives use the same runtime signing service as secure event artifacts. Ephemeral signing publishes key identities/transitions into a separately retained Signing Identity Journal; configured external signing authority is used without silent fallback to ephemeral keys.
+
+## Validation isolation
+
+Validation policy now declares a minimum isolation capability:
+
+```text
+PROCESS < CONTAINER < VM < EXTERNAL
+```
+
+The built-in backends are the existing subprocess worker (`PROCESS`), rootless Podman (`CONTAINER`), and Multipass (`VM`). If the configured backend cannot satisfy the minimum isolation level, Caretaker follows the explicit backend-unavailable policy and does not silently downgrade. See `docs/ISOLATED_EXECUTION.md` for provisioning and threat-boundary details.
+
+## Explicitly deferred work
+
+Supervisor-owned multiprocess aggregation of adaptive counters, import-hook dependency instrumentation, and graduation of accepted runtime repairs into repository/source patches remain explicit future work. See `docs/FUTURE_WORK.md`.
+
+---
+
 # Migration to Caretaker 0.5.0a1
 
 ## Compatibility

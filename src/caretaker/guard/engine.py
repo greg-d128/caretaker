@@ -395,6 +395,41 @@ class GuardEngine(GuardFacade):
             return
         identity = baseline.subject
         profile = baseline.profile
+        code_hash = identity.source_hash or identity.bytecode_hash
+        monitoring_configuration = self.monitoring_configuration(target_id)
+        monitoring_fingerprint = monitoring_configuration_fingerprint(monitoring_configuration)
+        baseline_profile = {
+            "window_count": baseline.observations,
+            "call_count": profile.call_count,
+            "event_count": profile.event_count,
+            "event_kind_counts": dict(profile.event_kind_counts),
+            "resource_counts": dict(profile.resource_counts),
+            "network_destinations": list(profile.network_destinations),
+            "filesystem_roots": list(profile.filesystem_roots),
+            "subprocesses": list(profile.subprocesses),
+            "imports": list(profile.imports),
+            "dynamic_code_operations": list(profile.dynamic_code_operations),
+            "resource_coverage_complete": True,
+            "distinct_resource_count": len(profile.resource_counts),
+        }
+        active_capture = self.behavior_statistics.current_capture(target_id)
+        if (
+            active_capture is not None
+            and active_capture.get("code_hash") == code_hash
+            and active_capture.get("monitoring_fingerprint") == monitoring_fingerprint
+        ):
+            active_profile = dict(active_capture.get("profile") or {})
+            # Guard remains authoritative for the accepted categorical behavior
+            # profile.  The statistical accumulator contributes distribution and
+            # sampling provenance from the same compatible generation.
+            baseline_profile.update(
+                {
+                    "statistics": dict(active_profile.get("statistics") or {}),
+                    "sampling_provenance": dict(active_profile.get("sampling_provenance") or {}),
+                    "success_count": int(active_profile.get("success_count") or 0),
+                    "failure_count": int(active_profile.get("failure_count") or 0),
+                }
+            )
         self.behavior_statistics.queue_guard_baseline(
             target_id=target_id,
             subject={
@@ -403,25 +438,12 @@ class GuardEngine(GuardFacade):
                 "qualified_name": identity.qualified_name,
                 "source_path": identity.source_path,
             },
-            code_hash=identity.source_hash or identity.bytecode_hash,
+            code_hash=code_hash,
             code_hash_kind=(
                 "function-source-sha256" if identity.source_hash else "function-bytecode-sha256"
             ),
-            monitoring_configuration=self.monitoring_configuration(target_id),
-            profile={
-                "window_count": baseline.observations,
-                "call_count": profile.call_count,
-                "event_count": profile.event_count,
-                "event_kind_counts": dict(profile.event_kind_counts),
-                "resource_counts": dict(profile.resource_counts),
-                "network_destinations": list(profile.network_destinations),
-                "filesystem_roots": list(profile.filesystem_roots),
-                "subprocesses": list(profile.subprocesses),
-                "imports": list(profile.imports),
-                "dynamic_code_operations": list(profile.dynamic_code_operations),
-                "resource_coverage_complete": True,
-                "distinct_resource_count": len(profile.resource_counts),
-            },
+            monitoring_configuration=monitoring_configuration,
+            profile=baseline_profile,
             baseline_id=baseline.baseline_id,
         )
         self._sealed_baseline_ids.add(baseline.baseline_id)
