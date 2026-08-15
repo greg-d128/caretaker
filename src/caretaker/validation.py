@@ -5,13 +5,16 @@ import ast
 import json
 import os
 import pickle
+import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Protocol
+from uuid import uuid4
 
 from .domain import (
     CheckOutcome,
@@ -291,11 +294,7 @@ class SubprocessValidationBackend:
     def _run_worker(self, payload: dict[str, Any], *, timeout_seconds: float) -> dict[str, Any]:
         with tempfile.TemporaryDirectory(prefix="caretaker-validation-") as temporary:
             temp = Path(temporary)
-            input_path = temp / "request.pickle"
-            output_path = temp / "result.json"
-            with input_path.open("wb") as handle:
-                pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
+            input_path, output_path = _write_worker_request(temp, payload)
             environment = {
                 "PYTHONPATH": os.pathsep.join(
                     (os.getcwd() if item == "" else item)
@@ -313,73 +312,723 @@ class SubprocessValidationBackend:
                 str(input_path),
                 str(output_path),
             ]
+            return _run_worker_command(
+                command,
+                output_path=output_path,
+                timeout_seconds=timeout_seconds,
+                cwd=temporary,
+                env=environment,
+            )
+
+
+class RootlessPodmanValidationBackend(SubprocessValidationBackend):
+    """Run a validation worker in a constrained rootless Podman container.
+
+    The backend never pulls images.  The operator must provision a trusted image
+    containing Python and any application dependencies that are not provided by
+    the read-only workspace/source mounts.
+    """
+
+    def __init__(
+        self,
+        image: str,
+        *,
+        podman_executable: str = "podman",
+        workspace: str | Path | None = None,
+        additional_read_only_paths: tuple[str | Path, ...] = (),
+        memory: str = "512m",
+        cpus: float = 1.0,
+        pids_limit: int = 64,
+        tmpfs_size: str = "64m",
+    ) -> None:
+        super().__init__(python_executable="python")
+        if not image.strip():
+            raise ValueError("A pre-provisioned Podman validation image is required")
+        if cpus <= 0:
+            raise ValueError("cpus must be > 0")
+        if pids_limit < 1:
+            raise ValueError("pids_limit must be >= 1")
+        self.image = image
+        self.podman_executable = podman_executable
+        self.workspace = Path(workspace or os.getcwd()).resolve()
+        self.additional_read_only_paths = tuple(
+            Path(item).resolve() for item in additional_read_only_paths
+        )
+        self.memory = memory
+        self.cpus = float(cpus)
+        self.pids_limit = int(pids_limit)
+        self.tmpfs_size = tmpfs_size
+        self._availability_details: dict[str, Any] = {}
+
+    def capabilities(self) -> ValidationBackendCapabilities:
+        details = {
+            "image": self.image,
+            "workspace": str(self.workspace),
+            "network": "none",
+            "read_only_root": True,
+            "capabilities_dropped": "ALL",
+            **self._availability_details,
+        }
+        return ValidationBackendCapabilities(
+            name="podman-rootless",
+            isolation_level=ValidationIsolationLevel.CONTAINER,
+            separate_kernel=False,
+            rootless=True,
+            network_control=True,
+            resource_control=True,
+            ephemeral_workspace=True,
+            details=details,
+        )
+
+    def available(self) -> tuple[bool, str | None]:
+        executable = shutil.which(self.podman_executable)
+        if executable is None and not Path(self.podman_executable).is_file():
+            return False, f"Podman executable {self.podman_executable!r} was not found"
+        try:
+            info = subprocess.run(
+                [self.podman_executable, "info", "--format", "json"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+                close_fds=True,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return False, f"Podman information query failed: {exc}"
+        if info.returncode != 0:
+            return False, f"Podman information query failed: {info.stderr[-1000:]}"
+        try:
+            payload = json.loads(info.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            return False, f"Podman returned invalid JSON: {exc}"
+        rootless = _find_json_boolean(payload, "rootless")
+        if rootless is not True:
+            return False, "Podman validation requires rootless mode"
+        image = subprocess.run(
+            [self.podman_executable, "image", "exists", self.image],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            close_fds=True,
+        )
+        if image.returncode != 0:
+            return False, f"Podman validation image {self.image!r} is not present locally"
+        digest = subprocess.run(
+            [
+                self.podman_executable,
+                "image",
+                "inspect",
+                self.image,
+                "--format",
+                "{{.Digest}}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            close_fds=True,
+        )
+        if digest.returncode == 0 and digest.stdout.strip():
+            self._availability_details["image_digest"] = digest.stdout.strip()
+        self._availability_details["rootless_verified"] = True
+        return True, None
+
+    def _build_command(self, host_workdir: Path) -> list[str]:
+        source_root = Path(__file__).resolve().parents[1]
+        mounts: list[tuple[Path, str, bool]] = [
+            (host_workdir, "/work", False),
+            (source_root, "/opt/caretaker-src", True),
+        ]
+        python_paths = ["/opt/caretaker-src"]
+        if self.workspace != source_root:
+            mounts.append((self.workspace, "/workspace", True))
+            python_paths.append("/workspace")
+        for index, path in enumerate(self.additional_read_only_paths):
+            destination = f"/inputs/{index}"
+            mounts.append((path, destination, True))
+            python_paths.append(destination)
+
+        command = [
+            self.podman_executable,
+            "run",
+            "--rm",
+            "--network=none",
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            f"--pids-limit={self.pids_limit}",
+            f"--memory={self.memory}",
+            f"--cpus={self.cpus:g}",
+            "--userns=keep-id",
+            f"--tmpfs=/tmp:rw,nosuid,nodev,noexec,size={self.tmpfs_size}",
+        ]
+        for source, destination, read_only in mounts:
+            options = f"type=bind,src={source},dst={destination}"
+            options += ",ro=true" if read_only else ",rw=true"
+            command.extend(("--mount", options))
+        command.extend(
+            (
+                "--workdir=/work",
+                "--env",
+                f"PYTHONPATH={':'.join(python_paths)}",
+                "--env",
+                "PYTHONIOENCODING=utf-8",
+                "--env",
+                "PYTHONDONTWRITEBYTECODE=1",
+                self.image,
+                "python",
+                "-m",
+                "caretaker.validation_worker",
+                "/work/request.pickle",
+                "/work/result.json",
+            )
+        )
+        return command
+
+    @lightweight_dependency(target_id="caretaker.dependency.podman.validation-worker")
+    def _run_worker(self, payload: dict[str, Any], *, timeout_seconds: float) -> dict[str, Any]:
+        with tempfile.TemporaryDirectory(prefix="caretaker-podman-validation-") as temporary:
+            temp = Path(temporary)
+            _, output_path = _write_worker_request(temp, payload)
+            command = self._build_command(temp)
+            return _run_worker_command(
+                command,
+                output_path=output_path,
+                timeout_seconds=timeout_seconds,
+                cwd=temporary,
+                env={"PATH": os.environ.get("PATH", "")},
+            )
+
+
+class MultipassValidationBackend(SubprocessValidationBackend):
+    """Run validation in a pre-provisioned Multipass VM.
+
+    The validator VM is expected to contain Caretaker, the target application,
+    and its dependencies.  Host paths are copied with ``multipass transfer``;
+    host-directory mounts are treated as an availability failure.
+    """
+
+    def __init__(
+        self,
+        *,
+        instance_name: str = "caretaker-validator",
+        multipass_executable: str = "multipass",
+        python_executable: str = "/opt/caretaker/venv/bin/python",
+        subject_user: str = "caretaker-subject",
+        clean_snapshot: str | None = "caretaker-clean",
+        restore_before_validation: bool = True,
+        disposable_clone: bool = False,
+        require_network_isolation: bool = True,
+        network_policy_marker: str = "/etc/caretaker/validation-network-isolated",
+        operation_timeout_seconds: float = 60.0,
+    ) -> None:
+        super().__init__(python_executable=python_executable)
+        if not instance_name.strip():
+            raise ValueError("instance_name cannot be empty")
+        if operation_timeout_seconds <= 0:
+            raise ValueError("operation_timeout_seconds must be > 0")
+        self.instance_name = instance_name
+        self.multipass_executable = multipass_executable
+        self.subject_user = subject_user
+        self.clean_snapshot = clean_snapshot
+        self.restore_before_validation = bool(restore_before_validation)
+        self.disposable_clone = bool(disposable_clone)
+        self.require_network_isolation = bool(require_network_isolation)
+        self.network_policy_marker = network_policy_marker
+        self.operation_timeout_seconds = float(operation_timeout_seconds)
+        self._lock = threading.RLock()
+        self._availability_details: dict[str, Any] = {}
+
+    def capabilities(self) -> ValidationBackendCapabilities:
+        details = {
+            "instance": self.instance_name,
+            "clean_snapshot": self.clean_snapshot,
+            "restore_before_validation": self.restore_before_validation,
+            "disposable_clone": self.disposable_clone,
+            "host_mounts_allowed": False,
+            "subject_user": self.subject_user,
+            "network_policy_marker": (
+                self.network_policy_marker if self.require_network_isolation else None
+            ),
+            **self._availability_details,
+        }
+        return ValidationBackendCapabilities(
+            name="multipass",
+            isolation_level=ValidationIsolationLevel.VM,
+            separate_kernel=True,
+            rootless=None,
+            network_control=self.require_network_isolation,
+            resource_control=True,
+            ephemeral_workspace=True,
+            details=details,
+        )
+
+    def _host_command(
+        self,
+        command: list[str],
+        *,
+        timeout: float | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout or self.operation_timeout_seconds,
+            check=False,
+            close_fds=True,
+        )
+
+    def available(self) -> tuple[bool, str | None]:
+        executable = shutil.which(self.multipass_executable)
+        if executable is None and not Path(self.multipass_executable).is_file():
+            return False, f"Multipass executable {self.multipass_executable!r} was not found"
+        info = self._host_command(
+            [self.multipass_executable, "info", "--format", "json", self.instance_name]
+        )
+        if info.returncode != 0:
+            return False, f"Multipass validator instance {self.instance_name!r} is unavailable: {info.stderr[-1000:]}"
+        try:
+            payload = json.loads(info.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            return False, f"Multipass returned invalid JSON: {exc}"
+        instance = _find_multipass_instance(payload, self.instance_name)
+        if instance is None:
+            return False, f"Multipass did not report validator instance {self.instance_name!r}"
+        mounts = instance.get("mounts")
+        if mounts:
+            return False, "Multipass validation refuses instances with host-directory mounts"
+        self._availability_details = {
+            "image_hash": instance.get("image_hash") or instance.get("image_release"),
+            "state": instance.get("state"),
+        }
+        state = str(instance.get("state", "")).upper()
+        if self.disposable_clone:
+            if state not in {"STOPPED", "OFF"}:
+                return False, "Multipass disposable-clone mode requires a stopped template instance"
+        elif state in {"RUNNING", "STARTED"}:
+            ready, reason = self._verify_guest_prerequisites(self.instance_name)
+            if not ready:
+                return False, reason
+        if self.clean_snapshot and self.restore_before_validation and not self.disposable_clone:
+            snapshot = self._host_command(
+                [
+                    self.multipass_executable,
+                    "info",
+                    f"{self.instance_name}.{self.clean_snapshot}",
+                ]
+            )
+            if snapshot.returncode != 0:
+                return False, (
+                    f"Required Multipass snapshot {self.instance_name}.{self.clean_snapshot} is unavailable"
+                )
+        return True, None
+
+    def _verify_guest_prerequisites(self, instance: str) -> tuple[bool, str | None]:
+        ready = self._guest_command(instance, ["test", "-x", self.python_executable])
+        if ready.returncode != 0:
+            return False, f"Validation Python {self.python_executable!r} is unavailable in Multipass guest"
+        user = self._guest_command(instance, ["id", "-u", self.subject_user])
+        if user.returncode != 0:
+            return False, f"Validation subject user {self.subject_user!r} is unavailable in Multipass guest"
+        if self.require_network_isolation:
+            marker = self._guest_command(
+                instance,
+                ["stat", "-c", "%u %a", self.network_policy_marker],
+            )
+            if marker.returncode != 0:
+                return False, (
+                    "Multipass validation requires the root-owned network-isolation marker "
+                    f"{self.network_policy_marker!r}"
+                )
+            fields = marker.stdout.strip().split()
+            if len(fields) != 2 or fields[0] != "0":
+                return False, "Multipass network-isolation marker must be owned by root"
             try:
-                completed = subprocess.run(
-                    command,
-                    cwd=temporary,
-                    env=environment,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout_seconds,
-                    check=False,
-                    close_fds=True,
-                    start_new_session=True,
-                )
-            except subprocess.TimeoutExpired as exc:
-                now = utcnow()
-                timeout_check = ValidationCheckResult(
-                    kind=ValidationCheckKind.PERFORMANCE,
-                    outcome=CheckOutcome.FAILED,
-                    started_at=now - timedelta(seconds=timeout_seconds),
-                    finished_at=now,
-                    summary=f"Validation worker exceeded {timeout_seconds:g}s timeout.",
-                    error_type="TimeoutExpired",
-                    error_message=str(exc),
-                )
-                return {
-                    "eligible": False,
-                    "checks": [_check_to_dict(timeout_check)],
-                    "measurements": {},
-                    "risk_findings": ["validation worker timed out"],
-                    "hard_disqualifications": [],
-                    "review_required_findings": [],
-                    "worker_stdout": exc.stdout or "",
-                    "worker_stderr": exc.stderr or "",
-                }
-            if not output_path.exists():
-                now = utcnow()
-                return {
-                    "eligible": False,
-                    "checks": [
-                        _check_to_dict(
-                            ValidationCheckResult(
-                                kind=ValidationCheckKind.COMPILE,
-                                outcome=CheckOutcome.ERROR,
-                                started_at=now,
-                                finished_at=now,
-                                summary="Validation worker did not produce a result.",
-                                details={"returncode": completed.returncode},
-                                error_type="WorkerProtocolError",
-                                error_message=completed.stderr[-2000:],
-                            )
-                        )
-                    ],
-                    "measurements": {},
-                    "risk_findings": ["validation worker crashed or corrupted its protocol"],
-                    "hard_disqualifications": [],
-                    "review_required_findings": [],
-                    "worker_stdout": completed.stdout[-20_000:],
-                    "worker_stderr": completed.stderr[-20_000:],
-                }
-            result = json.loads(output_path.read_text(encoding="utf-8"))
-            result["worker_stdout"] = completed.stdout[-20_000:]
-            result["worker_stderr"] = completed.stderr[-20_000:]
+                permissions = int(fields[1], 8)
+            except ValueError:
+                return False, "Multipass network-isolation marker has invalid permissions"
+            if permissions & 0o022:
+                return False, "Multipass network-isolation marker must not be group/world writable"
+        return True, None
+
+    def _restore_clean_instance(self, instance: str) -> tuple[bool, str | None]:
+        if not self.clean_snapshot or not self.restore_before_validation:
+            return True, None
+        commands = (
+            [self.multipass_executable, "stop", instance],
+            [
+                self.multipass_executable,
+                "restore",
+                "--destructive",
+                f"{instance}.{self.clean_snapshot}",
+            ],
+            [self.multipass_executable, "start", instance],
+            [self.multipass_executable, "wait-ready", instance],
+        )
+        for command in commands:
+            completed = self._host_command(command)
             if completed.returncode != 0:
-                result["eligible"] = False
-                result.setdefault("risk_findings", []).append(
-                    f"validation worker exited with status {completed.returncode}"
+                return False, f"Multipass preparation failed: {' '.join(command)}: {completed.stderr[-1000:]}"
+        return True, None
+
+    def _create_disposable_clone(self) -> tuple[str | None, str | None]:
+        name = f"caretaker-val-{uuid4().hex[:12]}"
+        clone = self._host_command(
+            [
+                self.multipass_executable,
+                "clone",
+                self.instance_name,
+                "--name",
+                name,
+            ]
+        )
+        if clone.returncode != 0:
+            return None, f"Multipass clone failed: {clone.stderr[-1000:]}"
+        for command in (
+            [self.multipass_executable, "start", name],
+            [self.multipass_executable, "wait-ready", name],
+        ):
+            completed = self._host_command(command)
+            if completed.returncode != 0:
+                self._destroy_disposable_clone(name)
+                return None, f"Multipass clone preparation failed: {completed.stderr[-1000:]}"
+        return name, None
+
+    def _destroy_disposable_clone(self, instance: str) -> None:
+        self._host_command([self.multipass_executable, "delete", "--purge", instance])
+
+    def _guest_command(
+        self,
+        instance: str,
+        command: list[str],
+        *,
+        timeout: float | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        return self._host_command(
+            [self.multipass_executable, "exec", instance, "--", *command],
+            timeout=timeout,
+        )
+
+    def _run_in_instance(
+        self,
+        instance: str,
+        payload: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        token = uuid4().hex
+        guest_directory = f"/var/lib/caretaker/validation/{token}"
+        guest_input = f"{guest_directory}/request.pickle"
+        guest_output = f"{guest_directory}/result.json"
+        guest_transfer = f"/tmp/caretaker-validation-{token}.pickle"
+        with tempfile.TemporaryDirectory(prefix="caretaker-multipass-validation-") as temporary:
+            temp = Path(temporary)
+            input_path, output_path = _write_worker_request(temp, payload)
+            setup = self._guest_command(
+                instance,
+                [
+                    "sudo",
+                    "install",
+                    "-d",
+                    "-o",
+                    self.subject_user,
+                    "-g",
+                    self.subject_user,
+                    "-m",
+                    "0700",
+                    guest_directory,
+                ],
+            )
+            if setup.returncode != 0:
+                return _worker_transport_error("Multipass guest workspace creation failed", setup)
+            try:
+                transfer = self._host_command(
+                    [
+                        self.multipass_executable,
+                        "transfer",
+                        str(input_path),
+                        f"{instance}:{guest_transfer}",
+                    ]
                 )
-            return result
+                if transfer.returncode != 0:
+                    return _worker_transport_error("Multipass request transfer failed", transfer)
+                install = self._guest_command(
+                    instance,
+                    [
+                        "sudo",
+                        "install",
+                        "-o",
+                        self.subject_user,
+                        "-g",
+                        self.subject_user,
+                        "-m",
+                        "0600",
+                        guest_transfer,
+                        guest_input,
+                    ],
+                )
+                if install.returncode != 0:
+                    return _worker_transport_error("Multipass request installation failed", install)
+                self._guest_command(instance, ["sudo", "rm", "-f", guest_transfer])
+                command = [
+                    "sudo",
+                    "-u",
+                    self.subject_user,
+                    "--",
+                    "env",
+                    "HOME=/var/lib/caretaker",
+                    "PYTHONIOENCODING=utf-8",
+                    "PYTHONDONTWRITEBYTECODE=1",
+                    self.python_executable,
+                    "-m",
+                    "caretaker.validation_worker",
+                    guest_input,
+                    guest_output,
+                ]
+                try:
+                    completed = self._guest_command(
+                        instance,
+                        command,
+                        timeout=timeout_seconds,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    return _worker_timeout_result(timeout_seconds, exc)
+                transfer_result = self._host_command(
+                    [
+                        self.multipass_executable,
+                        "transfer",
+                        f"{instance}:{guest_output}",
+                        str(output_path),
+                    ]
+                )
+                if transfer_result.returncode != 0 and not output_path.exists():
+                    return _worker_protocol_error(
+                        completed,
+                        summary="Multipass validation worker did not produce a transferable result.",
+                    )
+                return _load_worker_result(output_path, completed)
+            finally:
+                self._guest_command(instance, ["sudo", "rm", "-rf", guest_directory])
+                self._guest_command(instance, ["sudo", "rm", "-f", guest_transfer])
+
+    @lightweight_dependency(target_id="caretaker.dependency.multipass.validation-worker")
+    def _run_worker(self, payload: dict[str, Any], *, timeout_seconds: float) -> dict[str, Any]:
+        with self._lock:
+            instance = self.instance_name
+            disposable = False
+            if self.disposable_clone:
+                instance, reason = self._create_disposable_clone()
+                if instance is None:
+                    return _worker_backend_error(reason or "Multipass disposable clone could not be created")
+                disposable = True
+            else:
+                restored, reason = self._restore_clean_instance(instance)
+                if not restored:
+                    return _worker_backend_error(reason or "Multipass validator could not be restored")
+            try:
+                ready, reason = self._verify_guest_prerequisites(instance)
+                if not ready:
+                    return _worker_backend_error(reason or "Multipass guest prerequisites are unavailable")
+                return self._run_in_instance(
+                    instance,
+                    payload,
+                    timeout_seconds=timeout_seconds,
+                )
+            finally:
+                if disposable:
+                    self._destroy_disposable_clone(instance)
+
+
+def _write_worker_request(temp: Path, payload: dict[str, Any]) -> tuple[Path, Path]:
+    input_path = temp / "request.pickle"
+    output_path = temp / "result.json"
+    with input_path.open("wb") as handle:
+        pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    return input_path, output_path
+
+
+def _worker_timeout_result(timeout_seconds: float, exc: subprocess.TimeoutExpired) -> dict[str, Any]:
+    now = utcnow()
+    timeout_check = ValidationCheckResult(
+        kind=ValidationCheckKind.PERFORMANCE,
+        outcome=CheckOutcome.FAILED,
+        started_at=now - timedelta(seconds=timeout_seconds),
+        finished_at=now,
+        summary=f"Validation worker exceeded {timeout_seconds:g}s timeout.",
+        error_type="TimeoutExpired",
+        error_message=str(exc),
+    )
+    return {
+        "eligible": False,
+        "checks": [_check_to_dict(timeout_check)],
+        "measurements": {},
+        "risk_findings": ["validation worker timed out"],
+        "hard_disqualifications": [],
+        "review_required_findings": [],
+        "worker_stdout": _bounded_stream(exc.stdout),
+        "worker_stderr": _bounded_stream(exc.stderr),
+    }
+
+
+def _worker_protocol_error(
+    completed: subprocess.CompletedProcess[str],
+    *,
+    summary: str = "Validation worker did not produce a result.",
+) -> dict[str, Any]:
+    now = utcnow()
+    return {
+        "eligible": False,
+        "checks": [
+            _check_to_dict(
+                ValidationCheckResult(
+                    kind=ValidationCheckKind.COMPILE,
+                    outcome=CheckOutcome.ERROR,
+                    started_at=now,
+                    finished_at=now,
+                    summary=summary,
+                    details={"returncode": completed.returncode},
+                    error_type="WorkerProtocolError",
+                    error_message=_bounded_stream(completed.stderr, 2000),
+                )
+            )
+        ],
+        "measurements": {},
+        "risk_findings": ["validation worker crashed or corrupted its protocol"],
+        "hard_disqualifications": [],
+        "review_required_findings": [],
+        "worker_stdout": _bounded_stream(completed.stdout),
+        "worker_stderr": _bounded_stream(completed.stderr),
+    }
+
+
+def _worker_transport_error(summary: str, completed: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    result = _worker_protocol_error(completed, summary=summary)
+    result.setdefault("risk_findings", []).append("validation isolation transport failed")
+    return result
+
+
+def _worker_backend_error(summary: str) -> dict[str, Any]:
+    now = utcnow()
+    return {
+        "eligible": False,
+        "checks": [
+            _check_to_dict(
+                ValidationCheckResult(
+                    kind=ValidationCheckKind.STATIC_POLICY,
+                    outcome=CheckOutcome.ERROR,
+                    started_at=now,
+                    finished_at=now,
+                    summary=summary,
+                    error_type="ValidationBackendError",
+                    error_message=summary,
+                )
+            )
+        ],
+        "measurements": {},
+        "risk_findings": [summary],
+        "hard_disqualifications": [summary],
+        "review_required_findings": [],
+        "worker_stdout": "",
+        "worker_stderr": "",
+    }
+
+
+def _load_worker_result(
+    output_path: Path,
+    completed: subprocess.CompletedProcess[str],
+) -> dict[str, Any]:
+    if not output_path.exists():
+        return _worker_protocol_error(completed)
+    try:
+        result = json.loads(output_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        result = _worker_protocol_error(
+            completed,
+            summary=f"Validation worker produced an invalid result: {exc}",
+        )
+        return result
+    result["worker_stdout"] = _bounded_stream(completed.stdout)
+    result["worker_stderr"] = _bounded_stream(completed.stderr)
+    if completed.returncode != 0:
+        result["eligible"] = False
+        result.setdefault("risk_findings", []).append(
+            f"validation worker exited with status {completed.returncode}"
+        )
+    return result
+
+
+def _run_worker_command(
+    command: list[str],
+    *,
+    output_path: Path,
+    timeout_seconds: float,
+    cwd: str | Path | None,
+    env: dict[str, str] | None,
+) -> dict[str, Any]:
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+            close_fds=True,
+            start_new_session=True,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return _worker_timeout_result(timeout_seconds, exc)
+    return _load_worker_result(output_path, completed)
+
+
+def _bounded_stream(value: Any, limit: int = 20_000) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    return str(value)[-limit:]
+
+
+def _find_json_boolean(payload: Any, key: str) -> bool | None:
+    if isinstance(payload, dict):
+        for current_key, value in payload.items():
+            if str(current_key).lower() == key.lower() and isinstance(value, bool):
+                return value
+            found = _find_json_boolean(value, key)
+            if found is not None:
+                return found
+    elif isinstance(payload, list):
+        for value in payload:
+            found = _find_json_boolean(value, key)
+            if found is not None:
+                return found
+    return None
+
+
+def _find_multipass_instance(payload: Any, instance_name: str) -> dict[str, Any] | None:
+    if isinstance(payload, dict):
+        info = payload.get("info")
+        if isinstance(info, dict):
+            direct = info.get(instance_name)
+            if isinstance(direct, dict):
+                return direct
+        direct = payload.get(instance_name)
+        if isinstance(direct, dict):
+            return direct
+        if payload.get("name") == instance_name:
+            return payload
+        for value in payload.values():
+            found = _find_multipass_instance(value, instance_name)
+            if found is not None:
+                return found
+    elif isinstance(payload, list):
+        for value in payload:
+            found = _find_multipass_instance(value, instance_name)
+            if found is not None:
+                return found
+    return None
 
 
 # Explicit name for new code; keep SubprocessValidationBackend for compatibility.
