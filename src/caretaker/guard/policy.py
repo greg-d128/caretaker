@@ -64,6 +64,19 @@ class BaselinePolicy:
 
 
 @dataclass(frozen=True, slots=True)
+class BehaviorSnapshotPolicy:
+    """Bounded online statistics and automatic snapshot materialization."""
+
+    enabled: bool = True
+    statistics_target: int = 1000
+    maximum_resources: int = 1000
+    checkpoint_every_samples: int = 25
+    materialize_after_samples: int = 100
+    maximum_snapshot_age_seconds: float = 3600.0
+    automatic_materialization: bool = True
+
+
+@dataclass(frozen=True, slots=True)
 class DeviationPolicy:
     significance_threshold: float = 60.0
     high_significance_threshold: float = 80.0
@@ -127,6 +140,7 @@ class GuardPolicy:
     sampling: SamplingPolicy = field(default_factory=SamplingPolicy)
     aggregation: AggregationPolicy = field(default_factory=AggregationPolicy)
     baseline: BaselinePolicy = field(default_factory=BaselinePolicy)
+    snapshots: BehaviorSnapshotPolicy = field(default_factory=BehaviorSnapshotPolicy)
     deviations: DeviationPolicy = field(default_factory=DeviationPolicy)
     llm_review: LLMReviewPolicy = field(default_factory=LLMReviewPolicy)
     actions: GuardActionPolicy = field(default_factory=GuardActionPolicy)

@@ -72,6 +72,7 @@ class LoggingRuntime:
         source_path: str | None = None,
         supervised: bool | None = None,
         policy_transform: Callable[[OperatorLoggingPolicy], OperatorLoggingPolicy] | None = None,
+        external_signer: Any | None = None,
     ) -> None:
         self._declared_policy = policy
         self._policy_transform = policy_transform
@@ -82,7 +83,12 @@ class LoggingRuntime:
         self.effective = self.leases.effective
         self.run_id = uuid4()
         self.process_start_id = uuid4()
-        self.writer = SegmentWriter(policy, run_id=self.run_id, process_start_id=self.process_start_id)
+        self.writer = SegmentWriter(
+            policy,
+            run_id=self.run_id,
+            process_start_id=self.process_start_id,
+            external_signer=external_signer,
+        )
         self.sink = BufferedSegmentSink(self.writer, policy)
         self.attachments = AttachmentStore(policy.directory, policy.attachments)
         self._sequence = 0
@@ -398,9 +404,10 @@ def configure(
     *,
     attach_root: bool = True,
     replace_existing_caretaker_handler: bool = True,
+    external_signer: Any | None = None,
 ) -> LoggingRuntime:
     global _default_runtime
-    runtime = LoggingRuntime(policy)
+    runtime = LoggingRuntime(policy, external_signer=external_signer)
     _default_runtime = runtime
     if attach_root:
         root = logging.getLogger()

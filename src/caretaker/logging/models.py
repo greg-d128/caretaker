@@ -388,6 +388,31 @@ class RuntimeSignedManifest:
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimeSignedArtifact:
+    """Domain-separated signature over a runtime artifact commitment.
+
+    The artifact body remains outside this structure.  ``content_hash`` binds the
+    signature to that body while ``artifact_kind`` prevents a signature created
+    for one Caretaker artifact class from being replayed as another.
+    """
+
+    artifact_id: UUID
+    artifact_kind: str
+    application_id: str
+    run_id: UUID
+    process_start_id: UUID
+    signer_identity_id: str
+    signer_mode: RuntimeRecordIntegrityMode
+    public_key_fingerprint: str | None
+    key_epoch: int | None
+    content_hash: str
+    previous_artifact_hash: str | None
+    context: Mapping[str, Any]
+    signed_at: datetime
+    signature: bytes
+
+
+@dataclass(frozen=True, slots=True)
 class BaselineKey:
     application_id: str
     application_version: str | None

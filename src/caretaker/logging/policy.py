@@ -177,6 +177,11 @@ class RuntimeSigningPolicy:
     key_epoch_maximum_segments: int | None = None
     publish_public_key_to_log: bool = True
     publish_public_key_to_control_clients: bool = True
+    # Signing identities are written to a separate append-only hash-chained
+    # journal so their retention can outlive ordinary application events.
+    identity_journal_enabled: bool = True
+    identity_journal_maximum_age_days: int | None = 3650
+    identity_journal_maximum_files: int | None = None
     require_external_anchor: bool = False
     external_anchor_failure_action: AnchorFailureAction = AnchorFailureAction.CONTINUE_SELF_RECORDED
 

@@ -5,9 +5,11 @@ import json
 import os
 import threading
 import time
+from datetime import datetime
+from enum import Enum
 from collections import OrderedDict, defaultdict, deque
-from collections.abc import Callable
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Mapping
+from dataclasses import asdict, dataclass, replace
 from uuid import UUID, uuid4
 
 from ..authority import get_authority_runtime_context
@@ -31,6 +33,11 @@ from ..evidence.models import (
 )
 from ..evidence.store import EvidenceStore, InMemoryEvidenceStore
 from ..runtime import snapshot_context
+from ..behavior import (
+    BehaviorSnapshotStore,
+    BehaviorStatisticsRepository,
+    monitoring_configuration_fingerprint,
+)
 from ..logging.models import LoggingCapability, LoggingMode, RequiredCapabilityFailureAction
 from ..logging.policy import mode_requirements
 from .analytics import (
@@ -52,6 +59,7 @@ from .models import (
     BehaviorBaseline,
     BehaviorDeviation,
     BehavioralCandidateScore,
+    BehaviorProfile,
     BehaviorProfileSummary,
     GuardAction,
     GuardDecision,
@@ -76,12 +84,23 @@ def _tail(items, limit: int):
     return values[-limit:]
 
 
+def _configuration_value(value):
+    if isinstance(value, Enum):
+        return value.name
+    if isinstance(value, dict):
+        return {str(key): _configuration_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_configuration_value(item) for item in value]
+    return value
+
+
 @dataclass
 class _TargetBinding:
     function: Callable
     binding: GuardBinding
     identity: CodeIdentity
     function_resolver: Callable[[], Callable] | None = None
+    monitoring_configuration: Mapping[str, object] | None = None
 
 
 class GuardEngine(GuardFacade):
@@ -108,6 +127,19 @@ class GuardEngine(GuardFacade):
         self.work_registry = work_registry
         self.aggregator = BehaviorAggregator(self.store, self.policy.aggregation)
         self.baselines = BaselineManager(self.policy.baseline)
+        data_root = os.environ.get("CARETAKER_DATA_DIR")
+        self.behavior_statistics = (
+            BehaviorStatisticsRepository.from_guard_policy(
+                data_root,
+                self.policy.snapshots,
+                environment_fingerprint=self.policy.baseline.environment_fingerprint,
+                workload_label=self.policy.baseline.workload_label,
+            )
+            if data_root and self.policy.snapshots.enabled
+            else None
+        )
+        self.behavior_snapshot_store = (BehaviorSnapshotStore(data_root) if data_root else None)
+        self._sealed_baseline_ids: set[UUID] = set()
         self.detector = DeviationDetector(self.policy.deviations)
         self.inspector = RuntimeInspector(self.store)
         self.periodic = PeriodicInspector(self.inspector, on_inspection=self._on_inspection)
@@ -170,6 +202,17 @@ class GuardEngine(GuardFacade):
         )
         self.aggregator.policy = self.policy.aggregation
         self.baselines.policy = self.policy.baseline
+        data_root = os.environ.get("CARETAKER_DATA_DIR")
+        if data_root and self.policy.snapshots.enabled:
+            self.behavior_statistics = BehaviorStatisticsRepository.from_guard_policy(
+                data_root,
+                self.policy.snapshots,
+                environment_fingerprint=self.policy.baseline.environment_fingerprint,
+                workload_label=self.policy.baseline.workload_label,
+            )
+            self.behavior_snapshot_store = BehaviorSnapshotStore(data_root)
+        elif not self.policy.snapshots.enabled:
+            self.behavior_statistics = None
         self.detector.policy = self.policy.deviations
         self.audit_collector.collectors = self.policy.collectors
         self.audit_collector.attribution = self.policy.attribution
@@ -281,6 +324,108 @@ class GuardEngine(GuardFacade):
         self._repair_opener = open_repair
         self._candidate_rollback = rollback_candidate
 
+    def monitoring_configuration(self, target_id: str) -> dict[str, object]:
+        binding = self._targets.get(target_id)
+        binding_value = asdict(binding.binding) if binding is not None else {}
+        snapshots = self.policy.snapshots
+        configuration = {
+            "guard_mode": self.policy.mode.name,
+            "collectors": asdict(self.policy.collectors),
+            "attribution": asdict(self.policy.attribution),
+            "sampling": asdict(self.policy.sampling),
+            "aggregation": asdict(self.policy.aggregation),
+            # Only statistical settings that change the meaning/coverage of the
+            # accumulated data are generation-breaking. Materialization cadence
+            # changes when artifacts are sealed, not what an observation means.
+            "statistics": {
+                "statistics_target": snapshots.statistics_target,
+                "maximum_resources": snapshots.maximum_resources,
+            },
+            "binding": binding_value,
+            "target_monitoring": dict(binding.monitoring_configuration or {}) if binding is not None else {},
+        }
+        return _configuration_value(configuration)
+
+    def monitoring_fingerprint(self, target_id: str) -> str:
+        return monitoring_configuration_fingerprint(self.monitoring_configuration(target_id))
+
+    def _restore_accepted_baseline(self, target_id: str, identity: CodeIdentity) -> None:
+        if self.behavior_snapshot_store is None:
+            return
+        code_hash = identity.source_hash or identity.bytecode_hash
+        restored = self.behavior_snapshot_store.load_accepted_guard_baseline(
+            target_id,
+            code_hash=code_hash,
+            monitoring_fingerprint=self.monitoring_fingerprint(target_id),
+        )
+        if restored is None:
+            return
+        record, envelope = restored
+        snapshot = envelope["snapshot"]
+        profile_value = dict(snapshot.get("profile") or {})
+        baseline = BehaviorBaseline(
+            baseline_id=UUID(str(record["baseline_id"])),
+            subject=identity,
+            workload_label=snapshot.get("workload_label"),
+            environment_fingerprint=snapshot.get("environment_fingerprint"),
+            created_at=datetime.fromisoformat(str(snapshot["created_at"])),
+            accepted_at=datetime.fromisoformat(str(record["accepted_at"])),
+            observations=max(1, int(profile_value.get("window_count") or 0)),
+            profile=BehaviorProfile(
+                event_kind_counts=dict(profile_value.get("event_kind_counts") or {}),
+                resource_counts=dict(profile_value.get("resource_counts") or {}),
+                call_count=int(profile_value.get("call_count") or 0),
+                event_count=int(profile_value.get("event_count") or 0),
+                network_destinations=tuple(profile_value.get("network_destinations") or ()),
+                filesystem_roots=tuple(profile_value.get("filesystem_roots") or ()),
+                subprocesses=tuple(profile_value.get("subprocesses") or ()),
+                imports=tuple(profile_value.get("imports") or ()),
+                dynamic_code_operations=tuple(profile_value.get("dynamic_code_operations") or ()),
+            ),
+            state=BaselineState.ACCEPTED,
+        )
+        self.baselines.restore(baseline)
+        self._sealed_baseline_ids.add(baseline.baseline_id)
+        self.store.record_guard_baseline(baseline)
+
+    def _queue_accepted_baseline_snapshot(
+        self, target_id: str, baseline: BehaviorBaseline
+    ) -> None:
+        if self.behavior_statistics is None or baseline.baseline_id in self._sealed_baseline_ids:
+            return
+        identity = baseline.subject
+        profile = baseline.profile
+        self.behavior_statistics.queue_guard_baseline(
+            target_id=target_id,
+            subject={
+                "target_id": target_id,
+                "module_name": identity.module_name,
+                "qualified_name": identity.qualified_name,
+                "source_path": identity.source_path,
+            },
+            code_hash=identity.source_hash or identity.bytecode_hash,
+            code_hash_kind=(
+                "function-source-sha256" if identity.source_hash else "function-bytecode-sha256"
+            ),
+            monitoring_configuration=self.monitoring_configuration(target_id),
+            profile={
+                "window_count": baseline.observations,
+                "call_count": profile.call_count,
+                "event_count": profile.event_count,
+                "event_kind_counts": dict(profile.event_kind_counts),
+                "resource_counts": dict(profile.resource_counts),
+                "network_destinations": list(profile.network_destinations),
+                "filesystem_roots": list(profile.filesystem_roots),
+                "subprocesses": list(profile.subprocesses),
+                "imports": list(profile.imports),
+                "dynamic_code_operations": list(profile.dynamic_code_operations),
+                "resource_coverage_complete": True,
+                "distinct_resource_count": len(profile.resource_counts),
+            },
+            baseline_id=baseline.baseline_id,
+        )
+        self._sealed_baseline_ids.add(baseline.baseline_id)
+
     def register_target(
         self,
         target_id: str,
@@ -289,11 +434,15 @@ class GuardEngine(GuardFacade):
         function_resolver: Callable[[], Callable] | None = None,
         *,
         periodic: bool = True,
+        monitoring_configuration: Mapping[str, object] | None = None,
     ) -> None:
         identity = identify_function(function)
         with self._lock:
-            self._targets[target_id] = _TargetBinding(function, binding, identity, function_resolver)
+            self._targets[target_id] = _TargetBinding(
+                function, binding, identity, function_resolver, monitoring_configuration
+            )
         self.store.record_code_identity(identity)
+        self._restore_accepted_baseline(target_id, identity)
         self.inspector.inspect_function(function, kind=InspectionKind.POST_LOAD)
         if binding.enabled and periodic:
             if function_resolver is not None:
@@ -327,7 +476,10 @@ class GuardEngine(GuardFacade):
             target_id=target_id,
             process_id=os.getpid(),
             thread_id=threading.get_ident(),
-            attributes={},
+            attributes={
+                "observation_stage": snapshot_context().get("observation_stage") or ("POST_REPAIR_BEHAVIOR" if candidate_id else "GUARD"),
+                "monitoring_fingerprint": snapshot_context().get("monitoring_fingerprint"),
+            },
             outcome=EventOutcome.OBSERVED,
         )
         self.record_event(event)
@@ -364,7 +516,10 @@ class GuardEngine(GuardFacade):
             thread_id=threading.get_ident(),
             duration_seconds=elapsed_seconds,
             outcome=EventOutcome.SUCCEEDED if succeeded else EventOutcome.FAILED,
-            attributes={},
+            attributes={
+                "observation_stage": snapshot_context().get("observation_stage") or ("POST_REPAIR_BEHAVIOR" if candidate_id else "GUARD"),
+                "monitoring_fingerprint": snapshot_context().get("monitoring_fingerprint"),
+            },
         )
         self.record_event(event)
         inspection = self.inspector.inspect_function(
@@ -383,6 +538,16 @@ class GuardEngine(GuardFacade):
         if event.target_id is not None:
             with self._lock:
                 self._events_by_target[event.target_id].append(event)
+            if self.behavior_statistics is not None and event.target_id in self._targets:
+                try:
+                    self.behavior_statistics.observe_event(
+                        event,
+                        monitoring_configuration=self.monitoring_configuration(event.target_id),
+                    )
+                except Exception:
+                    # Statistical snapshotting is evidence infrastructure. It must
+                    # fail contained rather than changing application behavior.
+                    pass
         window = self.aggregator.consume(event)
         if window is not None:
             self._process_window(window, target_id=event.target_id)
@@ -423,6 +588,7 @@ class GuardEngine(GuardFacade):
         binding = self._targets[target_id]
         baseline = self.baselines.accept(binding.identity)
         self.store.record_guard_baseline(baseline)
+        self._queue_accepted_baseline_snapshot(target_id, baseline)
         return baseline
 
     def recent_summary(self, target_id: str, *, calls: int = 20) -> BehaviorProfileSummary | None:
@@ -545,6 +711,10 @@ class GuardEngine(GuardFacade):
         )
 
     def behavior_capture(self, target_id: str, *, calls: int = 50) -> dict[str, object]:
+        if self.behavior_statistics is not None:
+            capture = self.behavior_statistics.current_capture(target_id)
+            if capture is not None:
+                return capture
         summary = self.current_behavior_summary(target_id, calls=calls)
         if summary is None:
             raise KeyError(f"Unknown Guard target {target_id}")
@@ -564,6 +734,11 @@ class GuardEngine(GuardFacade):
             },
             "code_hash": code_hash,
             "code_hash_kind": code_hash_kind,
+            "monitoring_configuration": self.monitoring_configuration(target_id),
+            "monitoring_fingerprint": self.monitoring_fingerprint(target_id),
+            "statistics_schema_version": 1,
+            "environment_fingerprint": self.policy.baseline.environment_fingerprint,
+            "workload_label": self.policy.baseline.workload_label,
             "profile": {
                 "window_count": summary.window_count,
                 "call_count": summary.call_count,
@@ -680,6 +855,8 @@ class GuardEngine(GuardFacade):
         if baseline is None:
             return
         self.store.record_guard_baseline(baseline)
+        if target_id is not None and baseline.state is BaselineState.ACCEPTED:
+            self._queue_accepted_baseline_snapshot(target_id, baseline)
         if self.policy.mode is GuardMode.LEARN:
             return
         if baseline.state is not BaselineState.ACCEPTED:

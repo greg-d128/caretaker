@@ -13,6 +13,8 @@ current_episode_id: ContextVar[UUID | None] = ContextVar("caretaker_episode_id",
 current_attempt_id: ContextVar[UUID | None] = ContextVar("caretaker_attempt_id", default=None)
 current_candidate_id: ContextVar[UUID | None] = ContextVar("caretaker_candidate_id", default=None)
 current_operation: ContextVar[str | None] = ContextVar("caretaker_operation", default=None)
+current_observation_stage: ContextVar[str | None] = ContextVar("caretaker_observation_stage", default=None)
+current_monitoring_fingerprint: ContextVar[str | None] = ContextVar("caretaker_monitoring_fingerprint", default=None)
 repair_depth: ContextVar[int] = ContextVar("caretaker_repair_depth", default=0)
 
 
@@ -34,6 +36,8 @@ def set_runtime_context(**values: object) -> RuntimeTokens:
         "attempt_id": current_attempt_id,
         "candidate_id": current_candidate_id,
         "operation": current_operation,
+        "observation_stage": current_observation_stage,
+        "monitoring_fingerprint": current_monitoring_fingerprint,
     }
     tokens: list[tuple[ContextVar[Any], object]] = []
     for name, value in values.items():
@@ -51,5 +55,7 @@ def snapshot_context() -> dict[str, object]:
         "attempt_id": current_attempt_id.get(),
         "candidate_id": current_candidate_id.get(),
         "operation": current_operation.get(),
+        "observation_stage": current_observation_stage.get(),
+        "monitoring_fingerprint": current_monitoring_fingerprint.get(),
         "repair_depth": repair_depth.get(),
     }

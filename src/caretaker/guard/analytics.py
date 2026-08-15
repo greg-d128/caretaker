@@ -225,6 +225,16 @@ class BaselineManager:
             self._baselines[key] = accepted
             return accepted
 
+    def restore(self, baseline: BehaviorBaseline) -> BehaviorBaseline:
+        """Hydrate a previously accepted immutable baseline without replaying events."""
+        if baseline.state is not BaselineState.ACCEPTED:
+            raise ValueError("Only accepted Guard baselines may be restored")
+        key = _subject_key(baseline.subject)
+        with self._lock:
+            self._baselines[key] = baseline
+            self._windows.pop(key, None)
+        return baseline
+
     def get(self, subject: CodeIdentity) -> BehaviorBaseline | None:
         with self._lock:
             return self._baselines.get(_subject_key(subject))

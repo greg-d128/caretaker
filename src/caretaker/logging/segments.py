@@ -11,13 +11,13 @@ import time
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Any, Iterable, Iterator
 from uuid import UUID, uuid4
 
 from .models import LogEnvelope, RuntimeRecordIntegrityMode, SignatureStatus
 from .policy import OperatorLoggingPolicy
 from .records import HEADER, RecordFormatError, TLVLogCodec
-from .signing import EphemeralSignerProcess, KeyEvolutionSigner
+from .signing import RuntimeArtifactSigningService, serialize_signed_artifact
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +147,8 @@ class SegmentWriter:
         *,
         run_id: UUID,
         process_start_id: UUID,
+        external_signer: Any | None = None,
+        signing_service: RuntimeArtifactSigningService | None = None,
     ) -> None:
         self.policy = policy
         self.run_id = run_id
@@ -163,7 +165,17 @@ class SegmentWriter:
         self._previous_hash: str | None = self._load_previous_hash()
         self._global_sequence = self._load_last_sequence()
         self._reserved_sequences: dict[UUID, int] = {}
-        self._signer = self._create_signer()
+        self.signing_service = signing_service or RuntimeArtifactSigningService(
+            policy=policy.signing,
+            application_id=policy.application_id,
+            run_id=run_id,
+            process_start_id=process_start_id,
+            root=self.root,
+            external_signer=external_signer,
+            first_event_sequence=self._global_sequence + 1,
+        )
+        # Compatibility alias for callers that inspected the old signer object.
+        self._signer = self.signing_service
         self._open_new()
 
     def update_policy(self, policy: OperatorLoggingPolicy) -> tuple[str, ...]:
@@ -185,19 +197,6 @@ class SegmentWriter:
             signing=self.policy.signing,
         )
         return tuple(warnings)
-
-    def _create_signer(self):
-        if self.policy.signing.mode is not RuntimeRecordIntegrityMode.EPHEMERAL_SIGNED:
-            return None
-        args = dict(
-            application_id=self.policy.application_id,
-            run_id=self.run_id,
-            process_start_id=self.process_start_id,
-            policy=self.policy.signing,
-            first_event_sequence=0,
-        )
-        return EphemeralSignerProcess(**args) if self.policy.signing.run_signer_in_separate_process else KeyEvolutionSigner(**args)
-
 
     def _load_last_sequence(self) -> int:
         try:
@@ -287,8 +286,8 @@ class SegmentWriter:
             signature_path: str | None = None
             signed = None
             transitions = ()
-            if self._signer is not None and self._record_count:
-                kwargs = dict(
+            if self.policy.signing.mode is not RuntimeRecordIntegrityMode.HASH_CHAINED and self._record_count:
+                signed, transitions = self.signing_service.sign_event_manifest(
                     segment_id=self.segment_id,
                     segment_hash=content_hash,
                     previous_segment_hash=self._previous_hash,
@@ -297,18 +296,25 @@ class SegmentWriter:
                     event_count=self._record_count,
                     attachment_manifest_hash=attachment_manifest_hash,
                 )
-                if isinstance(self._signer, EphemeralSignerProcess):
-                    signed, transitions = self._signer.sign_manifest(**kwargs)
-                else:
-                    signed = self._signer.sign_manifest(**kwargs)
-                    transitions = tuple(self._signer.transitions)
-                signature_status = SignatureStatus.EPHEMERAL_SIGNED
+                signature_status = (
+                    SignatureStatus.EXTERNAL_SIGNED
+                    if self.policy.signing.mode is RuntimeRecordIntegrityMode.EXTERNAL_SIGNED
+                    else SignatureStatus.EPHEMERAL_SIGNED
+                )
                 signature_file = self.manifest_dir / f"{self.segment_id}.signature.json"
-                signature_file.write_text(json.dumps({
-                    "identity": _jsonable(self._signer.identity),
-                    "manifest": _jsonable(signed),
-                    "transitions": [_jsonable(item) for item in transitions],
-                }, indent=2, sort_keys=True))
+                if hasattr(signed, "artifact_kind"):
+                    signature_payload = {
+                        "identity": _jsonable(self.signing_service.identity),
+                        "artifact_signature": serialize_signed_artifact(signed),
+                        "transitions": [_jsonable(item) for item in transitions],
+                    }
+                else:
+                    signature_payload = {
+                        "identity": _jsonable(self.signing_service.identity),
+                        "manifest": _jsonable(signed),
+                        "transitions": [_jsonable(item) for item in transitions],
+                    }
+                signature_file.write_text(json.dumps(signature_payload, indent=2, sort_keys=True))
                 signature_path = str(signature_file)
             manifest = SegmentManifest(
                 segment_id=self.segment_id,
@@ -356,8 +362,7 @@ class SegmentWriter:
 
     def close(self, *, attachment_manifest_hash: str | None = None) -> SegmentManifest | None:
         manifest = self.close_segment(attachment_manifest_hash=attachment_manifest_hash)
-        if self._signer is not None:
-            self._signer.close()
+        self.signing_service.close()
         return manifest
 
 

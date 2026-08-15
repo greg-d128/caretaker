@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Protocol
+from typing import Mapping, Protocol
 from uuid import UUID
 
 from .models import (
@@ -23,6 +23,7 @@ class GuardFacade(Protocol):
         function_resolver: Callable[[], Callable] | None = None,
         *,
         periodic: bool = True,
+        monitoring_configuration: Mapping[str, object] | None = None,
     ) -> None: ...
 
     def before_call(

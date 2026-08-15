@@ -485,6 +485,18 @@ class _AdaptiveController:
             self.behavior_binding = binding
         return guard, binding
 
+    def _register_behavior_target(self, guard: Any, binding: Any) -> None:
+        kwargs: dict[str, Any] = {"periodic": self.allow_repair_promotion}
+        try:
+            parameters = inspect.signature(guard.register_target).parameters
+        except (TypeError, ValueError):
+            parameters = {}
+        if "monitoring_configuration" in parameters:
+            kwargs["monitoring_configuration"] = {
+                "adaptive_monitoring_fingerprint": _monitoring_policy_hash(self.policy),
+            }
+        guard.register_target(self.target_id, self.function, binding, **kwargs)
+
     def prepare_guard_registration(self) -> bool:
         """Register the behavior target before Guard hooks are installed.
 
@@ -498,12 +510,7 @@ class _AdaptiveController:
             if guard is None or not binding.enabled:
                 return False
             if not self._behavior_registered:
-                guard.register_target(
-                    self.target_id,
-                    self.function,
-                    binding,
-                    periodic=self.allow_repair_promotion,
-                )
+                self._register_behavior_target(guard, binding)
                 self._behavior_registered = True
             return True
 
@@ -511,12 +518,7 @@ class _AdaptiveController:
         if guard is None or not binding.enabled:
             return False
         if not self._behavior_registered:
-            guard.register_target(
-                self.target_id,
-                self.function,
-                binding,
-                periodic=self.allow_repair_promotion,
-            )
+            self._register_behavior_target(guard, binding)
             self._behavior_registered = True
         if self._behavior_lease_remaining <= 0:
             from .guard.models import GuardMode
@@ -538,6 +540,8 @@ class _AdaptiveController:
             target_id=self.target_id,
             call_id=call_id,
             operation="adaptive-behavior-call",
+            observation_stage=observed_level.name,
+            monitoring_fingerprint=_monitoring_policy_hash(self.policy),
         )
         started = time.perf_counter()
         succeeded = False
@@ -1320,6 +1324,20 @@ def _policy_hash(policy: LightweightPolicy) -> str:
     encoded = json.dumps(normalize(policy), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
+
+
+def _monitoring_policy_hash(policy: LightweightPolicy) -> str:
+    payload = {
+        "sampling": {
+            "enabled": policy.sampling.enabled,
+            "lightweight_every_calls": policy.sampling.lightweight_every_calls,
+            "behavior_every_calls": policy.sampling.behavior_every_calls,
+            "randomize_initial_offset": policy.sampling.randomize_initial_offset,
+        },
+        "behavior_executions": policy.behavior_executions,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 def _state_path(target_id: str, code_hash: str, directory: str | Path | None) -> Path:
     if directory is None:

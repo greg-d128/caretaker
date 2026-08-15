@@ -34,7 +34,12 @@ from .models import *
 from .policy import *
 from .records import RecordFormatError, TLVLogCodec
 from .segments import SegmentIndex, SegmentManifest, SegmentWriter, read_segment
-from .signing import EphemeralSignerProcess, ExternalManifestSigner, KeyEvolutionSigner, SigningUnavailable
+from .signing import (
+    EphemeralSignerProcess, ExternalArtifactSigner, ExternalManifestSigner,
+    KeyEvolutionSigner, RuntimeArtifactSigningService, SigningIdentityJournal,
+    SigningUnavailable, deserialize_signed_artifact, serialize_signed_artifact,
+    verify_signed_artifact,
+)
 from .supervisor import CaretakerApplicationSupervisor, Watchdog, WorkRegistry, WorkerRegistry
 
 __all__ = [name for name in globals() if not name.startswith("_")]

@@ -18,6 +18,7 @@ from .authority import (
 )
 from .behavior import (
     BehaviorSnapshotStore,
+    BehaviorStatisticsRepository,
     OllamaBehaviorSnapshotAnalyst,
     compare_snapshots,
     snapshot_payload,
@@ -85,7 +86,10 @@ def main(argv: list[str] | None = None) -> int:
         policy_transform=policy_transform,
     )
     policy = runtime.active_policy
-    behavior_store = BehaviorSnapshotStore(policy.directory)
+    behavior_store = BehaviorSnapshotStore(
+        policy.directory, artifact_signer=runtime.writer.signing_service
+    )
+    behavior_statistics = BehaviorStatisticsRepository(policy.directory)
     runtime.event(
         logger_name="caretaker.authority",
         severity=30 if authority.effective.overall_assurance in {"GUARANTEE_VIOLATED", "INVALID_AUTHORITY_CHAIN"} else 20,
@@ -115,6 +119,42 @@ def main(argv: list[str] | None = None) -> int:
     authority_lease_holder = {
         str(lease.lease_id): lease for lease in authority.effective.runtime_leases
     }
+
+    def deployment_fingerprint() -> str | None:
+        layer = next(
+            (
+                item
+                for item in authority.effective.layers
+                if getattr(getattr(item, "kind", None), "value", None) == "deployment"
+            ),
+            None,
+        )
+        return layer.fingerprint if layer else None
+
+    def materialize_behavior_snapshots(*, maximum: int = 100) -> int:
+        envelopes = behavior_statistics.materialize_pending(
+            behavior_store,
+            authority_fingerprint=authority.effective.fingerprint,
+            deployment_fingerprint=deployment_fingerprint(),
+            maximum=maximum,
+        )
+        for envelope in envelopes:
+            snapshot = envelope["snapshot"]
+            runtime.event(
+                logger_name="caretaker.behavior",
+                severity=20,
+                channel=LogChannel.GUARD,
+                message="Behavior snapshot automatically materialized",
+                fields={
+                    "snapshot_id": snapshot["snapshot_id"],
+                    "subject_key": snapshot["subject_key"],
+                    "generation_id": snapshot.get("generation_id"),
+                    "seal_reason": snapshot.get("seal_reason"),
+                    "content_sha256": envelope["integrity"]["content_sha256"],
+                    "signature_state": envelope["integrity"]["signature_state"],
+                },
+            )
+        return len(envelopes)
 
     def recent_log_records(limit: int = 1000):
         event_directory = Path(policy.directory) / "application" / "events"
@@ -193,18 +233,10 @@ def main(argv: list[str] | None = None) -> int:
             )
             if response.get("ok") is False:
                 return response
-            deployment_layer = next(
-                (
-                    item
-                    for item in authority.effective.layers
-                    if getattr(getattr(item, "kind", None), "value", None) == "deployment"
-                ),
-                None,
-            )
             envelope = behavior_store.create(
                 response["capture"],
                 authority_fingerprint=authority.effective.fingerprint,
-                deployment_fingerprint=(deployment_layer.fingerprint if deployment_layer else None),
+                deployment_fingerprint=deployment_fingerprint(),
             )
             snapshot = envelope["snapshot"]
             runtime.event(
@@ -658,6 +690,7 @@ def main(argv: list[str] | None = None) -> int:
         nonlocal collector, collector_thread
         while not health_stop.wait(1.0):
             effective_authority = authority.effective
+            materialize_behavior_snapshots(maximum=100)
             current_leases = {
                 str(lease.lease_id): lease for lease in effective_authority.runtime_leases
             }
@@ -818,6 +851,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         health_stop.set()
         health_thread.join(timeout=3)
+        materialize_behavior_snapshots(maximum=10_000)
         if collector:
             collector.stop()
         if collector_thread:
