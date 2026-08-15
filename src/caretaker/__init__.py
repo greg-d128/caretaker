@@ -1,7 +1,9 @@
 """Caretaker: experimental, policy-driven self-repair for Python functions."""
 
+from .acceptance import AcceptanceCriteria
 from .adaptive import (
     AcceptanceState,
+    AdaptiveLifecycleStage,
     AdaptiveInstrumentationState,
     DEFAULT_DEPENDENCY_POLICY,
     DEFAULT_LIGHTWEIGHT_POLICY,
@@ -209,6 +211,7 @@ from .system import (
 
 __all__ = [
     "AcceptanceState",
+    "AdaptiveLifecycleStage",
     "AdaptiveInstrumentationState",
     "DEFAULT_DEPENDENCY_POLICY",
     "DEFAULT_LIGHTWEIGHT_POLICY",
@@ -336,6 +339,7 @@ __all__ = [
     "identify_function",
     "identify_module",
     "inventory_distribution",
+    "AcceptanceCriteria",
     "ActivationPolicy",
     "AuxiliaryFunctionManager",
     "AuxiliaryRegistry",

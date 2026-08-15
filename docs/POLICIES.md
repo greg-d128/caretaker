@@ -12,9 +12,10 @@ demotion. The signed authority namespace is `lightweight.*`.
 
 Signal policies include exception and soft-timing thresholds. Their `promote_to` field
 expresses the desired terminal capability. `promote_to=REPAIR` is repair eligibility,
-not permission to skip observation: automatic escalation is always
-`LIGHTWEIGHT -> BEHAVIOR -> REPAIR`. Both exceptions and soft-timing breaches may be
-repair-eligible.
+not permission to skip observation. The complete repaired-function lifecycle is
+`LIGHTWEIGHT -> BEHAVIOR -> REPAIR -> BEHAVIOR -> VALIDATION -> LONG_TERM_ACCEPTANCE`.
+Both exceptions and soft-timing breaches may be repair-eligible. Pre-repair BEHAVIOR
+gathers diagnostic evidence; post-repair BEHAVIOR observes the activated candidate.
 
 `BehaviorSamplingPolicy` provides generation-scoped call-count sampling:
 
@@ -39,7 +40,9 @@ materialize a signed behavior snapshot by itself.
 Only behavior samples collected while already in BEHAVIOR count toward repair evidence.
 A threshold-triggering LIGHTWEIGHT call cannot satisfy the post-promotion reproduction
 requirement, even if multiple signals occur during that same execution. Disabling the
-repair-evidence policy disables automatic promotion from BEHAVIOR to REPAIR.
+repair-evidence policy disables automatic promotion from BEHAVIOR to REPAIR. An enabled
+policy cannot set every evidence requirement to zero while also disabling reproduction;
+Caretaker requires a real post-promotion observation before automatic repair.
 
 Demotion is never implied by promotion. `InstrumentationDemotionPolicy.enabled` is
 the explicit switch. Its acceptance fields deliberately mirror repaired-function
@@ -53,16 +56,26 @@ observation semantics:
 - `long_term_failure_rate`;
 - `stepwise`.
 
-A promoted level first enters probation, then short-term acceptance, then long-term
-acceptance. Only after long-term acceptance may an enabled demotion policy step the
-target down. With `stepwise=True`, `REPAIR` demotes to `BEHAVIOR` first and must pass
-a new acceptance cycle before returning to `LIGHTWEIGHT`. Exceptions and configured
-soft-timing breaches count against acceptance; a target that remains slow cannot
-demote merely because it continues to return successfully.
+For a BEHAVIOR promotion that never enters repair, the adaptive controller uses these
+shared criteria to decide whether observation may demote again. Once an actual repair
+candidate is activated, adaptive acceptance stops: `FunctionSlot` and
+`ObservationPolicy` become the single authoritative acceptance state machine. The
+candidate progresses from post-repair BEHAVIOR to VALIDATION (short-term accepted) and
+then LONG_TERM_ACCEPTANCE. At that point an enabled demotion policy may reduce
+observation intensity to LIGHTWEIGHT without changing the accepted candidate state.
+Exceptions and configured soft-timing breaches count against non-repair adaptive
+acceptance; a target that remains slow cannot demote merely because it returns
+successfully.
+
+`ObservationPolicy` and `InstrumentationDemotionPolicy` now inherit the same
+`AcceptanceCriteria`, so short-term/long-term thresholds have one mathematical
+definition. Lifecycle-specific actions such as rollback versus observation demotion
+remain separate.
 
 Once the evidence gate reaches `REPAIR`, the ordinary `RepairPolicy` still decides
 what evidence, validation, authority, retry, Guard, and activation behavior is
-permitted at that level.
+permitted. Candidate activation then returns the adaptive lifecycle to BEHAVIOR rather
+than treating repair as acceptance.
 
 ## Trigger policy
 

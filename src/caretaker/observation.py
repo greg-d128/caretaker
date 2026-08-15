@@ -55,14 +55,7 @@ class ObservationManager:
         version = slot.load()
         if version.candidate_id is None:
             return
-        session = slot.record_observation_success(
-            initial_threshold=policy.initial_successful_executions,
-            long_term_threshold=policy.long_term_successful_executions,
-            long_term_minimum_seconds=policy.long_term_minimum_duration_seconds,
-            probation_failure_budget=policy.probation_failure_budget,
-            long_term_maximum_failures=policy.long_term_maximum_failures,
-            long_term_failure_rate=policy.long_term_failure_rate,
-        )
+        session = slot.record_observation_success(acceptance=policy)
         if session is None:
             return
         self.store.record_observation(

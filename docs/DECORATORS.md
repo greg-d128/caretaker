@@ -91,19 +91,30 @@ def lookup(...):
     ...
 ```
 
-Instrumentation levels are ordered and automatic escalation never skips the middle
-observation phase:
+Caretaker exposes a single adaptive repair lifecycle to operators:
 
-1. `LIGHTWEIGHT` — rolling exception/timing threshold state plus sparse behavior samples;
-2. `BEHAVIOR` — increased behavior sampling and richer diagnostics while evidence is gathered;
-3. `REPAIR` — the existing full Repair wrapper is created lazily only after the evidence gate passes.
+`LIGHTWEIGHT -> BEHAVIOR -> REPAIR -> BEHAVIOR -> VALIDATION -> LONG_TERM_ACCEPTANCE`
+
+The two BEHAVIOR stages have different jobs. Before repair, BEHAVIOR increases sampling
+and gathers enough evidence to justify remediation. After a candidate is activated,
+BEHAVIOR observes the replacement while `FunctionSlot` remains authoritative for
+rollback and candidate state. `VALIDATION` corresponds to the candidate having passed
+its short-term/probation criteria; it continues operating under observation until the
+existing long-term acceptance criteria are satisfied.
+
+Instrumentation intensity is deliberately separate from lifecycle stage. A target in
+post-repair `LONG_TERM_ACCEPTANCE` may return to LIGHTWEIGHT observation if demotion
+policy permits it without erasing the fact that the repaired implementation completed
+its acceptance lifecycle.
 
 `promote_to=REPAIR` on an exception or soft-timing policy means that the signal is
 repair-eligible. It does **not** mean LIGHTWEIGHT jumps directly to REPAIR. The
-threshold first transitions the target to BEHAVIOR and records a repair request.
-`RepairEvidencePolicy` then controls when enough post-promotion evidence exists to
-enter REPAIR. Requiring reproduction prevents a transient threshold from immediately
-triggering repair if the problem disappears during observation.
+threshold first transitions the target to pre-repair BEHAVIOR and records a repair
+request. `RepairEvidencePolicy` then controls when enough post-promotion evidence
+exists to enter REPAIR. The policy must require at least one form of post-promotion
+evidence; an all-zero evidence gate is rejected. Requiring reproduction prevents a
+transient threshold from immediately triggering repair if the problem disappears
+during observation.
 
 The call that reaches a LIGHTWEIGHT promotion threshold still completes under the old
 level. For example, with `occurrences=2`, the first two exceptions are not

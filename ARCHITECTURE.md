@@ -35,6 +35,37 @@ Caretaker is scoped to one application or service. It runs with the application 
 - Caretaker-owned code is never eligible for generated self-repair.
 - LLM results are advisory except where standing automatic Repair authority has been explicitly enabled and all deterministic gates pass.
 
+## Adaptive repair lifecycle
+
+Caretaker separates **lifecycle stage** from **instrumentation intensity**. The
+operator-facing repaired-function lifecycle is:
+
+```text
+LIGHTWEIGHT
+    ↓ problem threshold
+BEHAVIOR                 pre-repair evidence gathering
+    ↓ evidence sufficient
+REPAIR                   candidate generation/activation
+    ↓ candidate activated
+BEHAVIOR                 post-repair candidate observation
+    ↓ probation criteria satisfied
+VALIDATION               short-term accepted; continued validation
+    ↓ long-term criteria satisfied
+LONG_TERM_ACCEPTANCE
+```
+
+`FunctionSlot` is authoritative after candidate activation. Adaptive instrumentation
+mirrors the slot's candidate state rather than maintaining a second repair-acceptance
+state machine. `ACTIVE_PROBATION`/`DEGRADED` map to post-repair BEHAVIOR,
+`INITIALLY_VALIDATED` maps to VALIDATION, and `LONG_TERM_ACCEPTED` maps to
+LONG_TERM_ACCEPTANCE.
+
+Observation intensity is orthogonal. For example, policy may return a long-term
+accepted target to LIGHTWEIGHT observation without changing its lifecycle history or
+accepted candidate identity. Repair candidate observation and adaptive demotion share
+one `AcceptanceCriteria` definition for success counts, duration, failure budgets, and
+failure rate; lifecycle-specific actions remain separate.
+
 ## Preferred process topology
 
 The supervised entry point starts before application imports:

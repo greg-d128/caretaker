@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 from uuid import uuid4
 
+from .acceptance import AcceptanceCriteria
 from .contracts import Comparator, Validator
 from .guard.policy import CandidateGuardPolicy, GuardBinding
 from .logging.policy import LoggingBinding
@@ -135,13 +136,7 @@ class DifferentialExecutionPolicy:
 
 
 @dataclass(frozen=True, slots=True)
-class ObservationPolicy:
-    initial_successful_executions: int = 3
-    long_term_successful_executions: int = 100
-    long_term_minimum_duration_seconds: float = 3600.0
-    probation_failure_budget: int = 0
-    long_term_maximum_failures: int = 1
-    long_term_failure_rate: float = 0.001
+class ObservationPolicy(AcceptanceCriteria):
     rollback_during_probation: bool = True
     rollback_after_acceptance: bool = False
     differential_execution: DifferentialExecutionPolicy = field(

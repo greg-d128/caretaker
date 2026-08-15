@@ -7,7 +7,9 @@ from datetime import datetime
 from threading import Condition, RLock
 from uuid import UUID, uuid4
 
+from .acceptance import long_term_accepted, short_term_accepted
 from .domain import CandidateState, SlotRole, SlotState, utcnow
+from .policy import AcceptanceCriteria
 
 
 class SlotConflictError(RuntimeError):
@@ -194,12 +196,7 @@ class FunctionSlot:
     def record_observation_success(
         self,
         *,
-        initial_threshold: int,
-        long_term_threshold: int,
-        long_term_minimum_seconds: float,
-        probation_failure_budget: int,
-        long_term_maximum_failures: int,
-        long_term_failure_rate: float,
+        acceptance: AcceptanceCriteria,
     ) -> ObservationSession | None:
         with self._condition:
             if self._observation is None:
@@ -208,21 +205,19 @@ class FunctionSlot:
                 self._observation,
                 successful_executions=self._observation.successful_executions + 1,
             )
-            elapsed = (utcnow() - observation.started_at).total_seconds()
-            total = observation.successful_executions + observation.failed_executions
-            failure_rate = observation.failed_executions / max(1, total)
             candidate_state = observation.state
-            if (
-                observation.successful_executions >= long_term_threshold
-                and elapsed >= long_term_minimum_seconds
-                and observation.failed_executions <= long_term_maximum_failures
-                and failure_rate <= long_term_failure_rate
+            if long_term_accepted(
+                successful_executions=observation.successful_executions,
+                failed_executions=observation.failed_executions,
+                started_at=observation.started_at,
+                criteria=acceptance,
             ):
                 candidate_state = CandidateState.LONG_TERM_ACCEPTED
                 self._state = SlotState.LONG_TERM_ACCEPTED
-            elif (
-                observation.successful_executions >= initial_threshold
-                and observation.failed_executions <= probation_failure_budget
+            elif short_term_accepted(
+                successful_executions=observation.successful_executions,
+                failed_executions=observation.failed_executions,
+                criteria=acceptance,
             ):
                 candidate_state = CandidateState.INITIALLY_VALIDATED
                 self._state = SlotState.INITIALLY_VALIDATED

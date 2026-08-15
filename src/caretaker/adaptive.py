@@ -29,6 +29,8 @@ from types import ModuleType
 from typing import Any, TypeVar, overload
 from uuid import uuid4
 
+from .acceptance import AcceptanceCriteria, long_term_accepted, short_term_accepted
+from .domain import CandidateState
 from .runtime import set_runtime_context
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -46,9 +48,42 @@ def utcnow_iso() -> str:
 
 
 class InstrumentationLevel(Enum):
+    """Current observation/execution intensity.
+
+    ``REPAIR`` is retained for API compatibility, but lifecycle stage is the source
+    of truth for whether Caretaker is investigating, repairing, or validating a
+    candidate.  This keeps observation intensity separate from repair acceptance.
+    """
+
     LIGHTWEIGHT = 0
     BEHAVIOR = 1
     REPAIR = 2
+
+
+class AdaptiveLifecycleStage(Enum):
+    """End-to-end adaptive repair lifecycle.
+
+    The two behavior stages deliberately have different names internally even though
+    both are presented to operators as BEHAVIOR.  The first gathers evidence for a
+    possible repair; the second observes the newly activated candidate before it is
+    allowed to progress through validation and long-term acceptance.
+    """
+
+    LIGHTWEIGHT = "lightweight"
+    PRE_REPAIR_BEHAVIOR = "pre-repair-behavior"
+    REPAIR = "repair"
+    POST_REPAIR_BEHAVIOR = "post-repair-behavior"
+    VALIDATION = "validation"
+    LONG_TERM_ACCEPTANCE = "long-term-acceptance"
+
+    @property
+    def operator_label(self) -> str:
+        if self in {
+            AdaptiveLifecycleStage.PRE_REPAIR_BEHAVIOR,
+            AdaptiveLifecycleStage.POST_REPAIR_BEHAVIOR,
+        }:
+            return "BEHAVIOR"
+        return self.name
 
 
 class AcceptanceState(Enum):
@@ -102,12 +137,12 @@ class RepairEvidencePolicy:
 
 
 @dataclass(frozen=True, slots=True)
-class InstrumentationDemotionPolicy:
-    """Acceptance criteria required before promoted instrumentation may step down.
+class InstrumentationDemotionPolicy(AcceptanceCriteria):
+    """Acceptance criteria required before promoted observation may step down.
 
-    The two phases intentionally mirror Repair ``ObservationPolicy`` semantics:
-    first establish a short-term successful probation, then require a larger and
-    optionally time-bounded long-term observation before demotion is permitted.
+    The thresholds are inherited from the same ``AcceptanceCriteria`` used by
+    repaired-function observation.  Only the action after acceptance differs:
+    this policy controls observation demotion rather than candidate rollback.
     """
 
     enabled: bool = False
@@ -137,6 +172,7 @@ class AdaptiveInstrumentationState:
     target_id: str
     code_hash: str
     level: InstrumentationLevel
+    stage: AdaptiveLifecycleStage = AdaptiveLifecycleStage.LIGHTWEIGHT
     acceptance: AcceptanceState = AcceptanceState.NONE
     promoted_at: str | None = None
     promotion_reason: str | None = None
@@ -155,6 +191,10 @@ class AdaptiveInstrumentationState:
     repair_requested: bool = False
     repair_request_reason: str | None = None
     repair_evidence_satisfied_at: str | None = None
+    repair_candidate_id: str | None = None
+    repair_candidate_version: int | None = None
+    post_repair_behavior_started_at: str | None = None
+    validation_started_at: str | None = None
     sampling_call_counter: int = 0
     recent_diagnostics: list[dict[str, Any]] = field(default_factory=list)
 
@@ -163,6 +203,8 @@ class AdaptiveInstrumentationState:
             "target_id": self.target_id,
             "code_hash": self.code_hash,
             "level": self.level.name,
+            "stage": self.stage.value,
+            "stage_label": self.stage.operator_label,
             "acceptance": self.acceptance.value,
             "promoted_at": self.promoted_at,
             "promotion_reason": self.promotion_reason,
@@ -181,6 +223,10 @@ class AdaptiveInstrumentationState:
             "repair_requested": self.repair_requested,
             "repair_request_reason": self.repair_request_reason,
             "repair_evidence_satisfied_at": self.repair_evidence_satisfied_at,
+            "repair_candidate_id": self.repair_candidate_id,
+            "repair_candidate_version": self.repair_candidate_version,
+            "post_repair_behavior_started_at": self.post_repair_behavior_started_at,
+            "validation_started_at": self.validation_started_at,
             "sampling_call_counter": self.sampling_call_counter,
             "recent_diagnostics": list(self.recent_diagnostics),
         }
@@ -202,6 +248,30 @@ def get_adaptive_state(target_id: str) -> Mapping[str, Any] | None:
     with _STATE_REGISTRY_LOCK:
         state = _STATE_REGISTRY.get(target_id)
         return None if state is None else state.public_dict()
+
+
+def _initial_stage(level: InstrumentationLevel) -> AdaptiveLifecycleStage:
+    if level is InstrumentationLevel.LIGHTWEIGHT:
+        return AdaptiveLifecycleStage.LIGHTWEIGHT
+    if level is InstrumentationLevel.REPAIR:
+        return AdaptiveLifecycleStage.REPAIR
+    return AdaptiveLifecycleStage.PRE_REPAIR_BEHAVIOR
+
+
+def _loaded_stage(data: Mapping[str, Any]) -> AdaptiveLifecycleStage:
+    raw = data.get("stage")
+    if raw is not None:
+        try:
+            return AdaptiveLifecycleStage(str(raw))
+        except ValueError:
+            pass
+    # Backward-compatible migration for adaptive state written before lifecycle
+    # stages were explicit.
+    try:
+        level = InstrumentationLevel[str(data.get("level", "LIGHTWEIGHT"))]
+    except KeyError:
+        level = InstrumentationLevel.LIGHTWEIGHT
+    return _initial_stage(level)
 
 
 def validate_lightweight_policy(policy: LightweightPolicy) -> None:
@@ -229,6 +299,17 @@ def validate_lightweight_policy(policy: LightweightPolicy) -> None:
         errors.append("repair_evidence.minimum_observation_calls cannot be negative")
     if evidence.minimum_duration_seconds < 0:
         errors.append("repair_evidence.minimum_duration_seconds cannot be negative")
+    if (
+        evidence.enabled
+        and evidence.minimum_behavior_samples == 0
+        and evidence.minimum_observation_calls == 0
+        and evidence.minimum_duration_seconds == 0
+        and not evidence.require_problem_reproduction
+    ):
+        errors.append(
+            "repair_evidence must require at least one post-promotion observation "
+            "before automatic repair"
+        )
     demotion = policy.demotion
     if demotion.initial_successful_executions < 0:
         errors.append("demotion.initial_successful_executions cannot be negative")
@@ -285,6 +366,7 @@ class _AdaptiveController:
                 target_id=target_id,
                 code_hash=self.code_hash,
                 level=self.policy.initial_level,
+                stage=_initial_stage(self.policy.initial_level),
             )
             self._initialize_generation_state()
         else:
@@ -308,16 +390,30 @@ class _AdaptiveController:
             with self._lock:
                 self._refresh_generation_if_needed()
                 self._refresh_policy_if_needed()
+                self._sync_repair_lifecycle()
                 level = self.state.level
+                stage = self.state.stage
                 sample_behavior = self._advance_sampling_counter(level)
                 if level is InstrumentationLevel.BEHAVIOR:
                     self.state.behavior_observation_calls += 1
 
             started = time.perf_counter()
             failed = False
-            promoted_during_call = False
+            transitioned_during_call = False
             try:
-                if level is InstrumentationLevel.REPAIR and self.allow_repair_promotion:
+                if stage is AdaptiveLifecycleStage.REPAIR and self.allow_repair_promotion:
+                    result = self._repair_call(*args, **kwargs)
+                elif stage in {
+                    AdaptiveLifecycleStage.POST_REPAIR_BEHAVIOR,
+                    AdaptiveLifecycleStage.VALIDATION,
+                    AdaptiveLifecycleStage.LONG_TERM_ACCEPTANCE,
+                } and self.allow_repair_promotion:
+                    # Candidate execution must continue through the Repair wrapper so
+                    # FunctionSlot observation/rollback semantics remain authoritative.
+                    # Adaptive BEHAVIOR sampling adds lifecycle evidence but never
+                    # bypasses the active repaired implementation.
+                    if sample_behavior:
+                        self._record_behavior_sample(InstrumentationLevel.BEHAVIOR)
                     result = self._repair_call(*args, **kwargs)
                 elif sample_behavior:
                     result = self._behavior_call(level, *args, **kwargs)
@@ -326,15 +422,17 @@ class _AdaptiveController:
                 return result
             except BaseException as exc:
                 failed = True
-                promoted_during_call = self._observe_exception(exc, observed_level=level)
+                transitioned_during_call = self._observe_exception(exc, observed_level=level)
                 raise
             finally:
                 elapsed = time.perf_counter() - started
-                timing_breach, timing_promoted = self._observe_timing(elapsed, observed_level=level)
-                promoted_during_call = promoted_during_call or timing_promoted
-                repair_promoted = self._maybe_promote_repair()
-                promoted_during_call = promoted_during_call or repair_promoted
-                if not promoted_during_call:
+                timing_breach, timing_transition = self._observe_timing(elapsed, observed_level=level)
+                transitioned_during_call = transitioned_during_call or timing_transition
+                repair_transition = self._maybe_promote_repair()
+                transitioned_during_call = transitioned_during_call or repair_transition
+                lifecycle_transition = self._sync_repair_lifecycle()
+                transitioned_during_call = transitioned_during_call or lifecycle_transition
+                if not transitioned_during_call:
                     self._observe_acceptance(success=(not failed and not timing_breach))
         finally:
             if dependency_boundary:
@@ -458,6 +556,150 @@ class _AdaptiveController:
             )(self.function)
         return self._managed_wrapper(*args, **kwargs)
 
+    def _repair_target(self) -> Any | None:
+        if not self.allow_repair_promotion:
+            return None
+        try:
+            registry = getattr(self._engine(), "registry", None)
+            if registry is None:
+                return None
+            finder = getattr(registry, "find", None)
+            if finder is None:
+                return None
+            return finder(self.target_id)
+        except Exception:
+            return None
+
+    def _sync_repair_lifecycle(self) -> bool:
+        """Mirror FunctionSlot candidate state into the adaptive lifecycle.
+
+        FunctionSlot remains authoritative for candidate activation, rollback, short-
+        term validation, and long-term acceptance.  The adaptive controller owns only
+        the surrounding observation intensity and the pre-repair evidence gate.
+        """
+        target = self._repair_target()
+        if target is None:
+            return False
+        try:
+            version = target.slot.load()
+        except Exception:
+            return False
+
+        candidate_id = getattr(version, "candidate_id", None)
+        candidate_state = getattr(version, "candidate_state", None)
+        stage = self.state.stage
+
+        if candidate_id is None:
+            if stage in {
+                AdaptiveLifecycleStage.POST_REPAIR_BEHAVIOR,
+                AdaptiveLifecycleStage.VALIDATION,
+                AdaptiveLifecycleStage.LONG_TERM_ACCEPTANCE,
+            }:
+                # The candidate was rolled back or superseded. Return to behavioral
+                # investigation rather than pretending the repaired lifecycle remains
+                # accepted. A future signal may request a new repair episode.
+                return self._transition_stage(
+                    AdaptiveLifecycleStage.PRE_REPAIR_BEHAVIOR,
+                    level=InstrumentationLevel.BEHAVIOR,
+                    reason="repair candidate no longer active; returned to behavior observation",
+                    clear_candidate=True,
+                )
+            return False
+
+        candidate_text = str(candidate_id)
+        candidate_version = int(getattr(version, "number", 0))
+        self.state.repair_candidate_id = candidate_text
+        self.state.repair_candidate_version = candidate_version
+
+        if candidate_state is CandidateState.LONG_TERM_ACCEPTED:
+            changed = self._transition_stage(
+                AdaptiveLifecycleStage.LONG_TERM_ACCEPTANCE,
+                level=(
+                    InstrumentationLevel.LIGHTWEIGHT
+                    if self.policy.demotion.enabled
+                    else InstrumentationLevel.BEHAVIOR
+                ),
+                reason="repair candidate reached long-term acceptance",
+            )
+            if self.state.long_term_accepted_at is None:
+                self.state.long_term_accepted_at = utcnow_iso()
+                changed = True
+            if changed:
+                self._persist()
+                self._publish_state()
+            return changed
+
+        if candidate_state is CandidateState.INITIALLY_VALIDATED:
+            return self._transition_stage(
+                AdaptiveLifecycleStage.VALIDATION,
+                level=InstrumentationLevel.BEHAVIOR,
+                reason="repair candidate passed post-repair behavior probation",
+            )
+
+        # ACTIVE_PROBATION and DEGRADED both remain in post-repair BEHAVIOR. A
+        # degraded candidate may subsequently be rolled back by ObservationManager.
+        if candidate_state in {CandidateState.ACTIVE_PROBATION, CandidateState.DEGRADED}:
+            return self._transition_stage(
+                AdaptiveLifecycleStage.POST_REPAIR_BEHAVIOR,
+                level=InstrumentationLevel.BEHAVIOR,
+                reason="repair candidate active; collecting post-repair behavior",
+            )
+        return False
+
+    def _transition_stage(
+        self,
+        stage: AdaptiveLifecycleStage,
+        *,
+        level: InstrumentationLevel,
+        reason: str,
+        clear_candidate: bool = False,
+    ) -> bool:
+        changed = self.state.stage is not stage or self.state.level is not level
+        if not changed and not clear_candidate:
+            return False
+        now = utcnow_iso()
+        self.state.stage = stage
+        self.state.level = level
+        self.state.last_transition_at = now
+        self.state.promotion_reason = reason
+        self.state.sampling_call_counter = 0
+        self._behavior_lease_requested = False
+
+        if stage is AdaptiveLifecycleStage.PRE_REPAIR_BEHAVIOR:
+            self.state.behavior_started_at = now
+            self.state.post_repair_behavior_started_at = None
+            self.state.validation_started_at = None
+            self.state.long_term_accepted_at = None
+        elif stage is AdaptiveLifecycleStage.REPAIR:
+            self.state.acceptance = AcceptanceState.NONE
+        elif stage is AdaptiveLifecycleStage.POST_REPAIR_BEHAVIOR:
+            if self.state.post_repair_behavior_started_at is None:
+                self.state.post_repair_behavior_started_at = now
+            self.state.validation_started_at = None
+            self.state.long_term_accepted_at = None
+            self.state.acceptance = AcceptanceState.PROBATION
+            self.state.repair_requested = False
+        elif stage is AdaptiveLifecycleStage.VALIDATION:
+            if self.state.validation_started_at is None:
+                self.state.validation_started_at = now
+            self.state.acceptance = AcceptanceState.SHORT_TERM_ACCEPTED
+        elif stage is AdaptiveLifecycleStage.LONG_TERM_ACCEPTANCE:
+            self.state.acceptance = AcceptanceState.LONG_TERM_ACCEPTED
+
+        if clear_candidate:
+            self.state.repair_candidate_id = None
+            self.state.repair_candidate_version = None
+            self.state.post_repair_behavior_started_at = None
+            self.state.validation_started_at = None
+            self.state.long_term_accepted_at = None
+            self.state.acceptance = AcceptanceState.PROBATION
+            self.state.repair_requested = False
+            self.state.repair_request_reason = None
+
+        self._persist()
+        self._publish_state()
+        return True
+
     def _observe_exception(
         self,
         exception: BaseException,
@@ -517,16 +759,27 @@ class _AdaptiveController:
         return True, transitioned
 
     def _request_signal_escalation(self, requested: InstrumentationLevel, reason: str) -> bool:
-        """Turn a lightweight signal into observation first, never directly into repair."""
+        """Turn a detection signal into investigation first, never directly into repair."""
+        if self.state.stage in {
+            AdaptiveLifecycleStage.REPAIR,
+            AdaptiveLifecycleStage.POST_REPAIR_BEHAVIOR,
+            AdaptiveLifecycleStage.VALIDATION,
+            AdaptiveLifecycleStage.LONG_TERM_ACCEPTANCE,
+        }:
+            # Once a repair episode has started, FunctionSlot/ObservationManager own
+            # candidate failure and rollback decisions. Adaptive signals remain
+            # diagnostics rather than opening a competing repair state machine.
+            return False
+
         if requested is InstrumentationLevel.REPAIR and self.allow_repair_promotion:
             self.state.repair_requested = True
             self.state.repair_request_reason = reason
         elif requested is InstrumentationLevel.REPAIR:
             requested = InstrumentationLevel.BEHAVIOR
 
-        if self.state.level is InstrumentationLevel.LIGHTWEIGHT:
+        if self.state.stage is AdaptiveLifecycleStage.LIGHTWEIGHT:
             return self._promote(InstrumentationLevel.BEHAVIOR, reason)
-        if self.state.level is InstrumentationLevel.BEHAVIOR:
+        if self.state.stage is AdaptiveLifecycleStage.PRE_REPAIR_BEHAVIOR:
             self._persist()
             self._publish_state()
         return False
@@ -583,7 +836,16 @@ class _AdaptiveController:
         now = utcnow_iso()
         previous = self.state.level
         self.state.level = requested
-        self.state.acceptance = AcceptanceState.PROBATION
+        self.state.stage = (
+            AdaptiveLifecycleStage.REPAIR
+            if requested is InstrumentationLevel.REPAIR
+            else AdaptiveLifecycleStage.PRE_REPAIR_BEHAVIOR
+        )
+        self.state.acceptance = (
+            AcceptanceState.NONE
+            if requested is InstrumentationLevel.REPAIR
+            else AcceptanceState.PROBATION
+        )
         self.state.promoted_at = now
         self.state.promotion_reason = reason
         self.state.short_term_accepted_at = None
@@ -594,6 +856,7 @@ class _AdaptiveController:
         self.state.long_term_failures = 0
         self.state.last_transition_at = now
         self.state.sampling_call_counter = 0
+        self._behavior_lease_requested = False
         if previous is InstrumentationLevel.LIGHTWEIGHT and requested is InstrumentationLevel.BEHAVIOR:
             self.state.behavior_started_at = now
             self.state.behavior_observation_calls = 0
@@ -649,7 +912,13 @@ class _AdaptiveController:
 
     def _observe_acceptance(self, *, success: bool) -> None:
         with self._lock:
-            if self.state.level is InstrumentationLevel.LIGHTWEIGHT:
+            # Adaptive acceptance is only for a non-repair behavioral promotion.
+            # Once repair is requested/active, FunctionSlot candidate observation is
+            # the single authoritative acceptance state machine.
+            if (
+                self.state.stage is not AdaptiveLifecycleStage.PRE_REPAIR_BEHAVIOR
+                or self.state.repair_requested
+            ):
                 return
             if success:
                 self._record_acceptance_success()
@@ -663,9 +932,10 @@ class _AdaptiveController:
         if self.state.acceptance in {AcceptanceState.NONE, AcceptanceState.PROBATION}:
             self.state.acceptance = AcceptanceState.PROBATION
             self.state.successful_executions += 1
-            if (
-                self.state.successful_executions >= policy.initial_successful_executions
-                and self.state.probation_failures <= policy.probation_failure_budget
+            if short_term_accepted(
+                successful_executions=self.state.successful_executions,
+                failed_executions=self.state.probation_failures,
+                criteria=policy,
             ):
                 self.state.acceptance = AcceptanceState.SHORT_TERM_ACCEPTED
                 self.state.short_term_accepted_at = utcnow_iso()
@@ -708,21 +978,19 @@ class _AdaptiveController:
                 self.state.promoted_at = utcnow_iso()
 
     def _long_term_accepted(self, policy: InstrumentationDemotionPolicy) -> bool:
-        if self.state.long_term_successes < policy.long_term_successful_executions:
-            return False
-        if self.state.long_term_failures > policy.long_term_maximum_failures:
-            return False
-        total = self.state.long_term_successes + self.state.long_term_failures
-        if total and (self.state.long_term_failures / total) > policy.long_term_failure_rate:
-            return False
         start = self.state.short_term_accepted_at
         if start is None:
             return False
         try:
-            accepted_at = datetime.fromisoformat(start).timestamp()
+            accepted_at = datetime.fromisoformat(start)
         except ValueError:
             return False
-        return (time.time() - accepted_at) >= policy.long_term_minimum_duration_seconds
+        return long_term_accepted(
+            successful_executions=self.state.long_term_successes,
+            failed_executions=self.state.long_term_failures,
+            started_at=accepted_at,
+            criteria=policy,
+        )
 
     def _demote(self, policy: InstrumentationDemotionPolicy) -> None:
         current = self.state.level
@@ -734,6 +1002,11 @@ class _AdaptiveController:
             next_level = InstrumentationLevel.LIGHTWEIGHT
         now = utcnow_iso()
         self.state.level = next_level
+        self.state.stage = (
+            AdaptiveLifecycleStage.LIGHTWEIGHT
+            if next_level is InstrumentationLevel.LIGHTWEIGHT
+            else AdaptiveLifecycleStage.PRE_REPAIR_BEHAVIOR
+        )
         self.state.acceptance = AcceptanceState.NONE if next_level is InstrumentationLevel.LIGHTWEIGHT else AcceptanceState.PROBATION
         self.state.promoted_at = None if next_level is InstrumentationLevel.LIGHTWEIGHT else now
         self.state.promotion_reason = "policy-controlled demotion after long-term acceptance"
@@ -752,6 +1025,7 @@ class _AdaptiveController:
         self.state.repair_evidence_samples = 0
         self.state.problem_reproductions = 0
         self.state.behavior_started_at = now if next_level is InstrumentationLevel.BEHAVIOR else None
+        self._behavior_lease_requested = False
         self._persist()
         self._publish_state()
 
@@ -782,6 +1056,7 @@ class _AdaptiveController:
                 target_id=self.target_id,
                 code_hash=self.code_hash,
                 level=self.policy.initial_level,
+                stage=_initial_stage(self.policy.initial_level),
             )
             self._initialize_generation_state()
         else:
@@ -832,6 +1107,7 @@ class _AdaptiveController:
                 target_id=self.target_id,
                 code_hash=self.code_hash,
                 level=InstrumentationLevel[str(data["level"])],
+                stage=_loaded_stage(data),
                 acceptance=AcceptanceState(str(data.get("acceptance", "none"))),
                 promoted_at=data.get("promoted_at"),
                 promotion_reason=data.get("promotion_reason"),
@@ -850,6 +1126,14 @@ class _AdaptiveController:
                 repair_requested=bool(data.get("repair_requested", False)),
                 repair_request_reason=data.get("repair_request_reason"),
                 repair_evidence_satisfied_at=data.get("repair_evidence_satisfied_at"),
+                repair_candidate_id=data.get("repair_candidate_id"),
+                repair_candidate_version=(
+                    int(data["repair_candidate_version"])
+                    if data.get("repair_candidate_version") is not None
+                    else None
+                ),
+                post_repair_behavior_started_at=data.get("post_repair_behavior_started_at"),
+                validation_started_at=data.get("validation_started_at"),
                 sampling_call_counter=int(data.get("sampling_call_counter", 0)),
                 recent_diagnostics=[dict(item) for item in data.get("recent_diagnostics", ())][-20:],
             )

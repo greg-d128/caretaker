@@ -849,3 +849,152 @@ def test_dependency_instrumentation_registers_with_real_guard_before_install() -
         instrumentation.restore()
         guard.close()
     assert module.ping is original
+
+
+def test_repair_lifecycle_returns_to_behavior_before_validation_and_long_term_acceptance(monkeypatch, tmp_path) -> None:
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from caretaker import AdaptiveLifecycleStage
+    from caretaker.domain import CandidateState
+
+    class _Slot:
+        def __init__(self) -> None:
+            self.version = SimpleNamespace(number=0, candidate_id=None, candidate_state=None)
+
+        def load(self):
+            return self.version
+
+    class _Registry:
+        def __init__(self, slot) -> None:
+            self.target = SimpleNamespace(slot=slot)
+
+        def find(self, target_id):
+            return self.target if target_id == "test.adaptive.lifecycle" else None
+
+    class _LifecycleEngine(_FakeEngine):
+        def __init__(self, guard, slot) -> None:
+            super().__init__(guard)
+            self.registry = _Registry(slot)
+
+    slot = _Slot()
+    guard = _FakeGuard()
+    engine = _LifecycleEngine(guard, slot)
+    candidate_id = uuid4()
+    managed_calls = 0
+
+    def fragile() -> None:
+        raise RuntimeError("reproduce before repair")
+
+    policy = LightweightPolicy(
+        exception=ExceptionPromotionPolicy(
+            occurrences=1,
+            window_seconds=60,
+            promote_to=InstrumentationLevel.REPAIR,
+        ),
+        soft_timing=SoftTimingPromotionPolicy(enabled=False),
+        sampling=BehaviorSamplingPolicy(
+            lightweight_every_calls=0,
+            behavior_every_calls=1,
+            randomize_initial_offset=False,
+        ),
+        repair_evidence=RepairEvidencePolicy(
+            minimum_behavior_samples=1,
+            minimum_observation_calls=1,
+            minimum_duration_seconds=0,
+            require_problem_reproduction=True,
+        ),
+        demotion=InstrumentationDemotionPolicy(enabled=True),
+    )
+
+    def fake_repair(*, policy, engine, target_id):
+        def decorate(function):
+            def managed(*args, **kwargs):
+                nonlocal managed_calls
+                managed_calls += 1
+                if managed_calls == 1:
+                    slot.version = SimpleNamespace(
+                        number=1,
+                        candidate_id=candidate_id,
+                        candidate_state=CandidateState.ACTIVE_PROBATION,
+                    )
+                elif managed_calls == 2:
+                    slot.version = SimpleNamespace(
+                        number=1,
+                        candidate_id=candidate_id,
+                        candidate_state=CandidateState.INITIALLY_VALIDATED,
+                    )
+                else:
+                    slot.version = SimpleNamespace(
+                        number=1,
+                        candidate_id=candidate_id,
+                        candidate_state=CandidateState.LONG_TERM_ACCEPTED,
+                    )
+                return "candidate"
+            return managed
+        return decorate
+
+    import caretaker.decorators.api as decorator_api
+
+    monkeypatch.setattr(decorator_api, "repair", fake_repair)
+    wrapped = lightweight(
+        policy=policy,
+        engine=engine,
+        target_id="test.adaptive.lifecycle",
+        behavior_binding=GuardBinding(enabled=True),
+        state_directory=tmp_path,
+    )(fragile)
+
+    with pytest.raises(RuntimeError):
+        wrapped()
+    state = get_adaptive_state("test.adaptive.lifecycle")
+    assert state["stage"] == AdaptiveLifecycleStage.PRE_REPAIR_BEHAVIOR.value
+    assert state["stage_label"] == "BEHAVIOR"
+
+    with pytest.raises(RuntimeError):
+        wrapped()
+    state = get_adaptive_state("test.adaptive.lifecycle")
+    assert state["stage"] == AdaptiveLifecycleStage.REPAIR.value
+
+    assert wrapped() == "candidate"
+    state = get_adaptive_state("test.adaptive.lifecycle")
+    assert state["stage"] == AdaptiveLifecycleStage.POST_REPAIR_BEHAVIOR.value
+    assert state["stage_label"] == "BEHAVIOR"
+    assert state["level"] == "BEHAVIOR"
+    assert state["repair_candidate_id"] == str(candidate_id)
+
+    assert wrapped() == "candidate"
+    state = get_adaptive_state("test.adaptive.lifecycle")
+    assert state["stage"] == AdaptiveLifecycleStage.VALIDATION.value
+    assert state["acceptance"] == AcceptanceState.SHORT_TERM_ACCEPTED.value
+
+    assert wrapped() == "candidate"
+    state = get_adaptive_state("test.adaptive.lifecycle")
+    assert state["stage"] == AdaptiveLifecycleStage.LONG_TERM_ACCEPTANCE.value
+    assert state["acceptance"] == AcceptanceState.LONG_TERM_ACCEPTED.value
+    # Demotion controls observation intensity only; it does not erase the completed
+    # repaired-function lifecycle.
+    assert state["level"] == "LIGHTWEIGHT"
+
+
+def test_repair_evidence_policy_cannot_bypass_behavior_with_all_zero_requirements() -> None:
+    from caretaker import validate_lightweight_policy
+
+    with pytest.raises(ValueError, match="post-promotion observation"):
+        validate_lightweight_policy(
+            LightweightPolicy(
+                repair_evidence=RepairEvidencePolicy(
+                    minimum_behavior_samples=0,
+                    minimum_observation_calls=0,
+                    minimum_duration_seconds=0,
+                    require_problem_reproduction=False,
+                )
+            )
+        )
+
+
+def test_observation_and_demotion_share_acceptance_criteria_type() -> None:
+    from caretaker import AcceptanceCriteria, ObservationPolicy
+
+    assert isinstance(ObservationPolicy(), AcceptanceCriteria)
+    assert isinstance(InstrumentationDemotionPolicy(), AcceptanceCriteria)
