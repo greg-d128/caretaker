@@ -5,7 +5,7 @@ import json
 import os
 import threading
 import time
-from collections import defaultdict
+from collections import OrderedDict, defaultdict, deque
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from uuid import UUID, uuid4
@@ -61,6 +61,19 @@ from .models import (
 )
 from .policy import CandidateGuardPolicy, GuardBinding, GuardPolicy
 from .provider import BehaviorAssessmentProvider, BehaviorAssessmentRequest
+
+
+_GUARD_EVENT_CACHE_LIMIT = 10_000
+_GUARD_DEVIATION_CACHE_LIMIT = 2_000
+_GUARD_ASSESSMENT_CACHE_LIMIT = 1_000
+_GUARD_DECISION_CACHE_LIMIT = 1_000
+
+
+def _tail(items, limit: int):
+    if limit <= 0:
+        return ()
+    values = tuple(items)
+    return values[-limit:]
 
 
 @dataclass
@@ -122,10 +135,22 @@ class GuardEngine(GuardFacade):
         )
         self._periodic_enabled = False
         self._targets: dict[str, _TargetBinding] = {}
-        self._events_by_target: dict[str, list[BehaviorEvent]] = defaultdict(list)
-        self._deviations_by_target: dict[str, list[BehaviorDeviation]] = defaultdict(list)
-        self._assessments: dict[UUID, BehaviorAssessment] = {}
-        self._decisions: list[GuardDecision] = []
+        # These structures are read-through operational caches, not the durable
+        # evidence record. Keep them bounded independently of store retention so a
+        # long-running process cannot grow without limit merely because Guard stays
+        # enabled for months.
+        event_cache_limit = min(
+            _GUARD_EVENT_CACHE_LIMIT,
+            max(1, self.policy.retention.maximum_raw_events),
+        )
+        self._events_by_target: dict[str, deque[BehaviorEvent]] = defaultdict(
+            lambda: deque(maxlen=event_cache_limit)
+        )
+        self._deviations_by_target: dict[str, deque[BehaviorDeviation]] = defaultdict(
+            lambda: deque(maxlen=_GUARD_DEVIATION_CACHE_LIMIT)
+        )
+        self._assessments: OrderedDict[UUID, BehaviorAssessment] = OrderedDict()
+        self._decisions: deque[GuardDecision] = deque(maxlen=_GUARD_DECISION_CACHE_LIMIT)
         self._leases: dict[str, InstrumentationLease] = {}
         self._candidate_deviations: set[UUID] = set()
         self._repair_opener: Callable[[str, tuple[BehaviorDeviation, ...]], None] | None = None
@@ -159,7 +184,7 @@ class GuardEngine(GuardFacade):
 
     def recent_deviations(self, target_id: str, *, limit: int = 50) -> tuple[BehaviorDeviation, ...]:
         with self._lock:
-            return tuple(self._deviations_by_target.get(target_id, ())[-limit:])
+            return _tail(self._deviations_by_target.get(target_id, ()), limit)
 
     def recent_target_inspections(self, target_id: str, *, limit: int = 20) -> tuple[object, ...]:
         with self._lock:
@@ -374,6 +399,8 @@ class GuardEngine(GuardFacade):
             if event.event_kind is BehaviorEventKind.IMPORT:
                 return binding.observe_imports
             return True
+        if event.target_id is None and not self.policy.collectors.unattributed_events:
+            return False
         if not self.policy.targets:
             return True
         module_name = event.code_identity.module_name
@@ -405,7 +432,7 @@ class GuardEngine(GuardFacade):
         baseline = self.baselines.summary(binding.identity)
         if baseline is not None:
             return baseline
-        events = self._events_by_target.get(target_id, [])[-max(1, calls * 10):]
+        events = _tail(self._events_by_target.get(target_id, ()), max(1, calls * 10))
         if not events:
             return None
         kinds: dict[str, int] = defaultdict(int)
@@ -559,13 +586,13 @@ class GuardEngine(GuardFacade):
         observed = self.recent_summary(target_id, calls=calls)
         maximum_events = max(0, self.policy.llm_review.maximum_representative_events)
         events = (
-            tuple(self._events_by_target.get(target_id, [])[-maximum_events:])
+            _tail(self._events_by_target.get(target_id, ()), maximum_events)
             if maximum_events
             else ()
         )
         maximum_deviations = max(0, self.policy.llm_review.maximum_deviations)
         deviations = (
-            tuple(self._deviations_by_target.get(target_id, [])[-maximum_deviations:])
+            _tail(self._deviations_by_target.get(target_id, ()), maximum_deviations)
             if maximum_deviations
             else ()
         )
@@ -582,7 +609,7 @@ class GuardEngine(GuardFacade):
             observation_summary=observed,
             deviations=deviations,
             representative_events=events,
-            omitted_event_count=max(0, len(self._events_by_target.get(target_id, [])) - len(events)),
+            omitted_event_count=max(0, len(self._events_by_target.get(target_id, ())) - len(events)),
             evidence_hash=evidence_hash(payload),
         )
 
@@ -642,6 +669,9 @@ class GuardEngine(GuardFacade):
         )
         with self._lock:
             self._assessments[assessment.assessment_id] = assessment
+            self._assessments.move_to_end(assessment.assessment_id)
+            while len(self._assessments) > _GUARD_ASSESSMENT_CACHE_LIMIT:
+                self._assessments.popitem(last=False)
         self.store.record_guard_assessment(assessment)
         return assessment
 
@@ -779,7 +809,7 @@ class GuardEngine(GuardFacade):
     def _handle_open_repair(self, action: RuntimeAction, signal: RuntimeSignal) -> None:
         if signal.target_id is None or self._repair_opener is None:
             return
-        deviations = tuple(self._deviations_by_target.get(signal.target_id, [])[-20:])
+        deviations = _tail(self._deviations_by_target.get(signal.target_id, ()), 20)
         self._repair_opener(signal.target_id, deviations)
 
     def _handle_rollback(self, action: RuntimeAction, signal: RuntimeSignal) -> None:

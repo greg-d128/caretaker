@@ -173,3 +173,31 @@ def test_audit_rate_limit_is_enforced_before_normalization() -> None:
     collector._handle("open", ("/tmp/first.txt", "r", 0))
     collector._handle("open", ("/tmp/second.txt", "r", 0))
     assert len(events) == 1
+
+
+def test_unattributed_audit_events_can_be_disabled_before_attribution() -> None:
+    from uuid import uuid4
+    from caretaker.runtime import set_runtime_context
+
+    events = []
+    collector = AuditEventCollector(
+        run_id=uuid4(),
+        sink=events.append,
+        collectors=CollectorPolicy(unattributed_events=False),
+    )
+
+    def should_not_run(*args, **kwargs):
+        raise AssertionError("unattributed event reached expensive attribution")
+
+    collector._attribute = should_not_run  # type: ignore[method-assign]
+    collector._handle("open", ("/tmp/unattributed.txt", "r", 0))
+    assert events == []
+
+    collector._attribute = lambda *, capture_stack: (None, None, ())  # type: ignore[method-assign]
+    tokens = set_runtime_context(target_id="test.explicit-context")
+    try:
+        collector._handle("open", ("/tmp/attributed.txt", "r", 0))
+    finally:
+        tokens.reset()
+    assert len(events) == 1
+    assert events[0].target_id == "test.explicit-context"

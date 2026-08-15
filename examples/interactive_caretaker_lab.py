@@ -67,7 +67,7 @@ from caretaker import (
     instrument_dependencies,
 )
 from caretaker.guard.models import GuardDeviationAction
-from caretaker.guard.policy import LLMReviewPolicy
+from caretaker.guard.policy import CollectorPolicy, LLMReviewPolicy
 from caretaker.logging import (
     OperatorLoggingPolicy,
     configure as configure_logging,
@@ -644,13 +644,21 @@ class LabRepairProvider:
 
 
 LAB_OLLAMA_MODEL = os.environ.get("CARETAKER_LAB_OLLAMA_MODEL", "").strip()
+# The lab demonstrates adaptive sampling rather than process-wide forensic capture.
+# Only calls with an explicit Caretaker runtime target context are therefore admitted
+# to the audit collector; lightweight dependency slots establish that context when
+# their call-count sampler chooses an execution for BEHAVIOR observation.
+LAB_GUARD_COLLECTORS = CollectorPolicy(unattributed_events=False)
 if LAB_OLLAMA_MODEL:
     GUARD = GuardEngine(
-        policy=GuardPolicy(llm_review=LLMReviewPolicy(enabled=True)),
+        policy=GuardPolicy(
+            collectors=LAB_GUARD_COLLECTORS,
+            llm_review=LLMReviewPolicy(enabled=True),
+        ),
         provider=OllamaBehaviorAssessmentProvider(model=LAB_OLLAMA_MODEL),
     )
 else:
-    GUARD = GuardEngine(policy=GuardPolicy())
+    GUARD = GuardEngine(policy=GuardPolicy(collectors=LAB_GUARD_COLLECTORS))
 ENGINE = RepairEngine(provider=LabRepairProvider(), guard=GUARD)
 
 # The lab intentionally instruments a small slice of its standard-library dependency

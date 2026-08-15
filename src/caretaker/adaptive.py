@@ -361,8 +361,10 @@ class _AdaptiveController:
         self._dirty_state_calls = 0
         self._last_checkpoint_monotonic = time.monotonic()
         self._authority_fingerprint: str | None = None
+        self._stale_persisted_state = False
         self.policy = self._effective_policy()
         validate_lightweight_policy(self.policy)
+        self._policy_fingerprint = _policy_hash(self.policy)
         self._state_path = _state_path(target_id, self.code_hash, self._state_directory) if self.policy.persist_state else None
         loaded = self._load_state()
         if loaded is None:
@@ -373,6 +375,12 @@ class _AdaptiveController:
                 stage=_initial_stage(self.policy.initial_level),
             )
             self._initialize_generation_state()
+            if self._stale_persisted_state:
+                # Replace state written under a different policy/authority generation
+                # immediately so a later restart cannot resurrect stale escalation or
+                # acceptance counters. Ordinary fresh LIGHTWEIGHT initialization still
+                # performs no filesystem write.
+                self._persist()
         else:
             self.state = loaded
             if self.state.level.value >= InstrumentationLevel.BEHAVIOR.value and self.state.behavior_started_at is None:
@@ -1060,6 +1068,7 @@ class _AdaptiveController:
             if self.policy.persist_state
             else None
         )
+        self._stale_persisted_state = False
         loaded = self._load_state()
         if loaded is None:
             self.state = AdaptiveInstrumentationState(
@@ -1069,6 +1078,8 @@ class _AdaptiveController:
                 stage=_initial_stage(self.policy.initial_level),
             )
             self._initialize_generation_state()
+            if self._stale_persisted_state:
+                self._persist()
         else:
             self.state = loaded
             if self.state.level.value >= InstrumentationLevel.BEHAVIOR.value and self.state.behavior_started_at is None:
@@ -1076,11 +1087,74 @@ class _AdaptiveController:
         self._publish_state()
 
     def _refresh_policy_if_needed(self) -> None:
-        fingerprint = _authority_context().effective.fingerprint
-        if fingerprint == self._authority_fingerprint:
+        authority_fingerprint = _authority_context().effective.fingerprint
+        if authority_fingerprint == self._authority_fingerprint:
             return
-        self.policy = self._effective_policy()
-        validate_lightweight_policy(self.policy)
+
+        previous_authority = self._authority_fingerprint
+        previous_policy_fingerprint = self._policy_fingerprint
+        previous_state_path = self._state_path
+        effective = self._effective_policy()
+        validate_lightweight_policy(effective)
+        effective_policy_fingerprint = _policy_hash(effective)
+        self.policy = effective
+        self._policy_fingerprint = effective_policy_fingerprint
+        self._state_path = (
+            _state_path(self.target_id, self.code_hash, self._state_directory)
+            if self.policy.persist_state
+            else None
+        )
+
+        if (
+            previous_authority == self._authority_fingerprint
+            and previous_policy_fingerprint == effective_policy_fingerprint
+        ):
+            return
+
+        # Authority/policy generations are part of adaptive-state provenance. A
+        # pre-repair escalation accumulated under an older authority must not grant
+        # observation or repair privileges under a new one. An already-active repair
+        # candidate remains owned by FunctionSlot/RepairEngine, so preserve only that
+        # candidate lifecycle and discard the adaptive trigger/evidence episode.
+        self._exception_events.clear()
+        self._timing_events.clear()
+        self._behavior_lease_remaining = 0
+        self._dirty_state_calls = 0
+        preserve_candidate = bool(
+            self.state.repair_candidate_id
+            and self.state.stage in {
+                AdaptiveLifecycleStage.POST_REPAIR_BEHAVIOR,
+                AdaptiveLifecycleStage.VALIDATION,
+                AdaptiveLifecycleStage.LONG_TERM_ACCEPTANCE,
+            }
+        )
+        if preserve_candidate:
+            self.state.sampling_call_counter = 0
+            self.state.behavior_observation_calls = 0
+            self.state.repair_evidence_samples = 0
+            self.state.problem_reproductions = 0
+            self.state.repair_requested = False
+            self.state.repair_request_reason = None
+            self.state.repair_evidence_satisfied_at = None
+            self.state.last_transition_at = utcnow_iso()
+        else:
+            self.state = AdaptiveInstrumentationState(
+                target_id=self.target_id,
+                code_hash=self.code_hash,
+                level=self.policy.initial_level,
+                stage=_initial_stage(self.policy.initial_level),
+                promotion_reason="effective authority/policy changed; adaptive episode reset",
+                last_transition_at=utcnow_iso(),
+            )
+            self._initialize_generation_state()
+
+        if previous_state_path is not None and self._state_path is None:
+            try:
+                previous_state_path.unlink()
+            except FileNotFoundError:
+                pass
+        self._persist()
+        self._publish_state()
 
     def _effective_policy(self) -> LightweightPolicy:
         context = _authority_context()
@@ -1101,6 +1175,12 @@ class _AdaptiveController:
         try:
             data = json.loads(self._state_path.read_text(encoding="utf-8"))
             if data.get("target_id") != self.target_id or data.get("code_hash") != self.code_hash:
+                return None
+            if (
+                data.get("policy_fingerprint") != self._policy_fingerprint
+                or data.get("authority_fingerprint") != self._authority_fingerprint
+            ):
+                self._stale_persisted_state = True
                 return None
             now = time.time()
             exception_window = self.policy.exception.window_seconds
@@ -1183,7 +1263,8 @@ class _AdaptiveController:
         self._last_checkpoint_monotonic = time.monotonic()
         self._state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         payload = self.state.public_dict()
-        payload["policy_fingerprint"] = _policy_hash(self.policy)
+        payload["policy_fingerprint"] = self._policy_fingerprint
+        payload["authority_fingerprint"] = self._authority_fingerprint
         payload["exception_events"] = list(self._exception_events)
         payload["timing_events"] = list(self._timing_events)
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"

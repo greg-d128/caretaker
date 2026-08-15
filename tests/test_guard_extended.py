@@ -231,3 +231,18 @@ def test_periodic_inspector_resolves_current_function_slot() -> None:
     inspections = guard.periodic.inspect_now()
     target_inspection = next(item for item in inspections if item.subject.qualified_name == "failing")
     assert target_inspection.function_state_summary.bytecode_hash == identify_function(current.implementation).bytecode_hash
+
+
+def test_guard_operational_event_cache_is_bounded(monkeypatch) -> None:
+    import caretaker.guard.engine as guard_engine_module
+
+    monkeypatch.setattr(guard_engine_module, "_GUARD_EVENT_CACHE_LIMIT", 3)
+    guard = GuardEngine(policy=_guard_policy())
+    target_id = "tests.guard_targets:bounded-cache"
+    for index in range(5):
+        guard.record_event(_event(target_id, f"cache-{index}.example:443"))
+
+    cached = tuple(guard._events_by_target[target_id])
+    assert len(cached) == 3
+    assert cached[0].resource.value == "cache-2.example:443"
+    assert cached[-1].resource.value == "cache-4.example:443"

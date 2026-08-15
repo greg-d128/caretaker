@@ -107,6 +107,9 @@ class AuditEventCollector:
         if mapping is None:
             return
         event_kind, resource, attributes = mapping
+        context = snapshot_context()
+        if not self.collectors.unattributed_events and context.get("target_id") is None:
+            return
         resource_key = self._resource_key(resource)
         novel = resource_key is not None and resource_key not in self._seen_resources
 
@@ -133,6 +136,7 @@ class AuditEventCollector:
             resource,
             attributes,
             capture_stack=capture_stack,
+            context=context,
         )
         try:
             self.sink(normalized)
@@ -164,8 +168,10 @@ class AuditEventCollector:
         attributes: dict[str, Any],
         *,
         capture_stack: bool,
+        context: dict[str, object] | None = None,
     ) -> BehaviorEvent:
-        context = snapshot_context()
+        if context is None:
+            context = snapshot_context()
         executing, initiating, stack = self._attribute(capture_stack=capture_stack)
         identity = initiating or executing or self._identity_for_module("<unknown>")
         return BehaviorEvent.create(

@@ -202,8 +202,11 @@ functions themselves.
 `prepare_guard=True` pre-registers the original callable with Guard for post-load code
 identity and inspection. Dependency preparation deliberately does not add the callable
 to Guard's periodic-inspection scheduler, request a Guard research lease, or cause every
-dependency call to be observed. The lightweight/behavior sampling policy remains the
-gate for per-call Guard observation.
+dependency call to be observed. The lightweight/behavior sampling policy remains the gate for per-call Guard
+observation. For this model, configure Guard with
+`CollectorPolicy(unattributed_events=False)` so unrelated process-wide CPython audit
+events cannot bypass the adaptive sampler merely because the global audit hook is
+installed.
 
 Module patching affects future lookups such as `module.function(...)`. A callable copied
 before initialization with `from module import function` cannot be rewritten by changing
@@ -213,8 +216,15 @@ early as practical during program initialization.
 Adaptive state is keyed by target ID and function code hash. Re-decoration with new
 code, or replacement of the live function `__code__`, starts a new adaptive generation
 and resets the sampling counter rather than inheriting escalation or sampling state
-from older code. Rolling threshold state is persisted only on noteworthy events;
-healthy LIGHTWEIGHT calls do not perform Caretaker adaptive-state file writes.
+from older code. Persisted adaptive state is additionally bound to the effective
+lightweight-policy fingerprint and authority fingerprint. State written under an older
+authority/policy generation is not allowed to restore escalation, repair eligibility,
+or acceptance counters under a new one. An already-active repair candidate remains
+owned by `FunctionSlot`/`RepairEngine`; only its adaptive pre-repair trigger/evidence
+state is discarded when authority changes.
+
+Rolling threshold state is persisted only on noteworthy events; healthy LIGHTWEIGHT
+calls do not perform Caretaker adaptive-state file writes.
 Promoted-state progress is also checkpointed in batches rather than fsynced after every
 successful execution. Threshold violations and lifecycle transitions remain immediate
 durable writes; routine behavior/acceptance progress is checkpointed periodically.

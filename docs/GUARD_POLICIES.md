@@ -43,9 +43,16 @@ Audit callbacks are intentionally small and send normalized events to a sink.
 **before** Guard performs code attribution, stack construction, value snapshots, or
 `BehaviorEvent` creation. Disabled audit categories are discarded even earlier.
 
-`event_sample_rate` controls routine event retention. `always_capture_novel_resources`
-allows the first retained occurrence of a resource identity to bypass that probability
-so a low routine sampling rate does not hide new files/network destinations/subprocesses.
+`event_sample_rate` controls routine event retention. `CollectorPolicy.unattributed_events`
+controls whether process-wide audit events without an active Caretaker target context are
+eligible for collection at all. Set it to `False` for adaptive/lightweight deployments
+where explicit sampled target calls should define the observation boundary; this check
+happens before attribution and stack construction. Leave it enabled only when deliberate
+process-wide Guard visibility is desired.
+
+`always_capture_novel_resources` allows the first retained occurrence of a resource
+identity to bypass the routine sampling probability so a low event rate does not hide
+new files/network destinations/subprocesses.
 `stack_sample_rate` independently controls whether a retained event receives a full
 stack summary. `maximum_events_per_second` is a hard per-collector processing cap and
 is applied before expensive normalization.
@@ -57,6 +64,11 @@ Useful strategies include:
 - sample complete stacks independently from event sampling;
 - rate-limit forensic evidence before normalization;
 - retain bounded representative events.
+
+Guard's in-process event, deviation, assessment, and decision histories are bounded
+operational caches. Durable evidence belongs to the configured `EvidenceStore`; keeping
+Guard enabled for a long-running process therefore does not make these convenience
+histories grow without limit.
 
 ## Baselines
 

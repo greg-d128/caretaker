@@ -1098,3 +1098,60 @@ def test_exception_only_lightweight_path_does_not_read_performance_clock(monkeyp
 
     monkeypatch.setattr(adaptive_module.time, "perf_counter", clock_should_not_run)
     assert healthy(1) == 2
+
+
+def test_persisted_adaptive_state_is_bound_to_effective_policy(tmp_path) -> None:
+    def target() -> None:
+        raise RuntimeError("persistent signal")
+
+    first_policy = LightweightPolicy(
+        exception=ExceptionPromotionPolicy(
+            enabled=True,
+            occurrences=1,
+            window_seconds=60,
+            promote_to=InstrumentationLevel.BEHAVIOR,
+        ),
+        soft_timing=SoftTimingPromotionPolicy(enabled=False),
+        sampling=BehaviorSamplingPolicy(enabled=False),
+        demotion=InstrumentationDemotionPolicy(enabled=False),
+        persist_state=True,
+    )
+    first = lightweight(
+        policy=first_policy,
+        target_id="test.adaptive.policy-provenance",
+        state_directory=tmp_path,
+    )(target)
+    with pytest.raises(RuntimeError):
+        first()
+    assert get_adaptive_state("test.adaptive.policy-provenance")["level"] == "BEHAVIOR"
+
+    second_policy = LightweightPolicy(
+        exception=ExceptionPromotionPolicy(
+            enabled=True,
+            occurrences=5,
+            window_seconds=60,
+            promote_to=InstrumentationLevel.BEHAVIOR,
+        ),
+        soft_timing=SoftTimingPromotionPolicy(enabled=False),
+        sampling=BehaviorSamplingPolicy(enabled=False),
+        demotion=InstrumentationDemotionPolicy(enabled=False),
+        persist_state=True,
+    )
+    second = lightweight(
+        policy=second_policy,
+        target_id="test.adaptive.policy-provenance",
+        state_directory=tmp_path,
+    )(target)
+    state = get_adaptive_state("test.adaptive.policy-provenance")
+    assert state["level"] == "LIGHTWEIGHT"
+    assert state["promotion_reason"] is None
+
+    # The stale file is replaced immediately, so another construction under the
+    # same new policy cannot resurrect the old BEHAVIOR escalation.
+    third = lightweight(
+        policy=second_policy,
+        target_id="test.adaptive.policy-provenance",
+        state_directory=tmp_path,
+    )(target)
+    assert get_adaptive_state("test.adaptive.policy-provenance")["level"] == "LIGHTWEIGHT"
+    assert second.__caretaker_adaptive__.state.code_hash == third.__caretaker_adaptive__.state.code_hash

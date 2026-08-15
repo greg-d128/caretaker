@@ -9,6 +9,11 @@ from ..logging.models import RequiredCapabilityFailureAction
 @dataclass(frozen=True, slots=True)
 class CollectorPolicy:
     audit_hooks: bool = True
+    # When false, global CPython audit events are ignored unless a Caretaker
+    # runtime target context is active. This is the normal choice for adaptive
+    # lightweight instrumentation because sampled calls establish that context
+    # explicitly and unrelated process-wide activity should stay off the hot path.
+    unattributed_events: bool = True
     imports: bool = True
     network: bool = True
     filesystem: bool = True
