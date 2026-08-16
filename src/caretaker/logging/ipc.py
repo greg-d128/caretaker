@@ -180,6 +180,8 @@ class SocketLogServer:
         self.maximum_packet_bytes = maximum_packet_bytes
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
+        self._connections: set[socket.socket] = set()
+        self._connection_lock = threading.RLock()
         self._socket: socket.socket | None = None
 
     def start(self) -> None:
@@ -211,13 +213,15 @@ class SocketLogServer:
             if self.allowed_uids is not None and uid not in self.allowed_uids:
                 connection.close()
                 continue
+            with self._connection_lock:
+                self._connections.add(connection)
             thread = threading.Thread(target=self._handle, args=(connection, pid, uid), daemon=True)
             thread.start()
             self._threads.append(thread)
 
     def _handle(self, connection: socket.socket, pid: int, uid: int) -> None:
         try:
-            while True:
+            while not self._stop.is_set():
                 if self._stream:
                     length_data = _recv_exact(connection, 4)
                     if not length_data:
@@ -241,6 +245,8 @@ class SocketLogServer:
                     envelope = LogEnvelope(**{**asdict(envelope), "fields": fields})
                 self.writer.write(envelope)
         finally:
+            with self._connection_lock:
+                self._connections.discard(connection)
             connection.close()
 
     def _handle_attachment(self, connection: socket.socket, packet: bytes) -> None:
@@ -276,20 +282,44 @@ class SocketLogServer:
             connection.sendall(encoded)
 
     def stop(self, *, grace_seconds: float = 1.0) -> None:
-        # Drain clients that completed connect() before shutdown was requested.
-        deadline = time.monotonic() + grace_seconds
+        # First allow already-connected clients a short bounded drain period.
+        deadline = time.monotonic() + max(0.0, grace_seconds)
         while self._socket is not None and time.monotonic() < deadline:
-            pending = bool(select.select([self._socket], [], [], 0)[0])
-            active = any(thread.is_alive() for thread in self._threads)
+            try:
+                pending = bool(select.select([self._socket], [], [], 0)[0])
+            except (OSError, ValueError):
+                pending = False
+            with self._connection_lock:
+                active = bool(self._connections)
             if not pending and not active:
                 break
             time.sleep(0.01)
+
+        # Shutdown is now authoritative. Close the listening socket and actively
+        # interrupt every handler connection before returning. This guarantees
+        # callers may safely close the underlying SegmentWriter after stop().
         self._stop.set()
         if self._socket is not None:
-            self._socket.close()
-        for thread in self._threads:
-            thread.join(timeout=1)
+            try:
+                self._socket.close()
+            except OSError:
+                pass
+        with self._connection_lock:
+            connections = tuple(self._connections)
+        for connection in connections:
+            try:
+                connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                connection.close()
+            except OSError:
+                pass
+        for thread in tuple(self._threads):
+            thread.join(timeout=max(1.0, grace_seconds + 1.0))
+        self._threads = [thread for thread in self._threads if thread.is_alive()]
         self.path.unlink(missing_ok=True)
+
 
 
 class ControlSocketServer:

@@ -112,6 +112,7 @@ class RotatingSystemStream:
             if (
                 self.policy.compression.enabled
                 and self.policy.compression.algorithm is CompressionAlgorithm.GZIP
+                and self.policy.compression.compress_closed_segments
             ):
                 compressed = self.path.with_suffix(self.path.suffix + ".gz")
                 with self.path.open("rb") as source, gzip.open(compressed, "wb", compresslevel=self.policy.compression.level) as target:
@@ -124,13 +125,25 @@ class RotatingSystemStream:
         age_days = self.policy.retention.maximum_age_days
         if age_days is not None:
             cutoff = time.time() - age_days * 86400
-            for path in paths:
-                if path.stat().st_mtime < cutoff:
+            for path in tuple(paths):
+                if path.exists() and path.stat().st_mtime < cutoff:
                     path.unlink(missing_ok=True)
+            paths = [path for path in paths if path.exists()]
         maximum = self.policy.retention.maximum_segments
         if maximum is not None and len(paths) > maximum:
             for path in paths[:len(paths) - maximum]:
                 path.unlink(missing_ok=True)
+            paths = [path for path in paths if path.exists()]
+        maximum_bytes = self.policy.retention.maximum_total_bytes
+        if maximum_bytes is not None:
+            total = sum(path.stat().st_size for path in paths if path.exists())
+            for path in paths:
+                if total <= maximum_bytes:
+                    break
+                if path.exists():
+                    size = path.stat().st_size
+                    path.unlink(missing_ok=True)
+                    total -= size
 
     def close(self) -> None:
         self.close_segment()

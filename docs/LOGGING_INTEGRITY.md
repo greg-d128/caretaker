@@ -34,3 +34,18 @@ A separate logging agent and independent collection server materially improve se
 ## Assurance reporting
 
 Runtime status now reports the record-integrity mode separately from identity anchoring. A healthy hash chain is not reported as corpus-replacement resistant. Only externally anchored/signed configurations claim that stronger property.
+
+### Supervised external signer configuration
+
+The normal supervisor entry point can load an operator-provided signer without placing persistent private-key configuration in application code:
+
+```bash
+python -m caretaker.run \
+  --policy /etc/caretaker/application.toml \
+  --external-signer organization.signing:caretaker_signer \
+  application.module
+```
+
+The referenced attribute may be a signer instance, class, or zero-argument factory and must expose `public_identity()` plus `sign_artifact()` (or the legacy `sign_manifest()`). In `EXTERNAL_SIGNED` mode an absent/invalid signer fails rather than falling back to ephemeral signing.
+
+`publish_public_key_to_control_clients` controls whether the current public signing identity is returned by supervisor status/health requests. The independently retained Signing Identity Journal remains the durable verification source for ephemeral artifact history.

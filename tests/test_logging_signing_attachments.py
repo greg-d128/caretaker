@@ -94,3 +94,23 @@ def test_attachment_overload_preserves_by_default(monkeypatch, tmp_path):
     assert store.store(event_id=uuid4(), event_sequence=1, content_type="text/plain", payload=b"first").stored
     assert store.store(event_id=uuid4(), event_sequence=2, content_type="text/plain", payload=b"second").stored
     store.close()
+
+
+def test_attachment_compression_toggle_is_executable(tmp_path):
+    from caretaker.logging import CompressionPolicy
+
+    policy = AttachmentPolicy(
+        maximum_rate_per_minute=None,
+        compression=CompressionPolicy(compress_closed_segments=False),
+    )
+    store = AttachmentStore(tmp_path, policy)
+    payload = b"x" * 10000
+    reference = store.store(
+        event_id=uuid4(),
+        event_sequence=7,
+        content_type="application/octet-stream",
+        payload=payload,
+    )
+    assert reference.compression.name == "NONE"
+    assert reference.compressed_bytes == len(payload)
+    store.close()

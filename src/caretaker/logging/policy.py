@@ -305,8 +305,14 @@ def validate_operator_logging_policy(policy: OperatorLoggingPolicy) -> None:
         errors.append("retention.preserve_baseline_segments is reserved until segment-class-aware retention is implemented")
     if policy.codec.format_version != 1:
         errors.append("codec.format_version is fixed at 1 in this release")
-    if policy.interrogation.enabled or policy.interrogation.llm_enabled:
-        errors.append("logging.interrogation policy activation is reserved; use the explicit interrogation API/console command")
+    if policy.interrogation.maximum_records <= 0:
+        errors.append("interrogation.maximum_records must be greater than zero")
+    if policy.interrogation.maximum_representative_records <= 0:
+        errors.append("interrogation.maximum_representative_records must be greater than zero")
+    if policy.interrogation.maximum_representative_records > policy.interrogation.maximum_records:
+        errors.append("interrogation.maximum_representative_records cannot exceed maximum_records")
+    if policy.interrogation.llm_enabled and not policy.interrogation.enabled:
+        errors.append("interrogation.llm_enabled requires interrogation.enabled=True")
     if policy.baseline.enabled:
         errors.append("logging.baseline automatic baseline policy is reserved; Guard behavior snapshots are the implemented baseline mechanism")
     if policy.metrics.enabled:
@@ -317,8 +323,6 @@ def validate_operator_logging_policy(policy: OperatorLoggingPolicy) -> None:
         errors.append("reload.retain_previous_on_failure=False is unsupported; failed reloads always retain the previous policy")
     if not policy.signing.publish_public_key_to_log:
         errors.append("signing.publish_public_key_to_log=False is unsupported; signed ephemeral identities require durable public-key publication")
-    if not policy.signing.publish_public_key_to_control_clients:
-        errors.append("signing.publish_public_key_to_control_clients=False is reserved; signed runtime identity remains available to control clients")
     if policy.attachments.compression.compression_workers != 1:
         errors.append("attachments.compression.compression_workers is reserved; attachment compression is single-worker")
     if policy.attachments.rotation.maximum_open_segments != 1:

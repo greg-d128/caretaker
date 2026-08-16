@@ -65,10 +65,12 @@ multipass = MultipassValidationBackend(
     clean_snapshot="caretaker-clean",
 )
 
-engine = RepairEngine(validation_backend=multipass)
+engine = RepairEngine(validation_backends=(podman, multipass))
 ```
 
-A repair policy can require the VM tier independently of which backend object is installed:
+When several backends are configured, Caretaker selects the lowest available isolation tier that satisfies the target policy. The legacy singular `validation_backend=` argument remains supported.
+
+A repair policy can require the VM tier independently of which backend objects are installed:
 
 ```python
 ValidationPolicy(minimum_isolation=ValidationIsolationLevel.VM)

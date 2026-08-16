@@ -90,3 +90,38 @@ def test_backend_unavailable_policy_can_require_explicit_operator_approval() -> 
     assert "validation isolation backend is unavailable" in pending[0].reason.lower()
     # No candidate has been deployed merely because PROCESS was available.
     assert wrapped.__caretaker_target__.slot.load().number == 0
+
+
+def test_registry_selects_lowest_available_backend_meeting_minimum() -> None:
+    from caretaker.validation import ValidationBackendCapabilities
+
+    class FakeVMBackend(SubprocessValidationBackend):
+        def __init__(self):
+            super().__init__()
+            self.called = False
+
+        def capabilities(self):
+            return ValidationBackendCapabilities(
+                name="fake-vm",
+                isolation_level=ValidationIsolationLevel.VM,
+                separate_kernel=True,
+                network_control=True,
+                resource_control=True,
+            )
+
+        def validate_candidate(self, *args, **kwargs):
+            self.called = True
+            return super().validate_candidate(*args, **kwargs)
+
+    fake_vm = FakeVMBackend()
+    engine = RepairEngine(
+        provider=StaticRepairProvider([_candidate()]),
+        validation_backends=(SubprocessValidationBackend(), fake_vm),
+    )
+    wrapped = repair(
+        policy=_policy(ValidationBackendUnavailableAction.FAIL_REPAIR),
+        engine=engine,
+    )(broken_divide)
+
+    assert wrapped(10.0, 0) == 0.0
+    assert fake_vm.called is True

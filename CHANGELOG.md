@@ -2,6 +2,19 @@
 
 ## 0.6.0a1
 
+### Policy truthfulness and enforcement
+
+- Make accepted policy an executable contract: unsupported non-default semantics fail policy validation instead of being accepted as no-ops.
+- Add a machine-reviewed policy dataclass surface fingerprint and explicit reserved-setting catalog so new policy fields require a semantic review and behavioral tests.
+- Make Guard `DISABLED` a true off state; collapse stronger-sounding legacy mode names into audit compatibility aliases and separate observation from deterministic policy response.
+- Enforce deterministic Guard network/subprocess/filesystem policy violations, target-binding response precedence, candidate Guard controls, and statistical p95 timing deviations.
+- Enforce Repair LLM privacy/context controls at request construction and apply `maximum_context_characters` to the complete textual provider context.
+- Reject or deactivate previously declarative Repair/Guard scheduling and retention settings until their semantics are implemented.
+- Enforce signature-integrity minimums for behavior snapshots/baselines/archives so signed artifacts cannot be downgraded by stripping their signatures.
+- Honor compression algorithm/rotation/buffering/interrogation/system-redaction controls that were previously declarative, and make unsupported logging/system values fail explicitly.
+- Add capability-based selection across multiple configured validation backends and supervised `--external-signer module:attribute` configuration.
+- Drain active logging IPC handlers during shutdown before the writer is closed.
+
 ### Policy authority
 
 - Add supervisor-owned framework, optional application-owner, deployment, and temporary runtime authority layers.

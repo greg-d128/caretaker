@@ -75,6 +75,43 @@ class ValidationBackend(Protocol):
     ) -> ValidationReport: ...
 
 
+class ValidationBackendRegistry:
+    """Capability-based validation backend selector.
+
+    The lowest available backend satisfying the policy minimum is preferred so
+    ordinary repairs do not pay for VM isolation unnecessarily. If no sufficient
+    backend is available, the strongest configured backend is returned so its
+    normal fail-closed unavailable report can explain the unmet requirement.
+    """
+
+    def __init__(self, backends: tuple[ValidationBackend, ...]) -> None:
+        if not backends:
+            raise ValueError("at least one validation backend is required")
+        self.backends = tuple(backends)
+
+    def select(self, minimum: ValidationIsolationLevel) -> ValidationBackend:
+        ordered = sorted(
+            self.backends,
+            key=lambda item: int(item.capabilities().isolation_level),
+        )
+        sufficient = [
+            item for item in ordered
+            if item.capabilities().isolation_level >= minimum
+        ]
+        for item in sufficient:
+            available, _reason = item.available()
+            if available:
+                return item
+        if sufficient:
+            return sufficient[0]
+        # No configured backend can satisfy the policy. Use the strongest one so
+        # validation emits the existing explicit insufficient-isolation report.
+        return ordered[-1]
+
+    def capabilities(self) -> tuple[ValidationBackendCapabilities, ...]:
+        return tuple(item.capabilities() for item in self.backends)
+
+
 class SubprocessValidationBackend:
     def __init__(self, python_executable: str | None = None) -> None:
         self.python_executable = python_executable or sys.executable

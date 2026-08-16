@@ -72,7 +72,12 @@ from .state import (
 )
 from .store import InMemoryRepairStore, RepairStore
 from .telemetry import CorrelatedLogHandler, logger
-from .validation import ValidationBackend, SubprocessValidationBackend, sanitized_function_tree
+from .validation import (
+    ValidationBackend,
+    ValidationBackendRegistry,
+    SubprocessValidationBackend,
+    sanitized_function_tree,
+)
 
 
 class ResolutionKind:
@@ -120,6 +125,7 @@ class RepairEngine:
         registry: TargetRegistry | None = None,
         store: RepairStore | None = None,
         validation_backend: ValidationBackend | None = None,
+        validation_backends: tuple[ValidationBackend, ...] | None = None,
         log_handler: CorrelatedLogHandler | None = None,
         auxiliary_registry: AuxiliaryRegistry | None = None,
         guard: "GuardFacade | None" = None,
@@ -128,7 +134,17 @@ class RepairEngine:
         self.provider = provider
         self.registry = registry or TargetRegistry()
         self.store = store or InMemoryRepairStore()
-        self.validation_backend = validation_backend or SubprocessValidationBackend()
+        if validation_backend is not None and validation_backends is not None:
+            raise ValueError("specify validation_backend or validation_backends, not both")
+        configured_backends = (
+            validation_backends
+            if validation_backends is not None
+            else ((validation_backend,) if validation_backend is not None else (SubprocessValidationBackend(),))
+        )
+        self.validation_registry = ValidationBackendRegistry(tuple(configured_backends))
+        # Backward-compatible default backend attribute. Candidate evaluation uses
+        # the registry so minimum-isolation policy can select a stronger backend.
+        self.validation_backend = configured_backends[0]
         self.log_handler = log_handler or CorrelatedLogHandler()
         self.auxiliary_registry = auxiliary_registry or AuxiliaryRegistry()
         self.guard = guard
@@ -1601,7 +1617,10 @@ class RepairEngine:
         )
         self.store.record_attempt(attempt)
         self._attempt_cache[attempt.attempt_id] = attempt
-        validation_capabilities = self.validation_backend.capabilities()
+        validation_backend = self.validation_registry.select(
+            target.policy.validation.minimum_isolation
+        )
+        validation_capabilities = validation_backend.capabilities()
         with self._activity_lock:
             self._active_validations[attempt.attempt_id] = {
                 "attempt_id": str(attempt.attempt_id),
@@ -1618,7 +1637,7 @@ class RepairEngine:
             }
         tokens = set_runtime_context(attempt_id=attempt.attempt_id, candidate_id=candidate.candidate_id, operation="candidate-validation")
         try:
-            report = self.validation_backend.validate_candidate(
+            report = validation_backend.validate_candidate(
                 candidate,
                 target,
                 timeout_seconds=target.policy.validation.validation_timeout_seconds,
@@ -1850,22 +1869,51 @@ class RepairEngine:
                         or "- none"
                     )
                 )
+        original_source = (
+            version.source or inspect.getsource(version.implementation)
+            if context_policy.include_source
+            else "Source omitted by repair context policy."
+        )
+        context_values = {
+            "original_source": original_source,
+            "incident_summary": incident_summary,
+            "traceback_summary": traceback_summary,
+            "state_summary": state_summary,
+            "policy_summary": policy_summary,
+            "registered_cases_summary": cases,
+            "logs_summary": logs_summary,
+            "guard_summary": guard_summary,
+        }
+        total_characters = sum(len(value) for value in context_values.values())
+        maximum_characters = context_policy.maximum_context_characters
+        if total_characters > maximum_characters:
+            scale = maximum_characters / total_characters
+            bounded: dict[str, str] = {}
+            remaining = maximum_characters
+            keys = tuple(context_values)
+            for index, key in enumerate(keys):
+                value = context_values[key]
+                if index == len(keys) - 1:
+                    allowance = remaining
+                else:
+                    allowance = min(len(value), max(0, int(len(value) * scale)))
+                    allowance = min(allowance, remaining)
+                bounded[key] = value[:allowance]
+                remaining -= allowance
+            context_values = bounded
+
         return RepairRequest(
             target_id=target.target_id,
             function_name=target.display_name.split(".")[-1],
             module_name=target.source.module_name,
-            original_source=(
-                version.source or inspect.getsource(version.implementation)
-                if context_policy.include_source
-                else "Source omitted by repair context policy."
-            ),
-            incident_summary=incident_summary,
-            traceback_summary=traceback_summary,
-            state_summary=state_summary,
-            policy_summary=policy_summary,
-            registered_cases_summary=cases,
-            logs_summary=logs_summary,
-            guard_summary=guard_summary,
+            original_source=context_values["original_source"],
+            incident_summary=context_values["incident_summary"],
+            traceback_summary=context_values["traceback_summary"],
+            state_summary=context_values["state_summary"],
+            policy_summary=context_values["policy_summary"],
+            registered_cases_summary=context_values["registered_cases_summary"],
+            logs_summary=context_values["logs_summary"],
+            guard_summary=context_values["guard_summary"],
             maximum_candidates=min(
                 target.policy.selection.maximum_candidates_to_evaluate,
                 target.policy.limits.maximum_candidates_per_incident,

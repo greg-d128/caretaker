@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator
 from uuid import UUID, uuid4
 
-from .models import LogEnvelope, RuntimeRecordIntegrityMode, SignatureStatus
+from .models import CompressionAlgorithm, LogEnvelope, RuntimeRecordIntegrityMode, SignatureStatus
 from .policy import OperatorLoggingPolicy
 from .records import HEADER, RecordFormatError, TLVLogCodec
 from .signing import RuntimeArtifactSigningService, serialize_signed_artifact

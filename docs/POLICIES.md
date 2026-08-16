@@ -1,5 +1,7 @@
 # Repair policies
 
+Caretaker accepts a policy setting only when the running release can honor its semantics. See [`POLICY_SEMANTICS.md`](POLICY_SEMANTICS.md) for the policy-truthfulness rules, reviewed policy-surface fingerprint, and explicitly reserved settings.
+
 Authority-layer constraints can further restrict or deliberately override these settings. See [`POLICY_AUTHORITY.md`](POLICY_AUTHORITY.md) for supervisor-owned signed/unsigned authority stacks and runtime leases.
 
 `RepairPolicy` is immutable configuration. A resolved policy is persisted as canonical data, a SHA-256 fingerprint, and a human-readable description.

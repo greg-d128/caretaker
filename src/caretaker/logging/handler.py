@@ -344,7 +344,11 @@ class LoggingRuntime:
         attachment_manifest = self.attachments.close()
         attachment_manifest_hash = (
             hashlib.sha256(json_bytes(attachment_manifest)).hexdigest()
-            if attachment_manifest is not None else None
+            if (
+                attachment_manifest is not None
+                and self.active_policy.signing.sign_attachment_manifests
+            )
+            else None
         )
         self.sink.close(attachment_manifest_hash=attachment_manifest_hash)
         self._closed = True

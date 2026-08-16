@@ -105,6 +105,7 @@ class AttachmentStore:
         use_gzip = (
             self.policy.compression.enabled
             and self.policy.compression.algorithm is CompressionAlgorithm.GZIP
+            and self.policy.compression.compress_closed_segments
         )
         compressed = gzip.compress(payload, compresslevel=self.policy.compression.level) if use_gzip else payload
         with self._lock:
@@ -124,9 +125,15 @@ class AttachmentStore:
                 "sampling_probability": probability,
             }, sort_keys=True, separators=(",", ":")).encode()
             block = len(entry_header).to_bytes(4, "big") + entry_header + len(compressed).to_bytes(8, "big") + compressed
+            now_utc = datetime.now(timezone.utc)
+            crossed_midnight = (
+                self.policy.rotation.rotate_at_utc_midnight
+                and now_utc.date() != self._created.date()
+            )
             if self._entries and (
                 self._file.tell() + len(block) > self.policy.rotation.maximum_segment_bytes
-                or (datetime.now(timezone.utc) - self._created).total_seconds() >= self.policy.rotation.maximum_segment_seconds
+                or (now_utc - self._created).total_seconds() >= self.policy.rotation.maximum_segment_seconds
+                or crossed_midnight
             ):
                 self.close_segment()
                 self._open_segment()
@@ -183,18 +190,39 @@ class AttachmentStore:
             self._entries = []
             return manifest
 
+    def _delete_segment(self, path: Path) -> None:
+        path.unlink(missing_ok=True)
+        try:
+            segment_id = path.stem[-36:]
+            (self.manifest_dir / f"{segment_id}.json").unlink(missing_ok=True)
+        except Exception:
+            # Retention must never fail solely because a legacy filename cannot be parsed.
+            pass
+
     def _retention(self) -> None:
         paths = sorted(self.segment_dir.glob("*.ctattach"), key=lambda item: item.stat().st_mtime)
         age_days = self.policy.retention.maximum_age_days
         if age_days is not None:
             cutoff = time.time() - age_days * 86400
-            for path in paths:
-                if path.stat().st_mtime < cutoff:
-                    path.unlink(missing_ok=True)
+            for path in tuple(paths):
+                if path.exists() and path.stat().st_mtime < cutoff:
+                    self._delete_segment(path)
+            paths = [path for path in paths if path.exists()]
         maximum = self.policy.retention.maximum_segments
         if maximum is not None and len(paths) > maximum:
             for path in paths[:len(paths) - maximum]:
-                path.unlink(missing_ok=True)
+                self._delete_segment(path)
+            paths = [path for path in paths if path.exists()]
+        maximum_bytes = self.policy.retention.maximum_total_bytes
+        if maximum_bytes is not None:
+            total = sum(path.stat().st_size for path in paths if path.exists())
+            for path in paths:
+                if total <= maximum_bytes:
+                    break
+                if path.exists():
+                    size = path.stat().st_size
+                    self._delete_segment(path)
+                    total -= size
 
     def close(self) -> dict[str, object] | None:
         return self.close_segment()

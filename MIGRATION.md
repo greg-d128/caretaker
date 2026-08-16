@@ -4,6 +4,24 @@
 
 The 0.5 logging, Repair, Guard, Integrity, and authority APIs remain available. Caretaker 0.6 adds adaptive lightweight instrumentation, persistent behavior statistics/snapshots, runtime-artifact signing, and selectable validation-isolation backends. These features remain policy-controlled and do not silently broaden repair authority.
 
+## Policy truthfulness changes
+
+The 0.6 development tree now validates public policy semantics rather than silently accepting settings that are only declarative. A machine-reviewed policy-surface fingerprint in `caretaker.policy_semantics` forces explicit review whenever a public policy dataclass field, type, or default changes. See `docs/POLICY_SEMANTICS.md`.
+
+Several previously implementation-looking defaults are now inactive because their runtime behavior is intentionally not implemented:
+
+- `ContextPolicy.previous_incidents`: `3` -> `0`; nonzero is rejected.
+- `RepairLimits.structural_review_after_repairs`: `5` -> `None`; non-`None` is rejected.
+- `StabilityPolicy.oscillation_window_incidents`: `20` -> `None`; non-`None` is rejected.
+- `StabilityPolicy.require_regression_replay_before_reactivation`: `True` -> `False`; `True` is rejected until replay is implemented.
+- Guard `RetentionPolicy.raw_event_seconds` / `aggregate_seconds`: configured durations -> `None`; non-`None` is rejected until durable time-based pruning exists.
+- `PeriodicInspectionPolicy.execution_window`: `100` -> `None`; non-`None` is rejected.
+- `PeriodicInspectionPolicy.compare_behavior`: `True` -> `False`; periodic behavior comparison is not a separate implemented scheduler control. Normal Guard behavior comparison remains active through observed behavior windows.
+
+`GuardMode.DISABLED` is now a true off state. Legacy `RESEARCH`, `FORENSIC`, and `ENFORCE` names are compatibility aliases for audit observation rather than stronger enforcement claims.
+
+Repair LLM context controls now govern the actual provider payload, including a combined `maximum_context_characters` budget. Signed behavior artifacts also enforce the minimum integrity required by the active signing policy and cannot be accepted after signature stripping.
+
 ## Adaptive instrumentation
 
 New `lightweight.*` policy controls govern low-cost detection, behavior sampling, evidence-gated escalation, and policy-controlled demotion. The intended repair lifecycle is:

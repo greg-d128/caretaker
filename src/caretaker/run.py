@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 import json
@@ -47,10 +48,33 @@ from .logging.segments import read_segment
 from .system import SystemCollectionPolicy, SystemDataCollector, SystemOutputPolicy, load_system_policy
 
 
+def _load_external_signer(specification: str | None):
+    if not specification:
+        return None
+    module_name, separator, attribute = specification.partition(":")
+    if not separator or not module_name or not attribute:
+        raise ValueError("external signer must use module:attribute syntax")
+    module = importlib.import_module(module_name)
+    value = getattr(module, attribute)
+    if isinstance(value, type):
+        value = value()
+    elif callable(value) and not hasattr(value, "sign_artifact") and not hasattr(value, "sign_manifest"):
+        value = value()
+    if not hasattr(value, "public_identity"):
+        raise TypeError("external signer must provide public_identity()")
+    if not hasattr(value, "sign_artifact") and not hasattr(value, "sign_manifest"):
+        raise TypeError("external signer must provide sign_artifact() or sign_manifest()")
+    return value
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m caretaker.run")
     parser.add_argument("--policy")
     parser.add_argument("--data-directory")
+    parser.add_argument(
+        "--external-signer",
+        help="trusted supervisor signer provider in module:attribute form",
+    )
     parser.add_argument("--system-data", action="store_true")
     parser.add_argument(
         "--authority-stack",
@@ -79,11 +103,13 @@ def main(argv: list[str] | None = None) -> int:
     authority.set_snapshot_path(
         Path(policy.directory) / "policy" / "authority-effective.json"
     )
+    external_signer = _load_external_signer(args.external_signer)
     runtime = LoggingRuntime(
         declared_policy,
         source_path=args.policy,
         supervised=True,
         policy_transform=policy_transform,
+        external_signer=external_signer,
     )
     policy = runtime.active_policy
     behavior_store = BehaviorSnapshotStore(
@@ -192,10 +218,16 @@ def main(argv: list[str] | None = None) -> int:
             supervisor = supervisor_holder.get("supervisor")
             runtime_policy_match, application_runtime = runtime_authority_match()
             effective_authority = authority.effective
+            signing_identity = None
+            if runtime.active_policy.signing.publish_public_key_to_control_clients:
+                identity = runtime.writer.signing_service.identity
+                if identity is not None:
+                    signing_identity = asdict(identity) if hasattr(identity, "__dataclass_fields__") else dict(identity)
             return {"ok": True, "application_pid": child.pid if child else None,
                     "application_running": child.poll() is None if child else False,
                     "policy_generation": runtime.effective.generation,
                     "active_leases": list(leases),
+                    "runtime_signing_identity": signing_identity,
                     "authority_policy": {
                         "generation": effective_authority.generation,
                         "fingerprint": effective_authority.fingerprint,
@@ -432,6 +464,9 @@ def main(argv: list[str] | None = None) -> int:
                 ],
             }
         if command == "investigate":
+            interrogation_policy = runtime.active_policy.interrogation
+            if not interrogation_policy.enabled:
+                raise PermissionError("logging.interrogation.enabled=False")
             target = str(request.get("target") or "").strip()
             minutes = max(1, min(int(request.get("minutes", 15)), 24 * 60))
             objective = str(request.get("objective") or "Investigate the current Caretaker incident")
@@ -458,10 +493,13 @@ def main(argv: list[str] | None = None) -> int:
             interrogator = LogInterrogator()
             bundle = interrogator.build_bundle(
                 interrogation,
-                tuple(recent_log_records(2000)),
+                tuple(recent_log_records(interrogation_policy.maximum_records)),
                 behavior_deviations=behavior,
+                maximum_representative_records=interrogation_policy.maximum_representative_records,
             )
             model = str(request.get("model") or "").strip()
+            if model and not interrogation_policy.llm_enabled:
+                raise PermissionError("logging.interrogation.llm_enabled=False")
             if model:
                 provider = OllamaRootCauseProvider(
                     model=model,

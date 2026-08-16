@@ -1,0 +1,82 @@
+# Policy truthfulness and runtime semantics
+
+Caretaker treats an accepted policy as an executable contract. A public setting must not be accepted merely because it can be parsed, serialized, signed, or displayed. If the running release cannot honor a requested semantic, policy validation fails before the affected subsystem begins.
+
+This rule is separate from policy authority. Authority answers **who may request or constrain a setting**. Policy truthfulness answers **whether this Caretaker build actually implements the requested setting**.
+
+## Rules
+
+1. Implemented settings must have behavioral tests showing that changing the setting changes runtime behavior.
+2. Security/privacy controls are enforced at the final action boundary where practical. For example, Repair context controls are applied when the LLM request is built, and artifact-integrity requirements are applied when artifacts are loaded or restored.
+3. A setting whose non-default behavior is not implemented is either removed from the supported surface or given an inactive/unset default and rejected explicitly when requested.
+4. A stronger-sounding mode name must not imply a boundary Caretaker cannot provide. Guard uses `DISABLED`, `LEARN`, and `AUDIT`; research/forensic collection depth is policy, while actual prevention/quarantine is an explicit response capability.
+5. Backend/isolation requirements fail closed. A minimum validation isolation tier is not silently weakened because a stronger backend is unavailable.
+6. Signed artifacts cannot silently downgrade to hash-only artifacts when policy requires signatures.
+
+## Reviewed policy-surface fingerprint
+
+`caretaker.policy_semantics` computes a deterministic schema fingerprint over the public policy dataclasses in:
+
+- Repair policy;
+- Guard policy and bindings;
+- operator logging policy and bindings;
+- system collection policy;
+- lightweight adaptive instrumentation policy.
+
+The fingerprint includes field path, declared type, and default. `REVIEWED_POLICY_SURFACE_HASH` is updated only as part of an explicit policy-semantics review. The test suite fails if the dataclass surface changes without that review.
+
+This fingerprint is a **development/conformance guardrail**, not a deployment signature or authority fingerprint. Signed policy/profile provenance remains the responsibility of the policy-authority and profile systems.
+
+The current review can be inspected programmatically:
+
+```python
+from caretaker.policy_semantics import policy_surface_review_status
+
+print(policy_surface_review_status())
+```
+
+## Explicitly reserved settings
+
+`caretaker.policy_semantics.RESERVED_SETTINGS` lists exposed concepts that are intentionally not implemented in this release. Validators reject requests that would rely on those semantics. Important examples include:
+
+- Repair incident-history retrieval and automatic structural-review scheduling;
+- incident-window oscillation detection and automatic regression replay before failed-version reactivation;
+- Guard environment-read/general function-call collectors;
+- time-based durable Guard retention and periodic behavior-comparison scheduling;
+- numeric candidate new-resource budgets;
+- multi-open-segment logging and multi-worker compression;
+- segment-class-aware incident/baseline retention;
+- automatic logging-baseline orchestration and metrics-provider adapters;
+- cgroup process discovery and system-collector-driven Guard/mode degradation.
+
+Defaults for these features are intentionally inactive/unset. Their presence in a dataclass is not a promise of availability.
+
+## Repair context privacy and size
+
+`ContextPolicy` is applied before a `RepairRequest` is handed to a provider. `include_source`, `include_traceback`, `include_state_diff`, `send_argument_values`, and `send_local_values` therefore change the actual provider payload. `maximum_context_characters` bounds the combined textual context fields, not only correlated log text.
+
+`previous_incidents` currently defaults to zero and values above zero are rejected because durable incident-history retrieval is not yet implemented.
+
+## Guard semantics
+
+`GuardMode.DISABLED` installs no Guard observation hooks. `LEARN` permits candidate-baseline learning. `AUDIT` observes and compares accepted behavior. Historical names such as `RESEARCH`, `FORENSIC`, and `ENFORCE` are compatibility aliases rather than claims of stronger enforcement.
+
+Deterministic allow/deny rules create explicit policy-violation deviations. Response policy then determines whether Caretaker alerts, quarantines, opens Repair, or takes another implemented action. Audit observation alone is never described as a host security boundary.
+
+## Operational configuration
+
+`RepairEngine(validation_backends=(...))` can receive several validation backends. Caretaker selects the lowest available backend that satisfies the target's `minimum_isolation`; if none satisfies it, the configured unavailable action applies. Supplying the legacy singular `validation_backend=` remains supported.
+
+For supervised runtime signing, `python -m caretaker.run --external-signer module:attribute ...` loads a trusted signer provider in the supervisor. `EXTERNAL_SIGNED` still fails rather than silently falling back if the provider is absent or invalid.
+
+## Adding a policy field
+
+A new public policy field requires all of the following before the reviewed surface hash is updated:
+
+1. a defined runtime meaning and precedence;
+2. validation of invalid/unsupported combinations;
+3. at least one behavioral test proving the setting changes execution;
+4. authority/profile-surface review when the setting changes a security capability;
+5. operator documentation and migration notes when defaults or semantics change.
+
+If any of those are intentionally deferred, the field must default to an inactive value and be entered in the explicit reserved-setting catalog.

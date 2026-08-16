@@ -109,8 +109,8 @@ class GuardActionPolicy:
 
 @dataclass(frozen=True, slots=True)
 class RetentionPolicy:
-    raw_event_seconds: float = 86_400.0
-    aggregate_seconds: float = 2_592_000.0
+    raw_event_seconds: float | None = None
+    aggregate_seconds: float | None = None
     maximum_raw_events: int = 100_000
 
 
@@ -118,10 +118,10 @@ class RetentionPolicy:
 class PeriodicInspectionPolicy:
     enabled: bool = True
     interval_seconds: float = 600.0
-    execution_window: int = 100
+    execution_window: int | None = None
     verify_source_hash: bool = True
     verify_runtime_fingerprints: bool = True
-    compare_behavior: bool = True
+    compare_behavior: bool = False
     escalate_on_change: bool = True
 
 
@@ -221,9 +221,9 @@ def validate_guard_policy(policy: GuardPolicy) -> None:
         errors.append("deviations.minimum_duration_samples must be at least one")
     if policy.retention.maximum_raw_events <= 0:
         errors.append("retention.maximum_raw_events must be greater than zero")
-    if policy.retention.raw_event_seconds != RetentionPolicy().raw_event_seconds:
+    if policy.retention.raw_event_seconds is not None:
         errors.append("retention.raw_event_seconds is reserved; durable time-based raw-event pruning is not implemented")
-    if policy.retention.aggregate_seconds != RetentionPolicy().aggregate_seconds:
+    if policy.retention.aggregate_seconds is not None:
         errors.append("retention.aggregate_seconds is reserved; aggregate time-based retention is not implemented")
     if policy.actions.deviation_action is GuardDeviationAction.OPEN_INCIDENT:
         errors.append("actions.deviation_action=OPEN_INCIDENT is reserved; use ALERT or OPEN_REPAIR_EPISODE")
@@ -237,14 +237,14 @@ def validate_guard_policy(policy: GuardPolicy) -> None:
         if target.baseline_name is not None:
             errors.append(f"{prefix}.baseline_name is reserved; named Guard baselines are not implemented")
         periodic = target.periodic
-        if periodic.execution_window != PeriodicInspectionPolicy().execution_window:
+        if periodic.execution_window is not None:
             errors.append(f"{prefix}.periodic.execution_window is reserved; execution-window scheduling is not implemented")
         if not periodic.verify_source_hash:
             errors.append(f"{prefix}.periodic.verify_source_hash=False is unsupported; identity inspection always verifies source identity")
         if not periodic.verify_runtime_fingerprints:
             errors.append(f"{prefix}.periodic.verify_runtime_fingerprints=False is unsupported; runtime fingerprints are always verified")
-        if not periodic.compare_behavior:
-            errors.append(f"{prefix}.periodic.compare_behavior=False is reserved; periodic behavior-comparison control is not independently configurable")
+        if periodic.compare_behavior:
+            errors.append(f"{prefix}.periodic.compare_behavior=True is reserved; periodic integrity inspection does not independently compare behavior")
         if not periodic.escalate_on_change:
             errors.append(f"{prefix}.periodic.escalate_on_change=False is unsupported; detected integrity changes remain signal-producing")
 

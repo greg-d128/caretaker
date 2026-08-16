@@ -323,3 +323,35 @@ def test_candidate_guard_allow_new_capabilities_is_honored() -> None:
     )
     assert denied.eligible is False
     assert allowed.eligible is True
+
+
+def test_repair_context_character_budget_applies_to_complete_llm_request() -> None:
+    provider = CapturingRepairProvider()
+    engine = RepairEngine(provider=provider)
+    policy = replace(
+        _repair_policy(),
+        context=ContextPolicy(
+            maximum_context_characters=160,
+            maximum_log_records=200,
+            previous_calls=3,
+        ),
+    )
+    wrapped = repair(policy=policy, engine=engine)(failing)
+
+    assert wrapped(999999) == 999999
+    assert provider.request is not None
+    request = provider.request
+    total = sum(
+        len(value)
+        for value in (
+            request.original_source,
+            request.incident_summary,
+            request.traceback_summary,
+            request.state_summary,
+            request.policy_summary,
+            request.registered_cases_summary,
+            request.logs_summary,
+            request.guard_summary,
+        )
+    )
+    assert total <= 160

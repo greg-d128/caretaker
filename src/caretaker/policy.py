@@ -199,7 +199,7 @@ class ContextPolicy:
     include_traceback: bool = True
     include_state_diff: bool = True
     previous_calls: int = 3
-    previous_incidents: int = 3
+    previous_incidents: int = 0
     maximum_log_records: int = 200
     maximum_context_characters: int = 100_000
     send_argument_values: bool = False
@@ -212,16 +212,16 @@ class RepairLimits:
     maximum_candidates_per_incident: int = 5
     maximum_repairs_per_target: int = 5
     cooldown_seconds: float = 60.0
-    structural_review_after_repairs: int = 5
+    structural_review_after_repairs: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class StabilityPolicy:
     detect_oscillation: bool = True
     oscillation_window_versions: int = 5
-    oscillation_window_incidents: int = 20
+    oscillation_window_incidents: int | None = None
     prevent_reactivation_of_failed_version: bool = True
-    require_regression_replay_before_reactivation: bool = True
+    require_regression_replay_before_reactivation: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,6 +289,12 @@ def validate_policy(policy: RepairPolicy) -> None:
                 errors.append("timeout seconds must be greater than zero")
             if trigger.mode is not TimeoutMode.SOFT:
                 errors.append(f"timeout mode {trigger.mode!r} is unsupported; only SOFT is available")
+    if policy.context.previous_calls < 0:
+        errors.append("context.previous_calls cannot be negative")
+    if policy.context.maximum_log_records < 0:
+        errors.append("context.maximum_log_records cannot be negative")
+    if policy.context.maximum_context_characters <= 0:
+        errors.append("context.maximum_context_characters must be greater than zero")
     if policy.retry.max_attempts < 0:
         errors.append("retry.max_attempts cannot be negative")
     if policy.retry.backoff_seconds < 0:
@@ -402,18 +408,22 @@ def validate_policy(policy: RepairPolicy) -> None:
         errors.append("maximum repairs per target must be greater than zero")
     if policy.limits.cooldown_seconds < 0:
         errors.append("repair cooldown cannot be negative")
-    if policy.limits.structural_review_after_repairs != RepairLimits().structural_review_after_repairs:
+    if policy.context.previous_incidents != 0:
         errors.append(
-            "limits.structural_review_after_repairs is reserved; non-default values are not implemented"
+            "context.previous_incidents is reserved; incident-history retrieval is not implemented"
         )
-    if policy.stability.oscillation_window_incidents != StabilityPolicy().oscillation_window_incidents:
+    if policy.limits.structural_review_after_repairs is not None:
+        errors.append(
+            "limits.structural_review_after_repairs is reserved; structural-review scheduling is not implemented"
+        )
+    if policy.stability.oscillation_window_incidents is not None:
         errors.append(
             "stability.oscillation_window_incidents is reserved; incident-window oscillation detection is not implemented"
         )
-    if not policy.stability.require_regression_replay_before_reactivation:
+    if policy.stability.require_regression_replay_before_reactivation:
         errors.append(
-            "stability.require_regression_replay_before_reactivation=False is not supported; "
-            "failed-version reactivation remains guarded by the implemented version-history checks"
+            "stability.require_regression_replay_before_reactivation=True is reserved; "
+            "automatic regression replay before failed-version reactivation is not implemented"
         )
     if policy.logging.capture_results:
         errors.append("logging.capture_results=True is reserved for Repair bindings; result capture is not implemented on every repair return path")
