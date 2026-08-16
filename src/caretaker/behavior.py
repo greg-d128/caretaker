@@ -927,6 +927,11 @@ def _distribution_summary(distribution: Mapping[str, Any]) -> dict[str, Any]:
         "p90": _percentile(reservoir, 0.90),
         "p95": _percentile(reservoir, 0.95),
         "p99": _percentile(reservoir, 0.99),
+        "histogram_bounds": [
+            value
+            for value in (_percentile(reservoir, fraction / 10.0) for fraction in range(1, 10))
+            if value is not None
+        ],
         "reservoir_size": len(reservoir),
     }
 

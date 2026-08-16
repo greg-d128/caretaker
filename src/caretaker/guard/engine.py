@@ -388,12 +388,46 @@ class GuardEngine(GuardFacade):
                 subprocesses=tuple(profile_value.get("subprocesses") or ()),
                 imports=tuple(profile_value.get("imports") or ()),
                 dynamic_code_operations=tuple(profile_value.get("dynamic_code_operations") or ()),
+                success_count=int(profile_value.get("success_count") or 0),
+                failure_count=int(profile_value.get("failure_count") or 0),
+                statistics=dict(profile_value.get("statistics") or {}),
+                sampling_provenance=dict(profile_value.get("sampling_provenance") or {}),
             ),
             state=BaselineState.ACCEPTED,
         )
         self.baselines.restore(baseline)
         self._sealed_baseline_ids.add(baseline.baseline_id)
         self.store.record_guard_baseline(baseline)
+
+    def _enrich_accepted_baseline_statistics(
+        self, target_id: str, baseline: BehaviorBaseline
+    ) -> BehaviorBaseline:
+        if self.behavior_statistics is None:
+            return baseline
+        capture = self.behavior_statistics.current_capture(target_id)
+        if capture is None:
+            return baseline
+        identity = baseline.subject
+        code_hash = identity.source_hash or identity.bytecode_hash
+        if capture.get("code_hash") != code_hash:
+            return baseline
+        if capture.get("monitoring_fingerprint") != self.monitoring_fingerprint(target_id):
+            return baseline
+        profile_value = dict(capture.get("profile") or {})
+        enriched = replace(
+            baseline,
+            profile=replace(
+                baseline.profile,
+                success_count=int(profile_value.get("success_count") or baseline.profile.success_count),
+                failure_count=int(profile_value.get("failure_count") or baseline.profile.failure_count),
+                statistics=dict(profile_value.get("statistics") or baseline.profile.statistics),
+                sampling_provenance=dict(
+                    profile_value.get("sampling_provenance") or baseline.profile.sampling_provenance
+                ),
+            ),
+        )
+        self.baselines.restore(enriched)
+        return enriched
 
     def _queue_accepted_baseline_snapshot(
         self, target_id: str, baseline: BehaviorBaseline
@@ -418,6 +452,10 @@ class GuardEngine(GuardFacade):
             "dynamic_code_operations": list(profile.dynamic_code_operations),
             "resource_coverage_complete": True,
             "distinct_resource_count": len(profile.resource_counts),
+            "success_count": profile.success_count,
+            "failure_count": profile.failure_count,
+            "statistics": dict(profile.statistics),
+            "sampling_provenance": dict(profile.sampling_provenance),
         }
         active_capture = self.behavior_statistics.current_capture(target_id)
         if (
@@ -626,9 +664,16 @@ class GuardEngine(GuardFacade):
     def accept_baseline(self, target_id: str) -> BehaviorBaseline:
         binding = self._targets[target_id]
         baseline = self.baselines.accept(binding.identity)
+        baseline = self._enrich_accepted_baseline_statistics(target_id, baseline)
         self.store.record_guard_baseline(baseline)
         self._queue_accepted_baseline_snapshot(target_id, baseline)
         return baseline
+
+    def seal_behavior_snapshot(self, target_id: str, *, reason: str) -> object | None:
+        """Queue the current statistical behavior generation at a lifecycle boundary."""
+        if self.behavior_statistics is None:
+            return None
+        return self.behavior_statistics.seal_target(target_id, reason=reason)
 
     def recent_summary(self, target_id: str, *, calls: int = 20) -> BehaviorProfileSummary | None:
         binding = self._targets.get(target_id)
@@ -902,6 +947,8 @@ class GuardEngine(GuardFacade):
         baseline = self.baselines.observe(window)
         if baseline is None:
             return
+        if target_id is not None and baseline.state is BaselineState.ACCEPTED:
+            baseline = self._enrich_accepted_baseline_statistics(target_id, baseline)
         self.store.record_guard_baseline(baseline)
         if target_id is not None and baseline.state is BaselineState.ACCEPTED:
             self._queue_accepted_baseline_snapshot(target_id, baseline)

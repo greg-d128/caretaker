@@ -86,6 +86,8 @@ class DeviationPolicy:
     deny_new_network_capability: bool = False
     deny_new_subprocess_capability: bool = False
     maximum_rate_multiplier: float = 10.0
+    maximum_duration_p95_multiplier: float = 2.0
+    minimum_duration_samples: int = 20
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,6 +213,12 @@ def validate_guard_policy(policy: GuardPolicy) -> None:
         errors.append("collectors.environment_reads is reserved; environment-read attribution is not implemented")
     if policy.collectors.function_calls:
         errors.append("collectors.function_calls is reserved; general function-call collection is not implemented")
+    if policy.deviations.maximum_rate_multiplier <= 0:
+        errors.append("deviations.maximum_rate_multiplier must be greater than zero")
+    if policy.deviations.maximum_duration_p95_multiplier <= 1.0:
+        errors.append("deviations.maximum_duration_p95_multiplier must be greater than 1")
+    if policy.deviations.minimum_duration_samples < 1:
+        errors.append("deviations.minimum_duration_samples must be at least one")
     if policy.retention.maximum_raw_events <= 0:
         errors.append("retention.maximum_raw_events must be greater than zero")
     if policy.retention.raw_event_seconds != RetentionPolicy().raw_event_seconds:

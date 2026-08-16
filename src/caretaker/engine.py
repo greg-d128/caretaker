@@ -235,6 +235,38 @@ class RepairEngine:
                 "active_validations": [dict(item) for item in self._active_validations.values()],
             }
 
+    def record_candidate_observation_success(
+        self,
+        *,
+        target: RepairTarget,
+        call_id: UUID,
+        output: Any,
+        mode: str = "canary",
+    ) -> None:
+        before = target.slot.observation()
+        self.observation.record_success(
+            slot=target.slot,
+            call_id=call_id,
+            policy=target.policy.observation,
+            output=output,
+            mode=mode,
+        )
+        after = target.slot.observation()
+        if (
+            self.guard is not None
+            and target.policy.guard.enabled
+            and after is not None
+            and (before is None or after.state is not before.state)
+        ):
+            if after.state is CandidateState.INITIALLY_VALIDATED:
+                self.guard.seal_behavior_snapshot(
+                    target.target_id, reason="post-repair-behavior-complete"
+                )
+            elif after.state is CandidateState.LONG_TERM_ACCEPTED:
+                self.guard.seal_behavior_snapshot(
+                    target.target_id, reason="long-term-acceptance"
+                )
+
     def approve_repair(self, episode_id: UUID):
         pending = self._pending_approvals[episode_id]
         target = self.registry.get(pending.target_id)
@@ -267,6 +299,8 @@ class RepairEngine:
             except Exception:
                 pass
             raise
+        if self.guard is not None and target.policy.guard.enabled:
+            self.guard.seal_behavior_snapshot(target.target_id, reason="repair-activated")
         self._pending_approvals.pop(episode_id, None)
         self.store.append_event(RepairEvent.create(
             "repair.operator_approved", target.target_id, episode_id=episode_id,
@@ -751,6 +785,10 @@ class RepairEngine:
             )
         )
 
+        if self.guard is not None and target.policy.guard.enabled:
+            self.guard.seal_behavior_snapshot(
+                target.target_id, reason="pre-repair-evidence-complete"
+            )
         request = self._build_request(target, version, incident, policy_snapshot.human_readable_policy)
         evaluated: list[EvaluatedCandidate] = []
         proposals: dict[UUID, CandidateProposal] = {}
@@ -1110,6 +1148,9 @@ class RepairEngine:
                 attempt_ids=tuple(attempt_ids),
                 active_function_version=target.slot.load().number,
             )
+
+        if self.guard is not None and target.policy.guard.enabled:
+            self.guard.seal_behavior_snapshot(target.target_id, reason="repair-activated")
 
         selected_attempt = replace(
             selected_attempt,

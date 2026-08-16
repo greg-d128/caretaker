@@ -256,6 +256,10 @@ class BaselineManager:
             subprocesses=profile.subprocesses,
             imports=profile.imports,
             dynamic_code_operations=profile.dynamic_code_operations,
+            success_count=profile.success_count,
+            failure_count=profile.failure_count,
+            statistics=profile.statistics,
+            sampling_provenance=profile.sampling_provenance,
         )
 
     @staticmethod
@@ -285,10 +289,22 @@ class BaselineManager:
         dynamic: set[str] = set()
         call_count = 0
         event_count = 0
+        duration_count = 0
+        duration_total = 0.0
+        duration_minimum: float | None = None
+        duration_maximum: float | None = None
         for window in windows:
             kind_counts.update(window.event_kind_counts)
             call_count += window.call_count
             event_count += window.event_count
+            duration = window.metrics.get("duration_seconds")
+            if duration is not None and duration.count:
+                duration_count += duration.count
+                duration_total += float(duration.total or 0.0)
+                if duration.minimum is not None:
+                    duration_minimum = duration.minimum if duration_minimum is None else min(duration_minimum, duration.minimum)
+                if duration.maximum is not None:
+                    duration_maximum = duration.maximum if duration_maximum is None else max(duration_maximum, duration.maximum)
             for summary in window.resources:
                 key = f"{summary.resource.kind}:{summary.resource.value}"
                 resources[key] += summary.count
@@ -312,6 +328,20 @@ class BaselineManager:
             subprocesses=tuple(sorted(subprocesses)),
             imports=tuple(sorted(imports)),
             dynamic_code_operations=tuple(sorted(dynamic)),
+            statistics=(
+                {
+                    "duration_seconds": {
+                        "count": duration_count,
+                        "minimum": duration_minimum,
+                        "maximum": duration_maximum,
+                        "average": duration_total / duration_count if duration_count else None,
+                        "total": duration_total,
+                    }
+                }
+                if duration_count
+                else {}
+            ),
+            sampling_provenance={"guard_windows": True},
         )
 
 
@@ -398,6 +428,42 @@ class DeviationDetector:
                     magnitude=min(100.0, 20.0 * multiplier),
                     sensitivity=50.0,
                     explanation=f"Behavior event rate increased {multiplier:.1f}x",
+                )
+            )
+        duration_baseline = dict(expected.statistics.get("duration_seconds") or {})
+        baseline_p95 = duration_baseline.get("p95")
+        baseline_samples = int(duration_baseline.get("count") or 0)
+        observed_duration = observed.metrics.get("duration_seconds")
+        if (
+            baseline_p95 is not None
+            and baseline_samples >= self.policy.minimum_duration_samples
+            and observed_duration is not None
+            and observed_duration.count > 0
+            and observed_duration.mean is not None
+            and float(observed_duration.mean)
+            > float(baseline_p95) * self.policy.maximum_duration_p95_multiplier
+        ):
+            multiplier = float(observed_duration.mean) / max(float(baseline_p95), 1e-12)
+            deviations.append(
+                self._deviation(
+                    baseline,
+                    observed,
+                    DeviationCategory.TIMING_DISTRIBUTION_CHANGE,
+                    expected=EvidenceSummary(
+                        "accepted duration distribution",
+                        {"p95": baseline_p95, "samples": baseline_samples},
+                    ),
+                    observed_summary=EvidenceSummary(
+                        "observed duration",
+                        {"mean": observed_duration.mean, "count": observed_duration.count, "multiplier_vs_p95": multiplier},
+                    ),
+                    novelty=20.0,
+                    magnitude=min(100.0, 25.0 * multiplier),
+                    sensitivity=70.0,
+                    explanation=(
+                        f"Observed mean duration is {multiplier:.1f}x the accepted p95 "
+                        f"({observed_duration.mean:.6g}s vs {float(baseline_p95):.6g}s)"
+                    ),
                 )
             )
         return tuple(deviations)

@@ -86,6 +86,8 @@ def test_online_behavior_statistics_are_bounded_and_include_quantiles(tmp_path: 
     assert statistics["average"] == 50.5
     assert statistics["reservoir_size"] == 20
     assert statistics["p10"] <= statistics["p50"] <= statistics["p90"] <= statistics["p95"] <= statistics["p99"]
+    assert len(statistics["histogram_bounds"]) == 9
+    assert statistics["histogram_bounds"] == sorted(statistics["histogram_bounds"])
     provenance = capture["profile"]["sampling_provenance"]
     assert provenance["strata"]["LIGHTWEIGHT"]["sample_count"] == 100
 
@@ -215,6 +217,8 @@ def test_guard_restores_signed_snapshot_baseline_after_restart(tmp_path: Path, m
     assert restored.state is BaselineState.ACCEPTED
     assert restored.baseline_id == accepted.baseline_id
     assert "api.example:443" in restored.profile.network_destinations
+    assert restored.profile.statistics["duration_seconds"]["p50"] == 0.25
+    assert restored.profile.sampling_provenance["strata"]["BEHAVIOR"]["sample_count"] == 1
 
     # A monitoring-policy change creates a different behavior generation and the
     # old accepted baseline is deliberately not restored.

@@ -237,10 +237,9 @@ def repair(
                             if result.equivalent is not True and not differential.reject_on_output_difference
                             else result.result
                         )
-                        selected_engine.observation.record_success(
-                            slot=runtime_target.slot,
+                        selected_engine.record_candidate_observation_success(
+                            target=runtime_target,
                             call_id=call_id,
-                            policy=runtime_target.policy.observation,
                             output=selected_output,
                             mode="differential",
                         )
@@ -452,10 +451,9 @@ def repair(
                         )
 
                 if version.candidate_id is not None:
-                    selected_engine.observation.record_success(
-                        slot=runtime_target.slot,
+                    selected_engine.record_candidate_observation_success(
+                        target=runtime_target,
                         call_id=call_id,
-                        policy=runtime_target.policy.observation,
                         output=output,
                     )
                 return output

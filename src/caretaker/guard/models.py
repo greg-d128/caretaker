@@ -62,6 +62,7 @@ class DeviationCategory(Enum):
     RUNTIME_CODE_CHANGE = auto()
     DEPENDENCY_CHANGE = auto()
     OUTPUT_BEHAVIOR_CHANGE = auto()
+    TIMING_DISTRIBUTION_CHANGE = auto()
     EXPLICIT_POLICY_VIOLATION = auto()
     OTHER = auto()
 
@@ -107,6 +108,10 @@ class BehaviorProfile:
     subprocesses: tuple[str, ...] = ()
     imports: tuple[str, ...] = ()
     dynamic_code_operations: tuple[str, ...] = ()
+    success_count: int = 0
+    failure_count: int = 0
+    statistics: Mapping[str, Any] = field(default_factory=dict)
+    sampling_provenance: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +126,10 @@ class BehaviorProfileSummary:
     subprocesses: tuple[str, ...]
     imports: tuple[str, ...]
     dynamic_code_operations: tuple[str, ...]
+    success_count: int = 0
+    failure_count: int = 0
+    statistics: Mapping[str, Any] = field(default_factory=dict)
+    sampling_provenance: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
