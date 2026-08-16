@@ -246,6 +246,11 @@ class CaretakerConsoleApp(App):
         padding: 0 1;
         align-vertical: middle;
     }
+    #behavior-selection-status {
+        height: 3;
+        padding: 0 2;
+        color: $text-muted;
+    }
     #behavior-subject { width: 1fr; min-width: 24; }
     #behavior-model { width: 1fr; min-width: 18; }
     #behavior-toolbar Button, #behavior-compare-actions Button, #behavior-manage-actions Button {
@@ -405,7 +410,7 @@ class CaretakerConsoleApp(App):
             with TabPane("Behavior", id="behavior"):
                 yield Static(
                     "Snapshots are evidence, not accuracy guarantees. Calls/target shows collection coverage; "
-                    "workload diversity and sampling policy still determine representativeness.",
+                    "a code change starts a new generation but earlier snapshots remain available for comparison.",
                     id="behavior-help",
                 )
                 with Horizontal(id="behavior-toolbar"):
@@ -421,22 +426,26 @@ class CaretakerConsoleApp(App):
                         yield Static("Behavior snapshots", id="behavior-list-title", classes="behavior-pane-title")
                         table = DataTable(id="behavior-table")
                         table.cursor_type = "row"
-                        table.add_columns("#", "A", "Created", "Subject", "Hash", "Calls/target", "Evidence", "Seal")
+                        table.add_columns("#", "A", "Created", "Subject", "Hash", "Coverage", "Evidence", "Seal")
                         yield table
                     with Vertical(classes="behavior-pane"):
                         yield Static("Selected snapshot / comparison", id="behavior-detail-title", classes="behavior-pane-title")
                         yield RichLog(id="behavior-output", wrap=True, markup=True)
+                yield Static(
+                    "Select a snapshot as B. Optionally use another snapshot as A; unavailable actions remain disabled.",
+                    id="behavior-selection-status",
+                )
                 with Horizontal(id="behavior-compare-actions"):
                     yield Input(placeholder="Ollama model for advisory analysis", id="behavior-model")
-                    yield Button("Compare live", id="behavior-compare-live")
-                    yield Button("Compare previous", id="behavior-compare-previous")
-                    yield Button("Set A", id="behavior-set-a")
-                    yield Button("Compare to A", id="behavior-compare-a")
-                    yield Button("LLM compare", id="behavior-assess-comparison")
+                    yield Button("B ↔ current runtime", id="behavior-compare-live", disabled=True)
+                    yield Button("B ↔ previous", id="behavior-compare-previous", disabled=True)
+                    yield Button("Use B as A", id="behavior-set-a", disabled=True)
+                    yield Button("A ↔ selected B", id="behavior-compare-a", disabled=True)
+                    yield Button("Explain comparison", id="behavior-assess-comparison", disabled=True)
                 with Horizontal(id="behavior-manage-actions"):
                     yield Button("LLM history", id="behavior-assess-history")
-                    yield Button("Archive", id="behavior-archive", variant="warning")
-                    yield Button("Delete", id="behavior-delete", variant="error")
+                    yield Button("Archive B", id="behavior-archive", variant="warning", disabled=True)
+                    yield Button("Delete B", id="behavior-delete", variant="error", disabled=True)
 
             with TabPane("Repair", id="repair"):
                 with Horizontal(id="repair-toolbar"):
@@ -1092,6 +1101,7 @@ class CaretakerConsoleApp(App):
             if not snapshot_id:
                 return
             self._selected_behavior_snapshot = snapshot_id
+            self._refresh_behavior_actions()
             subject = record.get("subject") or {}
             subject_value = (
                 subject.get("module_name")
@@ -1204,6 +1214,11 @@ class CaretakerConsoleApp(App):
         self._behavior_records = [
             dict(item) for item in response.get("snapshots", ()) if isinstance(item, dict)
         ]
+        snapshot_ids = {str(item.get("snapshot_id") or "") for item in self._behavior_records}
+        if self._selected_behavior_snapshot not in snapshot_ids:
+            self._selected_behavior_snapshot = None
+        if self._behavior_compare_anchor not in snapshot_ids:
+            self._behavior_compare_anchor = None
         table.clear()
         for index, record in enumerate(self._behavior_records, start=1):
             profile = record.get("profile") or {}
@@ -1238,14 +1253,73 @@ class CaretakerConsoleApp(App):
             output.write(
                 "No behavior snapshots have been captured. Capture a function target or module to begin a code-hash-scoped behavior history."
             )
+        self._refresh_behavior_actions()
+
+    def _behavior_record(self, snapshot_id: str | None) -> dict[str, Any] | None:
+        return next(
+            (
+                item for item in self._behavior_records
+                if str(item.get("snapshot_id") or "") == str(snapshot_id or "")
+            ),
+            None,
+        )
+
+    def _behavior_has_previous(self, selected: dict[str, Any] | None) -> bool:
+        if selected is None:
+            return False
+        subject = selected.get("subject_key")
+        created = str(selected.get("created_at") or "")
+        return any(
+            item.get("subject_key") == subject
+            and str(item.get("created_at") or "") < created
+            for item in self._behavior_records
+        )
+
+    def _refresh_behavior_actions(self) -> None:
+        selected = self._behavior_record(self._selected_behavior_snapshot)
+        anchor = self._behavior_record(self._behavior_compare_anchor)
+        self.query_one("#behavior-compare-live", Button).disabled = not (
+            selected and self._application_running
+        )
+        self.query_one("#behavior-compare-previous", Button).disabled = not self._behavior_has_previous(selected)
+        self.query_one("#behavior-set-a", Button).disabled = selected is None
+        self.query_one("#behavior-compare-a", Button).disabled = not (
+            selected and anchor and selected is not anchor
+        )
+        self.query_one("#behavior-assess-comparison", Button).disabled = self._behavior_last_comparison is None
+        self.query_one("#behavior-archive", Button).disabled = selected is None
+        self.query_one("#behavior-delete", Button).disabled = selected is None
+
+        def identity(record: dict[str, Any] | None) -> str:
+            if record is None:
+                return "not set"
+            return (
+                f"{record.get('subject_key') or '-'} "
+                f"[{self._behavior_short_hash(record.get('code_hash'))}] "
+                f"snapshot {self._behavior_short_hash(record.get('snapshot_id'))}"
+            )
+
+        available = []
+        if selected and self._application_running:
+            available.append("B↔runtime")
+        if self._behavior_has_previous(selected):
+            available.append("B↔previous")
+        if selected and anchor and selected is not anchor:
+            available.append("A↔B (cross-generation allowed)")
+        self.query_one("#behavior-selection-status", Static).update(
+            f"A: {identity(anchor)}  |  Selected B: {identity(selected)}  |  "
+            f"Available: {', '.join(available) if available else 'select a suitable snapshot'}"
+        )
 
     @staticmethod
     def _behavior_evidence(record: dict[str, Any]) -> tuple[str, str]:
         profile = record.get("profile") or {}
-        calls = int(profile.get("call_count") or 0)
+        calls = int(profile.get("coverage_call_count", profile.get("call_count")) or 0)
+        coverage_kind = str(profile.get("coverage_kind") or "snapshot")
         provenance = profile.get("sampling_provenance") or {}
         target = int(provenance.get("statistics_target") or 0)
-        calls_target = f"{calls}/{target}" if target else f"{calls}/?"
+        prefix = "gen " if coverage_kind == "generation" else "window "
+        calls_target = prefix + (f"{calls}/{target}" if target else f"{calls}/?")
         if calls <= 0:
             return "NO DATA", calls_target
         if not target:
@@ -1361,6 +1435,7 @@ class CaretakerConsoleApp(App):
 
     def _show_behavior_comparison(self, comparison: dict[str, Any]) -> None:
         self._behavior_last_comparison = comparison
+        self._refresh_behavior_actions()
         subject_a = comparison.get("subject_a") or "-"
         subject_b = comparison.get("subject_b") or "-"
         self.query_one("#behavior-detail-title", Static).update(

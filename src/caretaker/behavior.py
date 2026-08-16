@@ -423,10 +423,43 @@ class BehaviorSnapshotStore:
 
     def list_summaries(self, *, limit: int = 200) -> tuple[dict[str, Any], ...]:
         """Return bounded metadata suitable for an operator list view."""
-        rows = self.list()[:max(1, limit)]
+        all_rows = self.list()
+        cumulative_reasons = {
+            "sample-target-reached",
+            "maximum-snapshot-age-reached",
+            "guard-baseline-accepted",
+        }
+        generation_totals: dict[tuple[str, str], tuple[int, int]] = {}
+        snapshot_progress: dict[str, tuple[int, int]] = {}
+        ordered_rows = sorted(
+            all_rows,
+            key=lambda item: (
+                str(item.get("subject_key") or ""),
+                str(item.get("generation_id") or ""),
+                int(item.get("snapshot_sequence") or 0),
+                str(item.get("created_at") or ""),
+            ),
+        )
+        for row in ordered_rows:
+            if row.get("seal_reason") not in cumulative_reasons:
+                continue
+            key = (str(row.get("subject_key") or ""), str(row.get("generation_id") or ""))
+            calls, snapshots = generation_totals.get(key, (0, 0))
+            profile = row.get("profile") or {}
+            progress = (calls + int(profile.get("call_count") or 0), snapshots + 1)
+            generation_totals[key] = progress
+            snapshot_progress[str(row.get("snapshot_id") or "")] = progress
+        rows = all_rows[:max(1, limit)]
         summaries = []
         for row in rows:
             profile = dict(row.get("profile") or {})
+            key = (str(row.get("subject_key") or ""), str(row.get("generation_id") or ""))
+            window_calls = int(profile.get("call_count") or 0)
+            cumulative = row.get("seal_reason") in cumulative_reasons
+            generation_calls, generation_snapshots = snapshot_progress.get(
+                str(row.get("snapshot_id") or ""),
+                (window_calls, 1),
+            )
             summaries.append({
                 key: row.get(key)
                 for key in (
@@ -451,6 +484,9 @@ class BehaviorSnapshotStore:
                     "success_count": int(profile.get("success_count") or 0),
                     "failure_count": int(profile.get("failure_count") or 0),
                     "sampling_provenance": dict(profile.get("sampling_provenance") or {}),
+                    "coverage_call_count": generation_calls if cumulative else window_calls,
+                    "coverage_snapshot_count": generation_snapshots if cumulative else 1,
+                    "coverage_kind": "generation" if cumulative else "snapshot",
                 }
             })
         return tuple(summaries)

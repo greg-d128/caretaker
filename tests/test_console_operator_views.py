@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+
 from caretaker.console import CaretakerConsoleApp
+from textual.widgets import Button, Static
 
 
 def test_target_runtime_state_marks_candidate_probation_as_validating():
@@ -111,10 +114,53 @@ def test_behavior_evidence_distinguishes_preliminary_from_collection_target():
             "call_count": 1,
             "sampling_provenance": {"statistics_target": 1000},
         }
-    }) == ("PRELIMINARY", "1/1000")
+    }) == ("PRELIMINARY", "window 1/1000")
     assert CaretakerConsoleApp._behavior_evidence({
         "profile": {
             "call_count": 1000,
             "sampling_provenance": {"statistics_target": 1000},
         }
-    }) == ("TARGET REACHED", "1000/1000")
+    }) == ("TARGET REACHED", "window 1000/1000")
+    assert CaretakerConsoleApp._behavior_evidence({
+        "profile": {
+            "call_count": 1,
+            "coverage_call_count": 12,
+            "coverage_kind": "generation",
+            "sampling_provenance": {"statistics_target": 1000},
+        }
+    }) == ("PRELIMINARY", "gen 12/1000")
+
+
+def test_behavior_actions_explain_and_enforce_a_b_workflow(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            app._application_running = True
+            app._behavior_records = [
+                {
+                    "snapshot_id": "older",
+                    "subject_key": "function:lab.probe",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "code_hash": "a" * 64,
+                },
+                {
+                    "snapshot_id": "newer",
+                    "subject_key": "function:lab.probe",
+                    "created_at": "2026-01-02T00:00:00+00:00",
+                    "code_hash": "b" * 64,
+                },
+            ]
+            app._selected_behavior_snapshot = "newer"
+            app._refresh_behavior_actions()
+            assert app.query_one("#behavior-compare-live", Button).disabled is False
+            assert app.query_one("#behavior-compare-previous", Button).disabled is False
+            assert app.query_one("#behavior-compare-a", Button).disabled is True
+
+            app._behavior_compare_anchor = "older"
+            app._refresh_behavior_actions()
+            assert app.query_one("#behavior-compare-a", Button).disabled is False
+            status = str(app.query_one("#behavior-selection-status", Static).render())
+            assert "cross-generation allowed" in status
+
+    asyncio.run(exercise())

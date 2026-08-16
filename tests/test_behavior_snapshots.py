@@ -75,6 +75,24 @@ def test_snapshot_list_summaries_omit_large_profile_details(tmp_path: Path):
     assert "filesystem_roots" not in summaries[0]["profile"]
 
 
+def test_snapshot_summaries_accumulate_disjoint_generation_windows(tmp_path: Path):
+    store = BehaviorSnapshotStore(tmp_path)
+    capture = _capture(code_hash="a" * 64, events=3)
+    capture["seal_reason"] = "sample-target-reached"
+    capture["profile"]["call_count"] = 1
+    capture["profile"]["sampling_provenance"] = {"statistics_target": 1000}
+    store.create(capture)
+    store.create(capture)
+    store.create(capture)
+
+    summaries = store.list_summaries()
+
+    assert len(summaries) == 3
+    assert {item["profile"]["coverage_call_count"] for item in summaries} == {1, 2, 3}
+    assert {item["profile"]["coverage_snapshot_count"] for item in summaries} == {1, 2, 3}
+    assert {item["profile"]["coverage_kind"] for item in summaries} == {"generation"}
+
+
 def test_archive_contains_manifest_and_removes_snapshot(tmp_path: Path):
     store = BehaviorSnapshotStore(tmp_path)
     envelope = store.create(_capture(code_hash="a" * 64, events=10))
