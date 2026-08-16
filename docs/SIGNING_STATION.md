@@ -27,6 +27,49 @@ The target displays the manifest SHA-256, asks the configured GnuPG environment 
 
 Run the target separately for keys A, B, and C, preferably in independent signing environments as described below. The Make target is convenience, not a replacement for manifest review or threshold independence.
 
+## Reviewable Make workflow
+
+The coordinator validates the finalized public root and generates both manifests:
+
+```bash
+make root-check PUBLIC_KEYS='caretaker-key-a.asc caretaker-key-b.asc caretaker-key-c.asc'
+make release-check PUBLIC_KEYS='caretaker-key-a.asc caretaker-key-b.asc caretaker-key-c.asc'
+make manifests RELEASE_MANIFEST_VERSION=1 PROTECTED_MANIFEST_VERSION=1
+make inspect-integrity
+```
+
+`root-check` rejects placeholder or duplicate primary fingerprints, role/slot
+mismatches, non-canonical JSON, unmatched protected paths, secret material in a
+supplied certificate, and certificates without usable signing subkeys.
+Manifest targets refuse to replace an existing manifest unless the operator
+explicitly supplies `FORCE=1` after deciding that regeneration is intended.
+
+On signing station A, after independently comparing the document hashes:
+
+```bash
+make signing-check KEY_SLOT=a SIGNING_KEY=FULL_PRIMARY_FINGERPRINT_A
+make sign-all KEY_SLOT=a SIGNING_KEY=FULL_PRIMARY_FINGERPRINT_A
+```
+
+Stations B and C use their own slot and primary fingerprint. `signing-check`
+requires the slot to match `root.json` and requires a usable secret signing
+subkey. The certification-only primary identity need not perform the signature.
+
+After collecting the three public certificates and all detached signatures in
+one directory, perform complete publication verification:
+
+```bash
+make verify-all PUBLICATION_DIR=.
+```
+
+For a single detached signature already known to the local GnuPG keyring:
+
+```bash
+make verify-signature \
+  MANIFEST=release-manifest.json \
+  SIGNATURE=release-manifest.json.key-a.asc
+```
+
 A dedicated Raspberry Pi can be used as a medium-assurance research signing environment when it is narrowly configured and normally offline.
 
 ## Recommended role
