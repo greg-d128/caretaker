@@ -652,9 +652,13 @@ class CaretakerConsoleApp(App):
             return
         try:
             status = await self._request("status")
-        except Exception:
+        except Exception as exc:
             self._application_running = False
-            self._offline_overview(reason="Caretaker supervisor control socket is unavailable")
+            message = str(exc).strip()
+            reason = f"{type(exc).__name__}: {message}" if message else type(exc).__name__
+            self._offline_overview(
+                reason=f"Caretaker supervisor control socket is unavailable: {reason}"
+            )
             return
 
         self._last_status = status
@@ -885,27 +889,18 @@ class CaretakerConsoleApp(App):
             for target in response.get("targets", ())
             if isinstance(target, dict)
         ]
-        state_results = await asyncio.gather(
-            *(
-                self._request(
-                    "runtime-target-state",
-                    target=str(target.get("target_id") or ""),
-                )
-                for target in self._target_records
-                if target.get("target_id")
-            ),
-            return_exceptions=True,
-        )
-        state_index = 0
         for target in self._target_records:
             if not target.get("target_id"):
                 target["slot_state"] = ""
                 target["candidate_state"] = ""
                 target["status"] = self._target_status(target)
                 continue
-            state_result = state_results[state_index]
-            state_index += 1
-            if isinstance(state_result, Exception):
+            try:
+                state_result = await self._request(
+                    "runtime-target-state",
+                    target=str(target["target_id"]),
+                )
+            except Exception:
                 slot_state, candidate_state = "", ""
             else:
                 slot_state, candidate_state = self._target_runtime_states(state_result)
@@ -949,17 +944,16 @@ class CaretakerConsoleApp(App):
                 decisions = [dict(item) for item in response.get("decisions", ()) if isinstance(item, dict)]
             except Exception:
                 decisions = []
-            responses = await asyncio.gather(
-                *(
-                    asyncio.gather(
+            responses = []
+            for target in targets:
+                responses.append(
+                    await asyncio.gather(
                         self._request("runtime-guard-summary", target=str(target["target_id"])),
                         self._request("runtime-guard-deviations", target=str(target["target_id"]), limit=100),
                         self._request("runtime-guard-inspections", target=str(target["target_id"]), limit=100),
                         return_exceptions=True,
                     )
-                    for target in targets
                 )
-            )
         else:
             responses = [()] * len(targets)
 
