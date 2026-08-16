@@ -182,7 +182,10 @@ class SocketLogServer:
         self._threads: list[threading.Thread] = []
         self._connections: set[socket.socket] = set()
         self._connection_lock = threading.RLock()
+        self._accept_lock = threading.Lock()
         self._socket: socket.socket | None = None
+        self._serving = threading.Event()
+        self._serve_done = threading.Event()
 
     def start(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -200,28 +203,44 @@ class SocketLogServer:
         if self._socket is None:
             self.start()
         assert self._socket is not None
-        while not self._stop.is_set():
-            try:
-                connection, _ = self._socket.accept()
-            except TimeoutError:
-                continue
-            except OSError:
-                if self._stop.is_set():
-                    break
-                raise
-            pid, uid, _gid = peer_credentials(connection)
-            if self.allowed_uids is not None and uid not in self.allowed_uids:
-                connection.close()
-                continue
-            with self._connection_lock:
-                self._connections.add(connection)
-            thread = threading.Thread(target=self._handle, args=(connection, pid, uid), daemon=True)
-            thread.start()
-            self._threads.append(thread)
+        self._serve_done.clear()
+        self._serving.set()
+        try:
+            while not self._stop.is_set():
+                try:
+                    # Registration and shutdown are serialized so stop() cannot
+                    # miss a connection between accept() and _connections.add().
+                    with self._accept_lock:
+                        if self._stop.is_set():
+                            break
+                        connection, _ = self._socket.accept()
+                        with self._connection_lock:
+                            self._connections.add(connection)
+                except TimeoutError:
+                    continue
+                except OSError:
+                    if self._stop.is_set():
+                        break
+                    raise
+                pid, uid, _gid = peer_credentials(connection)
+                if self.allowed_uids is not None and uid not in self.allowed_uids:
+                    with self._connection_lock:
+                        self._connections.discard(connection)
+                    connection.close()
+                    continue
+                thread = threading.Thread(target=self._handle, args=(connection, pid, uid), daemon=True)
+                thread.start()
+                self._threads.append(thread)
+        finally:
+            self._serving.clear()
+            self._serve_done.set()
 
     def _handle(self, connection: socket.socket, pid: int, uid: int) -> None:
         try:
-            while not self._stop.is_set():
+            # A graceful server stop ends acceptance but lets already accepted
+            # clients drain through EOF. The stop path force-closes clients that
+            # outlive its bounded grace period.
+            while True:
                 if self._stream:
                     length_data = _recv_exact(connection, 4)
                     if not length_data:
@@ -282,28 +301,42 @@ class SocketLogServer:
             connection.sendall(encoded)
 
     def stop(self, *, grace_seconds: float = 1.0) -> None:
-        # First allow already-connected clients a short bounded drain period.
-        deadline = time.monotonic() + max(0.0, grace_seconds)
+        # Drain queued and registered clients before stopping acceptance. The
+        # accept lock makes the pending/active snapshot atomic with registration.
+        grace = max(0.0, grace_seconds)
+        deadline = time.monotonic() + grace
         while self._socket is not None and time.monotonic() < deadline:
-            try:
-                pending = bool(select.select([self._socket], [], [], 0)[0])
-            except (OSError, ValueError):
-                pending = False
-            with self._connection_lock:
-                active = bool(self._connections)
-            if not pending and not active:
-                break
+            with self._accept_lock:
+                try:
+                    pending = bool(select.select([self._socket], [], [], 0)[0])
+                except (OSError, ValueError):
+                    pending = False
+                with self._connection_lock:
+                    active = bool(self._connections)
+                if not pending and not active:
+                    self._stop.set()
+                    try:
+                        self._socket.close()
+                    except OSError:
+                        pass
+                    break
             time.sleep(0.01)
+        else:
+            with self._accept_lock:
+                self._stop.set()
+                if self._socket is not None:
+                    try:
+                        self._socket.close()
+                    except OSError:
+                        pass
+        if self._serving.is_set():
+            self._serve_done.wait(timeout=max(0.0, deadline - time.monotonic()))
 
-        # Shutdown is now authoritative. Close the listening socket and actively
-        # interrupt every handler connection before returning. This guarantees
-        # callers may safely close the underlying SegmentWriter after stop().
-        self._stop.set()
-        if self._socket is not None:
-            try:
-                self._socket.close()
-            except OSError:
-                pass
+        # Clients that have closed their side now drain naturally through EOF.
+        for thread in tuple(self._threads):
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
+
+        # Force-close only handlers that did not finish inside the grace period.
         with self._connection_lock:
             connections = tuple(self._connections)
         for connection in connections:
@@ -316,7 +349,7 @@ class SocketLogServer:
             except OSError:
                 pass
         for thread in tuple(self._threads):
-            thread.join(timeout=max(1.0, grace_seconds + 1.0))
+            thread.join(timeout=1.0)
         self._threads = [thread for thread in self._threads if thread.is_alive()]
         self.path.unlink(missing_ok=True)
 
