@@ -115,7 +115,6 @@ policy = RepairPolicy(
         include_traceback=True,
         include_state_diff=True,
         previous_calls=3,
-        previous_incidents=3,
         maximum_log_records=200,
         send_argument_values=False,
         send_local_values=False,
@@ -125,12 +124,10 @@ policy = RepairPolicy(
         maximum_candidates_per_incident=5,
         maximum_repairs_per_target=5,
         cooldown_seconds=60.0,
-        structural_review_after_repairs=5,
     ),
     stability=StabilityPolicy(
         detect_oscillation=True,
         prevent_reactivation_of_failed_version=True,
-        require_regression_replay_before_reactivation=True,
     ),
 
     # Integrity restrictions remain part of the existing RepairPolicy.
@@ -145,7 +142,6 @@ policy = RepairPolicy(
         capture_exceptions=True,
         capture_timing=True,
         capture_arguments=True,
-        capture_results=True,
     ),
 
     # Guard observation requested for this target.
@@ -155,7 +151,6 @@ policy = RepairPolicy(
         observe_filesystem=True,
         observe_subprocesses=True,
         observe_imports=True,
-        baseline_name="remote-record-v1",
         include_guard_context_in_repair=True,
         validate_candidate_behavior=True,
         monitor_during_probation=True,

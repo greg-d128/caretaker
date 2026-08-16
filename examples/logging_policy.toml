@@ -45,8 +45,8 @@ level = 6
 
 [logging.retention]
 maximum_age_days = 90
-preserve_incident_segments = true
-preserve_baseline_segments = true
+preserve_incident_segments = false
+preserve_baseline_segments = false
 
 [logging.storage_emergency]
 minimum_free_bytes = 52428800

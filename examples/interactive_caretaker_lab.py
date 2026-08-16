@@ -734,7 +734,6 @@ COMMON_LOGGING = LoggingBinding(
     capture_exceptions=True,
     capture_timing=True,
     capture_arguments=True,
-    capture_results=True,
 )
 
 COMMON_GUARD = GuardBinding(
@@ -814,7 +813,6 @@ DIVIDE_POLICY = RepairPolicy(
         maximum_candidates_per_incident=2,
         maximum_repairs_per_target=20,
         cooldown_seconds=0.0,
-        structural_review_after_repairs=10,
     ),
     logging=COMMON_LOGGING,
     guard=COMMON_GUARD,
@@ -860,7 +858,6 @@ TRANSFORM_POLICY = RepairPolicy(
         maximum_candidates_per_incident=2,
         maximum_repairs_per_target=20,
         cooldown_seconds=0.0,
-        structural_review_after_repairs=10,
     ),
     logging=COMMON_LOGGING,
     guard=COMMON_GUARD,

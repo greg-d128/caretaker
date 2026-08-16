@@ -8,6 +8,7 @@ from caretaker import (
     ExceptionTrigger,
     ObservationPolicy,
     RegisteredCase,
+    RepairAuthority,
     RepairEngine,
     RepairPolicy,
     ReplaySafety,
@@ -53,6 +54,9 @@ policy = RepairPolicy(
         long_term_successful_executions=4,
         long_term_minimum_duration_seconds=0,
     ),
+    # This example deliberately demonstrates unattended activation. Production
+    # policies default to explicit operator approval.
+    authority=RepairAuthority.AUTOMATIC_ELIGIBLE_REPAIRS,
 )
 
 safe_divide = repair(

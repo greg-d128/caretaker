@@ -18,8 +18,8 @@ restore the target                    inspect logs / ask Guard LLM
 The separation is intentional. Application controls stay in the example while
 operator controls stay in Caretaker itself.
 
-> The lab records function arguments and results. Do not enter real passwords,
-> API keys, tokens, or other sensitive information.
+> The lab records selected function arguments and exception evidence. Do not
+> enter real passwords, API keys, tokens, or other sensitive information.
 
 ## Quick start
 
