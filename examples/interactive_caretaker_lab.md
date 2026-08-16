@@ -130,12 +130,17 @@ These demonstrate the difference between bad input and a bad implementation.
 3. In the Caretaker console, accept its Guard baseline.
 4. In the lab select **Malicious** and **Substitute behavior**.
 5. Run the target again.
-6. In the Caretaker console inspect:
+6. Wait up to one supervisor refresh interval, press `r`, and inspect:
    - Guard events;
    - deviations;
    - runtime inspections;
    - Guard decisions;
+   - Behavior snapshots for the same unchanged target code hash;
    - Repair events where applicable.
+
+The Guard tab is the live event view. The Behavior tab contains persisted
+statistical snapshots; this lab uses a one-completed-call snapshot threshold so
+each probe can be compared without running a production-sized sample window.
 
 The contained malicious variants intentionally add unrelated filesystem,
 subprocess, and loopback-network activity so Guard has obvious new behavior to

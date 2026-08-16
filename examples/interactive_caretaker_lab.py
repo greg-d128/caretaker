@@ -67,7 +67,7 @@ from caretaker import (
     instrument_dependencies,
 )
 from caretaker.guard.models import GuardDeviationAction
-from caretaker.guard.policy import CollectorPolicy, LLMReviewPolicy
+from caretaker.guard.policy import BehaviorSnapshotPolicy, CollectorPolicy, LLMReviewPolicy
 from caretaker.logging import (
     OperatorLoggingPolicy,
     configure as configure_logging,
@@ -654,11 +654,23 @@ if LAB_OLLAMA_MODEL:
         policy=GuardPolicy(
             collectors=LAB_GUARD_COLLECTORS,
             llm_review=LLMReviewPolicy(enabled=True),
+            snapshots=BehaviorSnapshotPolicy(
+                checkpoint_every_samples=1,
+                materialize_after_samples=1,
+            ),
         ),
         provider=OllamaBehaviorAssessmentProvider(model=LAB_OLLAMA_MODEL),
     )
 else:
-    GUARD = GuardEngine(policy=GuardPolicy(collectors=LAB_GUARD_COLLECTORS))
+    GUARD = GuardEngine(
+        policy=GuardPolicy(
+            collectors=LAB_GUARD_COLLECTORS,
+            snapshots=BehaviorSnapshotPolicy(
+                checkpoint_every_samples=1,
+                materialize_after_samples=1,
+            ),
+        )
+    )
 ENGINE = RepairEngine(provider=LabRepairProvider(), guard=GUARD)
 
 # The lab intentionally instruments a small slice of its standard-library dependency

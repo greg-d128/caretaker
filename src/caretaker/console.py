@@ -110,6 +110,17 @@ class CaretakerConsoleApp(App):
         padding: 0 1;
         background: $surface;
     }
+    #targets-filter-row, #logs-filter-row {
+        height: 4;
+        padding: 0 1;
+        align-vertical: middle;
+    }
+    #targets-filter-row Input, #logs-filter-row Input { width: 1fr; }
+    #targets-filter-row Button, #logs-filter-row Button {
+        width: auto;
+        min-width: 12;
+        margin-left: 1;
+    }
     #logs-split {
         height: 1fr;
         min-height: 0;
@@ -356,13 +367,15 @@ class CaretakerConsoleApp(App):
         with TabbedContent(initial="overview"):
             with TabPane("Overview", id="overview"):
                 yield Static("", id="overview-details")
-                yield Input(
-                    placeholder=(
-                        "Filter targets: text, status:validating, mode:automatic, "
-                        "authority:approval, guard:yes"
-                    ),
-                    id="targets-filter",
-                )
+                with Horizontal(id="targets-filter-row"):
+                    yield Input(
+                        placeholder=(
+                            "Filter targets: text, status:validating, mode:automatic, "
+                            "authority:approval, guard:yes"
+                        ),
+                        id="targets-filter",
+                    )
+                    yield Button("Clear filter", id="targets-filter-clear")
                 table = DataTable(id="targets-table")
                 table.cursor_type = "row"
                 table.add_columns(
@@ -390,6 +403,11 @@ class CaretakerConsoleApp(App):
                         yield Static("Select a Guard target", id="guard-detail-title", classes="context-pane-title")
                         yield RichLog(id="guard-output", wrap=True, markup=True)
             with TabPane("Behavior", id="behavior"):
+                yield Static(
+                    "Behavior shows persisted statistical snapshots. Use Guard Events for the live event stream; "
+                    "selecting an Overview target or related log supplies its target ID here.",
+                    id="behavior-help",
+                )
                 with Horizontal(id="behavior-toolbar"):
                     yield Input(
                         placeholder="Target id for function capture, or module name for module capture",
@@ -521,13 +539,15 @@ class CaretakerConsoleApp(App):
             with TabPane("Logs", id="logs"):
                 with Grid(id="logs-split"):
                     with Vertical(classes="logs-pane"):
-                        yield Input(
-                            placeholder=(
-                                "Filter logs: text, level:warn+, channel:guard, "
-                                "target:lab.divide, logger:name"
-                            ),
-                            id="logs-filter",
-                        )
+                        with Horizontal(id="logs-filter-row"):
+                            yield Input(
+                                placeholder=(
+                                    "Filter logs: text, level:warn+, channel:guard, "
+                                    "target:lab.divide, logger:name"
+                                ),
+                                id="logs-filter",
+                            )
+                            yield Button("Clear filter", id="logs-filter-clear")
                         table = DataTable(id="logs-table")
                         table.cursor_type = "row"
                         table.add_columns("#", "Time", "Level", "Channel", "Target", "Message")
@@ -1151,6 +1171,7 @@ class CaretakerConsoleApp(App):
         if not row:
             return
         target_id = str(row[0])
+        self.query_one("#behavior-subject", Input).value = target_id
         if not self._application_running:
             details = self.query_one("#target-details", RichLog)
             details.clear()
@@ -1987,6 +2008,15 @@ class CaretakerConsoleApp(App):
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button = event.button.id or ""
         try:
+            if button == "targets-filter-clear":
+                self.query_one("#targets-filter", Input).value = ""
+                self._apply_target_filter()
+                return
+            if button == "logs-filter-clear":
+                self.query_one("#logs-filter", Input).value = ""
+                self._apply_log_filter()
+                self._refresh_investigation_candidates()
+                return
             if button.startswith("behavior-"):
                 if button == "behavior-refresh":
                     await self.refresh_behavior()
