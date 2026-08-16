@@ -344,6 +344,19 @@ def main(argv: list[str] | None = None) -> int:
             )
             if response.get("ok") is False:
                 return response
+            live_profile = response.get("capture", {}).get("profile", {})
+            if int(live_profile.get("call_count") or 0) <= 0:
+                return {
+                    "ok": False,
+                    "error": {
+                        "message": (
+                            "The active unsaved behavior window contains no completed calls. "
+                            "This action does not execute the function. Run the function, refresh "
+                            "Behavior, and compare the newly persisted snapshot instead."
+                        ),
+                        "failure_kind": "empty-active-behavior-window",
+                    },
+                }
             current = wrap_snapshot(
                 snapshot_payload(
                     response["capture"],

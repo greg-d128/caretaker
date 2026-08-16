@@ -1503,6 +1503,7 @@ def compare_snapshots(
             "removed": sorted(before - after),
             "unchanged_count": len(before & after),
         }
+    semantic_changes = _semantic_behavior_changes(set_changes)
     before_rate = left["event_count"] / max(1, left["call_count"])
     after_rate = right["event_count"] / max(1, right["call_count"])
     left_duration = dict((left.get("statistics") or {}).get("duration_seconds") or {})
@@ -1537,8 +1538,45 @@ def compare_snapshots(
         "duration_statistics": duration_changes,
         "event_kind_changes": kind_changes,
         "resource_changes": set_changes,
+        "semantic_changes": semantic_changes,
+        "outcomes": {
+            "success": _numeric_change(
+                "success", int(left.get("success_count") or 0), int(right.get("success_count") or 0)
+            ),
+            "failure": _numeric_change(
+                "failure", int(left.get("failure_count") or 0), int(right.get("failure_count") or 0)
+            ),
+        },
         "tree_changes": _compare_children(older.get("children") or (), newer.get("children") or ()),
     }
+
+
+def _semantic_behavior_changes(resource_changes: Mapping[str, Mapping[str, Any]]) -> list[dict[str, str]]:
+    labels = {
+        "network_destinations": ("network", "contacting"),
+        "filesystem_roots": ("filesystem", "accessing"),
+        "subprocesses": ("subprocess", "launching"),
+        "imports": ("import", "importing"),
+        "dynamic_code_operations": ("dynamic code", "performing"),
+    }
+    changes: list[dict[str, str]] = []
+    for key, values in resource_changes.items():
+        kind, verb = labels.get(key, (key, "using"))
+        for value in values.get("added") or ():
+            changes.append({
+                "kind": kind,
+                "change": "started",
+                "value": str(value),
+                "description": f"Started {verb} {value}",
+            })
+        for value in values.get("removed") or ():
+            changes.append({
+                "kind": kind,
+                "change": "stopped",
+                "value": str(value),
+                "description": f"Stopped {verb} {value}",
+            })
+    return changes
 
 
 def _comparison_operand(snapshot: Mapping[str, Any], profile: Mapping[str, Any]) -> dict[str, Any]:

@@ -410,7 +410,8 @@ class CaretakerConsoleApp(App):
             with TabPane("Behavior", id="behavior"):
                 yield Static(
                     "Snapshots are evidence, not accuracy guarantees. Calls/target shows collection coverage; "
-                    "a code change starts a new generation but earlier snapshots remain available for comparison.",
+                    "a code change starts a new generation but earlier snapshots remain comparable. "
+                    "An active-window comparison reads unsaved observations; it never executes the function.",
                     id="behavior-help",
                 )
                 with Horizontal(id="behavior-toolbar"):
@@ -437,7 +438,7 @@ class CaretakerConsoleApp(App):
                 )
                 with Horizontal(id="behavior-compare-actions"):
                     yield Input(placeholder="Ollama model for advisory analysis", id="behavior-model")
-                    yield Button("B ↔ current runtime", id="behavior-compare-live", disabled=True)
+                    yield Button("B ↔ active unsaved window", id="behavior-compare-live", disabled=True)
                     yield Button("B ↔ previous", id="behavior-compare-previous", disabled=True)
                     yield Button("Use B as A", id="behavior-set-a", disabled=True)
                     yield Button("A ↔ selected B", id="behavior-compare-a", disabled=True)
@@ -1301,14 +1302,18 @@ class CaretakerConsoleApp(App):
 
         available = []
         if selected and self._application_running:
-            available.append("B↔runtime")
+            available.append("B↔active window (does not execute)")
         if self._behavior_has_previous(selected):
             available.append("B↔previous")
         if selected and anchor and selected is not anchor:
             available.append("A↔B (cross-generation allowed)")
+        next_step = ""
+        if selected and anchor is selected:
+            next_step = "  |  Next: run the function, Refresh, select the new snapshot as B"
         self.query_one("#behavior-selection-status", Static).update(
             f"A: {identity(anchor)}  |  Selected B: {identity(selected)}  |  "
             f"Available: {', '.join(available) if available else 'select a suitable snapshot'}"
+            f"{next_step}"
         )
 
     @staticmethod
@@ -1459,6 +1464,29 @@ class CaretakerConsoleApp(App):
         output.write(
             "[yellow]Collection targets indicate evidence volume, not guaranteed accuracy or workload representativeness.[/yellow]"
         )
+        semantic_changes = comparison.get("semantic_changes") or ()
+        output.write("\n[b]What changed in observed behavior[/b]")
+        if semantic_changes:
+            for change in semantic_changes[:40]:
+                marker = "+" if change.get("change") == "started" else "−"
+                output.write(f"  {marker} {change.get('description')}")
+            if len(semantic_changes) > 40:
+                output.write(f"  … {len(semantic_changes) - 40} more behavior changes")
+        else:
+            output.write(
+                "  No observed filesystem, network, subprocess, import, or dynamic-code resources were added or removed."
+            )
+        outcomes = comparison.get("outcomes") or {}
+        outcome_changes = [
+            change for change in outcomes.values()
+            if int(change.get("absolute") or 0) != 0
+        ]
+        if outcome_changes:
+            output.write("[b]Call outcome changes[/b]")
+            for change in outcome_changes:
+                output.write(
+                    f"  {change.get('label')}: {change.get('before', 0)} → {change.get('after', 0)}"
+                )
         code_changed = bool(comparison.get("code_hash_changed"))
         output.write(
             f"[b]Code generation[/b] {'CHANGED' if code_changed else 'same'}\n"

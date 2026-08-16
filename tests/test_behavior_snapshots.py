@@ -51,6 +51,20 @@ def test_snapshot_store_verifies_content_hash_and_compares_across_code_hashes(tm
     assert comparison["snapshot_a"]["subject_key"] == "function:lab.divide"
     assert comparison["snapshot_a"]["call_count"] == 10
     assert comparison["snapshot_b"]["snapshot_id"] == second["snapshot"]["snapshot_id"]
+    assert comparison["semantic_changes"] == [
+        {
+            "kind": "network",
+            "change": "started",
+            "value": "new.example:443",
+            "description": "Started contacting new.example:443",
+        },
+        {
+            "kind": "network",
+            "change": "stopped",
+            "value": "api.example:443",
+            "description": "Stopped contacting api.example:443",
+        },
+    ]
     assert comparison["events"]["absolute"] == 10
     assert comparison["resource_changes"]["network_destinations"]["added"] == [
         "new.example:443"
