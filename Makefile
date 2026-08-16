@@ -4,7 +4,7 @@ BIN     := $(VENV)/bin
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup test compile check wheel build verify-wheel lab lab-console profile clean distclean
+.PHONY: help setup test compile check wheel build verify-wheel sign lab lab-console profile clean distclean
 
 help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <command>\n\nCommands:\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -26,6 +26,12 @@ wheel: ## Build the wheel in dist/
 
 build: ## Build the wheel and source distribution in dist/
 	$(BIN)/python -m build
+
+sign: ## Sign MANIFEST with SIGNING_KEY and write SIGNATURE
+	@test -n "$(MANIFEST)" || { echo "MANIFEST is required" >&2; exit 2; }
+	@test -n "$(SIGNING_KEY)" || { echo "SIGNING_KEY is required" >&2; exit 2; }
+	@test -n "$(SIGNATURE)" || { echo "SIGNATURE is required" >&2; exit 2; }
+	./scripts/sign-code.sh "$(MANIFEST)" "$(SIGNING_KEY)" "$(SIGNATURE)"
 
 lab: ## Run the interactive Caretaker lab under caretaker-run
 	PYTHONPATH=src:. $(BIN)/python -m caretaker.run --data-directory ./examples/.caretaker-interactive-lab/caretaker-data examples.interactive_caretaker_lab

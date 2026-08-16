@@ -8,6 +8,7 @@
 - Publish the validation, isolation, same-UID control, VM-attestation, policy-truthfulness, multiprocess, and Repair restart debts in the future-work ledger.
 - Add a private vulnerability-reporting policy, supported Python/Linux scope, a current development verification report, and Forgejo CI for CPython 3.11 through 3.13.
 - Correct the Guard security description of policy-enabled automatic baseline acceptance and convert its strict expected-failure regression into a passing documentation-conformance test.
+- Add a small reviewable `scripts/sign-code.sh` GnuPG wrapper and `make sign` target for producing and immediately verifying one detached signature over an already-reviewed canonical manifest.
 
 ### Policy truthfulness and enforcement
 

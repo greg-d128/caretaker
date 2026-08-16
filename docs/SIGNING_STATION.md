@@ -1,6 +1,21 @@
 # Separate offline signing station
 
-The signing procedure is deliberately outside the Caretaker project. Caretaker contains no signing command and no private-key handling code.
+Release-signing authority and private-key handling remain outside the Caretaker runtime. The repository includes a small `scripts/sign-code.sh` convenience wrapper that delegates one detached signature to GnuPG; it contains no key import, passphrase, private-key storage, or cryptographic implementation.
+
+## Simple manifest signing
+
+After generating and reviewing a canonical manifest, sign it with one full primary fingerprint and an explicit output path:
+
+```bash
+make sign \
+  MANIFEST=release-manifest.json \
+  SIGNING_KEY=FULL_PRIMARY_FINGERPRINT_A \
+  SIGNATURE=release-manifest.json.key-a.asc
+```
+
+The target displays the manifest SHA-256, asks the configured GnuPG environment to create an armored detached signature, and immediately runs `gpg --verify`. It refuses to overwrite an existing signature. The script does not generate a manifest, select a key, import private material, or decide that the reviewed bytes are suitable for release.
+
+Run the target separately for keys A, B, and C, preferably in independent signing environments as described below. The Make target is convenience, not a replacement for manifest review or threshold independence.
 
 A dedicated Raspberry Pi can be used as a medium-assurance research signing environment when it is narrowly configured and normally offline.
 
