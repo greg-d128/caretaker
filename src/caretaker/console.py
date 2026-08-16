@@ -78,6 +78,30 @@ class CaretakerConsoleApp(App):
         text-style: bold;
         border-bottom: solid $accent;
     }
+    #data-status, #operator-context {
+        height: 3;
+        padding: 0 2;
+        color: $text-muted;
+        border-bottom: solid $surface-lighten-2;
+    }
+    #operator-context { layout: horizontal; }
+    #operator-context-label { width: 1fr; }
+    #context-clear { width: auto; min-width: 14; }
+    #attention-split {
+        height: 1fr;
+        min-height: 0;
+        grid-size: 2 1;
+        grid-columns: 3fr 2fr;
+        grid-rows: 1fr;
+        grid-gutter: 1;
+    }
+    .attention-pane {
+        height: 1fr;
+        min-height: 0;
+        border: solid $surface-lighten-2;
+    }
+    #attention-actions { height: 4; padding: 0 1; align-vertical: middle; }
+    #attention-actions Button { width: auto; min-width: 16; margin-left: 1; }
     #overview-details {
         height: 6;
         padding: 1 2;
@@ -365,11 +389,44 @@ class CaretakerConsoleApp(App):
         self._investigation_records: list[dict[str, Any]] = []
         self._selected_investigation_record: dict[str, Any] | None = None
         self._selected_log_record: dict[str, Any] | None = None
+        self._attention_records: list[dict[str, Any]] = []
+        self._selected_attention_record: dict[str, Any] | None = None
+        self._context_target: str | None = None
+        self._context_incident: str | None = None
+        self._context_call: str | None = None
+        self._logs_source = "not loaded"
+        self._authority_source = "not loaded"
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield Static("Connecting to Caretaker...", id="operator-status")
-        with TabbedContent(initial="overview"):
+        yield Static("Data has not been refreshed yet", id="data-status")
+        with Horizontal(id="operator-context"):
+            yield Static(
+                "Context: all targets and incidents | Select an item to focus related views",
+                id="operator-context-label",
+            )
+            yield Button("Clear context", id="context-clear", disabled=True)
+        with TabbedContent(initial="attention"):
+            with TabPane("Attention", id="attention"):
+                yield Static(
+                    "Start here. This queue combines active incidents, Guard findings, failed Repairs, "
+                    "pending approvals, policy violations, and degraded runtime components.",
+                    classes="context-pane-title",
+                )
+                with Grid(id="attention-split"):
+                    with Vertical(classes="attention-pane"):
+                        yield Static("Items requiring operator attention", id="attention-list-title", classes="context-pane-title")
+                        table = DataTable(id="attention-table")
+                        table.cursor_type = "row"
+                        table.add_columns("#", "Priority", "Kind", "Target", "Time", "Summary")
+                        yield table
+                    with Vertical(classes="attention-pane"):
+                        yield Static("Select an item to see why it matters", id="attention-detail-title", classes="context-pane-title")
+                        yield RichLog(id="attention-output", wrap=True, markup=True)
+                        with Horizontal(id="attention-actions"):
+                            yield Button("Open related view", id="attention-open", disabled=True, variant="primary")
+                            yield Button("Investigate evidence", id="attention-investigate", disabled=True)
             with TabPane("Overview", id="overview"):
                 yield Static("", id="overview-details")
                 with Horizontal(id="targets-filter-row"):
@@ -1040,12 +1097,163 @@ class CaretakerConsoleApp(App):
     def _activate_tab(self, tab_id: str) -> None:
         self.query_one(TabbedContent).active = tab_id
 
+    def _set_operator_context(
+        self,
+        *,
+        target: str | None = None,
+        incident: str | None = None,
+        call: str | None = None,
+    ) -> None:
+        self._context_target = target or None
+        self._context_incident = incident or None
+        self._context_call = call or None
+        parts = []
+        if self._context_target:
+            parts.append(f"target={self._context_target}")
+        if self._context_incident:
+            parts.append(f"incident={self._context_incident}")
+        if self._context_call:
+            parts.append(f"call={self._context_call}")
+        self.query_one("#operator-context-label", Static).update(
+            "Context: " + (" | ".join(parts) if parts else "all targets and incidents")
+        )
+        self.query_one("#context-clear", Button).disabled = not parts
+
+    @staticmethod
+    def _attention_priority(value: Any) -> tuple[int, str]:
+        text = str(value or "INFO").upper()
+        order = {"CRITICAL": 0, "ERROR": 1, "HIGH": 1, "WARNING": 2, "WARN": 2, "MEDIUM": 2, "INFO": 3}
+        return order.get(text, 3), text
+
+    def _refresh_attention(self) -> None:
+        records: list[dict[str, Any]] = []
+        runtime = self._last_runtime
+        for incident in runtime.get("active_incidents", ()) if runtime else ():
+            records.append({
+                "priority": "HIGH",
+                "kind": "ACTIVE INCIDENT",
+                "target_id": str(incident.get("target_id") or "-"),
+                "timestamp": str(incident.get("created_at") or incident.get("occurred_at") or ""),
+                "summary": str(incident.get("summary") or incident.get("trigger") or "Active incident requires review"),
+                "related_tab": "repair",
+                "payload": dict(incident),
+                "incident_id": str(incident.get("incident_id") or ""),
+            })
+        for record in self._guard_records:
+            for deviation in record.get("deviations", ()):
+                explanations = deviation.get("explanations") or () if isinstance(deviation, dict) else ()
+                records.append({
+                    "priority": str(deviation.get("severity") or "WARNING") if isinstance(deviation, dict) else "WARNING",
+                    "kind": "GUARD DEVIATION",
+                    "target_id": str(record.get("target_id") or "-"),
+                    "timestamp": str(deviation.get("created_at") or deviation.get("occurred_at") or "") if isinstance(deviation, dict) else "",
+                    "summary": str(explanations[0] if explanations else "Observed behavior differs from the accepted baseline"),
+                    "related_tab": "guard",
+                    "payload": dict(deviation) if isinstance(deviation, dict) else {"value": deviation},
+                })
+        for record in self._repair_records:
+            if record.get("state") not in {"WAITING", "FAILED", "ROLLBACK", "BLOCKED", "ERROR"}:
+                continue
+            records.append({
+                "priority": "HIGH" if record.get("state") in {"WAITING", "FAILED", "ERROR"} else "WARNING",
+                "kind": f"REPAIR {record.get('state')}",
+                "target_id": str(record.get("target_id") or "-"),
+                "timestamp": str(record.get("timestamp") or ""),
+                "summary": str(record.get("description") or "Repair requires review"),
+                "related_tab": "repair",
+                "payload": dict(record),
+                "incident_id": str((record.get("payload") or {}).get("incident_id") or "") if isinstance(record.get("payload"), dict) else "",
+            })
+        for violation in self._authority_snapshot.get("violations", ()):
+            if not isinstance(violation, dict):
+                continue
+            records.append({
+                "priority": "HIGH",
+                "kind": "POLICY VIOLATION",
+                "target_id": str(violation.get("target") or violation.get("target_id") or "-"),
+                "timestamp": str(violation.get("created_at") or ""),
+                "summary": str(violation.get("message") or violation.get("reason") or "Policy guarantee is violated"),
+                "related_tab": "policy",
+                "payload": dict(violation),
+            })
+        for component in runtime.get("degraded_components", ()) if runtime else ():
+            records.append({
+                "priority": "WARNING",
+                "kind": "DEGRADED",
+                "target_id": "-",
+                "timestamp": "",
+                "summary": f"Runtime capability is degraded: {component}",
+                "related_tab": "overview",
+                "payload": {"component": component},
+            })
+        records.sort(key=lambda item: (self._attention_priority(item.get("priority"))[0], str(item.get("timestamp") or "")), reverse=False)
+        self._attention_records = records
+        table = self.query_one("#attention-table", DataTable)
+        table.clear()
+        for index, record in enumerate(records, start=1):
+            timestamp = str(record.get("timestamp") or "")
+            table.add_row(
+                index,
+                self._attention_priority(record.get("priority"))[1],
+                str(record.get("kind") or "-"),
+                self._compact_log_text(record.get("target_id"), limit=26) or "-",
+                timestamp[:19].replace("T", " ") if timestamp else "-",
+                self._compact_log_text(record.get("summary"), limit=72),
+            )
+        self.query_one("#attention-list-title", Static).update(
+            f"Items requiring operator attention: {len(records)}"
+        )
+        if not records:
+            output = self.query_one("#attention-output", RichLog)
+            output.clear()
+            output.write("No active issues were found in the currently loaded live and persisted evidence.")
+
+    def _update_data_status(self) -> None:
+        refreshed = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+        runtime_source = "LIVE" if self._application_running else "UNAVAILABLE/CACHED"
+        self.query_one("#data-status", Static).update(
+            f"Refreshed {refreshed}  |  Runtime {runtime_source}  |  "
+            f"Logs {self._logs_source.upper()} (latest 200)  |  "
+            f"Policy {self._authority_source.upper()}  |  Lists may be bounded"
+        )
+
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if event.data_table.id == "attention-table":
+            row = event.data_table.get_row(event.row_key)
+            if not row:
+                return
+            try:
+                record = self._attention_records[int(row[0]) - 1]
+            except (TypeError, ValueError, IndexError):
+                return
+            self._selected_attention_record = record
+            target = str(record.get("target_id") or "")
+            self._set_operator_context(
+                target=target if target != "-" else None,
+                incident=str(record.get("incident_id") or "") or None,
+            )
+            self.query_one("#attention-detail-title", Static).update(
+                f"{record.get('kind', 'Issue')} | {target or 'unscoped'}"
+            )
+            self.query_one("#attention-open", Button).disabled = False
+            self.query_one("#attention-investigate", Button).disabled = False
+            output = self.query_one("#attention-output", RichLog)
+            output.clear()
+            output.write(
+                f"[b]Why this needs attention[/b]\n{record.get('summary') or '-'}\n"
+                f"[b]Priority[/b] {record.get('priority') or '-'}\n"
+                f"[b]Recommended next step[/b] Open {record.get('related_tab') or 'the related view'} "
+                "or investigate the correlated evidence."
+            )
+            output.write("\n[b]Technical details[/b]")
+            output.write(json.dumps(record.get("payload") or {}, indent=2, sort_keys=True, default=str))
+            return
         if event.data_table.id == "guard-table":
             row = event.data_table.get_row(event.row_key)
             if not row:
                 return
             target_id = str(row[0])
+            self._set_operator_context(target=target_id)
             record = next((item for item in self._guard_records if item["target_id"] == target_id), None)
             if record is None:
                 return
@@ -1062,6 +1270,11 @@ class CaretakerConsoleApp(App):
                 return
             self._selected_investigation_record = record
             target = str(record.get("target_id") or "")
+            self._set_operator_context(
+                target=target or None,
+                incident=str(record.get("incident_id") or "") or None,
+                call=str(record.get("call_id") or "") or None,
+            )
             if target:
                 self.query_one("#investigate-target", Input).value = target
             self.query_one("#investigate-detail-title", Static).update(
@@ -1084,6 +1297,11 @@ class CaretakerConsoleApp(App):
                 f"{record.get('channel', '-')} | {record.get('target_id') or 'no target'}"
             )
             self._selected_log_record = record
+            self._set_operator_context(
+                target=str(record.get("target_id") or "") or None,
+                incident=str(record.get("incident_id") or "") or None,
+                call=str(record.get("call_id") or "") or None,
+            )
             self.query_one("#logs-investigate", Button).disabled = False
             self.query_one("#logs-related", Button).disabled = False
             self._write_json("#logs-output", record)
@@ -1102,6 +1320,8 @@ class CaretakerConsoleApp(App):
             if not snapshot_id:
                 return
             self._selected_behavior_snapshot = snapshot_id
+            behavior_target = str((record.get("subject") or {}).get("target_id") or "")
+            self._set_operator_context(target=behavior_target or None)
             self._refresh_behavior_actions()
             subject = record.get("subject") or {}
             subject_value = (
@@ -1131,6 +1351,11 @@ class CaretakerConsoleApp(App):
             except (TypeError, ValueError, IndexError):
                 return
             self._selected_repair_record = record
+            payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+            self._set_operator_context(
+                target=str(record.get("target_id") or "") or None,
+                incident=str(payload.get("incident_id") or "") or None,
+            )
             self._repair_source_view = False
             self._selected_repair_approval = (
                 str(record.get("episode_id"))
@@ -1176,6 +1401,7 @@ class CaretakerConsoleApp(App):
         if not row:
             return
         target_id = str(row[0])
+        self._set_operator_context(target=target_id)
         self.query_one("#behavior-subject", Input).value = target_id
         if not self._application_running:
             details = self.query_one("#target-details", RichLog)
@@ -1592,6 +1818,8 @@ class CaretakerConsoleApp(App):
                 {"error": f"Unable to refresh behavior snapshots: {type(exc).__name__}: {exc}"},
             )
         await self.refresh_logs()
+        self._refresh_attention()
+        self._update_data_status()
 
     async def action_refresh(self) -> None:
         await self.refresh_all()
@@ -1761,8 +1989,10 @@ class CaretakerConsoleApp(App):
         try:
             response = await self._request("logs", limit=200)
             records = [dict(record) for record in response.get("records", []) if isinstance(record, dict)]
+            self._logs_source = "live supervisor"
         except Exception:
             records = self._local_log_records(200)
+            self._logs_source = "persisted fallback"
         self._log_records = self._sorted_log_records(records)
         self._selected_log_record = None
         self.query_one("#logs-investigate", Button).disabled = True
@@ -2041,8 +2271,10 @@ class CaretakerConsoleApp(App):
         try:
             response = await self._request("authority-status")
             snapshot = {key: value for key, value in response.items() if key != "ok"}
+            self._authority_source = "live supervisor"
         except Exception:
             snapshot = self._local_authority_snapshot()
+            self._authority_source = "persisted fallback" if snapshot else "unavailable"
         self._authority_snapshot = snapshot
         statuses = [dict(item) for item in snapshot.get("layer_status", ()) if isinstance(item, dict)]
         layers_by_id = {
@@ -2145,6 +2377,41 @@ class CaretakerConsoleApp(App):
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button = event.button.id or ""
         try:
+            if button == "context-clear":
+                self._set_operator_context()
+                return
+            if button in {"attention-open", "attention-investigate"}:
+                record = self._selected_attention_record
+                if record is None:
+                    raise ValueError("Select an attention item first")
+                target = str(record.get("target_id") or "")
+                target = target if target != "-" else ""
+                if button == "attention-investigate":
+                    if target:
+                        self.query_one("#investigate-target", Input).value = target
+                    self.query_one("#investigate-objective", Input).value = (
+                        f"Investigate {record.get('kind', 'issue')}: {record.get('summary', '')}"
+                    )
+                    related_logs = [
+                        item for item in self._log_records
+                        if not target or str(item.get("target_id") or "") == target
+                    ]
+                    self._refresh_investigation_candidates(related_logs, include_all=True)
+                    self._write_json("#investigate-output", record.get("payload") or record)
+                    self._activate_tab("investigate")
+                    return
+                related_tab = str(record.get("related_tab") or "overview")
+                if related_tab == "guard" and target:
+                    self._selected_guard_target = target
+                    guard_record = next(
+                        (item for item in self._guard_records if item.get("target_id") == target),
+                        None,
+                    )
+                    if guard_record:
+                        self.query_one("#guard-detail-title", Static).update(f"Guard target {target}")
+                        self._write_json("#guard-output", guard_record)
+                self._activate_tab(related_tab)
+                return
             if button == "targets-filter-clear":
                 self.query_one("#targets-filter", Input).value = ""
                 self._apply_target_filter()

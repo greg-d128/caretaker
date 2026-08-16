@@ -83,6 +83,18 @@ regardless of segment or writer return order. The left pane is a compact event
 list and the right pane shows the full JSON object for the selected record.
 Press `r` to refresh the console; a separate refresh button is not required.
 
+The console opens on **Attention**, an operator queue that combines active
+incidents, Guard deviations, failed or waiting Repair work, authority-policy
+violations, and degraded runtime capabilities. Selecting an item explains why
+it needs attention and provides direct navigation to its owning view or a
+correlated investigation.
+
+The header reports when the console last refreshed, whether runtime information
+is live or cached, whether Logs and Policy came from the supervisor or persisted
+fallback files, and the bounded record limit. A shared context banner retains
+the selected target, incident, and call while the operator moves between views;
+**Clear context** returns to the unscoped console.
+
 The filter field accepts ordinary case-insensitive text and compact field
 selectors. Multiple terms are combined with AND semantics. Examples:
 

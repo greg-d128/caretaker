@@ -164,3 +164,42 @@ def test_behavior_actions_explain_and_enforce_a_b_workflow(tmp_path):
             assert "cross-generation allowed" in status
 
     asyncio.run(exercise())
+
+
+def test_attention_view_combines_operator_issues_and_shared_context(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            app._last_runtime = {
+                "active_incidents": [{
+                    "incident_id": "incident-1",
+                    "target_id": "lab.probe",
+                    "trigger": "unexpected filesystem activity",
+                }],
+                "degraded_components": ["guard:audit_hooks"],
+            }
+            app._repair_records = [{
+                "state": "WAITING",
+                "target_id": "lab.probe",
+                "description": "Validated repair awaiting approval",
+                "payload": {"incident_id": "incident-1"},
+            }]
+            app._authority_snapshot = {
+                "violations": [{"target": "lab.*", "message": "deployment guarantee violated"}]
+            }
+            app._refresh_attention()
+
+            assert {item["kind"] for item in app._attention_records} == {
+                "ACTIVE INCIDENT",
+                "DEGRADED",
+                "REPAIR WAITING",
+                "POLICY VIOLATION",
+            }
+            app._set_operator_context(target="lab.probe", incident="incident-1")
+            rendered = str(app.query_one("#operator-context-label", Static).render())
+            assert "target=lab.probe" in rendered
+            assert "incident=incident-1" in rendered
+            assert app.query_one("#context-clear", Button).disabled is False
+
+    asyncio.run(exercise())
