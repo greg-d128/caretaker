@@ -8,6 +8,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
+import os
 from typing import Iterable
 from uuid import UUID, uuid4
 
@@ -337,6 +338,7 @@ class DeviationDetector:
                 sensitivity=85.0,
             )
         )
+        deviations.extend(self._explicit_policy_violations(baseline, observed, observed_profile))
         deviations.extend(
             self._new_set_deviations(
                 baseline,
@@ -399,6 +401,79 @@ class DeviationDetector:
                 )
             )
         return tuple(deviations)
+
+    def _explicit_policy_violations(
+        self,
+        baseline: BehaviorBaseline,
+        observed: BehaviorWindow,
+        observed_profile: BehaviorProfile,
+    ) -> list[BehaviorDeviation]:
+        expected = baseline.profile
+        result: list[BehaviorDeviation] = []
+
+        network = set(observed_profile.network_destinations)
+        if self.policy.network_allowlist:
+            allowed = set(self.policy.network_allowlist)
+            for value in sorted(network - allowed):
+                result.append(self._policy_violation(
+                    baseline, observed, "network destination", value,
+                    f"network allowlist {sorted(allowed)!r}",
+                ))
+        elif self.policy.deny_new_network_capability:
+            for value in sorted(network - set(expected.network_destinations)):
+                result.append(self._policy_violation(
+                    baseline, observed, "network destination", value,
+                    "new network capabilities are denied",
+                ))
+
+        subprocesses = set(observed_profile.subprocesses)
+        if self.policy.subprocess_allowlist:
+            allowed = set(self.policy.subprocess_allowlist)
+            for value in sorted(subprocesses - allowed):
+                result.append(self._policy_violation(
+                    baseline, observed, "subprocess", value,
+                    f"subprocess allowlist {sorted(allowed)!r}",
+                ))
+        elif self.policy.deny_new_subprocess_capability:
+            for value in sorted(subprocesses - set(expected.subprocesses)):
+                result.append(self._policy_violation(
+                    baseline, observed, "subprocess", value,
+                    "new subprocess capabilities are denied",
+                ))
+
+        if self.policy.filesystem_roots:
+            allowed_roots = tuple(os.path.abspath(os.path.expanduser(item)) for item in self.policy.filesystem_roots)
+            for value in sorted(observed_profile.filesystem_roots):
+                observed_path = os.path.abspath(os.path.expanduser(value))
+                if not any(
+                    observed_path == root or observed_path.startswith(root.rstrip(os.sep) + os.sep)
+                    for root in allowed_roots
+                ):
+                    result.append(self._policy_violation(
+                        baseline, observed, "filesystem root", value,
+                        f"filesystem roots {list(self.policy.filesystem_roots)!r}",
+                    ))
+        return result
+
+    def _policy_violation(
+        self,
+        baseline: BehaviorBaseline,
+        observed: BehaviorWindow,
+        label: str,
+        value: str,
+        rule: str,
+    ) -> BehaviorDeviation:
+        return self._deviation(
+            baseline,
+            observed,
+            DeviationCategory.EXPLICIT_POLICY_VIOLATION,
+            expected=EvidenceSummary("deterministic Guard policy", {"rule": rule}),
+            observed_summary=EvidenceSummary(f"prohibited {label}", {"value": value}),
+            novelty=100.0,
+            magnitude=100.0,
+            sensitivity=100.0,
+            explanation=f"Explicit Guard policy violation: {label} {value!r} violates {rule}",
+        )
 
     def _new_set_deviations(
         self,

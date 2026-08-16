@@ -41,6 +41,7 @@ from caretaker.guard.models import (
 from caretaker.guard.policy import (
     AggregationPolicy,
     BaselinePolicy,
+    CandidateGuardPolicy,
     DeviationPolicy,
     GuardActionPolicy,
     LLMReviewPolicy,
@@ -272,3 +273,53 @@ def test_guard_operational_event_cache_is_bounded(monkeypatch) -> None:
     assert len(cached) == 3
     assert cached[0].resource.value == "cache-2.example:443"
     assert cached[-1].resource.value == "cache-4.example:443"
+
+
+def test_guard_disabled_is_a_true_noop_for_behavior_events() -> None:
+    guard = GuardEngine(policy=GuardPolicy(mode=GuardMode.DISABLED))
+    target_id = "tests.guard_targets:failing"
+    guard.register_target(target_id, failing, _repair_policy().guard)
+    guard.record_event(_event(target_id, "unexpected.example:443"))
+    assert guard.recent_events(target_id) == ()
+    assert guard.decisions == ()
+
+
+def test_legacy_research_modes_are_audit_aliases() -> None:
+    assert GuardMode.RESEARCH is GuardMode.AUDIT
+    assert GuardMode.FORENSIC is GuardMode.AUDIT
+    assert GuardMode.ENFORCE is GuardMode.AUDIT
+
+
+def test_binding_deviation_action_overrides_global_guard_action() -> None:
+    guard = GuardEngine(policy=_guard_policy())
+    target_id = "tests.guard_targets:failing"
+    binding = replace(
+        _repair_policy().guard,
+        deviation_action=GuardDeviationAction.QUARANTINE_TARGET,
+    )
+    guard.register_target(target_id, failing, binding)
+    guard.record_event(_event(target_id, "api.example:443"))
+    guard.accept_baseline(target_id)
+    guard.record_event(_event(target_id, "unexpected.example:443"))
+
+    assert guard.is_target_quarantined(target_id)
+
+
+def test_candidate_guard_allow_new_capabilities_is_honored() -> None:
+    guard = GuardEngine(policy=_guard_policy())
+    target_id = "tests.guard_targets:failing"
+    guard.register_target(target_id, failing, _repair_policy().guard)
+    source = "def failing(value):\n    import socket\n    return value\n"
+
+    denied = guard.evaluate_candidate(
+        target_id,
+        source,
+        policy=CandidateGuardPolicy(allow_new_capabilities=False),
+    )
+    allowed = guard.evaluate_candidate(
+        target_id,
+        source,
+        policy=CandidateGuardPolicy(allow_new_capabilities=True),
+    )
+    assert denied.eligible is False
+    assert allowed.eligible is True

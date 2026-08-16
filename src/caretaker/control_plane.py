@@ -169,7 +169,7 @@ class DefaultRuntimePolicyEngine:
                 actions = (RuntimeActionKind.ALERT, RuntimeActionKind.ROLLBACK_REPAIR)
             elif requested == "OPEN_REPAIR_EPISODE":
                 actions = (RuntimeActionKind.ALERT, RuntimeActionKind.OPEN_REPAIR_EPISODE)
-            elif requested == "QUARANTINE_TARGET" or signal.attributes.get("explicit_policy_violation"):
+            elif requested == "QUARANTINE_TARGET":
                 actions = (RuntimeActionKind.ALERT, RuntimeActionKind.QUARANTINE_MODULE)
             elif requested == "ALERT":
                 actions = (RuntimeActionKind.ALERT,)

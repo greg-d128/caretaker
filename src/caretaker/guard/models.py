@@ -23,9 +23,13 @@ class GuardMode(Enum):
     DISABLED = auto()
     LEARN = auto()
     AUDIT = auto()
-    RESEARCH = auto()
-    FORENSIC = auto()
-    ENFORCE = auto()
+    # Backward-compatible aliases. Research/forensic depth is expressed by
+    # collector/attribution/sampling policy; deterministic blocking/quarantine
+    # is expressed by action policy. These names therefore must not imply
+    # independent runtime enforcement semantics.
+    RESEARCH = AUDIT
+    FORENSIC = AUDIT
+    ENFORCE = AUDIT
 
 
 class InspectionLevel(Enum):

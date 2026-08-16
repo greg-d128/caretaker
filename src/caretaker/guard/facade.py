@@ -12,6 +12,7 @@ from .models import (
     InstrumentationLease,
 )
 from .policy import GuardBinding
+from .policy import CandidateGuardPolicy
 
 
 class GuardFacade(Protocol):
@@ -65,6 +66,7 @@ class GuardFacade(Protocol):
         candidate_source: str,
         *,
         candidate_id: UUID | None = None,
+        policy: CandidateGuardPolicy | None = None,
     ) -> BehavioralCandidateScore: ...
 
     def candidate_deviated(self, candidate_id: UUID) -> bool: ...

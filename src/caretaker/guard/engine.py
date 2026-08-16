@@ -185,6 +185,8 @@ class GuardEngine(GuardFacade):
         self._decisions: deque[GuardDecision] = deque(maxlen=_GUARD_DECISION_CACHE_LIMIT)
         self._leases: dict[str, InstrumentationLease] = {}
         self._candidate_deviations: set[UUID] = set()
+        self._candidate_policies: dict[UUID, CandidateGuardPolicy] = {}
+        self._quarantined_targets: set[str] = set()
         self._repair_opener: Callable[[str, tuple[BehaviorDeviation, ...]], None] | None = None
         self._candidate_rollback: Callable[[UUID, str], None] | None = None
         self._lock = threading.RLock()
@@ -262,6 +264,9 @@ class GuardEngine(GuardFacade):
         periodic: bool = True,
         system_hooks: bool = True,
     ) -> None:
+        if self.policy.mode is GuardMode.DISABLED:
+            self._periodic_enabled = False
+            return
         if audit_hooks and self.policy.collectors.audit_hooks:
             self.audit_collector.install()
         if import_hook:
@@ -464,6 +469,8 @@ class GuardEngine(GuardFacade):
                 function, binding, identity, function_resolver, monitoring_configuration
             )
         self.store.record_code_identity(identity)
+        if self.policy.mode is GuardMode.DISABLED:
+            return
         self._restore_accepted_baseline(target_id, identity)
         self.inspector.inspect_function(function, kind=InspectionKind.POST_LOAD)
         if binding.enabled and periodic:
@@ -485,6 +492,10 @@ class GuardEngine(GuardFacade):
         *,
         candidate_id: UUID | None,
     ) -> None:
+        if self.policy.mode is GuardMode.DISABLED:
+            return
+        if target_id in self._quarantined_targets:
+            raise PermissionError(f"Guard quarantined target {target_id}")
         binding = self._targets.get(target_id)
         if binding is None or not binding.binding.enabled:
             return
@@ -523,6 +534,8 @@ class GuardEngine(GuardFacade):
         succeeded: bool,
         elapsed_seconds: float,
     ) -> None:
+        if self.policy.mode is GuardMode.DISABLED:
+            return
         binding = self._targets.get(target_id)
         if binding is None or not binding.binding.enabled:
             return
@@ -553,6 +566,8 @@ class GuardEngine(GuardFacade):
             self._signal_inspection(inspection, target_id=target_id, candidate_id=candidate_id)
 
     def record_event(self, event: BehaviorEvent) -> None:
+        if self.policy.mode is GuardMode.DISABLED:
+            return
         if not self._event_in_scope(event):
             return
         self.store.record_code_identity(event.code_identity)
@@ -834,13 +849,22 @@ class GuardEngine(GuardFacade):
         candidate_source: str,
         *,
         candidate_id: UUID | None = None,
+        policy: CandidateGuardPolicy | None = None,
     ) -> BehavioralCandidateScore:
         binding = self._targets.get(target_id)
-        baseline = self.recent_summary(target_id) if binding is not None else None
+        candidate_policy = policy or CandidateGuardPolicy()
+        baseline = (
+            self.recent_summary(target_id)
+            if binding is not None and candidate_policy.compare_to_original_baseline
+            else None
+        )
+        if candidate_id is not None:
+            with self._lock:
+                self._candidate_policies[candidate_id] = candidate_policy
         return StaticCandidateBehaviorAnalyzer.evaluate(
             candidate_source,
             baseline=baseline,
-            allow_new_capabilities=False,
+            allow_new_capabilities=candidate_policy.allow_new_capabilities,
             candidate_id=candidate_id,
         )
 
@@ -905,6 +929,11 @@ class GuardEngine(GuardFacade):
         highest = max(item.significance_score for item in significant)
         severity = SignalSeverity.HIGH if highest >= self.policy.deviations.high_significance_threshold else SignalSeverity.MEDIUM
         explicit = any(item.category.name == "EXPLICIT_POLICY_VIOLATION" for item in significant)
+        requested_action = self._requested_deviation_action(
+            target_id=target_id,
+            candidate_id=candidate_id if isinstance(candidate_id, UUID) else None,
+            explicit_policy_violation=explicit,
+        )
         signal = RuntimeSignal.create(
             domain=SignalDomain.BEHAVIOR,
             kind="behavior-deviation",
@@ -923,11 +952,7 @@ class GuardEngine(GuardFacade):
                     if self.router.active_variant(window.subject.module_name) is not None
                     else None
                 ),
-                "requested_action": (
-                    "ROLLBACK_ACTIVE_CANDIDATE"
-                    if isinstance(candidate_id, UUID) and self.policy.actions.rollback_repair_on_candidate_deviation
-                    else self.policy.actions.deviation_action.name
-                ),
+                "requested_action": requested_action,
             },
         )
         runtime_decision = self.control_plane.submit(signal, context=self._control_context())
@@ -976,6 +1001,11 @@ class GuardEngine(GuardFacade):
         target_id: str | None,
         candidate_id: UUID | None,
     ) -> None:
+        requested_action = self._requested_deviation_action(
+            target_id=target_id,
+            candidate_id=candidate_id,
+            explicit_policy_violation=False,
+        )
         signal = RuntimeSignal.create(
             domain=SignalDomain.BEHAVIOR,
             kind="runtime-introspection-change",
@@ -993,17 +1023,49 @@ class GuardEngine(GuardFacade):
                     if self.router.active_variant(inspection.subject.module_name) is not None
                     else None
                 ),
-                "requested_action": (
-                    "ROLLBACK_ACTIVE_CANDIDATE"
-                    if candidate_id is not None and self.policy.actions.rollback_repair_on_candidate_deviation
-                    else self.policy.actions.deviation_action.name
-                ),
+                "requested_action": requested_action,
             },
         )
         if candidate_id is not None:
             with self._lock:
                 self._candidate_deviations.add(candidate_id)
         self.control_plane.submit(signal, context=self._control_context())
+
+    def _requested_deviation_action(
+        self,
+        *,
+        target_id: str | None,
+        candidate_id: UUID | None,
+        explicit_policy_violation: bool,
+    ) -> str:
+        if candidate_id is not None:
+            candidate_policy = self._candidate_policies.get(candidate_id)
+            rollback = (
+                candidate_policy.rollback_on_significant_deviation
+                if candidate_policy is not None
+                else self.policy.actions.rollback_repair_on_candidate_deviation
+            )
+            if rollback:
+                return "ROLLBACK_ACTIVE_CANDIDATE"
+        if explicit_policy_violation and self.policy.actions.quarantine_on_explicit_violation:
+            return "QUARANTINE_TARGET"
+        if target_id is not None:
+            binding = self._targets.get(target_id)
+            if binding is not None:
+                action = binding.binding.deviation_action
+                if (
+                    action.name == "OPEN_REPAIR_EPISODE"
+                    and not self.policy.actions.open_repair_for_application_code
+                ):
+                    return "ALERT"
+                return action.name
+        action = self.policy.actions.deviation_action
+        if (
+            action.name == "OPEN_REPAIR_EPISODE"
+            and not self.policy.actions.open_repair_for_application_code
+        ):
+            return "ALERT"
+        return action.name
 
     def _handle_open_repair(self, action: RuntimeAction, signal: RuntimeSignal) -> None:
         if signal.target_id is None or self._repair_opener is None:
@@ -1022,9 +1084,16 @@ class GuardEngine(GuardFacade):
         self._candidate_rollback(candidate_id, action.reason)
 
     def _handle_quarantine(self, action: RuntimeAction, signal: RuntimeSignal) -> None:
+        if signal.target_id:
+            with self._lock:
+                self._quarantined_targets.add(signal.target_id)
         variant_id = signal.attributes.get("variant_id")
         if variant_id:
             self.router.quarantine(str(variant_id))
+
+    def is_target_quarantined(self, target_id: str) -> bool:
+        with self._lock:
+            return target_id in self._quarantined_targets
 
     def _policy_summary(self) -> str:
         return (

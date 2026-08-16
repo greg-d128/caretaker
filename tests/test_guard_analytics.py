@@ -96,3 +96,55 @@ def test_baseline_policy_can_automatically_accept_materialized_candidate() -> No
     assert baseline is not None
     assert baseline.state is BaselineState.ACCEPTED
     assert baseline.accepted_at is not None
+
+
+def test_explicit_network_allowlist_violation_is_deterministic() -> None:
+    store = InMemoryEvidenceStore()
+    aggregator = BehaviorAggregator(
+        store,
+        AggregationPolicy(close_after_events=1, close_after_calls=1, close_after_seconds=999),
+    )
+    baselines = BaselineManager(BaselinePolicy(minimum_windows=1))
+    detector = DeviationDetector(
+        DeviationPolicy(
+            significance_threshold=0,
+            network_allowlist=("api.example:443",),
+        )
+    )
+    baseline_window = aggregator.consume(_event(ResourceIdentity("network", "api.example:443")))
+    assert baseline_window is not None
+    baselines.observe(baseline_window)
+    accepted = baselines.accept(baseline_window.subject)
+
+    observed = aggregator.consume(_event(ResourceIdentity("network", "evil.example:443")))
+    assert observed is not None
+    deviations = detector.compare(accepted, observed)
+
+    violation = next(
+        item for item in deviations
+        if item.category is DeviationCategory.EXPLICIT_POLICY_VIOLATION
+    )
+    assert violation.observed.values["value"] == "evil.example:443"
+
+
+def test_deny_new_network_capability_creates_explicit_violation() -> None:
+    store = InMemoryEvidenceStore()
+    aggregator = BehaviorAggregator(
+        store,
+        AggregationPolicy(close_after_events=1, close_after_calls=1, close_after_seconds=999),
+    )
+    baselines = BaselineManager(BaselinePolicy(minimum_windows=1))
+    detector = DeviationDetector(
+        DeviationPolicy(significance_threshold=0, deny_new_network_capability=True)
+    )
+    baseline_window = aggregator.consume(_event(ResourceIdentity("network", "api.example:443")))
+    assert baseline_window is not None
+    baselines.observe(baseline_window)
+    accepted = baselines.accept(baseline_window.subject)
+    observed = aggregator.consume(_event(ResourceIdentity("network", "new.example:443")))
+    assert observed is not None
+
+    assert any(
+        item.category is DeviationCategory.EXPLICIT_POLICY_VIOLATION
+        for item in detector.compare(accepted, observed)
+    )

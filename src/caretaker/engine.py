@@ -1592,6 +1592,7 @@ class RepairEngine:
                     target.target_id,
                     candidate.artifact.files[0].content,
                     candidate_id=candidate.candidate_id,
+                    policy=target.policy.candidate_guard,
                 )
                 now = utcnow()
                 behavior_check = ValidationCheckResult(

@@ -409,6 +409,16 @@ def validate_policy(policy: RepairPolicy) -> None:
         errors.append("candidate_guard.maximum_new_filesystem_roots cannot be negative")
     if policy.candidate_guard.maximum_new_subprocesses < 0:
         errors.append("candidate_guard.maximum_new_subprocesses cannot be negative")
+    if any((
+        policy.candidate_guard.maximum_new_network_destinations,
+        policy.candidate_guard.maximum_new_filesystem_roots,
+        policy.candidate_guard.maximum_new_subprocesses,
+    )):
+        errors.append(
+            "candidate_guard maximum_new_* resource-count limits are reserved until "
+            "candidate resource extraction can identify concrete destinations/roots/subprocesses; "
+            "use allow_new_capabilities for the currently supported coarse capability gate"
+        )
     if errors:
         raise PolicyConfigurationError("Invalid Caretaker policy:\n- " + "\n- ".join(errors))
 
