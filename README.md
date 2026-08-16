@@ -314,7 +314,7 @@ Ephemeral Ed25519 signing requires the optional cryptography backend:
 python -m pip install 'Caretaker[signing]'
 ```
 
-Release manifests remain an offline OpenPGP workflow. After generating and reviewing a canonical manifest, `make sign MANIFEST=... SIGNING_KEY=FULL_FINGERPRINT SIGNATURE=...` invokes the small reviewable GnuPG wrapper in `scripts/sign-code.sh`. See [`docs/SIGNING_STATION.md`](docs/SIGNING_STATION.md); Caretaker never receives or stores the release private key.
+Release manifests remain an offline OpenPGP workflow. After generating and reviewing `release-manifest.json`, `make sign SIGNING_KEY=FULL_FINGERPRINT` invokes the small reviewable GnuPG wrapper in `scripts/sign-code.sh`; `MANIFEST` and `SIGNATURE` may be overridden when needed. `MANIFEST.in` is packaging metadata, not the release integrity manifest. See [`docs/SIGNING_STATION.md`](docs/SIGNING_STATION.md); Caretaker never receives or stores the release private key.
 
 Development:
 

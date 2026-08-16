@@ -4,16 +4,26 @@ Release-signing authority and private-key handling remain outside the Caretaker 
 
 ## Simple manifest signing
 
-After generating and reviewing a canonical manifest, sign it with one full primary fingerprint and an explicit output path:
+After generating and reviewing a canonical manifest, sign it with one full primary fingerprint:
+
+```bash
+make sign SIGNING_KEY=FULL_PRIMARY_FINGERPRINT_A
+```
+
+The Makefile defaults to `MANIFEST=release-manifest.json` and
+`SIGNATURE=release-manifest.json.asc`. Override either value when signing a
+different manifest or when naming signatures by signer, for example:
 
 ```bash
 make sign \
-  MANIFEST=release-manifest.json \
   SIGNING_KEY=FULL_PRIMARY_FINGERPRINT_A \
   SIGNATURE=release-manifest.json.key-a.asc
 ```
 
-The target displays the manifest SHA-256, asks the configured GnuPG environment to create an armored detached signature, and immediately runs `gpg --verify`. It refuses to overwrite an existing signature. The script does not generate a manifest, select a key, import private material, or decide that the reviewed bytes are suitable for release.
+`MANIFEST.in` is Python packaging metadata and is not the canonical integrity
+manifest. Do not sign it as a substitute for `release-manifest.json`.
+
+The target displays the manifest SHA-256, asks the configured GnuPG environment to create an armored detached signature, and immediately runs `gpg --verify`. It refuses to overwrite an existing signature. The script does not generate a manifest, select a key, import private material, or decide that the reviewed bytes are suitable for release. If the default manifest is absent, the target explains that it must be generated and reviewed first.
 
 Run the target separately for keys A, B, and C, preferably in independent signing environments as described below. The Make target is convenience, not a replacement for manifest review or threshold independence.
 

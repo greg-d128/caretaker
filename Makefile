@@ -2,6 +2,11 @@ PYTHON ?= python3
 VENV   ?= venv
 BIN     := $(VENV)/bin
 
+# Release-signing defaults. MANIFEST.in is packaging metadata, not a release
+# integrity manifest; generate and review this JSON file before signing it.
+MANIFEST  ?= release-manifest.json
+SIGNATURE ?= $(MANIFEST).asc
+
 .DEFAULT_GOAL := help
 
 .PHONY: help setup test compile check wheel build verify-wheel sign lab lab-console profile clean distclean
@@ -27,10 +32,9 @@ wheel: ## Build the wheel in dist/
 build: ## Build the wheel and source distribution in dist/
 	$(BIN)/python -m build
 
-sign: ## Sign MANIFEST with SIGNING_KEY and write SIGNATURE
-	@test -n "$(MANIFEST)" || { echo "MANIFEST is required" >&2; exit 2; }
+sign: ## Sign release-manifest.json (override with MANIFEST/SIGNATURE)
+	@test -f "$(MANIFEST)" || { echo "Manifest not found: $(MANIFEST)" >&2; echo "Generate and review a canonical release manifest before signing." >&2; exit 2; }
 	@test -n "$(SIGNING_KEY)" || { echo "SIGNING_KEY is required" >&2; exit 2; }
-	@test -n "$(SIGNATURE)" || { echo "SIGNATURE is required" >&2; exit 2; }
 	./scripts/sign-code.sh "$(MANIFEST)" "$(SIGNING_KEY)" "$(SIGNATURE)"
 
 lab: ## Run the interactive Caretaker lab under caretaker-run
