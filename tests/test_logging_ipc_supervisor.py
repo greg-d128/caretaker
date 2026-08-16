@@ -212,3 +212,24 @@ def test_control_status_is_not_blocked_by_an_in_flight_request(tmp_path):
         slow_thread.join(timeout=2)
         server.stop()
         server_thread.join(timeout=2)
+
+
+def test_control_socket_round_trips_response_larger_than_seqpacket_limit(tmp_path):
+    from caretaker.logging import ControlSocketServer, control_request
+
+    payload = "x" * (512 * 1024)
+    socket_path = tmp_path / "control.sock"
+    server = ControlSocketServer(
+        socket_path,
+        lambda request, credentials: {"ok": True, "payload": payload},
+        allowed_uids={os.getuid()},
+    )
+    server.start()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        response = control_request(socket_path, {"command": "large"})
+        assert response["payload"] == payload
+    finally:
+        server.stop()
+        thread.join(timeout=2)

@@ -57,6 +57,20 @@ def test_snapshot_store_verifies_content_hash_and_compares_across_code_hashes(tm
     ]
 
 
+def test_snapshot_list_summaries_omit_large_profile_details(tmp_path: Path):
+    store = BehaviorSnapshotStore(tmp_path)
+    capture = _capture(code_hash="a" * 64, events=10)
+    capture["profile"]["filesystem_roots"] = [f"/large/path/{index}" for index in range(10_000)]
+    envelope = store.create(capture)
+
+    summaries = store.list_summaries(limit=10)
+
+    assert len(summaries) == 1
+    assert summaries[0]["snapshot_id"] == envelope["snapshot"]["snapshot_id"]
+    assert summaries[0]["profile"] == {"call_count": 10, "event_count": 10}
+    assert "filesystem_roots" not in summaries[0]["profile"]
+
+
 def test_archive_contains_manifest_and_removes_snapshot(tmp_path: Path):
     store = BehaviorSnapshotStore(tmp_path)
     envelope = store.create(_capture(code_hash="a" * 64, events=10))

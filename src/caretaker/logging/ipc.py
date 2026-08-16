@@ -25,6 +25,8 @@ _PEERCRED = struct.Struct("3i")
 
 
 _UNIX_SOCKET_PATH_LIMIT = 100
+_CONTROL_REQUEST_LIMIT = 64 * 1024
+_CONTROL_RESPONSE_LIMIT = 16 * 1024 * 1024
 
 
 def unix_socket_path(path: str | Path) -> Path:
@@ -383,14 +385,15 @@ class ControlSocketServer:
     def start(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.unlink(missing_ok=True)
-        socket_type = getattr(socket, "SOCK_SEQPACKET", socket.SOCK_STREAM)
-        server = socket.socket(socket.AF_UNIX, socket_type)
+        # Control responses can contain evidence bundles and behavior snapshots
+        # larger than the platform's SOCK_SEQPACKET message limit.  A framed
+        # stream keeps those responses reliable without relying on recv timing.
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server.bind(str(self.path))
         os.chmod(self.path, 0o660)
         server.listen(16)
         server.settimeout(0.25)
         self._socket = server
-        self._stream = socket_type == socket.SOCK_STREAM
 
     def serve_forever(self) -> None:
         if self._socket is None:
@@ -415,10 +418,13 @@ class ControlSocketServer:
                 continue
             if not self._client_slots.acquire(blocking=False):
                 try:
-                    connection.sendall(json.dumps({
-                        "ok": False,
-                        "error": "Caretaker control server is busy",
-                    }).encode())
+                    _send_control_payload(
+                        connection,
+                        json.dumps({
+                            "ok": False,
+                            "error": "Caretaker control server is busy",
+                        }).encode(),
+                    )
                 finally:
                     connection.close()
                 continue
@@ -440,11 +446,13 @@ class ControlSocketServer:
     ) -> None:
         try:
             try:
-                request = json.loads(connection.recv(64 * 1024))
+                request = json.loads(
+                    _recv_control_payload(connection, maximum=_CONTROL_REQUEST_LIMIT)
+                )
                 response = self.handler(request, credentials)
             except Exception as exc:
                 response = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-            connection.sendall(json.dumps(response, default=str).encode())
+            _send_control_payload(connection, json.dumps(response, default=str).encode())
         except OSError:
             # A timed-out or disconnected control client must not affect the
             # listener or other in-flight requests.
@@ -467,14 +475,26 @@ class ControlSocketServer:
 
 
 def control_request(path: str | Path, request: dict[str, Any], *, timeout: float = 5.0) -> dict[str, Any]:
-    socket_type = getattr(socket, "SOCK_SEQPACKET", socket.SOCK_STREAM)
-    connection = socket.socket(socket.AF_UNIX, socket_type)
+    connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     connection.settimeout(timeout)
     connection.connect(str(unix_socket_path(path)))
-    connection.sendall(json.dumps(request).encode())
-    response = connection.recv(1024 * 1024)
-    connection.close()
-    return json.loads(response)
+    try:
+        _send_control_payload(connection, json.dumps(request).encode())
+        response = _recv_control_payload(connection, maximum=_CONTROL_RESPONSE_LIMIT)
+        return json.loads(response)
+    finally:
+        connection.close()
+
+
+def _send_control_payload(connection: socket.socket, payload: bytes) -> None:
+    connection.sendall(len(payload).to_bytes(4, "big") + payload)
+
+
+def _recv_control_payload(connection: socket.socket, *, maximum: int) -> bytes:
+    size = int.from_bytes(_recv_exact(connection, 4), "big")
+    if size > maximum:
+        raise ValueError(f"Caretaker control payload exceeds {maximum} bytes")
+    return _recv_exact(connection, size)
 
 
 def _recv_exact(connection: socket.socket, count: int) -> bytes:

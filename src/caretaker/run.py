@@ -239,7 +239,11 @@ def main(argv: list[str] | None = None) -> int:
                     "workers": [asdict(item) for item in supervisor.workers.all()] if supervisor else [],
                     "runtime": application_runtime}
         if command == "behavior-list":
-            return {"ok": True, "snapshots": list(behavior_store.list())}
+            limit = max(1, min(int(request.get("limit", 200)), 500))
+            return {
+                "ok": True,
+                "snapshots": list(behavior_store.list_summaries(limit=limit)),
+            }
 
         if command == "behavior-get":
             snapshot_id = str(request.get("snapshot_id") or "").strip()

@@ -421,6 +421,37 @@ class BehaviorSnapshotStore:
         rows.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
         return tuple(rows)
 
+    def list_summaries(self, *, limit: int = 200) -> tuple[dict[str, Any], ...]:
+        """Return bounded metadata suitable for an operator list view."""
+        rows = self.list()[:max(1, limit)]
+        summaries = []
+        for row in rows:
+            profile = dict(row.get("profile") or {})
+            summaries.append({
+                key: row.get(key)
+                for key in (
+                    "snapshot_id",
+                    "created_at",
+                    "scope",
+                    "subject_key",
+                    "subject",
+                    "code_hash",
+                    "code_hash_kind",
+                    "generation_id",
+                    "snapshot_sequence",
+                    "seal_reason",
+                    "integrity",
+                    "verified",
+                    "verification_error",
+                )
+            } | {
+                "profile": {
+                    "call_count": int(profile.get("call_count") or 0),
+                    "event_count": int(profile.get("event_count") or 0),
+                }
+            })
+        return tuple(summaries)
+
     def accept_guard_baseline(
         self,
         snapshot_id: UUID | str,
