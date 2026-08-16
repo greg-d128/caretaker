@@ -376,6 +376,9 @@ class ControlSocketServer:
         self.allowed_gids = allowed_gids
         self._stop = threading.Event()
         self._socket: socket.socket | None = None
+        self._threads: list[threading.Thread] = []
+        self._thread_lock = threading.Lock()
+        self._client_slots = threading.BoundedSemaphore(32)
 
     def start(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -410,18 +413,56 @@ class ControlSocketServer:
             if self.allowed_gids is not None and gid not in self.allowed_gids:
                 connection.close()
                 continue
+            if not self._client_slots.acquire(blocking=False):
+                try:
+                    connection.sendall(json.dumps({
+                        "ok": False,
+                        "error": "Caretaker control server is busy",
+                    }).encode())
+                finally:
+                    connection.close()
+                continue
+            thread = threading.Thread(
+                target=self._handle_connection,
+                args=(connection, credentials),
+                name="caretaker-control-client",
+                daemon=True,
+            )
+            with self._thread_lock:
+                self._threads = [item for item in self._threads if item.is_alive()]
+                self._threads.append(thread)
+            thread.start()
+
+    def _handle_connection(
+        self,
+        connection: socket.socket,
+        credentials: tuple[int, int, int],
+    ) -> None:
+        try:
             try:
                 request = json.loads(connection.recv(64 * 1024))
                 response = self.handler(request, credentials)
             except Exception as exc:
                 response = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
             connection.sendall(json.dumps(response, default=str).encode())
+        except OSError:
+            # A timed-out or disconnected control client must not affect the
+            # listener or other in-flight requests.
+            pass
+        finally:
             connection.close()
+            self._client_slots.release()
 
     def stop(self) -> None:
         self._stop.set()
         if self._socket is not None:
             self._socket.close()
+        with self._thread_lock:
+            threads = tuple(self._threads)
+        for thread in threads:
+            thread.join(timeout=1.0)
+        with self._thread_lock:
+            self._threads = [thread for thread in self._threads if thread.is_alive()]
         self.path.unlink(missing_ok=True)
 
 

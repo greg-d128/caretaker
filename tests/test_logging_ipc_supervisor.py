@@ -178,3 +178,37 @@ def test_long_unix_control_socket_path_round_trip(tmp_path):
     finally:
         server.stop()
         thread.join(timeout=2)
+
+
+def test_control_status_is_not_blocked_by_an_in_flight_request(tmp_path):
+    from caretaker.logging import ControlSocketServer, control_request
+
+    slow_started = threading.Event()
+    release_slow = threading.Event()
+
+    def handler(request, credentials):
+        if request.get("command") == "slow":
+            slow_started.set()
+            release_slow.wait(timeout=2)
+        return {"ok": True, "command": request.get("command")}
+
+    socket_path = tmp_path / "control.sock"
+    server = ControlSocketServer(socket_path, handler, allowed_uids={os.getuid()})
+    server.start()
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    slow_thread = threading.Thread(
+        target=control_request,
+        args=(socket_path, {"command": "slow"}),
+        daemon=True,
+    )
+    slow_thread.start()
+    try:
+        assert slow_started.wait(timeout=1)
+        response = control_request(socket_path, {"command": "status"}, timeout=0.5)
+        assert response == {"ok": True, "command": "status"}
+    finally:
+        release_slow.set()
+        slow_thread.join(timeout=2)
+        server.stop()
+        server_thread.join(timeout=2)
