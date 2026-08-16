@@ -103,3 +103,18 @@ def test_guard_decision_subject_resolves_target_without_manual_identifier():
     assert CaretakerConsoleApp._subject_target(
         {"subject": {"target_id": "lab.divide"}}
     ) == "lab.divide"
+
+
+def test_behavior_evidence_distinguishes_preliminary_from_collection_target():
+    assert CaretakerConsoleApp._behavior_evidence({
+        "profile": {
+            "call_count": 1,
+            "sampling_provenance": {"statistics_target": 1000},
+        }
+    }) == ("PRELIMINARY", "1/1000")
+    assert CaretakerConsoleApp._behavior_evidence({
+        "profile": {
+            "call_count": 1000,
+            "sampling_provenance": {"statistics_target": 1000},
+        }
+    }) == ("TARGET REACHED", "1000/1000")

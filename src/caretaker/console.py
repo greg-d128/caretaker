@@ -404,8 +404,8 @@ class CaretakerConsoleApp(App):
                         yield RichLog(id="guard-output", wrap=True, markup=True)
             with TabPane("Behavior", id="behavior"):
                 yield Static(
-                    "Behavior shows persisted statistical snapshots. Use Guard Events for the live event stream; "
-                    "selecting an Overview target or related log supplies its target ID here.",
+                    "Snapshots are evidence, not accuracy guarantees. Calls/target shows collection coverage; "
+                    "workload diversity and sampling policy still determine representativeness.",
                     id="behavior-help",
                 )
                 with Horizontal(id="behavior-toolbar"):
@@ -418,10 +418,10 @@ class CaretakerConsoleApp(App):
                     yield Button("Refresh", id="behavior-refresh")
                 with Grid(id="behavior-split"):
                     with Vertical(classes="behavior-pane"):
-                        yield Static("Behavior snapshots", classes="behavior-pane-title")
+                        yield Static("Behavior snapshots", id="behavior-list-title", classes="behavior-pane-title")
                         table = DataTable(id="behavior-table")
                         table.cursor_type = "row"
-                        table.add_columns("#", "Created", "Scope", "Subject", "Hash", "Calls", "Events", "Signature")
+                        table.add_columns("#", "A", "Created", "Subject", "Hash", "Calls/target", "Evidence", "Seal")
                         yield table
                     with Vertical(classes="behavior-pane"):
                         yield Static("Selected snapshot / comparison", id="behavior-detail-title", classes="behavior-pane-title")
@@ -1216,19 +1216,21 @@ class CaretakerConsoleApp(App):
             created = str(record.get("created_at") or "-")
             if "T" in created:
                 created = created.replace("T", " ").replace("+00:00", "Z")[:19]
-            signature = (record.get("integrity") or {}).get("signature_state") or "-"
-            if record.get("verified") is False:
-                signature = "INVALID"
+            evidence, calls_target = self._behavior_evidence(record)
             table.add_row(
                 str(index),
+                "A" if str(record.get("snapshot_id")) == self._behavior_compare_anchor else "",
                 created,
-                str(record.get("scope") or "-"),
                 str(label or "-"),
                 self._behavior_short_hash(record.get("code_hash")),
-                str(profile.get("call_count", 0)),
-                str(profile.get("event_count", 0)),
-                str(signature),
+                calls_target,
+                evidence,
+                str(record.get("seal_reason") or "-").replace("-", " "),
             )
+        subjects = len({str(item.get("subject_key")) for item in self._behavior_records})
+        self.query_one("#behavior-list-title", Static).update(
+            f"Behavior snapshots: {len(self._behavior_records)} across {subjects} subject{'s' if subjects != 1 else ''}"
+        )
         if not self._behavior_records:
             self.query_one("#behavior-detail-title", Static).update("Behavior snapshots")
             output = self.query_one("#behavior-output", RichLog)
@@ -1236,6 +1238,21 @@ class CaretakerConsoleApp(App):
             output.write(
                 "No behavior snapshots have been captured. Capture a function target or module to begin a code-hash-scoped behavior history."
             )
+
+    @staticmethod
+    def _behavior_evidence(record: dict[str, Any]) -> tuple[str, str]:
+        profile = record.get("profile") or {}
+        calls = int(profile.get("call_count") or 0)
+        provenance = profile.get("sampling_provenance") or {}
+        target = int(provenance.get("statistics_target") or 0)
+        calls_target = f"{calls}/{target}" if target else f"{calls}/?"
+        if calls <= 0:
+            return "NO DATA", calls_target
+        if not target:
+            return "UNKNOWN", calls_target
+        if calls < target:
+            return "PRELIMINARY", calls_target
+        return "TARGET REACHED", calls_target
 
     @staticmethod
     def _behavior_bar(value: float, maximum: float, *, width: int = 18) -> str:
@@ -1257,6 +1274,7 @@ class CaretakerConsoleApp(App):
         integrity = envelope.get("integrity") or {}
         subject = snapshot.get("subject") or {}
         profile = snapshot.get("profile") or {}
+        evidence, calls_target = self._behavior_evidence(snapshot)
         title = str(snapshot.get("subject_key") or snapshot.get("snapshot_id") or "Behavior snapshot")
         self.query_one("#behavior-detail-title", Static).update(title)
         output = self.query_one("#behavior-output", RichLog)
@@ -1278,6 +1296,10 @@ class CaretakerConsoleApp(App):
             f"[b]Seal reason[/b] {snapshot.get('seal_reason') or '-'}\n"
             f"[b]Snapshot SHA-256[/b] {integrity.get('content_sha256', '-')}\n"
             f"[b]Signature[/b] {signature_detail}"
+            f"\n[b]Evidence[/b] {evidence} ({calls_target} completed calls/collection target)"
+        )
+        output.write(
+            "[yellow]This indicates evidence volume only; it does not guarantee statistical accuracy or representative workload coverage.[/yellow]"
         )
         output.write(
             f"\n[b]Behavior[/b] calls={profile.get('call_count', 0)} events={profile.get('event_count', 0)}"
@@ -1339,11 +1361,29 @@ class CaretakerConsoleApp(App):
 
     def _show_behavior_comparison(self, comparison: dict[str, Any]) -> None:
         self._behavior_last_comparison = comparison
+        subject_a = comparison.get("subject_a") or "-"
+        subject_b = comparison.get("subject_b") or "-"
         self.query_one("#behavior-detail-title", Static).update(
-            f"Comparison {comparison.get('snapshot_a_id', '-')} → {comparison.get('snapshot_b_id', 'live')}"
+            f"Comparison A {subject_a} → B {subject_b}"
         )
         output = self.query_one("#behavior-output", RichLog)
         output.clear()
+        for marker, operand in (
+            ("A", comparison.get("snapshot_a") or {}),
+            ("B", comparison.get("snapshot_b") or {}),
+        ):
+            calls = int(operand.get("call_count") or 0)
+            target = int(operand.get("statistics_target") or 0)
+            evidence = "target reached" if target and calls >= target else "preliminary"
+            output.write(
+                f"[b]{marker}[/b] {operand.get('subject_key') or '-'}\n"
+                f"  snapshot={operand.get('snapshot_id') or 'live'}  created={operand.get('created_at') or '-'}\n"
+                f"  code={self._behavior_short_hash(operand.get('code_hash'))}  "
+                f"calls={calls}/{target or '?'} ({evidence})  events={operand.get('event_count', 0)}"
+            )
+        output.write(
+            "[yellow]Collection targets indicate evidence volume, not guaranteed accuracy or workload representativeness.[/yellow]"
+        )
         code_changed = bool(comparison.get("code_hash_changed"))
         output.write(
             f"[b]Code generation[/b] {'CHANGED' if code_changed else 'same'}\n"
@@ -2050,8 +2090,9 @@ class CaretakerConsoleApp(App):
                     return
                 if button == "behavior-set-a":
                     self._behavior_compare_anchor = snapshot_id
+                    await self.refresh_behavior()
                     self.query_one("#behavior-detail-title", Static).update(
-                        f"Comparison A set to {snapshot_id}"
+                        f"Comparison A set: {snapshot_id}"
                     )
                     return
                 if button == "behavior-compare-a":

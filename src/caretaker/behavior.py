@@ -448,6 +448,9 @@ class BehaviorSnapshotStore:
                 "profile": {
                     "call_count": int(profile.get("call_count") or 0),
                     "event_count": int(profile.get("event_count") or 0),
+                    "success_count": int(profile.get("success_count") or 0),
+                    "failure_count": int(profile.get("failure_count") or 0),
+                    "sampling_provenance": dict(profile.get("sampling_provenance") or {}),
                 }
             })
         return tuple(summaries)
@@ -1490,6 +1493,8 @@ def compare_snapshots(
         "generation_changed": older.get("generation_id") != newer.get("generation_id"),
         "monitoring_changed": older.get("monitoring_fingerprint") != newer.get("monitoring_fingerprint"),
         "cross_subject": older.get("subject_key") != newer.get("subject_key"),
+        "snapshot_a": _comparison_operand(older, left),
+        "snapshot_b": _comparison_operand(newer, right),
         "calls": _numeric_change("calls", left["call_count"], right["call_count"]),
         "events": _numeric_change("events", left["event_count"], right["event_count"]),
         "events_per_call": _float_change("events_per_call", before_rate, after_rate),
@@ -1497,6 +1502,21 @@ def compare_snapshots(
         "event_kind_changes": kind_changes,
         "resource_changes": set_changes,
         "tree_changes": _compare_children(older.get("children") or (), newer.get("children") or ()),
+    }
+
+
+def _comparison_operand(snapshot: Mapping[str, Any], profile: Mapping[str, Any]) -> dict[str, Any]:
+    provenance = dict(profile.get("sampling_provenance") or {})
+    return {
+        "snapshot_id": snapshot.get("snapshot_id"),
+        "created_at": snapshot.get("created_at"),
+        "subject_key": snapshot.get("subject_key"),
+        "code_hash": snapshot.get("code_hash"),
+        "generation_id": snapshot.get("generation_id"),
+        "call_count": int(profile.get("call_count") or 0),
+        "event_count": int(profile.get("event_count") or 0),
+        "statistics_target": int(provenance.get("statistics_target") or 0),
+        "seal_reason": snapshot.get("seal_reason"),
     }
 
 

@@ -48,6 +48,9 @@ def test_snapshot_store_verifies_content_hash_and_compares_across_code_hashes(tm
     assert first["snapshot"]["generation_id"] != second["snapshot"]["generation_id"]
     assert comparison["code_hash_changed"] is True
     assert comparison["generation_changed"] is True
+    assert comparison["snapshot_a"]["subject_key"] == "function:lab.divide"
+    assert comparison["snapshot_a"]["call_count"] == 10
+    assert comparison["snapshot_b"]["snapshot_id"] == second["snapshot"]["snapshot_id"]
     assert comparison["events"]["absolute"] == 10
     assert comparison["resource_changes"]["network_destinations"]["added"] == [
         "new.example:443"
@@ -67,7 +70,8 @@ def test_snapshot_list_summaries_omit_large_profile_details(tmp_path: Path):
 
     assert len(summaries) == 1
     assert summaries[0]["snapshot_id"] == envelope["snapshot"]["snapshot_id"]
-    assert summaries[0]["profile"] == {"call_count": 10, "event_count": 10}
+    assert summaries[0]["profile"]["call_count"] == 10
+    assert summaries[0]["profile"]["event_count"] == 10
     assert "filesystem_roots" not in summaries[0]["profile"]
 
 
