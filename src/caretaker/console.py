@@ -271,6 +271,10 @@ class CaretakerConsoleApp(App):
         align-vertical: middle;
         border-top: solid $surface-lighten-2;
     }
+    #repair-toolbar { height: 4; padding: 0 1; align-vertical: middle; }
+    #repair-filter { width: 1fr; }
+    #repair-context-actions { height: 4; padding: 0 1; align-vertical: middle; }
+    #repair-context-actions Button { width: auto; min-width: 14; margin-left: 1; }
     #repair-reason {
         width: 1fr;
         min-width: 24;
@@ -393,6 +397,7 @@ class CaretakerConsoleApp(App):
         self._target_records: list[dict[str, Any]] = []
         self._displayed_target_records: list[dict[str, Any]] = []
         self._repair_records: list[dict[str, Any]] = []
+        self._displayed_repair_records: list[dict[str, Any]] = []
         self._selected_repair_approval: str | None = None
         self._selected_repair_record: dict[str, Any] | None = None
         self._repair_source_view = False
@@ -562,8 +567,14 @@ class CaretakerConsoleApp(App):
                     yield Button("Delete B", id="behavior-delete", variant="error", disabled=True)
 
             with TabPane("Repair", id="repair"):
+                yield Static(
+                    "Repair groups incidents, candidate work, validation outcomes, and operator decisions by episode. "
+                    "WAITING items require explicit review; historical events are read-only.",
+                    id="repair-help",
+                )
                 with Horizontal(id="repair-toolbar"):
                     yield Button("Refresh repair", id="repair-refresh")
+                    yield Input(placeholder="Filter by target, state, episode, or description", id="repair-filter")
                 with Grid(id="repair-split"):
                     with Vertical(classes="repair-pane"):
                         yield Static(
@@ -583,6 +594,7 @@ class CaretakerConsoleApp(App):
                         )
                         yield RichLog(id="repair-output", wrap=False, markup=True)
                         with Horizontal(id="repair-actions"):
+                            yield Checkbox("I reviewed candidate and evidence gaps", id="repair-approve-confirm", disabled=True)
                             yield Input(
                                 placeholder="Rejection reason (used only for Reject)",
                                 id="repair-reason",
@@ -592,6 +604,10 @@ class CaretakerConsoleApp(App):
                                 id="repair-source",
                                 disabled=True,
                             )
+                        with Horizontal(id="repair-context-actions"):
+                            yield Button("Triggering logs", id="repair-open-logs", disabled=True)
+                            yield Button("Guard evidence", id="repair-open-guard", disabled=True)
+                            yield Button("Investigate episode", id="repair-open-investigate", disabled=True, variant="primary")
                             yield Button(
                                 "Approve",
                                 id="repair-approve",
@@ -1516,7 +1532,7 @@ class CaretakerConsoleApp(App):
                 return
             try:
                 record_number = int(row[0])
-                record = self._repair_records[record_number - 1]
+                record = self._displayed_repair_records[record_number - 1]
             except (TypeError, ValueError, IndexError):
                 return
             self._selected_repair_record = record
@@ -1532,8 +1548,13 @@ class CaretakerConsoleApp(App):
                 else None
             )
             actionable = self._selected_repair_approval is not None and bool(self._application_running)
-            self.query_one("#repair-approve", Button).disabled = not actionable
+            confirmation = self.query_one("#repair-approve-confirm", Checkbox)
+            confirmation.value = False
+            confirmation.disabled = not actionable
+            self.query_one("#repair-approve", Button).disabled = True
             self.query_one("#repair-reject", Button).disabled = not actionable
+            for button_id in ("#repair-open-logs", "#repair-open-guard", "#repair-open-investigate"):
+                self.query_one(button_id, Button).disabled = False
             source_button = self.query_one("#repair-source", Button)
             source_button.label = "View source"
             source_button.disabled = self._repair_source(record) is None
@@ -1544,7 +1565,24 @@ class CaretakerConsoleApp(App):
             else:
                 title = f"Repair event | {record.get('target_id', '-')}"
             self.query_one("#repair-detail-title", Static).update(title)
-            self._write_json("#repair-output", record.get("payload", record))
+            if record.get("record_kind") == "pending_approval":
+                approval = record.get("payload") or {}
+                output = self.query_one("#repair-output", RichLog)
+                output.clear()
+                output.write(
+                    f"[b]Decision required[/b] Activate candidate for {record.get('target_id')}\n"
+                    f"[b]Episode[/b] {record.get('episode_id')}\n"
+                    f"[b]Candidate[/b] {approval.get('candidate_id', '-')}\n"
+                    f"[b]Expected current version[/b] {approval.get('expected_function_version', '-')}\n"
+                    f"[b]Why approval is required[/b] {approval.get('reason', '-')}\n"
+                    f"[b]Artifact hash[/b] {approval.get('artifact_hash', '-')}\n"
+                    f"[b]Authority generation[/b] {approval.get('authority_policy_generation', '-')}\n"
+                    "[yellow]Evidence limitation: the approval record does not currently include the validation backend, "
+                    "complete validation report, or original-source diff. Review candidate source and triggering evidence; "
+                    "approval does not prove those missing assurances.[/yellow]"
+                )
+            else:
+                self._write_json("#repair-output", record.get("payload", record))
             return
 
         if event.data_table.id == "policy-table":
@@ -2092,11 +2130,17 @@ class CaretakerConsoleApp(App):
             self._apply_guard_filter()
         elif event.input.id == "behavior-filter":
             self._apply_behavior_filter()
+        elif event.input.id == "repair-filter":
+            self._apply_repair_filter()
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         if event.checkbox.id == "guard-baseline-confirm":
             self.query_one("#guard-baseline", Button).disabled = not (
                 event.value and self._selected_guard_target
+            )
+        elif event.checkbox.id == "repair-approve-confirm":
+            self.query_one("#repair-approve", Button).disabled = not (
+                event.value and self._selected_repair_approval and self._application_running
             )
 
     @staticmethod
@@ -2369,6 +2413,11 @@ class CaretakerConsoleApp(App):
         self._repair_source_view = False
         self.query_one("#repair-approve", Button).disabled = True
         self.query_one("#repair-reject", Button).disabled = True
+        confirmation = self.query_one("#repair-approve-confirm", Checkbox)
+        confirmation.value = False
+        confirmation.disabled = True
+        for button_id in ("#repair-open-logs", "#repair-open-guard", "#repair-open-investigate"):
+            self.query_one(button_id, Button).disabled = True
         source_button = self.query_one("#repair-source", Button)
         source_button.disabled = True
         source_button.label = "View source"
@@ -2498,19 +2547,7 @@ class CaretakerConsoleApp(App):
         )
         self.query_one("#repair-detail-title", Static).update("Selected Repair record")
 
-        table = self.query_one("#repair-table", DataTable)
-        table.clear()
-        for index, record in enumerate(records, start=1):
-            timestamp = record["timestamp"]
-            rendered_time = timestamp[:19].replace("T", " ") if timestamp else "-"
-            table.add_row(
-                index,
-                record["state"],
-                rendered_time,
-                self._compact_log_text(record["target_id"], limit=28),
-                self._compact_log_text(record["description"], limit=72),
-                self._compact_log_text(record["episode_id"], limit=12) or "-",
-            )
+        self._apply_repair_filter()
 
         if errors:
             self._show_repair_message(
@@ -2523,6 +2560,34 @@ class CaretakerConsoleApp(App):
                 "Validated replacement source can be reviewed as formatted Python before approval."
                 if records else "No Repair events or pending approvals were returned."
             )
+
+    def _apply_repair_filter(self) -> None:
+        expression = self.query_one("#repair-filter", Input).value.strip().casefold()
+        self._displayed_repair_records = [
+            record for record in self._repair_records
+            if not expression or expression in json.dumps(record, default=str).casefold()
+        ]
+        self._displayed_repair_records.sort(
+            key=lambda record: (
+                0 if record.get("state") == "WAITING" else 1,
+                str(record.get("episode_id") or ""),
+                str(record.get("timestamp") or ""),
+            )
+        )
+        table = self.query_one("#repair-table", DataTable)
+        table.clear()
+        for index, record in enumerate(self._displayed_repair_records, start=1):
+            timestamp = record["timestamp"]
+            rendered_time = timestamp[:19].replace("T", " ") if timestamp else "-"
+            table.add_row(
+                index,
+                record["state"],
+                rendered_time,
+                self._compact_log_text(record["target_id"], limit=28),
+                self._compact_log_text(record["description"], limit=72),
+                self._compact_log_text(record["episode_id"], limit=12) or "-",
+            )
+
 
     def _local_authority_snapshot(self) -> dict[str, Any]:
         candidates = [self.data_directory / "policy" / "authority-effective.json"]
@@ -2664,6 +2729,29 @@ class CaretakerConsoleApp(App):
                 if button == "overview-guard":
                     self._selected_guard_target = target
                     self._activate_tab("guard")
+                    return
+            if button.startswith("repair-open-"):
+                record = self._selected_repair_record
+                if record is None:
+                    raise ValueError("Select a Repair record first")
+                target = str(record.get("target_id") or "")
+                if button == "repair-open-logs":
+                    terms = [f"target:{target}"] if target and target != "-" else []
+                    self.query_one("#logs-filter", Input).value = " ".join(terms)
+                    self._apply_log_filter()
+                    self._activate_tab("logs")
+                    return
+                if button == "repair-open-guard":
+                    self._selected_guard_target = target or None
+                    self._activate_tab("guard")
+                    return
+                if button == "repair-open-investigate":
+                    if target and target != "-":
+                        self.query_one("#investigate-target", Input).value = target
+                    self.query_one("#investigate-objective", Input).value = (
+                        f"Investigate Repair episode {record.get('episode_id') or 'unknown'}"
+                    )
+                    self._activate_tab("investigate")
                     return
                 if button == "overview-behavior":
                     self.query_one("#behavior-subject", Input).value = target

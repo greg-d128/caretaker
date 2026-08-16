@@ -117,6 +117,16 @@ artifact integrity, while snapshot detail reports environment/workload labels,
 sampling strata, resource coverage, and monitoring provenance. Saving current
 observations does not execute the target function.
 
+The **Repair** view lists waiting decisions first and supports target, state,
+episode, and description filtering. A pending approval is rendered as a decision
+summary containing the candidate identity, expected active version, artifact
+hash, authority generation, and reason approval is required. The console also
+states which assurance evidence is absent from the current approval protocol;
+operators must not interpret approval as proof of missing validation lineage.
+Approval remains disabled until the candidate and evidence gaps are explicitly
+acknowledged. Selected episodes link directly to triggering Logs, Guard evidence,
+and Investigation.
+
 The filter field accepts ordinary case-insensitive text and compact field
 selectors. Multiple terms are combined with AND semantics. Examples:
 
