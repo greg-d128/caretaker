@@ -77,3 +77,29 @@ def test_repair_source_extracts_pending_approval_source():
         "def divide_values(left, right):\n    return left / right\n"
     )
     assert CaretakerConsoleApp._repair_source({"payload": {}}) is None
+
+
+def test_investigation_candidates_prioritize_security_channels_and_warnings():
+    assert CaretakerConsoleApp._is_investigation_candidate(
+        {"severity": 20, "channel": "GUARD"}
+    )
+    assert CaretakerConsoleApp._is_investigation_candidate(
+        {"severity": 40, "channel": "APPLICATION"}
+    )
+    assert not CaretakerConsoleApp._is_investigation_candidate(
+        {"severity": 20, "channel": "APPLICATION"}
+    )
+
+
+def test_guard_last_check_uses_latest_evidence_timestamp():
+    assert CaretakerConsoleApp._latest_evidence_time(
+        [{"created_at": "2026-08-16T10:00:00+00:00"}],
+        [{"created_at": "2026-08-16T11:30:00+00:00"}],
+    ) == "2026-08-16 11:30:00"
+    assert CaretakerConsoleApp._latest_evidence_time([], []) == "never"
+
+
+def test_guard_decision_subject_resolves_target_without_manual_identifier():
+    assert CaretakerConsoleApp._subject_target(
+        {"subject": {"target_id": "lab.divide"}}
+    ) == "lab.divide"

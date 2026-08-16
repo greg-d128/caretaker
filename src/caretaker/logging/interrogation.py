@@ -64,6 +64,10 @@ class LogInterrogator:
         selected = [record for record in records if request.period_start <= record.occurred_at <= request.period_end]
         if request.target_ids:
             selected = [record for record in selected if record.target_id in request.target_ids]
+        if request.call_ids:
+            selected = [record for record in selected if record.call_id in request.call_ids]
+        if request.incident_ids:
+            selected = [record for record in selected if record.incident_id in request.incident_ids]
         templates = Counter(record.message_template or record.formatted_message or "" for record in selected)
         severity_values = [record.severity for record in selected]
         mean = statistics.fmean(severity_values) if severity_values else 0.0

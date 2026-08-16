@@ -137,6 +137,41 @@ class CaretakerConsoleApp(App):
         padding: 0 1;
         background: $surface;
     }
+    #logs-actions, #guard-actions, #investigate-actions {
+        height: 4;
+        padding: 0 1;
+        align-vertical: middle;
+    }
+    #logs-actions Button, #guard-actions Button, #investigate-actions Button {
+        width: auto;
+        min-width: 14;
+        margin-right: 1;
+    }
+    #guard-split, #investigate-split {
+        height: 1fr;
+        min-height: 0;
+        grid-size: 2 1;
+        grid-columns: 3fr 2fr;
+        grid-rows: 1fr;
+        grid-gutter: 1;
+    }
+    .guard-pane, .investigate-pane {
+        height: 1fr;
+        min-height: 0;
+        border: solid $surface-lighten-2;
+        overflow: hidden hidden;
+    }
+    .context-pane-title {
+        height: 3;
+        padding: 1 2;
+        text-style: bold;
+        border-bottom: solid $surface-lighten-2;
+    }
+    #guard-table, #guard-output, #investigate-table, #investigate-output {
+        height: 1fr;
+        min-height: 0;
+        border: none;
+    }
     #logs-table, #logs-output {
         height: 1fr;
         min-height: 0;
@@ -309,6 +344,11 @@ class CaretakerConsoleApp(App):
         self._selected_behavior_snapshot: str | None = None
         self._behavior_compare_anchor: str | None = None
         self._behavior_last_comparison: dict[str, Any] | None = None
+        self._guard_records: list[dict[str, Any]] = []
+        self._selected_guard_target: str | None = None
+        self._investigation_records: list[dict[str, Any]] = []
+        self._selected_investigation_record: dict[str, Any] | None = None
+        self._selected_log_record: dict[str, Any] | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -331,15 +371,24 @@ class CaretakerConsoleApp(App):
                 yield table
                 yield RichLog(id="target-details", wrap=True, markup=True)
             with TabPane("Guard", id="guard"):
-                with Horizontal(classes="toolbar"):
-                    yield Input(placeholder="Target id", id="guard-target")
+                with Horizontal(id="guard-actions"):
+                    yield Button("Refresh", id="guard-refresh", variant="primary")
                     yield Button("Summary", id="guard-summary")
                     yield Button("Events", id="guard-events")
                     yield Button("Deviations", id="guard-deviations")
                     yield Button("Inspections", id="guard-inspections")
                     yield Button("Accept baseline", id="guard-baseline")
                     yield Button("LLM assist", id="guard-assess")
-                yield RichLog(id="guard-output", wrap=True, markup=True)
+                with Grid(id="guard-split"):
+                    with Vertical(classes="guard-pane"):
+                        yield Static("Guard operational status", classes="context-pane-title")
+                        table = DataTable(id="guard-table")
+                        table.cursor_type = "row"
+                        table.add_columns("Target", "Status", "Last check", "Violations", "Escalations")
+                        yield table
+                    with Vertical(classes="guard-pane"):
+                        yield Static("Select a Guard target", id="guard-detail-title", classes="context-pane-title")
+                        yield RichLog(id="guard-output", wrap=True, markup=True)
             with TabPane("Behavior", id="behavior"):
                 with Horizontal(id="behavior-toolbar"):
                     yield Input(
@@ -459,7 +508,16 @@ class CaretakerConsoleApp(App):
                     "sends the bounded evidence bundle to the configured local Ollama endpoint.",
                     id="investigate-help",
                 )
-                yield RichLog(id="investigate-output", wrap=True, markup=True)
+                with Grid(id="investigate-split"):
+                    with Vertical(classes="investigate-pane"):
+                        yield Static("Recent items worth investigating", classes="context-pane-title")
+                        table = DataTable(id="investigate-table")
+                        table.cursor_type = "row"
+                        table.add_columns("#", "Time", "Level", "Channel", "Target", "Description")
+                        yield table
+                    with Vertical(classes="investigate-pane"):
+                        yield Static("Select an item or investigate the current period", id="investigate-detail-title", classes="context-pane-title")
+                        yield RichLog(id="investigate-output", wrap=True, markup=True)
             with TabPane("Logs", id="logs"):
                 with Grid(id="logs-split"):
                     with Vertical(classes="logs-pane"):
@@ -474,6 +532,9 @@ class CaretakerConsoleApp(App):
                         table.cursor_type = "row"
                         table.add_columns("#", "Time", "Level", "Channel", "Target", "Message")
                         yield table
+                        with Horizontal(id="logs-actions"):
+                            yield Button("Investigate similar", id="logs-investigate", disabled=True, variant="primary")
+                            yield Button("Open related tab", id="logs-related", disabled=True)
                     with Vertical(classes="logs-pane"):
                         yield Static(
                             "Selected log record | R refreshes",
@@ -833,7 +894,158 @@ class CaretakerConsoleApp(App):
             target["status"] = self._target_status(target)
         self._apply_target_filter()
 
+    @staticmethod
+    def _subject_target(value: Any) -> str:
+        if not isinstance(value, dict):
+            return ""
+        subject = value.get("subject")
+        if isinstance(subject, dict):
+            return str(subject.get("target_id") or "")
+        return str(value.get("target_id") or "")
+
+    @staticmethod
+    def _latest_evidence_time(*groups: Any) -> str:
+        values = []
+        for group in groups:
+            if not isinstance(group, (list, tuple)):
+                continue
+            for item in group:
+                if isinstance(item, dict) and item.get("created_at"):
+                    values.append(str(item["created_at"]))
+        if not values:
+            return "never"
+        return max(values).replace("T", " ").replace("+00:00", "Z")[:19]
+
+    async def refresh_guard(self) -> None:
+        targets = [
+            target for target in self._target_records
+            if target.get("guard_enabled") and target.get("target_id")
+        ]
+        records: list[dict[str, Any]] = []
+        decisions: list[dict[str, Any]] = []
+        if self._application_running:
+            try:
+                response = await self._request("runtime-guard-decisions", limit=200)
+                decisions = [dict(item) for item in response.get("decisions", ()) if isinstance(item, dict)]
+            except Exception:
+                decisions = []
+            responses = await asyncio.gather(
+                *(
+                    asyncio.gather(
+                        self._request("runtime-guard-summary", target=str(target["target_id"])),
+                        self._request("runtime-guard-deviations", target=str(target["target_id"]), limit=100),
+                        self._request("runtime-guard-inspections", target=str(target["target_id"]), limit=100),
+                        return_exceptions=True,
+                    )
+                    for target in targets
+                )
+            )
+        else:
+            responses = [()] * len(targets)
+
+        for target, response_group in zip(targets, responses):
+            target_id = str(target["target_id"])
+            summary_response = response_group[0] if len(response_group) > 0 else {}
+            deviations_response = response_group[1] if len(response_group) > 1 else {}
+            inspections_response = response_group[2] if len(response_group) > 2 else {}
+            summary = summary_response.get("summary") if isinstance(summary_response, dict) else None
+            deviations = deviations_response.get("deviations", ()) if isinstance(deviations_response, dict) else ()
+            inspections = inspections_response.get("inspections", ()) if isinstance(inspections_response, dict) else ()
+            target_decisions = [item for item in decisions if self._subject_target(item) == target_id]
+            records.append({
+                "target_id": target_id,
+                "status": target.get("status") or "READY",
+                "last_check": self._latest_evidence_time(inspections, deviations),
+                "violation_count": len(deviations),
+                "escalation_count": len(target_decisions),
+                "summary": summary,
+                "deviations": deviations,
+                "inspections": inspections,
+                "decisions": target_decisions,
+            })
+        self._guard_records = records
+        table = self.query_one("#guard-table", DataTable)
+        table.clear()
+        for record in records:
+            table.add_row(
+                record["target_id"],
+                str(record["status"]),
+                str(record["last_check"]),
+                str(record["violation_count"]),
+                str(record["escalation_count"]),
+                key=record["target_id"],
+            )
+        if not records:
+            output = self.query_one("#guard-output", RichLog)
+            output.clear()
+            output.write("No Guard-enabled runtime targets are currently available.")
+
+    @classmethod
+    def _is_investigation_candidate(cls, record: dict[str, Any]) -> bool:
+        try:
+            severity = int(record.get("severity") or 0)
+        except (TypeError, ValueError):
+            severity = 0
+        channel = str(record.get("channel") or "").upper()
+        return severity >= 30 or channel in {"GUARD", "REPAIR", "INTEGRITY", "AUDIT", "EMERGENCY"}
+
+    def _refresh_investigation_candidates(
+        self,
+        records: list[dict[str, Any]] | None = None,
+        *,
+        include_all: bool = False,
+    ) -> None:
+        source = records if records is not None else self._log_records
+        self._investigation_records = [
+            record for record in source
+            if include_all or self._is_investigation_candidate(record)
+        ][:100]
+        table = self.query_one("#investigate-table", DataTable)
+        table.clear()
+        for index, record in enumerate(self._investigation_records, start=1):
+            occurred_at = str(record.get("occurred_at") or "")
+            table.add_row(
+                str(index),
+                occurred_at[:19].replace("T", " ") if occurred_at else "-",
+                self._log_level(record.get("severity")),
+                self._compact_log_text(record.get("channel"), limit=14) or "-",
+                self._compact_log_text(record.get("target_id"), limit=24) or "-",
+                self._compact_log_text(record.get("message"), limit=64) or "-",
+            )
+
+    def _activate_tab(self, tab_id: str) -> None:
+        self.query_one(TabbedContent).active = tab_id
+
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if event.data_table.id == "guard-table":
+            row = event.data_table.get_row(event.row_key)
+            if not row:
+                return
+            target_id = str(row[0])
+            record = next((item for item in self._guard_records if item["target_id"] == target_id), None)
+            if record is None:
+                return
+            self._selected_guard_target = target_id
+            self.query_one("#guard-detail-title", Static).update(f"Guard target {target_id}")
+            self._write_json("#guard-output", record)
+            return
+
+        if event.data_table.id == "investigate-table":
+            row = event.data_table.get_row(event.row_key)
+            try:
+                record = self._investigation_records[int(row[0]) - 1]
+            except (TypeError, ValueError, IndexError):
+                return
+            self._selected_investigation_record = record
+            target = str(record.get("target_id") or "")
+            if target:
+                self.query_one("#investigate-target", Input).value = target
+            self.query_one("#investigate-detail-title", Static).update(
+                f"Selected {record.get('channel', '-')} evidence | {target or 'no target'}"
+            )
+            self._write_json("#investigate-output", record)
+            return
+
         if event.data_table.id == "logs-table":
             row = event.data_table.get_row(event.row_key)
             if not row:
@@ -847,6 +1059,9 @@ class CaretakerConsoleApp(App):
                 f"Log record {record_number} | "
                 f"{record.get('channel', '-')} | {record.get('target_id') or 'no target'}"
             )
+            self._selected_log_record = record
+            self.query_one("#logs-investigate", Button).disabled = False
+            self.query_one("#logs-related", Button).disabled = False
             self._write_json("#logs-output", record)
             return
 
@@ -1205,6 +1420,13 @@ class CaretakerConsoleApp(App):
             await self.refresh_targets()
             await self.refresh_repair()
         try:
+            await self.refresh_guard()
+        except Exception as exc:
+            self._write_json(
+                "#guard-output",
+                {"error": f"Unable to refresh Guard status: {type(exc).__name__}: {exc}"},
+            )
+        try:
             await self.refresh_behavior()
         except Exception as exc:
             self._write_json(
@@ -1384,7 +1606,11 @@ class CaretakerConsoleApp(App):
         except Exception:
             records = self._local_log_records(200)
         self._log_records = self._sorted_log_records(records)
+        self._selected_log_record = None
+        self.query_one("#logs-investigate", Button).disabled = True
+        self.query_one("#logs-related", Button).disabled = True
         self._apply_log_filter()
+        self._refresh_investigation_candidates()
 
     def _local_log_records(self, limit: int) -> list[dict[str, Any]]:
         event_directories = []
@@ -1413,6 +1639,9 @@ class CaretakerConsoleApp(App):
                 "logger": item.logger_name,
                 "message": item.formatted_message or item.message_template,
                 "target_id": str(item.target_id) if item.target_id else None,
+                "record_id": str(item.record_id),
+                "call_id": str(item.call_id) if item.call_id else None,
+                "incident_id": str(item.incident_id) if item.incident_id else None,
                 "fields": dict(item.fields),
             }
             for item in envelopes[-max(1, limit):]
@@ -1853,7 +2082,12 @@ class CaretakerConsoleApp(App):
                     await self.refresh_behavior()
                     return
             if button.startswith("guard-"):
-                target = self._target("#guard-target")
+                if button == "guard-refresh":
+                    await self.refresh_guard()
+                    return
+                target = self._selected_guard_target
+                if not target:
+                    raise ValueError("Select a Guard target from the operational status table first")
                 command_map = {
                     "guard-summary": "runtime-guard-summary",
                     "guard-events": "runtime-guard-events",
@@ -1864,6 +2098,63 @@ class CaretakerConsoleApp(App):
                 }
                 response = await self._request(command_map[button], target=target, limit=100)
                 self._write_json("#guard-output", response)
+                return
+            if button == "logs-investigate":
+                record = self._selected_log_record
+                if record is None:
+                    raise ValueError("Select a log record first")
+                target = str(record.get("target_id") or "")
+                channel = str(record.get("channel") or "")
+                logger = str(record.get("logger") or "")
+                terms = [f"target:{target}"] if target else []
+                if channel:
+                    terms.append(f"channel:{channel}")
+                if not target and logger:
+                    terms.append(f"logger:{logger}")
+                expression = " ".join(terms)
+                self.query_one("#logs-filter", Input).value = expression
+                self._apply_log_filter()
+                self._refresh_investigation_candidates(
+                    self._displayed_log_records,
+                    include_all=True,
+                )
+                self._selected_investigation_record = record
+                if target:
+                    self.query_one("#investigate-target", Input).value = target
+                message = self._compact_log_text(record.get("message"), limit=100)
+                self.query_one("#investigate-objective", Input).value = (
+                    f"Investigate evidence similar to: {message}"
+                )
+                self.query_one("#investigate-detail-title", Static).update(
+                    f"Context from Logs | {channel or '-'} | {target or logger or 'unscoped'}"
+                )
+                self._write_json("#investigate-output", record)
+                self._activate_tab("investigate")
+                return
+            if button == "logs-related":
+                record = self._selected_log_record
+                if record is None:
+                    raise ValueError("Select a log record first")
+                channel = str(record.get("channel") or "").upper()
+                target = str(record.get("target_id") or "")
+                if channel == "GUARD" and target:
+                    self._selected_guard_target = target
+                    guard_record = next(
+                        (item for item in self._guard_records if item["target_id"] == target),
+                        {"target_id": target, "message": "Select a Guard action for live details"},
+                    )
+                    self.query_one("#guard-detail-title", Static).update(f"Guard target {target}")
+                    self._write_json("#guard-output", guard_record)
+                    self._activate_tab("guard")
+                elif channel == "REPAIR":
+                    self._activate_tab("repair")
+                elif channel in {"AUDIT", "INTEGRITY"}:
+                    self._activate_tab("policy")
+                elif target:
+                    self.query_one("#behavior-subject", Input).value = target
+                    self._activate_tab("behavior")
+                else:
+                    self._activate_tab("investigate")
                 return
             if button == "repair-refresh":
                 await self.refresh_repair()
@@ -1961,9 +2252,12 @@ class CaretakerConsoleApp(App):
                 target = self.query_one("#investigate-target", Input).value.strip()
                 model = self.query_one("#investigate-model", Input).value.strip()
                 objective = self.query_one("#investigate-objective", Input).value.strip()
+                selected = self._selected_investigation_record or {}
                 response = await self._request(
                     "investigate",
                     target=target or None,
+                    call_id=selected.get("call_id"),
+                    incident_id=selected.get("incident_id"),
                     model=model or None,
                     objective=objective or "Investigate the current Caretaker incident",
                     minutes=15,
@@ -1976,6 +2270,8 @@ class CaretakerConsoleApp(App):
                 output = "#behavior-output"
             elif button == "investigate-run":
                 output = "#investigate-output"
+            elif button.startswith("logs-"):
+                output = "#logs-output"
             elif button.startswith("policy-"):
                 output = "#policy-output"
             self._write_json(output, {"error": f"{type(exc).__name__}: {exc}"})

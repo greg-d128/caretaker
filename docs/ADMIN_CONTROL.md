@@ -70,6 +70,12 @@ Tabs provide target/FunctionSlot inspection, Guard evidence and baseline
 operations, Repair event/approval controls, persisted logs, and Guard LLM
 assistance when the application configured an advisory assessment provider.
 
+The **Guard** tab discovers Guard-enabled runtime targets and presents their
+operational status, most recent inspection/deviation time, recent violation
+count, and escalation count. Selecting a row supplies the target context for
+summary, event, deviation, inspection, baseline, and advisory actions; operators
+do not need to copy an internal target identifier from another screen.
+
 ### Log browsing and filtering
 
 The **Logs** view orders records by their `occurred_at` timestamp, newest first,
@@ -91,6 +97,12 @@ message:validation level:error
 warning, error, and critical records. Supported selectors are `level`,
 `channel`, `target`, `logger`, and `message`; unqualified text searches the full
 JSON record.
+
+Selecting a log enables contextual navigation. **Investigate similar** applies
+the available target/channel/logger context, shows the matching evidence queue,
+and opens Investigate. **Open related tab** routes Guard records to the selected
+Guard target, Repair records to Repair, integrity/audit records to Policy, and
+targeted application records to Behavior when that context is meaningful.
 
 ### Structured control-plane failure evidence
 
@@ -126,9 +138,11 @@ JSON write to standard error.
 
 ### Incident investigation and LLM assistance
 
-The Textual console includes an **Investigate** view. It builds a bounded logging
-interrogation bundle for the selected target and recent time window and includes
-recent Guard deviations when available.
+The Textual console includes an **Investigate** view. It lists recent warnings
+and security-channel records as selectable investigation candidates, rather
+than requiring an operator to know a target ID in advance. It builds a bounded
+logging interrogation bundle for the selected target, call, or incident and
+recent time window, and includes recent Guard deviations when available.
 
 With no model selected, Caretaker performs deterministic interrogation only. If
 the operator explicitly supplies an Ollama model, the supervisor sends the

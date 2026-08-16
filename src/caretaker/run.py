@@ -458,6 +458,9 @@ def main(argv: list[str] | None = None) -> int:
                         "logger": item.logger_name,
                         "message": item.formatted_message or item.message_template,
                         "target_id": str(item.target_id) if item.target_id else None,
+                        "record_id": str(item.record_id),
+                        "call_id": str(item.call_id) if item.call_id else None,
+                        "incident_id": str(item.incident_id) if item.incident_id else None,
                         "fields": dict(item.fields),
                     }
                     for item in records[-limit:]
@@ -468,6 +471,8 @@ def main(argv: list[str] | None = None) -> int:
             if not interrogation_policy.enabled:
                 raise PermissionError("logging.interrogation.enabled=False")
             target = str(request.get("target") or "").strip()
+            call_id = str(request.get("call_id") or "").strip()
+            incident_id = str(request.get("incident_id") or "").strip()
             minutes = max(1, min(int(request.get("minutes", 15)), 24 * 60))
             objective = str(request.get("objective") or "Investigate the current Caretaker incident")
             now = datetime.now(timezone.utc)
@@ -475,6 +480,8 @@ def main(argv: list[str] | None = None) -> int:
                 period_start=now - timedelta(minutes=minutes),
                 period_end=now,
                 target_ids=(target,) if target else (),
+                call_ids=(UUID(call_id),) if call_id else (),
+                incident_ids=(UUID(incident_id),) if incident_id else (),
                 objective=objective,
             )
             behavior = ()
