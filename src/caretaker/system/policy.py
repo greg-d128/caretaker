@@ -179,7 +179,7 @@ def load_system_policy(
         from ..logging.models import CompressionAlgorithm
         compression_data["algorithm"] = _enum(CompressionAlgorithm, compression_data["algorithm"])
 
-    return SystemCollectionPolicy(
+    policy = SystemCollectionPolicy(
         enabled=bool(raw.get("enabled", False)),
         interval_seconds=float(raw.get("interval_seconds", 5.0)),
         host_sources=_source_selection(raw.get("host_sources"), DEFAULT_HOST_SOURCES, per_process=False),
@@ -210,3 +210,39 @@ def load_system_policy(
             raw.get("failure_action", "CONTINUE_WITH_WARNING"),
         ),
     )
+    validate_system_policy(policy)
+    return policy
+
+
+class SystemPolicyConfigurationError(ValueError):
+    """Raised when system collection policy requests unavailable semantics."""
+
+
+def validate_system_policy(policy: SystemCollectionPolicy) -> None:
+    errors: list[str] = []
+    if policy.interval_seconds <= 0:
+        errors.append("interval_seconds must be greater than zero")
+    if policy.process_selector.include_same_cgroup:
+        errors.append("process_selector.include_same_cgroup is reserved until cgroup-aware process discovery is implemented")
+    if policy.redaction.capture_environment and not policy.redaction.environment_name_allowlist:
+        errors.append("redaction.capture_environment=True requires a non-empty environment_name_allowlist")
+    if policy.redaction.environment_name_allowlist and not policy.redaction.capture_environment:
+        errors.append("redaction.environment_name_allowlist requires capture_environment=True")
+    if policy.unavailable_source_action in {UnavailableSourceAction.DEGRADE_HIGHER_MODE, UnavailableSourceAction.REFUSE_MODE}:
+        errors.append(
+            f"unavailable_source_action={policy.unavailable_source_action.name} is reserved; "
+            "RECORD_AND_CONTINUE and STOP_APPLICATION are implemented"
+        )
+    if policy.failure_action in {SystemCollectionFailureAction.DEGRADE_GUARD, SystemCollectionFailureAction.REFUSE_RESEARCH_MODE}:
+        errors.append(
+            f"failure_action={policy.failure_action.name} is reserved; "
+            "CONTINUE_WITH_WARNING and STOP_APPLICATION are implemented"
+        )
+    if policy.rotation.maximum_open_segments != 1:
+        errors.append("rotation.maximum_open_segments is reserved; system collection supports one open segment per source")
+    if policy.compression.compression_workers != 1:
+        errors.append("compression.compression_workers is reserved; system compression is single-worker")
+    if policy.retention.preserve_incident_segments or policy.retention.preserve_baseline_segments:
+        errors.append("system retention preserve_* segment classes are not applicable to system-source streams")
+    if errors:
+        raise SystemPolicyConfigurationError("Invalid system collection policy:\n- " + "\n- ".join(errors))

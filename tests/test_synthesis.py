@@ -57,7 +57,10 @@ def broken_divide(total: float, count: int) -> float:
         retry=RetryPolicy(max_attempts=1, safety=ReplaySafety.PURE),
         selection=CandidateSelectionPolicy(
             minimum_total_score=70,
-            synthesis=CandidateSynthesisPolicy(enabled=True),
+            synthesis=CandidateSynthesisPolicy(
+                enabled=True,
+                require_score_improvement=False,
+            ),
         ),
         scoring=ScoringPolicy(
             performance_weight=0.0,

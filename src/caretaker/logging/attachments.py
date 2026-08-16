@@ -102,7 +102,11 @@ class AttachmentStore:
         probability = self._sampling_probability(priority)
         if random.random() > probability:
             return self._reference(event_id, event_sequence, content_type, schema_version, payload, b"", content_hash, False, AttachmentSamplingDecision.SAMPLED_OUT)
-        compressed = gzip.compress(payload, compresslevel=self.policy.compression.level) if self.policy.compression.enabled else payload
+        use_gzip = (
+            self.policy.compression.enabled
+            and self.policy.compression.algorithm is CompressionAlgorithm.GZIP
+        )
+        compressed = gzip.compress(payload, compresslevel=self.policy.compression.level) if use_gzip else payload
         with self._lock:
             if self._file is None:
                 self._open_segment()
@@ -135,7 +139,7 @@ class AttachmentStore:
                 attachment_id=UUID(entry["attachment_id"]), event_id=event_id, event_sequence=event_sequence,
                 content_type=content_type, schema_version=schema_version,
                 uncompressed_bytes=len(payload), compressed_bytes=len(compressed),
-                compression=CompressionAlgorithm.GZIP if self.policy.compression.enabled else CompressionAlgorithm.NONE,
+                compression=CompressionAlgorithm.GZIP if use_gzip else CompressionAlgorithm.NONE,
                 content_hash=content_hash, compressed_hash=entry["compressed_hash"],
                 attachment_segment_id=self.segment_id, segment_offset=offset, stored=True,
                 sampling_decision=AttachmentSamplingDecision.STORED,

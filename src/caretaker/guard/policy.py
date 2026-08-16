@@ -184,3 +184,61 @@ class CandidateGuardPolicy:
     maximum_new_filesystem_roots: int = 0
     maximum_new_subprocesses: int = 0
     rollback_on_significant_deviation: bool = True
+
+
+class GuardPolicyConfigurationError(ValueError):
+    """Raised when Guard policy requests semantics this runtime cannot honor."""
+
+
+def validate_guard_policy(policy: GuardPolicy) -> None:
+    """Fail closed for unsupported or internally inconsistent Guard settings.
+
+    Public policy is an assurance surface.  A non-default value is rejected when
+    the corresponding runtime behavior is not implemented rather than being
+    silently accepted.
+    """
+
+    errors: list[str] = []
+    if not 0.0 <= policy.sampling.event_sample_rate <= 1.0:
+        errors.append("sampling.event_sample_rate must be between 0 and 1")
+    if not 0.0 <= policy.sampling.stack_sample_rate <= 1.0:
+        errors.append("sampling.stack_sample_rate must be between 0 and 1")
+    if policy.sampling.maximum_events_per_second <= 0:
+        errors.append("sampling.maximum_events_per_second must be greater than zero")
+    if policy.attribution.maximum_stack_frames < 0:
+        errors.append("attribution.maximum_stack_frames cannot be negative")
+    if policy.collectors.environment_reads:
+        errors.append("collectors.environment_reads is reserved; environment-read attribution is not implemented")
+    if policy.collectors.function_calls:
+        errors.append("collectors.function_calls is reserved; general function-call collection is not implemented")
+    if policy.retention.maximum_raw_events <= 0:
+        errors.append("retention.maximum_raw_events must be greater than zero")
+    if policy.retention.raw_event_seconds != RetentionPolicy().raw_event_seconds:
+        errors.append("retention.raw_event_seconds is reserved; durable time-based raw-event pruning is not implemented")
+    if policy.retention.aggregate_seconds != RetentionPolicy().aggregate_seconds:
+        errors.append("retention.aggregate_seconds is reserved; aggregate time-based retention is not implemented")
+    if policy.actions.deviation_action is GuardDeviationAction.OPEN_INCIDENT:
+        errors.append("actions.deviation_action=OPEN_INCIDENT is reserved; use ALERT or OPEN_REPAIR_EPISODE")
+
+    for index, target in enumerate(policy.targets):
+        prefix = f"targets[{index}]"
+        if target.function_patterns:
+            errors.append(f"{prefix}.function_patterns is reserved; module targets are the implemented policy surface")
+        if target.inspection_level is not InspectionLevel.PERIODIC:
+            errors.append(f"{prefix}.inspection_level={target.inspection_level.name} is reserved; only PERIODIC is implemented")
+        if target.baseline_name is not None:
+            errors.append(f"{prefix}.baseline_name is reserved; named Guard baselines are not implemented")
+        periodic = target.periodic
+        if periodic.execution_window != PeriodicInspectionPolicy().execution_window:
+            errors.append(f"{prefix}.periodic.execution_window is reserved; execution-window scheduling is not implemented")
+        if not periodic.verify_source_hash:
+            errors.append(f"{prefix}.periodic.verify_source_hash=False is unsupported; identity inspection always verifies source identity")
+        if not periodic.verify_runtime_fingerprints:
+            errors.append(f"{prefix}.periodic.verify_runtime_fingerprints=False is unsupported; runtime fingerprints are always verified")
+        if not periodic.compare_behavior:
+            errors.append(f"{prefix}.periodic.compare_behavior=False is reserved; periodic behavior-comparison control is not independently configurable")
+        if not periodic.escalate_on_change:
+            errors.append(f"{prefix}.periodic.escalate_on_change=False is unsupported; detected integrity changes remain signal-producing")
+
+    if errors:
+        raise GuardPolicyConfigurationError("Invalid Guard policy:\n- " + "\n- ".join(errors))

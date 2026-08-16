@@ -25,7 +25,8 @@ class DifferentialResult:
     candidate_succeeded: bool
     original_succeeded: bool
     equivalent: bool | None
-    decision_reason: str
+    state_equivalent: bool | None = None
+    decision_reason: str = ""
     comparison_evidence: dict[str, Any] | None = None
     original_exception: BaseException | None = None
     candidate_exception: BaseException | None = None
@@ -220,6 +221,23 @@ class ObservationManager:
         raw = comparator(original_result, candidate_result) if comparator else original_result == candidate_result
         comparison = normalize_comparison_result(raw)
         equivalent = comparison.equivalent
+        try:
+            state_equivalent = (
+                original_args == candidate_args
+                and original_kwargs == candidate_kwargs
+            )
+        except Exception:
+            state_equivalent = False
+        reason = (
+            comparison.reason
+            or (
+                "both versions returned equivalent outputs"
+                if equivalent
+                else "both versions succeeded but returned different outputs"
+            )
+        )
+        if equivalent and not state_equivalent:
+            reason += "; argument state changes differed"
         return DifferentialResult(
             result=candidate_result if equivalent else original_result,
             original_result=original_result,
@@ -227,13 +245,10 @@ class ObservationManager:
             candidate_succeeded=True,
             original_succeeded=True,
             equivalent=equivalent,
-            decision_reason=(
-                comparison.reason
-                or (
-                    "both versions returned equivalent outputs"
-                    if equivalent
-                    else "both versions succeeded but returned different outputs"
-                )
-            ),
-            comparison_evidence=dict(comparison.evidence),
+            state_equivalent=state_equivalent,
+            decision_reason=reason,
+            comparison_evidence={
+                **dict(comparison.evidence),
+                "argument_state_equivalent": state_equivalent,
+            },
         )

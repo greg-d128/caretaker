@@ -100,8 +100,11 @@ class RetentionPolicy:
     maximum_age_days: int | None = 90
     maximum_total_bytes: int | None = None
     maximum_segments: int | None = None
-    preserve_incident_segments: bool = True
-    preserve_baseline_segments: bool = True
+    # Segment-class-aware preservation is not yet implemented.  Keep these
+    # defaults false so the public policy does not claim a guarantee the
+    # retention engine cannot currently provide.
+    preserve_incident_segments: bool = False
+    preserve_baseline_segments: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,6 +270,63 @@ class OperatorLoggingPolicy:
     @classmethod
     def application_defaults(cls, *, directory: str, application_id: str = "application") -> "OperatorLoggingPolicy":
         return cls(directory=directory, application_id=application_id)
+
+
+class LoggingPolicyConfigurationError(ValueError):
+    """Raised when logging policy requests unsupported runtime semantics."""
+
+
+def validate_operator_logging_policy(policy: OperatorLoggingPolicy) -> None:
+    """Validate that accepted logging policy has executable semantics."""
+
+    errors: list[str] = []
+    for name, rate in (("debug_rate", policy.sampling.debug_rate), ("info_rate", policy.sampling.info_rate), ("warning_rate", policy.sampling.warning_rate)):
+        if not 0.0 <= rate <= 1.0:
+            errors.append(f"sampling.{name} must be between 0 and 1")
+    if not policy.sampling.always_preserve_errors:
+        errors.append("sampling.always_preserve_errors=False is unsupported; ERROR and higher records are always preserved")
+    if policy.buffering.queue_capacity <= 0:
+        errors.append("buffering.queue_capacity must be greater than zero")
+    if policy.buffering.batch_records <= 0:
+        errors.append("buffering.batch_records must be greater than zero")
+    if policy.buffering.flush_interval_seconds <= 0:
+        errors.append("buffering.flush_interval_seconds must be greater than zero")
+    if policy.rotation.maximum_segment_bytes <= 0 or policy.rotation.maximum_segment_seconds <= 0:
+        errors.append("rotation byte/time limits must be greater than zero")
+    if policy.rotation.maximum_open_segments != 1:
+        errors.append("rotation.maximum_open_segments is reserved; this writer supports exactly one open segment")
+    if policy.compression.compression_workers != 1:
+        errors.append("compression.compression_workers is reserved; compression is single-worker in this release")
+    if not 0 <= policy.compression.level <= 9:
+        errors.append("compression.level must be between 0 and 9")
+    if policy.retention.preserve_incident_segments:
+        errors.append("retention.preserve_incident_segments is reserved until segment-class-aware retention is implemented")
+    if policy.retention.preserve_baseline_segments:
+        errors.append("retention.preserve_baseline_segments is reserved until segment-class-aware retention is implemented")
+    if policy.codec.format_version != 1:
+        errors.append("codec.format_version is fixed at 1 in this release")
+    if policy.interrogation.enabled or policy.interrogation.llm_enabled:
+        errors.append("logging.interrogation policy activation is reserved; use the explicit interrogation API/console command")
+    if policy.baseline.enabled:
+        errors.append("logging.baseline automatic baseline policy is reserved; Guard behavior snapshots are the implemented baseline mechanism")
+    if policy.metrics.enabled:
+        errors.append("logging.metrics provider correlation is reserved; no metrics provider adapter is implemented")
+    if not policy.reload.require_valid_complete_document:
+        errors.append("reload.require_valid_complete_document=False is unsupported; reloads always require a complete valid document")
+    if not policy.reload.retain_previous_on_failure:
+        errors.append("reload.retain_previous_on_failure=False is unsupported; failed reloads always retain the previous policy")
+    if not policy.signing.publish_public_key_to_log:
+        errors.append("signing.publish_public_key_to_log=False is unsupported; signed ephemeral identities require durable public-key publication")
+    if not policy.signing.publish_public_key_to_control_clients:
+        errors.append("signing.publish_public_key_to_control_clients=False is reserved; signed runtime identity remains available to control clients")
+    if policy.attachments.compression.compression_workers != 1:
+        errors.append("attachments.compression.compression_workers is reserved; attachment compression is single-worker")
+    if policy.attachments.rotation.maximum_open_segments != 1:
+        errors.append("attachments.rotation.maximum_open_segments is reserved; attachment storage supports one open segment")
+    if policy.attachments.retention.preserve_incident_segments or policy.attachments.retention.preserve_baseline_segments:
+        errors.append("attachments retention preserve_* segment classes are reserved until class-aware retention is implemented")
+    if errors:
+        raise LoggingPolicyConfigurationError("Invalid logging policy:\n- " + "\n- ".join(errors))
 
 
 MODE_REQUIREMENTS_VERSION = "logging-mode-requirements-v1"
@@ -493,6 +553,7 @@ def load_operator_policy(path: str | Path) -> tuple[OperatorLoggingPolicy, Loggi
             **_enum_if_present(WorkerFailureAction, worker_restart_data, "exhaustion_action"),
         }),
     )
+    validate_operator_logging_policy(policy)
     return policy, policy_snapshot(policy, source_path=str(path))
 
 

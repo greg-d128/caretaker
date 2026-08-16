@@ -171,31 +171,38 @@ class BufferedSegmentSink:
     def _run(self) -> None:
         while True:
             item = self._queue.get()
+            if item is self._stop_token:
+                self._queue.task_done()
+                return
+            assert isinstance(item, LogEnvelope)
+            batch = [item]
+            stop_after_batch = False
+            deadline = time.monotonic() + self.policy.buffering.flush_interval_seconds
+            while len(batch) < self.policy.buffering.batch_records:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    next_item = self._queue.get(timeout=remaining)
+                except queue.Empty:
+                    break
+                if next_item is self._stop_token:
+                    self._queue.task_done()
+                    stop_after_batch = True
+                    break
+                assert isinstance(next_item, LogEnvelope)
+                batch.append(next_item)
             try:
-                if item is self._stop_token:
-                    return
-                assert isinstance(item, LogEnvelope)
-                batch = [item]
-                while len(batch) < self.policy.buffering.batch_records:
-                    try:
-                        next_item = self._queue.get_nowait()
-                    except queue.Empty:
-                        break
-                    if next_item is self._stop_token:
-                        self._queue.task_done()
-                        for record in batch:
-                            self.writer.write(record)
-                        return
-                    batch.append(next_item)  # type: ignore[arg-type]
                 for record in batch:
                     self.writer.write(record)
                 self.writer.flush()
-                for _ in batch[1:]:
-                    self._queue.task_done()
             except Exception as exc:
                 self._last_error = exc
             finally:
-                self._queue.task_done()
+                for _ in batch:
+                    self._queue.task_done()
+            if stop_after_batch:
+                return
 
     def flush(self) -> None:
         self._queue.join()

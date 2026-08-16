@@ -221,19 +221,32 @@ def repair(
                         comparator=comparator,
                     )
                     elapsed = time.perf_counter() - started_counter
-                    if result.candidate_succeeded and (
-                        not result.original_succeeded or result.equivalent is True
-                    ):
+                    output_acceptable = (
+                        not result.original_succeeded
+                        or result.equivalent is True
+                        or not differential.reject_on_output_difference
+                    )
+                    state_acceptable = (
+                        not differential.require_equivalent_state_changes
+                        or not result.original_succeeded
+                        or result.state_equivalent is not False
+                    )
+                    if result.candidate_succeeded and output_acceptable and state_acceptable:
+                        selected_output = (
+                            result.candidate_result
+                            if result.equivalent is not True and not differential.reject_on_output_difference
+                            else result.result
+                        )
                         selected_engine.observation.record_success(
                             slot=runtime_target.slot,
                             call_id=call_id,
                             policy=runtime_target.policy.observation,
-                            output=result.result,
+                            output=selected_output,
                             mode="differential",
                         )
                         if result.equivalent and not differential.return_candidate_on_equivalence:
                             return result.original_result
-                        return result.result
+                        return selected_output
 
                     fallback = result.candidate_exception or DifferentialMismatchError(
                         result.decision_reason
@@ -458,7 +471,12 @@ def repair(
                         succeeded=succeeded,
                         elapsed_seconds=elapsed_for_logging,
                     )
-                if logging_runtime is not None and runtime_target.policy.logging.enabled and runtime_target.policy.logging.capture_calls:
+                if (
+                    logging_runtime is not None
+                    and runtime_target.policy.logging.enabled
+                    and runtime_target.policy.logging.capture_calls
+                    and (succeeded or runtime_target.policy.logging.capture_exceptions)
+                ):
                     logging_runtime.event(
                         logger_name=original.__module__,
                         severity=10 if succeeded else 40,

@@ -228,7 +228,15 @@ class SegmentWriter:
     def _rotation_due(self, next_size: int) -> bool:
         current_size = self._file.tell()
         age = (datetime.now(timezone.utc) - self._created_at).total_seconds()
-        return current_size + next_size > self.policy.rotation.maximum_segment_bytes or age >= self.policy.rotation.maximum_segment_seconds
+        crossed_midnight = (
+            self.policy.rotation.rotate_at_utc_midnight
+            and datetime.now(timezone.utc).date() != self._created_at.date()
+        )
+        return (
+            current_size + next_size > self.policy.rotation.maximum_segment_bytes
+            or age >= self.policy.rotation.maximum_segment_seconds
+            or crossed_midnight
+        )
 
     def reserve_sequence(self, record_id: UUID) -> int:
         with self._lock:
@@ -277,7 +285,11 @@ class SegmentWriter:
             closed = datetime.now(timezone.utc)
             content_hash = hashlib.sha256(self.path.read_bytes()).hexdigest()
             compressed_path: str | None = None
-            if self.policy.compression.enabled and self.policy.compression.compress_closed_segments:
+            if (
+                self.policy.compression.enabled
+                and self.policy.compression.algorithm is CompressionAlgorithm.GZIP
+                and self.policy.compression.compress_closed_segments
+            ):
                 compressed = self.path.with_suffix(self.path.suffix + ".gz")
                 with self.path.open("rb") as source, gzip.open(compressed, "wb", compresslevel=self.policy.compression.level) as target:
                     shutil.copyfileobj(source, target)
@@ -286,7 +298,11 @@ class SegmentWriter:
             signature_path: str | None = None
             signed = None
             transitions = ()
-            if self.policy.signing.mode is not RuntimeRecordIntegrityMode.HASH_CHAINED and self._record_count:
+            if (
+                self.policy.signing.mode is not RuntimeRecordIntegrityMode.HASH_CHAINED
+                and self.policy.signing.sign_closed_event_segments
+                and self._record_count
+            ):
                 signed, transitions = self.signing_service.sign_event_manifest(
                     segment_id=self.segment_id,
                     segment_hash=content_hash,

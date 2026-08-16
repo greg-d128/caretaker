@@ -67,7 +67,7 @@ from .models import (
     GuardMode,
     InstrumentationLease,
 )
-from .policy import CandidateGuardPolicy, GuardBinding, GuardPolicy
+from .policy import CandidateGuardPolicy, GuardBinding, GuardPolicy, validate_guard_policy
 from .provider import BehaviorAssessmentProvider, BehaviorAssessmentRequest
 
 
@@ -118,6 +118,7 @@ class GuardEngine(GuardFacade):
         self.policy = get_authority_runtime_context().apply(
             self._declared_policy, prefix="guard"
         )
+        validate_guard_policy(self.policy)
         self.store = store or InMemoryEvidenceStore(
             event_limit=self.policy.retention.maximum_raw_events
         )
@@ -202,6 +203,7 @@ class GuardEngine(GuardFacade):
         self.policy = get_authority_runtime_context().apply(
             self._declared_policy, prefix="guard"
         )
+        validate_guard_policy(self.policy)
         self.aggregator.policy = self.policy.aggregation
         self.baselines.policy = self.policy.baseline
         data_root = os.environ.get("CARETAKER_DATA_DIR")

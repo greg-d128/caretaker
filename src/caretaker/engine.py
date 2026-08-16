@@ -820,8 +820,13 @@ class RepairEngine:
             attempt_ids.append(attempt.attempt_id)
 
         synthesis = target.policy.selection.synthesis
+        parent_pool = (
+            (item for item in evaluated if item.score.eligible)
+            if synthesis.use_only_eligible_candidates
+            else iter(evaluated)
+        )
         eligible_initial = sorted(
-            (item for item in evaluated if item.score.eligible),
+            (item for item in parent_pool if item.score.total_score >= synthesis.minimum_parent_score),
             key=lambda item: item.score.total_score,
             reverse=True,
         )
@@ -857,6 +862,7 @@ class RepairEngine:
                     generator_kind=CandidateGeneratorKind.CONSOLIDATION,
                     parent_ids=tuple(item.candidate.candidate_id for item in parents),
                 )
+                parent_best_score = max(item.score.total_score for item in parents)
                 for candidate, proposal in synthesized_candidates:
                     proposals[candidate.candidate_id] = proposal
                     evaluated_item, attempt = self._evaluate_candidate(
@@ -867,6 +873,24 @@ class RepairEngine:
                         policy_snapshot=policy_snapshot,
                         attempt_number=len(attempt_ids) + 1,
                     )
+                    if (
+                        synthesis.require_score_improvement
+                        and evaluated_item.score.total_score
+                        < parent_best_score + synthesis.minimum_improvement
+                    ):
+                        evaluated_item = replace(
+                            evaluated_item,
+                            score=replace(
+                                evaluated_item.score,
+                                eligible=False,
+                                disqualification_reasons=tuple(
+                                    dict.fromkeys(
+                                        (*evaluated_item.score.disqualification_reasons,
+                                         "synthesized candidate did not meet minimum score improvement")
+                                    )
+                                ),
+                            ),
+                        )
                     evaluated.append(evaluated_item)
                     attempt_ids.append(attempt.attempt_id)
             except Exception as exc:

@@ -341,6 +341,15 @@ def validate_policy(policy: RepairPolicy) -> None:
         errors.append("CONSOLIDATE_TOP_CANDIDATES requires synthesis.enabled=True")
     if policy.selection.maximum_candidates_to_evaluate <= 0:
         errors.append("selection.maximum_candidates_to_evaluate must be greater than zero")
+    synthesis = policy.selection.synthesis
+    if synthesis.minimum_parent_candidates < 1:
+        errors.append("selection.synthesis.minimum_parent_candidates must be at least one")
+    if synthesis.maximum_parent_candidates < synthesis.minimum_parent_candidates:
+        errors.append("selection.synthesis.maximum_parent_candidates cannot be lower than minimum_parent_candidates")
+    if not 0 <= synthesis.minimum_parent_score <= 100:
+        errors.append("selection.synthesis.minimum_parent_score must be between 0 and 100")
+    if synthesis.minimum_improvement < 0:
+        errors.append("selection.synthesis.minimum_improvement cannot be negative")
     if not 0 <= policy.selection.minimum_total_score <= 100:
         errors.append("selection.minimum_total_score must be between 0 and 100")
     if policy.observation.initial_successful_executions < 0:
@@ -393,6 +402,23 @@ def validate_policy(policy: RepairPolicy) -> None:
         errors.append("maximum repairs per target must be greater than zero")
     if policy.limits.cooldown_seconds < 0:
         errors.append("repair cooldown cannot be negative")
+    if policy.limits.structural_review_after_repairs != RepairLimits().structural_review_after_repairs:
+        errors.append(
+            "limits.structural_review_after_repairs is reserved; non-default values are not implemented"
+        )
+    if policy.stability.oscillation_window_incidents != StabilityPolicy().oscillation_window_incidents:
+        errors.append(
+            "stability.oscillation_window_incidents is reserved; incident-window oscillation detection is not implemented"
+        )
+    if not policy.stability.require_regression_replay_before_reactivation:
+        errors.append(
+            "stability.require_regression_replay_before_reactivation=False is not supported; "
+            "failed-version reactivation remains guarded by the implemented version-history checks"
+        )
+    if policy.logging.capture_results:
+        errors.append("logging.capture_results=True is reserved for Repair bindings; result capture is not implemented on every repair return path")
+    if policy.guard.baseline_name is not None:
+        errors.append("guard.baseline_name is reserved; named Guard baselines are not implemented")
     if policy.guard.enabled and not any((
         policy.guard.observe_network,
         policy.guard.observe_filesystem,

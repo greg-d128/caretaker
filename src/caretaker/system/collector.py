@@ -13,11 +13,16 @@ from pathlib import Path
 from typing import Iterable, Mapping
 from uuid import UUID, uuid4
 
+from ..logging.models import CompressionAlgorithm
+
 from .policy import (
     ProcessSelector,
     SystemCollectionPolicy,
     SystemSourceDefinition,
     SystemTimestampMode,
+    SystemCollectionFailureAction,
+    UnavailableSourceAction,
+    validate_system_policy,
 )
 
 
@@ -83,9 +88,14 @@ class RotatingSystemStream:
     def write(self, data: bytes) -> Path:
         with self._lock:
             age = (datetime.now(timezone.utc) - self._created).total_seconds()
+            crossed_midnight = (
+                self.policy.rotation.rotate_at_utc_midnight
+                and datetime.now(timezone.utc).date() != self._created.date()
+            )
             if self._file.tell() and (
                 self._file.tell() + len(data) > self.policy.rotation.maximum_segment_bytes
                 or age >= self.policy.rotation.maximum_segment_seconds
+                or crossed_midnight
             ):
                 self.close_segment()
                 self._open()
@@ -99,7 +109,10 @@ class RotatingSystemStream:
             self._file.flush()
             os.fsync(self._file.fileno())
             self._file.close()
-            if self.policy.compression.enabled:
+            if (
+                self.policy.compression.enabled
+                and self.policy.compression.algorithm is CompressionAlgorithm.GZIP
+            ):
                 compressed = self.path.with_suffix(self.path.suffix + ".gz")
                 with self.path.open("rb") as source, gzip.open(compressed, "wb", compresslevel=self.policy.compression.level) as target:
                     shutil.copyfileobj(source, target)
@@ -132,6 +145,7 @@ class SystemDataCollector:
     """
 
     def __init__(self, policy: SystemCollectionPolicy, *, application_pid: int) -> None:
+        validate_system_policy(policy)
         self.policy = policy
         self.application_pid = application_pid
         self.output_root = Path(policy.output.directory)
@@ -163,6 +177,13 @@ class SystemDataCollector:
             for source in self.policy.process_sources:
                 if source.enabled:
                     results.append(self._capture(source, cycle_id, self._sequence, timestamp, clock, process))
+            if self.policy.redaction.capture_environment:
+                results.append(
+                    self._capture(
+                        SystemSourceDefinition("environ", "/proc/{pid}/environ", per_process=True),
+                        cycle_id, self._sequence, timestamp, clock, process,
+                    )
+                )
         return SystemCollectionCycle(
             cycle_id=cycle_id, sequence=self._sequence,
             capture_timestamp_utc=timestamp, capture_clock_value=clock,
@@ -174,7 +195,15 @@ class SystemDataCollector:
             return
         while not self._stop.is_set():
             started = time.monotonic()
-            self.collect_once()
+            try:
+                self.collect_once()
+            except BaseException:
+                if self.policy.failure_action is SystemCollectionFailureAction.STOP_APPLICATION:
+                    raise
+                if self.policy.failure_action is not SystemCollectionFailureAction.CONTINUE_WITH_WARNING:
+                    raise RuntimeError(
+                        f"unsupported system failure action reached runtime: {self.policy.failure_action.name}"
+                    )
             remaining = max(0.0, self.policy.interval_seconds - (time.monotonic() - started))
             self._stop.wait(remaining)
         self.close()
@@ -238,7 +267,17 @@ class SystemDataCollector:
         process: ProcessIdentity | None,
     ) -> SystemSourceCaptureResult:
         path_text = source.path_template.format(pid=process.pid if process else "")
+        display_path = (
+            self.policy.redaction.path_masker(path_text)
+            if self.policy.redaction.path_masker is not None
+            else path_text
+        )
         path = Path(path_text)
+        source_timestamp = (
+            datetime.now(timezone.utc)
+            if self.policy.timestamp_mode is SystemTimestampMode.PER_SOURCE_TIMESTAMP
+            else timestamp
+        )
         started = time.monotonic_ns() - clock
         try:
             if path.name == "cmdline" and not self.policy.redaction.capture_cmdline:
@@ -249,34 +288,47 @@ class SystemDataCollector:
                 body = body.replace(b"\0", b" ")
                 if self.policy.redaction.mask_cmdline:
                     body = self.policy.redaction.mask_cmdline(body.decode(errors="replace")).encode()
+            if path.name == "environ":
+                allowed = set(self.policy.redaction.environment_name_allowlist)
+                entries: list[bytes] = []
+                for raw_entry in body.split(b"\0"):
+                    if not raw_entry or b"=" not in raw_entry:
+                        continue
+                    name, _sep, _value = raw_entry.partition(b"=")
+                    if name.decode(errors="replace") in allowed:
+                        entries.append(raw_entry)
+                body = b"\n".join(entries)
             completed = time.monotonic_ns() - clock
             stream_key, output_path = self._stream_for(source, process)
             header = (
                 "@@caretaker-system-record\n"
                 f"schema_version=1\nwriter_version=0.6.0a1\ncycle_id={cycle_id}\n"
-                f"sequence={sequence}\ntimestamp_utc={timestamp.isoformat()}\n"
+                f"sequence={sequence}\ntimestamp_utc={source_timestamp.isoformat()}\n"
                 f"capture_clock_value={clock}\nread_started_offset_ns={started}\n"
-                f"read_completed_offset_ns={completed}\nsource={path_text}\n"
+                f"read_completed_offset_ns={completed}\nsource={display_path}\n"
                 f"pid={process.pid if process else ''}\nproc_start_ticks={process.proc_start_ticks if process else ''}\n"
-                f"body_bytes={len(body)}\n@@body\n"
+                f"body_bytes={len(body)}\nbody_preserved={str(self.policy.output.preserve_source_body).lower()}\n@@body\n"
             ).encode()
-            block = header + body + (b"" if body.endswith(b"\n") else b"\n") + b"@@end\n"
+            persisted_body = body if self.policy.output.preserve_source_body else b"<source body omitted by policy>"
+            block = header + persisted_body + (b"" if persisted_body.endswith(b"\n") else b"\n") + b"@@end\n"
             actual_path = self._streams[stream_key].write(block)
             now = datetime.now(timezone.utc)
-            self._statuses[source.source_id] = SystemSourceStatus(source.source_id, path_text, "AVAILABLE", now, None)
+            self._statuses[source.source_id] = SystemSourceStatus(source.source_id, display_path, "AVAILABLE", now, None)
             return SystemSourceCaptureResult(
-                source_id=source.source_id, path=path_text, process=process,
+                source_id=source.source_id, path=display_path, process=process,
                 state="CAPTURED", bytes_captured=len(body), content_hash=hashlib.sha256(body).hexdigest(),
                 output_path=str(actual_path), read_started_offset_ns=started,
                 read_completed_offset_ns=completed,
             )
         except Exception as exc:
             self._statuses[source.source_id] = SystemSourceStatus(
-                source.source_id, path_text, "UNAVAILABLE", self._statuses.get(source.source_id, SystemSourceStatus(source.source_id, path_text, "", None, None)).last_success_at,
+                source.source_id, display_path, "UNAVAILABLE", self._statuses.get(source.source_id, SystemSourceStatus(source.source_id, display_path, "", None, None)).last_success_at,
                 f"{type(exc).__name__}: {exc}",
             )
+            if self.policy.unavailable_source_action is UnavailableSourceAction.STOP_APPLICATION:
+                raise SystemExit(f"system source unavailable: {display_path}: {type(exc).__name__}: {exc}") from exc
             return SystemSourceCaptureResult(
-                source_id=source.source_id, path=path_text, process=process,
+                source_id=source.source_id, path=display_path, process=process,
                 state="UNAVAILABLE", bytes_captured=0, content_hash=None, output_path=None,
                 read_started_offset_ns=started, read_completed_offset_ns=time.monotonic_ns() - clock,
                 error=f"{type(exc).__name__}: {exc}",

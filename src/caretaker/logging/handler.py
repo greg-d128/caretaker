@@ -26,6 +26,7 @@ from .policy import (
     reconcile_policy,
     runtime_integrity_assurance,
     policy_security_warnings,
+    validate_operator_logging_policy,
     OperatorPolicyWatcher,
 )
 from .segments import SegmentWriter
@@ -77,6 +78,7 @@ class LoggingRuntime:
         self._declared_policy = policy
         self._policy_transform = policy_transform
         policy = policy_transform(policy) if policy_transform is not None else policy
+        validate_operator_logging_policy(policy)
         self.policy = policy
         self.snapshot = policy_snapshot(policy, source_path=source_path)
         self.leases = ModeLeaseManager(policy, self.snapshot)
@@ -237,6 +239,7 @@ class LoggingRuntime:
         if self._policy_transform is not None:
             policy = self._policy_transform(policy)
             snapshot = policy_snapshot(policy, source_path=snapshot.source_path)
+        validate_operator_logging_policy(policy)
         old_hash = self.snapshot.content_hash
         # Record the request under the old effective policy before a new policy
         # can disable logging or protected channels.
