@@ -160,8 +160,10 @@ def test_behavior_actions_explain_and_enforce_a_b_workflow(tmp_path):
             app._behavior_compare_anchor = "older"
             app._refresh_behavior_actions()
             assert app.query_one("#behavior-compare-a", Button).disabled is False
+            assert app.query_one("#behavior-compare-latest", Button).disabled is False
             status = str(app.query_one("#behavior-selection-status", Static).render())
             assert "cross-generation allowed" in status
+            assert "A↔latest" in status
 
     asyncio.run(exercise())
 

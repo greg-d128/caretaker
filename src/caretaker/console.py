@@ -286,6 +286,9 @@ class CaretakerConsoleApp(App):
         padding: 0 1;
         align-vertical: middle;
     }
+    #behavior-filter-row { height: 4; padding: 0 1; align-vertical: middle; }
+    #behavior-filter { width: 1fr; }
+    #behavior-filter-row Button { width: auto; min-width: 14; margin-left: 1; }
     #behavior-selection-status {
         height: 3;
         padding: 0 2;
@@ -397,6 +400,7 @@ class CaretakerConsoleApp(App):
         self._authority_rows: list[dict[str, Any]] = []
         self._selected_authority_lease: str | None = None
         self._behavior_records: list[dict[str, Any]] = []
+        self._displayed_behavior_records: list[dict[str, Any]] = []
         self._selected_behavior_snapshot: str | None = None
         self._behavior_compare_anchor: str | None = None
         self._behavior_last_comparison: dict[str, Any] | None = None
@@ -521,15 +525,21 @@ class CaretakerConsoleApp(App):
                         placeholder="Target id for function capture, or module name for module capture",
                         id="behavior-subject",
                     )
-                    yield Button("Capture function", id="behavior-capture-function", variant="primary")
-                    yield Button("Capture module", id="behavior-capture-module", variant="primary")
+                    yield Button("Save function observations", id="behavior-capture-function", variant="primary")
+                    yield Button("Save module observations", id="behavior-capture-module", variant="primary")
                     yield Button("Refresh", id="behavior-refresh")
+                with Horizontal(id="behavior-filter-row"):
+                    yield Input(
+                        placeholder="Filter snapshots: subject text, evidence:preliminary, integrity:invalid, generation:hash",
+                        id="behavior-filter",
+                    )
+                    yield Button("Clear filter", id="behavior-filter-clear")
                 with Grid(id="behavior-split"):
                     with Vertical(classes="behavior-pane"):
                         yield Static("Behavior snapshots", id="behavior-list-title", classes="behavior-pane-title")
                         table = DataTable(id="behavior-table")
                         table.cursor_type = "row"
-                        table.add_columns("#", "A", "Created", "Subject", "Hash", "Coverage", "Evidence", "Seal")
+                        table.add_columns("#", "Role", "Created", "Subject", "Generation", "Coverage", "Evidence", "Integrity")
                         yield table
                     with Vertical(classes="behavior-pane"):
                         yield Static("Selected snapshot / comparison", id="behavior-detail-title", classes="behavior-pane-title")
@@ -544,6 +554,7 @@ class CaretakerConsoleApp(App):
                     yield Button("B ↔ previous", id="behavior-compare-previous", disabled=True)
                     yield Button("Use B as A", id="behavior-set-a", disabled=True)
                     yield Button("A ↔ selected B", id="behavior-compare-a", disabled=True)
+                    yield Button("A ↔ latest", id="behavior-compare-latest", disabled=True, variant="primary")
                     yield Button("Explain comparison", id="behavior-assess-comparison", disabled=True)
                 with Horizontal(id="behavior-manage-actions"):
                     yield Button("LLM history", id="behavior-assess-history")
@@ -1471,7 +1482,7 @@ class CaretakerConsoleApp(App):
                 return
             try:
                 record_number = int(row[0])
-                record = self._behavior_records[record_number - 1]
+                record = self._displayed_behavior_records[record_number - 1]
             except (TypeError, ValueError, IndexError):
                 return
             snapshot_id = str(record.get("snapshot_id") or "")
@@ -1613,7 +1624,6 @@ class CaretakerConsoleApp(App):
         return text[:12] if text != "-" else text
 
     async def refresh_behavior(self) -> None:
-        table = self.query_one("#behavior-table", DataTable)
         response = await self._request("behavior-list")
         self._behavior_records = [
             dict(item) for item in response.get("snapshots", ()) if isinstance(item, dict)
@@ -1623,9 +1633,54 @@ class CaretakerConsoleApp(App):
             self._selected_behavior_snapshot = None
         if self._behavior_compare_anchor not in snapshot_ids:
             self._behavior_compare_anchor = None
+        self._apply_behavior_filter()
+        if not self._behavior_records:
+            self.query_one("#behavior-detail-title", Static).update("Behavior snapshots")
+            output = self.query_one("#behavior-output", RichLog)
+            output.clear()
+            output.write(
+                "No behavior snapshots have been saved. Run the target workload first, then save or refresh observations."
+            )
+        self._refresh_behavior_actions()
+
+    def _apply_behavior_filter(self) -> None:
+        expression = self.query_one("#behavior-filter", Input).value.strip().casefold()
+        tokens = expression.split()
+        self._displayed_behavior_records = []
+        for record in self._behavior_records:
+            evidence, _coverage = self._behavior_evidence(record)
+            integrity = "invalid" if record.get("verified") is False else str(
+                (record.get("integrity") or {}).get("signature_state") or "verified"
+            ).casefold()
+            fields = {
+                "subject": str(record.get("subject_key") or "").casefold(),
+                "generation": str(record.get("generation_id") or "").casefold(),
+                "evidence": evidence.casefold(),
+                "integrity": integrity,
+            }
+            searchable = (json.dumps(record, default=str) + " " + " ".join(fields.values())).casefold()
+            matched = True
+            for token in tokens:
+                if ":" in token:
+                    name, value = token.split(":", 1)
+                    if name in fields and value not in fields[name]:
+                        matched = False
+                        break
+                elif token not in searchable:
+                    matched = False
+                    break
+            if matched:
+                self._displayed_behavior_records.append(record)
+
+        latest_by_subject: dict[str, str] = {}
+        for record in self._behavior_records:
+            latest_by_subject.setdefault(
+                str(record.get("subject_key") or ""),
+                str(record.get("snapshot_id") or ""),
+            )
+        table = self.query_one("#behavior-table", DataTable)
         table.clear()
-        for index, record in enumerate(self._behavior_records, start=1):
-            profile = record.get("profile") or {}
+        for index, record in enumerate(self._displayed_behavior_records, start=1):
             subject = record.get("subject") or {}
             label = (
                 subject.get("module_name")
@@ -1636,28 +1691,30 @@ class CaretakerConsoleApp(App):
             if "T" in created:
                 created = created.replace("T", " ").replace("+00:00", "Z")[:19]
             evidence, calls_target = self._behavior_evidence(record)
+            snapshot_id = str(record.get("snapshot_id") or "")
+            roles = []
+            if snapshot_id == self._behavior_compare_anchor:
+                roles.append("A")
+            if snapshot_id == latest_by_subject.get(str(record.get("subject_key") or "")):
+                roles.append("LATEST")
+            integrity = "INVALID" if record.get("verified") is False else str(
+                (record.get("integrity") or {}).get("signature_state") or "VERIFIED"
+            )
             table.add_row(
                 str(index),
-                "A" if str(record.get("snapshot_id")) == self._behavior_compare_anchor else "",
+                ",".join(roles),
                 created,
                 str(label or "-"),
-                self._behavior_short_hash(record.get("code_hash")),
+                self._behavior_short_hash(record.get("generation_id")),
                 calls_target,
                 evidence,
-                str(record.get("seal_reason") or "-").replace("-", " "),
+                integrity,
             )
         subjects = len({str(item.get("subject_key")) for item in self._behavior_records})
         self.query_one("#behavior-list-title", Static).update(
-            f"Behavior snapshots: {len(self._behavior_records)} across {subjects} subject{'s' if subjects != 1 else ''}"
+            f"Behavior snapshots: showing {len(self._displayed_behavior_records)}/{len(self._behavior_records)} "
+            f"across {subjects} subject{'s' if subjects != 1 else ''}"
         )
-        if not self._behavior_records:
-            self.query_one("#behavior-detail-title", Static).update("Behavior snapshots")
-            output = self.query_one("#behavior-output", RichLog)
-            output.clear()
-            output.write(
-                "No behavior snapshots have been captured. Capture a function target or module to begin a code-hash-scoped behavior history."
-            )
-        self._refresh_behavior_actions()
 
     def _behavior_record(self, snapshot_id: str | None) -> dict[str, Any] | None:
         return next(
@@ -1679,6 +1736,19 @@ class CaretakerConsoleApp(App):
             for item in self._behavior_records
         )
 
+    def _behavior_latest_for_anchor(self, anchor: dict[str, Any] | None) -> dict[str, Any] | None:
+        if anchor is None:
+            return None
+        return next(
+            (
+                item for item in self._behavior_records
+                if item.get("subject_key") == anchor.get("subject_key")
+                and item is not anchor
+                and str(item.get("created_at") or "") > str(anchor.get("created_at") or "")
+            ),
+            None,
+        )
+
     def _refresh_behavior_actions(self) -> None:
         selected = self._behavior_record(self._selected_behavior_snapshot)
         anchor = self._behavior_record(self._behavior_compare_anchor)
@@ -1690,6 +1760,8 @@ class CaretakerConsoleApp(App):
         self.query_one("#behavior-compare-a", Button).disabled = not (
             selected and anchor and selected is not anchor
         )
+        latest = self._behavior_latest_for_anchor(anchor)
+        self.query_one("#behavior-compare-latest", Button).disabled = latest is None
         self.query_one("#behavior-assess-comparison", Button).disabled = self._behavior_last_comparison is None
         self.query_one("#behavior-archive", Button).disabled = selected is None
         self.query_one("#behavior-delete", Button).disabled = selected is None
@@ -1710,6 +1782,8 @@ class CaretakerConsoleApp(App):
             available.append("B↔previous")
         if selected and anchor and selected is not anchor:
             available.append("A↔B (cross-generation allowed)")
+        if latest:
+            available.append("A↔latest")
         next_step = ""
         if selected and anchor is selected:
             next_step = "  |  Next: run the function, Refresh, select the new snapshot as B"
@@ -1775,6 +1849,8 @@ class CaretakerConsoleApp(App):
             f"[b]Code hash[/b] {snapshot.get('code_hash_kind', '-')}: {snapshot.get('code_hash', '-')}\n"
             f"[b]Generation[/b] {self._behavior_short_hash(snapshot.get('generation_id'))}\n"
             f"[b]Monitoring[/b] {self._behavior_short_hash(snapshot.get('monitoring_fingerprint'))}\n"
+            f"[b]Environment[/b] {snapshot.get('environment_fingerprint') or 'not labeled'}\n"
+            f"[b]Workload[/b] {snapshot.get('workload_label') or 'not labeled'}\n"
             f"[b]Seal reason[/b] {snapshot.get('seal_reason') or '-'}\n"
             f"[b]Snapshot SHA-256[/b] {integrity.get('content_sha256', '-')}\n"
             f"[b]Signature[/b] {signature_detail}"
@@ -1801,6 +1877,12 @@ class CaretakerConsoleApp(App):
                 f"  observations={duration.get('count', 0)} reservoir={duration.get('reservoir_size', 0)}"
             )
         provenance = profile.get("sampling_provenance") or {}
+        output.write(
+            f"\n[b]Observation provenance[/b] completed_calls={provenance.get('completed_call_samples', profile.get('call_count', 0))} "
+            f"event_samples={provenance.get('event_samples', profile.get('event_count', 0))} "
+            f"statistics_target={provenance.get('statistics_target', '?')} "
+            f"resource_coverage={'complete' if profile.get('resource_coverage_complete', True) else 'TRUNCATED'}"
+        )
         strata = provenance.get("strata") or {}
         if strata:
             output.write("\n[b]Sampling strata[/b]")
@@ -2008,6 +2090,8 @@ class CaretakerConsoleApp(App):
             self._apply_target_filter()
         elif event.input.id == "guard-filter":
             self._apply_guard_filter()
+        elif event.input.id == "behavior-filter":
+            self._apply_behavior_filter()
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         if event.checkbox.id == "guard-baseline-confirm":
@@ -2569,6 +2653,10 @@ class CaretakerConsoleApp(App):
                 self.query_one("#guard-filter", Input).value = ""
                 self._apply_guard_filter()
                 return
+            if button == "behavior-filter-clear":
+                self.query_one("#behavior-filter", Input).value = ""
+                self._apply_behavior_filter()
+                return
             if button.startswith("overview-"):
                 target = self._selected_target
                 if not target:
@@ -2687,6 +2775,20 @@ class CaretakerConsoleApp(App):
                         snapshot_b_id=snapshot_id,
                     )
                     self._show_behavior_comparison(response.get("comparison") or {})
+                    return
+                if button == "behavior-compare-latest":
+                    anchor = self._behavior_record(self._behavior_compare_anchor)
+                    latest = self._behavior_latest_for_anchor(anchor)
+                    if anchor is None or latest is None:
+                        raise ValueError("Choose baseline A and collect a newer snapshot for the same subject first")
+                    self._selected_behavior_snapshot = str(latest.get("snapshot_id") or "")
+                    response = await self._request(
+                        "behavior-compare",
+                        snapshot_a_id=self._behavior_compare_anchor,
+                        snapshot_b_id=self._selected_behavior_snapshot,
+                    )
+                    self._show_behavior_comparison(response.get("comparison") or {})
+                    self._refresh_behavior_actions()
                     return
                 if button == "behavior-assess-comparison":
                     if self._behavior_last_comparison is None:
