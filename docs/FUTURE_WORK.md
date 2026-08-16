@@ -2,7 +2,7 @@
 
 This document records intentionally incomplete, deferred, or proposed Caretaker capabilities. An item listed here is not an implicit security guarantee and must not be treated as implemented until it has code, policy semantics, tests, and documentation.
 
-Last reviewed: 2026-08-15
+Last reviewed: 2026-08-16
 
 ## Status vocabulary
 
@@ -11,6 +11,44 @@ Last reviewed: 2026-08-15
 - **Proposal pending decision**: alternatives are documented, but an implementation choice has not been approved.
 - **Explicitly deferred**: intentionally omitted from the current test/research scope.
 - **General future work**: desirable work that has not yet been scheduled or designed in detail.
+
+## Known assurance debt in implemented features
+
+**Status: Open security and correctness work.**
+
+An "implemented" label in this document means that a usable research path exists; it does not mean that every assurance property around that path is complete. Strict expected-failure regression tests preserve the following known debts:
+
+- a validation result is not structurally or cryptographically bound to the candidate hash, base source hash, target, policy/authority fingerprints, backend identity, and unique validation transaction;
+- the parent does not require proof that every mandatory validation check was returned and passed;
+- non-finite numeric validation measurements are not rejected fail-closed;
+- persisted `RepairAttempt` evidence does not retain the backend name, isolation tier, and capability/validator identity that produced it;
+- validation requests use Python `pickle` and can carry arbitrary pickle-serializable application objects rather than a data-only versioned protocol;
+- `StatePolicy.restore_for_validation` is accepted but has no runtime enforcement consumer;
+- an operator approval can override missing policy-requested isolation and activate the candidate;
+- Multipass network isolation relies on a root-owned provisioning marker rather than live network-policy attestation;
+- a persistent Multipass guest can advertise an ephemeral workspace without a configured restore or disposable-clone boundary;
+- static candidate inspection does not comprehensively detect dynamically constructed prohibited attribute names;
+- same-UID Unix peer credentials do not distinguish application code from an independent operator.
+
+These debts are also executable documentation in `tests/test_validation_trust_boundary.py` and `tests/test_security_assurance_regressions.py`. They should remain strict expected failures until the corresponding boundary is implemented and the test passes normally.
+
+### Validation transaction and protocol hardening
+
+Future validation requests and results should use a canonical, versioned, data-only schema. A supervisor-generated transaction ID should bind the candidate artifact hash, base code hash, target and callable contract, policy and authority fingerprints, requested isolation, backend identity, mandatory check set, and result. The parent should reject missing, duplicate, unknown, malformed, non-finite, or mismatched evidence. External validators should authenticate the result envelope.
+
+Registered cases that require domain types need explicit trusted codecs or fixture references; arbitrary object deserialization should not be part of the validator protocol.
+
+### Independent operator authorization
+
+Administrative commands currently rely on filesystem permissions and Unix PID/UID/GID credentials. A same-account application can therefore be indistinguishable from its operator. Future work should support a separate operator agent/account or authenticated command envelopes with replay protection, explicit action scope, expiry, and policy-generation binding.
+
+### Non-overridable isolation
+
+Policy should distinguish a hard, non-overridable minimum from a preferred tier that an operator may override. An override record must preserve the fact that the requested validation did not occur and must never satisfy a `validation_passed` predicate.
+
+### VM capability attestation
+
+The VM backend should derive capability claims from verified configuration and current guest state: reset/clone boundary, image identity, mounts, subject UID, routes, firewall/egress rules, and relevant profile hashes. A marker file can remain operator-supplied evidence but must not be the sole basis for claiming network isolation.
 
 ## Deployment-authorized behavior snapshot signing
 
@@ -313,6 +351,24 @@ This omission is deliberate:
 
 Future work may export a signed review bundle containing a unified diff, original/replacement hashes, incident/evidence references, policy and authority fingerprints, validation results, and short/long-term acceptance evidence. Applying that bundle to a repository remains a separate authorized workflow.
 
+## Repair workflow restart and crash recovery
+
+**Status: Explicitly deferred.**
+
+The default Repair engine, pending approvals, active work, repair-rate history, regression corpus, FunctionSlot replacements, and candidate observation lifecycle are process-local. Historical records may be written to logging or an explicitly supplied SQLite Repair store, but a new engine does not reconstruct an actionable workflow or reactivate a runtime replacement from those records.
+
+Future recovery semantics must define how to:
+
+- mark interrupted incidents, generations, attempts, and validations incomplete;
+- reconstruct or deliberately stale pending approvals;
+- verify candidate source and policy/authority bindings again after restart;
+- recover probation and long-term observation state without double counting;
+- persist safe regression fixtures;
+- coordinate the same target across multiple application workers;
+- decide whether an accepted runtime replacement may be reactivated at all.
+
+Until this exists, restart is a rollback to deployed application code, not continuation of an in-memory repair.
+
 ## Other logging and storage work
 
 **Status: General future work.**
@@ -386,6 +442,36 @@ Adaptive instrumentation escalation is no longer listed as future work; its init
 - Signed or externally witnessed accepted-baseline chronology.
 - Fleet aggregation for probabilistic verification.
 - Public transparency logs for releases, roots, baselines, and runtime identity anchors.
+
+## Software supply-chain management roadmap
+
+**Status: General future work.**
+
+The current tree verifies Caretaker-style OpenPGP manifests and observes Python dependency identity/behavior. It does not yet implement the broader supply-chain lifecycle commonly associated with inventory, advisory monitoring, updating, and fleet incident response.
+
+Potential future integrations include:
+
+- SPDX and CycloneDX SBOM ingestion, generation, comparison, and policy evaluation;
+- OSV/CVE and distribution/vendor advisory ingestion with freshness evidence;
+- package-registry and release monitoring;
+- lockfile, resolver, license, package-reputation, and dependency-confusion analysis;
+- Sigstore, SLSA, in-toto, OCI image, and build-provenance verification;
+- bounded dependency-upgrade proposal and compatibility-test workflows;
+- signed rebuild/deployment handoff artifacts without granting the runtime repository authority;
+- external incident notifications, webhooks, tickets, paging, and fleet remediation coordination.
+
+Each integration requires an explicit source-of-truth, freshness model, offline/degraded behavior, authentication boundary, rate limit, evidence format, and operator authority model.
+
+## Public release assurance
+
+**Status: General future work.**
+
+- Run CI on every supported Python version and on the Linux facilities required by Unix-socket and GnuPG integration tests.
+- Publish a current verification report for each tagged release, including strict expected failures and environmental exclusions.
+- Test wheels and source distributions outside the source tree.
+- Define a reproducible release procedure that binds source revision, wheel/sdist hashes, manifests, and signatures.
+- Add dependency review, constraints/lock inputs for release testing, and periodic vulnerability review.
+- Maintain a supported-platform matrix and a private vulnerability-reporting path.
 
 ## Review rule for future capabilities
 

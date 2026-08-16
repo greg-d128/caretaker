@@ -110,6 +110,8 @@ supervisor process
 
 Multiple application processes send framed records through a Unix-domain socket. They do not append to shared files or write SQLite. One writer owns event segments and the derived index. Supplemental attachments and system records have separate streams.
 
+This centralized logging topology does not make Repair application-wide. Each application process owns its decorated targets, active runtime replacements, adaptive thresholds, regression corpus, pending approvals, and candidate lifecycle. The default `RepairEngine` uses an in-memory store. A restart therefore discards executable runtime replacements and actionable workflow state even when historical events were logged; pending work is not reconstructed automatically from the SQLite Repair store.
+
 The alpha uses a supervised service process and bounded worker threads for some permanent functions. The worker registry, heartbeat, active-work registry, and watchdog contracts are process-neutral and permit later extraction into separate worker processes without changing public evidence contracts.
 
 ## Source of truth

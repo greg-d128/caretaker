@@ -1,5 +1,67 @@
+Caretaker 0.6.0a1 development verification status
+=================================================
+
+Status date
+-----------
+2026-08-16
+
+Scope and interpretation
+------------------------
+This is a transparent development-tree verification status, not a release
+certification or guarantee. Caretaker is alpha research software. A tagged
+release should receive a fresh run on every supported Python version, an
+installed wheel, and an extracted source distribution.
+
+Environment used for this review
+--------------------------------
+Python: 3.14 (review environment; declared support is CPython 3.11-3.13)
+Platform: restricted Linux sandbox
+Command: PYTHONPATH=src venv/bin/pytest -q
+
+Observed result
+---------------
+- 224 passed;
+- 11 strict expected failures representing known security/assurance debt;
+- 17 environment-limited failures.
+
+The 17 failures occurred because the restricted review sandbox could not start
+gpg-agent or bind Unix-domain sockets. They do not constitute a successful test
+of those facilities. Forgejo CI is configured to run the suite on ordinary Linux
+for CPython 3.11, 3.12, and 3.13.
+
+Known strict expected failures
+------------------------------
+The executable debt ledger currently covers:
+
+1. operator override of missing validation isolation;
+2. arbitrary pickle-serializable validation request objects;
+3. missing mandatory validation-check completeness;
+4. dynamically constructed prohibited dunder access;
+5. same-UID administrative authorization ambiguity;
+6. validation results not bound to candidate/base/policy transaction identity;
+7. non-finite validation measurements;
+8. missing persisted validation backend/isolation identity;
+9. unused StatePolicy.restore_for_validation assurance setting;
+10. marker-only Multipass network-isolation assertion;
+11. inaccurate ephemeral-workspace capability for persistent VMs.
+
+The prior Guard automatic-baseline-acceptance documentation inconsistency was
+corrected in this update and its regression now passes normally.
+
+The authoritative tests are tests/test_validation_trust_boundary.py and
+tests/test_security_assurance_regressions.py. The public design and remediation
+ledger is docs/FUTURE_WORK.md. A strict expected failure must not be interpreted
+as an implemented security property.
+
+Additional checks performed
+---------------------------
+- Python module and CLI imports succeeded during test collection outside the
+  environment-limited facilities.
+- Documentation and package metadata were reviewed against the implementation.
+- git diff --check is required before the documentation update is committed.
+
 Historical Caretaker 0.5.0a1 verification report
-=====================================
+================================================
 
 Historical notice
 -----------------

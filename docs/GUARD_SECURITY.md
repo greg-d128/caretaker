@@ -32,7 +32,7 @@ It does not prove that a package is benign or contain arbitrary hostile code in 
 
 ## Baseline safeguards
 
-- no automatic baseline acceptance;
+- baseline acceptance is explicit by default, but policy can deliberately enable `automatic_acceptance=True`; automatic acceptance increases poisoning risk and is not an independent trust decision;
 - baselines include exact code identity;
 - optional workload and environment identity;
 - accepted baselines are immutable and versioned;

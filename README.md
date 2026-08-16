@@ -15,9 +15,15 @@ Version 0.6.0a1 combines lightweight adaptive instrumentation with persistent be
 
 Supporting infrastructure includes the runtime control plane, shared evidence identities, an application-scoped supervisor, a local administrative socket, optional `/proc` and `/sys` collection, supplemental evidence attachments, and an advisory LLM interrogation interface.
 
+## Current supply-chain scope
+
+Caretaker currently researches Python runtime evidence, signed source/release manifests, dependency identity and behavior, controlled import routing, and temporary in-memory function repair. It is not yet a general software-supply-chain management platform. In particular, this release does not ingest SBOMs or vulnerability feeds, monitor package registries, resolve dependency upgrades, verify Sigstore/SLSA/in-toto provenance, rebuild or deploy releases, or notify external incident-management systems. Those capabilities are roadmap items rather than implied features; see [`docs/FUTURE_WORK.md`](docs/FUTURE_WORK.md).
+
 ## Application scope
 
 Caretaker supports one application or service and its process tree. It is not a machine-wide management daemon and does not request privilege escalation. Host-wide `/proc` or `/sys` collection can be enabled when the machine primarily exists to serve the supervised application, but collection still runs with the application account's permissions.
+
+Observation can cover a process tree, but adaptive thresholds, Repair engines, runtime replacements, pending approvals, and acceptance state are currently process-local unless an embedding application supplies additional coordination. Caretaker does not yet provide application-wide atomic Repair coordination across multiple workers.
 
 Caretaker terminates when the application terminates. Caretaker may inspect and restart its own worker components, but **Repair is prohibited from modifying Caretaker's own code**.
 
@@ -328,3 +334,5 @@ Caretaker is alpha research software, not an operating-system security boundary.
 - LLM assessments are interpretations, not source evidence.
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md), [`docs/LOGGING_INTEGRITY.md`](docs/LOGGING_INTEGRITY.md), [`docs/GUARD_SECURITY.md`](docs/GUARD_SECURITY.md), and [`docs/FUTURE_WORK.md`](docs/FUTURE_WORK.md).
+
+Security issues should be reported according to [`SECURITY.md`](SECURITY.md). The supported research and test environments are also listed there.

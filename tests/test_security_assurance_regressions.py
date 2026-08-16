@@ -306,13 +306,6 @@ def test_multipass_does_not_claim_ephemeral_workspace_without_reset_boundary() -
     assert backend.capabilities().ephemeral_workspace is False
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known documentation/policy contradiction: GUARD_SECURITY promises no automatic "
-        "baseline acceptance while the executable Guard policy explicitly permits it."
-    ),
-)
 def test_guard_security_documentation_matches_automatic_acceptance_policy() -> None:
     policy = GuardPolicy(
         baseline=replace(BaselinePolicy(), automatic_acceptance=True),

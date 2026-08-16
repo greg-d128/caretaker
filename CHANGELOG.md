@@ -2,6 +2,13 @@
 
 ## 0.6.0a1
 
+### Public research release assurance
+
+- State the current supply-chain scope explicitly: runtime evidence, Caretaker OpenPGP manifests, dependency behavior, import routing, and temporary function repair are implemented research areas; SBOM/advisory ingestion, registry monitoring, upgrade orchestration, modern provenance ecosystems, deployment, and external incident integrations remain roadmap work.
+- Publish the validation, isolation, same-UID control, VM-attestation, policy-truthfulness, multiprocess, and Repair restart debts in the future-work ledger.
+- Add a private vulnerability-reporting policy, supported Python/Linux scope, a current development verification report, and Forgejo CI for CPython 3.11 through 3.13.
+- Correct the Guard security description of policy-enabled automatic baseline acceptance and convert its strict expected-failure regression into a passing documentation-conformance test.
+
 ### Policy truthfulness and enforcement
 
 - Make accepted policy an executable contract: unsupported non-default semantics fail policy validation instead of being accepted as no-ops.

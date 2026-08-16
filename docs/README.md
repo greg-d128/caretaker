@@ -48,3 +48,5 @@ Caretaker is active research software. These documents describe current design i
 - `FUTURE_WORK.md`
 - `../MIGRATION.md`
 - `../CHANGELOG.md`
+- `../VERIFICATION.txt` — current verification status followed by historical reports
+- `../SECURITY.md` — vulnerability reporting, supported research versions, and platform scope

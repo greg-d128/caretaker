@@ -10,7 +10,7 @@ This rule is separate from policy authority. Authority answers **who may request
 2. Security/privacy controls are enforced at the final action boundary where practical. For example, Repair context controls are applied when the LLM request is built, and artifact-integrity requirements are applied when artifacts are loaded or restored.
 3. A setting whose non-default behavior is not implemented is either removed from the supported surface or given an inactive/unset default and rejected explicitly when requested.
 4. A stronger-sounding mode name must not imply a boundary Caretaker cannot provide. Guard uses `DISABLED`, `LEARN`, and `AUDIT`; research/forensic collection depth is policy, while actual prevention/quarantine is an explicit response capability.
-5. Backend/isolation requirements fail closed. A minimum validation isolation tier is not silently weakened because a stronger backend is unavailable.
+5. Backend/isolation shortfalls are explicit. `FAIL_REPAIR` fails closed, while `PROPOSE_ONLY` preserves evidence without activation. The current `REQUIRE_OPERATOR_APPROVAL` path is an override that can authorize activation without the requested tier; it must not be reported as successful validation at that tier.
 6. Signed artifacts cannot silently downgrade to hash-only artifacts when policy requires signatures.
 
 ## Reviewed policy-surface fingerprint
@@ -56,6 +56,8 @@ Defaults for these features are intentionally inactive/unset. Their presence in 
 `ContextPolicy` is applied before a `RepairRequest` is handed to a provider. `include_source`, `include_traceback`, `include_state_diff`, `send_argument_values`, and `send_local_values` therefore change the actual provider payload. `maximum_context_characters` bounds the combined textual context fields, not only correlated log text.
 
 `previous_incidents` currently defaults to zero and values above zero are rejected because durable incident-history retrieval is not yet implemented.
+
+`StatePolicy.restore_for_validation` is a known exception to the policy-truthfulness rule in this development release: it is accepted with an active default but has no runtime enforcement consumer. Until that debt is resolved, it must not be treated as evidence that pre-validation application state was restored.
 
 ## Guard semantics
 
