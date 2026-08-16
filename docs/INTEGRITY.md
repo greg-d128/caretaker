@@ -1,6 +1,6 @@
 # Caretaker integrity subsystem
 
-Caretaker 0.3 provides public-key-only integrity verification. It is a technology demonstrator for release provenance, threshold authorization, randomized fleet verification, self-verification, root rotation, rollback protection, and tamper evidence.
+Caretaker provides public-key-only integrity verification as part of its research into release provenance, threshold authorization, randomized fleet verification, self-verification, root rotation, rollback protection, and tamper evidence.
 
 The runtime project has **no private-key interface**. It cannot load a release private key, request a signature, or sign an artifact. Signing is performed by a separate offline procedure that is intentionally outside this repository.
 

@@ -1,6 +1,8 @@
 # Caretaker 0.6.0a1
 
-Caretaker is an experimental Python 3.11+ runtime framework for application-scoped logging, behavioral analysis, guarded self-repair, and publicly verifiable code integrity.
+Caretaker is a Python 3.11+ research framework for application-scoped logging, behavioral analysis, guarded self-repair, and publicly verifiable code integrity.
+
+Caretaker is active research software. Its documented behavior describes current design goals and tested behavior, not a warranty or guarantee of availability, correctness, containment, recovery, or security. It is being developed toward useful operational workflows, but operators must independently validate it for their environment and retain external recovery and verification paths.
 
 Version 0.6.0a1 combines lightweight adaptive instrumentation with persistent behavioral statistics, signed behavior snapshots, restartable Guard baselines, and capability-based validation isolation. Logging can still be deployed independently and remains the evidence foundation for Guard and Repair.
 
@@ -71,7 +73,7 @@ vm = MultipassValidationBackend(
 engine = RepairEngine(validation_backend=vm)
 ```
 
-A required isolation level is never silently downgraded. See [`docs/ISOLATED_EXECUTION.md`](docs/ISOLATED_EXECUTION.md) for the rootless-container and Multipass provisioning model and for the distinction between candidate validation and whole-subject isolation.
+Caretaker reports when a configured backend cannot meet the required isolation level. Depending on `backend_unavailable_action`, it fails the repair, retains a proposal, or asks for an explicit operator override. In the current implementation, approving that override can activate a candidate that did not receive the requested isolation; approval must not be interpreted as successful validation at that level. See [`docs/ISOLATED_EXECUTION.md`](docs/ISOLATED_EXECUTION.md) for the rootless-container and Multipass provisioning model and for the distinction between candidate validation and whole-subject isolation.
 
 ## Operator console
 
@@ -315,7 +317,7 @@ pytest
 
 ## Important boundaries
 
-Caretaker is an alpha technology demonstrator, not an operating-system security boundary.
+Caretaker is alpha research software, not an operating-system security boundary. No specific behavior is guaranteed; the properties described here are implementation targets supported to varying degrees by current code and tests.
 
 - Python audit hooks and introspection do not contain native extensions, `ctypes`, a compromised interpreter, kernel-level access, or a same-user attacker with unrestricted process-memory access.
 - Local hashes without an external commitment can be rewritten together with the corpus.
@@ -325,4 +327,4 @@ Caretaker is an alpha technology demonstrator, not an operating-system security 
 - System collection is limited to sources readable by the application account.
 - LLM assessments are interpretations, not source evidence.
 
-See [`ARCHITECTURE.md`](ARCHITECTURE.md), [`docs/LOGGING_SECURITY.md`](docs/LOGGING_SECURITY.md), and [`docs/FUTURE_WORK.md`](docs/FUTURE_WORK.md).
+See [`ARCHITECTURE.md`](ARCHITECTURE.md), [`docs/LOGGING_INTEGRITY.md`](docs/LOGGING_INTEGRITY.md), [`docs/GUARD_SECURITY.md`](docs/GUARD_SECURITY.md), and [`docs/FUTURE_WORK.md`](docs/FUTURE_WORK.md).

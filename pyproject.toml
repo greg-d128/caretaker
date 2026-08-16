@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "Caretaker"
 version = "0.6.0a1"
-description = "Experimental application logging, runtime behavior analysis, self-repair, and public-key code integrity for Python"
+description = "Research framework for application logging, runtime behavior analysis, self-repair, and public-key code integrity"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "GPL-3.0-or-later"

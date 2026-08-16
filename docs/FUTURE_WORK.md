@@ -287,7 +287,7 @@ Validation uses a common capability-based backend contract. Policy specifies a m
 - **VM**: `MultipassValidationBackend`, which uses a pre-provisioned guest with no host-directory mounts. Artifacts cross the boundary through `multipass transfer`. Normal mode can restore a configured clean snapshot before validation; suspicious scenarios can use a disposable clone of a stopped clean template and purge it afterward.
 - **EXTERNAL**: reserved for a future dedicated remote/disposable validation service.
 
-If a configured backend cannot meet `ValidationPolicy.minimum_isolation`, Caretaker does not silently downgrade. `backend_unavailable_action` controls whether repair fails, remains proposal-only, or enters the explicit operator-approval workflow.
+If a configured backend cannot meet `ValidationPolicy.minimum_isolation`, `backend_unavailable_action` controls whether repair fails, remains proposal-only, or enters the explicit operator-override workflow. The current approval path can authorize activation without the requested isolation; this is recorded as an override and is not successful validation at that tier. Making required isolation non-overridable is tracked as security work.
 
 Multipass candidate validation is distinct from the existing whole-subject Multipass deployment documented in `ISOLATED_EXECUTION.md`. The built-in VM backend requires the validator guest to contain Caretaker/application dependencies, refuses host mounts, and by default requires a root-owned network-isolation provisioning marker before advertising guest network control.
 

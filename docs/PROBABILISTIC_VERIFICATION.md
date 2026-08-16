@@ -2,7 +2,7 @@
 
 Caretaker release manifests are expected to carry detached OpenPGP signatures from all three authorized primary certificate identities. Independent release verification checks all three signatures. Runtime verification may instead select an unpredictable subset of those identities to reduce repeated verification cost and to distribute detection across a population of Caretaker installations.
 
-This is an experimental fleet-detection mechanism. It is not stronger than full verification for an individual process.
+This is a research fleet-detection mechanism. It is not stronger than full verification for an individual process.
 
 ## Signed-root policy
 

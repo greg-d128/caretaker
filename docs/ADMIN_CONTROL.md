@@ -4,6 +4,8 @@
 
 The control interface uses a Unix-domain socket, filesystem permissions, and peer PID/UID/GID. The application account should not have administrative socket access unless the operator deliberately grants it.
 
+Peer credentials do not provide authorization independent of the operating-system account. When the application and operator share a UID, current control-socket checks cannot reliably distinguish application code from the operator. Use a separately controlled account and filesystem permissions where that distinction matters; Caretaker does not currently provide a separate credential verifier or application-layer authentication mechanism.
+
 No network listener, password database, arbitrary Python, shell command, or unrestricted path execution is provided.
 
 The configured `run/control.sock` and `run/runtime.sock` names are logical paths. On systems with short `AF_UNIX` pathname limits, Caretaker transparently relocates only an overlong socket file to a private per-user runtime directory; the configured evidence/data directory is unchanged. Caretaker's control clients resolve the same mapping automatically.

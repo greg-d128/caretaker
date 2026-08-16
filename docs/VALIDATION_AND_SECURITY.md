@@ -4,11 +4,19 @@
 
 Candidates are parsed, compiled, and exercised in a child process. This protects the main interpreter from many crashes and state mutations but is not a hostile-code sandbox.
 
-The worker may still inherit access available to the operating-system account. Future backends should add containers, dedicated users, network isolation, filesystem restrictions, and resource controls.
+The PROCESS worker may still inherit access available to the operating-system account. Caretaker also includes rootless Podman CONTAINER and Multipass VM validation backends with stronger configured boundaries. These reduce exposure but do not guarantee containment; see `ISOLATED_EXECUTION.md`.
+
+## Current validation trust boundaries
+
+Validation reports are trusted backend input. The parent currently rejects reported mandatory failures, but it does not prove that a backend returned every mandatory successful check. A custom, defective, or compromised backend can therefore overstate completion. Backend results must not be treated as independently attested evidence.
+
+Validation requests currently use Python `pickle` so registered cases can contain Python values. Only trusted Caretaker components should create, transport, or deserialize these requests. Do not treat the request/result channel as safe for mutually untrusted peers.
+
+When the requested isolation backend is unavailable, `REQUIRE_OPERATOR_APPROVAL` can currently authorize activation without that isolation. This is an explicit policy override, not evidence that validation at the requested level passed. Use `FAIL_REPAIR` when the isolation requirement must remain a hard activation condition.
 
 ## Hard static gates
 
-Automatic activation rejects candidates containing or requiring prohibited capabilities, including dangerous dynamic execution, process creation, global/nonlocal mutation declarations, unsafe dunder access, and executable definition-time default or annotation expressions.
+Automatic activation rejects statically recognizable prohibited capabilities, including dangerous dynamic execution, process creation, global/nonlocal mutation declarations, direct unsafe dunder access, and executable definition-time default or annotation expressions. Dynamic construction or lookup of prohibited names, such as a dunder name passed to `getattr`, is not comprehensively detected.
 
 Imports and new concurrency are treated as review-required changes and are not automatically activated in the strict V1 profile.
 

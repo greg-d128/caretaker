@@ -2,7 +2,7 @@
 
 ## Compatibility
 
-The 0.5 logging, Repair, Guard, Integrity, and authority APIs remain available. Caretaker 0.6 adds adaptive lightweight instrumentation, persistent behavior statistics/snapshots, runtime-artifact signing, and selectable validation-isolation backends. These features remain policy-controlled and do not silently broaden repair authority.
+Most 0.5 logging, Repair, Guard, Integrity, and authority APIs remain available. Caretaker 0.6 adds adaptive lightweight instrumentation, persistent behavior statistics/snapshots, runtime-artifact signing, and selectable validation-isolation backends. These features remain policy-controlled and do not silently broaden automatic repair authority. The compatibility exceptions and deactivated policy semantics below require operator review.
 
 ## Policy truthfulness changes
 
@@ -46,7 +46,7 @@ Validation policy now declares a minimum isolation capability:
 PROCESS < CONTAINER < VM < EXTERNAL
 ```
 
-The built-in backends are the existing subprocess worker (`PROCESS`), rootless Podman (`CONTAINER`), and Multipass (`VM`). If the configured backend cannot satisfy the minimum isolation level, Caretaker follows the explicit backend-unavailable policy and does not silently downgrade. See `docs/ISOLATED_EXECUTION.md` for provisioning and threat-boundary details.
+The built-in backends are the existing subprocess worker (`PROCESS`), rootless Podman (`CONTAINER`), and Multipass (`VM`). If the configured backend cannot satisfy the minimum isolation level, Caretaker follows the explicit backend-unavailable policy. `REQUIRE_OPERATOR_APPROVAL` is currently an explicit override path that can activate a candidate without the requested isolation; it records the missing backend but does not prove that required validation occurred. See `docs/ISOLATED_EXECUTION.md` for provisioning and trust-boundary details.
 
 ## Explicitly deferred work
 
@@ -98,7 +98,7 @@ from caretaker.logging import configure_from_operator_policy, CaretakerLogHandle
 
 runtime = configure_from_operator_policy(
     application_id="your-application",
-    policy_path="/etc/caretaker/your-application.toml",
+    path="/etc/caretaker/your-application.toml",
 )
 root_logger.addHandler(CaretakerLogHandler(runtime))
 ```

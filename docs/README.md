@@ -1,5 +1,7 @@
 # Caretaker documentation
 
+Caretaker is active research software. These documents describe current design intent, implemented and tested behavior, known limitations, and future work; they do not guarantee availability, correctness, recovery, containment, or security in a particular environment.
+
 ## Start here
 
 - `../README.md` — installation, supervised startup, and examples

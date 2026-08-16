@@ -76,7 +76,9 @@ A repair policy can require the VM tier independently of which backend objects a
 ValidationPolicy(minimum_isolation=ValidationIsolationLevel.VM)
 ```
 
-If only PROCESS or CONTAINER validation is available, Caretaker does not silently weaken the requirement. `backend_unavailable_action` determines whether the candidate fails, remains proposal-only, or enters explicit operator approval.
+If only PROCESS or CONTAINER validation is available, `backend_unavailable_action` determines whether the candidate fails, remains proposal-only, or enters explicit operator approval. In the current implementation, approving the latter can activate the candidate without the requested isolation. The record preserves the missing-isolation finding, but approval is an override and must not be reported as validation at the required tier. Select `FAIL_REPAIR` when missing isolation must prevent activation.
+
+Validation requests currently use Python `pickle`, and the parent trusts a backend's result to include the checks it claims to have performed. The transport is intended only between trusted Caretaker components; it is not an authenticated, independently attested protocol for mutually untrusted validators.
 
 `RootlessPodmanValidationBackend` requires a locally present image and verified rootless Podman. It does not pull images automatically. The validation container uses no network, a read-only root filesystem, dropped Linux capabilities, `no-new-privileges`, bounded PID/CPU/memory settings, a private writable request/result directory, and read-only source inputs.
 
@@ -1012,7 +1014,7 @@ After running:
 
 ## 33. Security interpretation
 
-This guidance provides a better-than-default isolation posture for an alpha technology demonstrator.
+This guidance provides a better-than-default isolation posture for alpha research software.
 
 It does not guarantee containment of:
 

@@ -1,6 +1,6 @@
 # Guard security analysis
 
-## Intended guarantee
+## Intended property
 
 Guard records, compares, and explains observable Python runtime behavior. It can enforce selected deterministic policies where supported hooks provide a reliable decision point.
 

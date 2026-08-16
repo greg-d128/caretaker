@@ -90,7 +90,7 @@ Secure event manifests, sealed behavior snapshots, accepted-baseline references,
 
 ## Validation isolation
 
-Repair policy expresses a minimum isolation capability: PROCESS, CONTAINER, VM, or EXTERNAL. Backend product selection is deployment configuration, not policy semantics. The development tree includes the subprocess PROCESS backend, a rootless Podman CONTAINER backend, and a Multipass VM backend. If the installed backend cannot satisfy policy, Caretaker fails, remains proposal-only, or enters explicit operator approval according to policy; it never silently downgrades.
+Repair policy expresses a minimum isolation capability: PROCESS, CONTAINER, VM, or EXTERNAL. Backend product selection is deployment configuration, not policy semantics. The development tree includes the subprocess PROCESS backend, a rootless Podman CONTAINER backend, and a Multipass VM backend. If the installed backend cannot satisfy policy, Caretaker fails, remains proposal-only, or enters an explicit operator-override workflow according to policy. That override can currently authorize activation without the requested isolation and is not evidence that validation at that tier passed.
 
 Multipass whole-subject deployment and Multipass candidate validation are distinct. Candidate validation transfers only request/result artifacts into a pre-provisioned guest, refuses host-directory mounts, can restore a clean snapshot between ordinary validations, and can use a disposable clone for more suspicious candidates.
 

@@ -1,8 +1,8 @@
 # Integrity threat model
 
-The integrity subsystem provides release provenance, tamper evidence, and an experimental population-level verification mechanism. It is not complete containment of a privileged attacker.
+The integrity subsystem researches release provenance, tamper evidence, and population-level verification. It does not guarantee those properties and is not complete containment of a privileged attacker.
 
-## Intended guarantees
+## Intended properties
 
 Starting from independently authenticated primary fingerprints or a previously accepted root, Caretaker can establish that:
 

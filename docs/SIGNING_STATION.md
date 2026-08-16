@@ -2,7 +2,7 @@
 
 The signing procedure is deliberately outside the Caretaker project. Caretaker contains no signing command and no private-key handling code.
 
-A dedicated Raspberry Pi is an acceptable medium-assurance signing environment for this technology demonstrator when it is narrowly configured and normally offline.
+A dedicated Raspberry Pi can be used as a medium-assurance research signing environment when it is narrowly configured and normally offline.
 
 ## Recommended role
 
