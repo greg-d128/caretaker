@@ -110,6 +110,22 @@ class CaretakerConsoleApp(App):
         height: 12;
         border-top: solid $surface-lighten-2;
     }
+    #overview-help, #guard-help, #overview-status-legend {
+        height: auto;
+        padding: 0 2;
+        color: $text-muted;
+    }
+    #overview-actions, #guard-context-actions, #guard-filter-row {
+        height: 4;
+        padding: 0 1;
+        align-vertical: middle;
+    }
+    #overview-actions Button, #guard-context-actions Button, #guard-filter-row Button {
+        width: auto;
+        min-width: 14;
+        margin-left: 1;
+    }
+    #guard-filter { width: 1fr; }
     TabbedContent {
         height: 1fr;
     }
@@ -389,6 +405,7 @@ class CaretakerConsoleApp(App):
         self._investigation_records: list[dict[str, Any]] = []
         self._selected_investigation_record: dict[str, Any] | None = None
         self._selected_log_record: dict[str, Any] | None = None
+        self._selected_target: str | None = None
         self._attention_records: list[dict[str, Any]] = []
         self._selected_attention_record: dict[str, Any] | None = None
         self._context_target: str | None = None
@@ -428,6 +445,11 @@ class CaretakerConsoleApp(App):
                             yield Button("Open related view", id="attention-open", disabled=True, variant="primary")
                             yield Button("Investigate evidence", id="attention-investigate", disabled=True)
             with TabPane("Overview", id="overview"):
+                yield Static(
+                    "Registered functions and their operational state. Problem states are listed first; "
+                    "select a target for plain-language status and related evidence shortcuts.",
+                    id="overview-help",
+                )
                 yield Static("", id="overview-details")
                 with Horizontal(id="targets-filter-row"):
                     yield Input(
@@ -441,29 +463,52 @@ class CaretakerConsoleApp(App):
                 table = DataTable(id="targets-table")
                 table.cursor_type = "row"
                 table.add_columns(
-                    "Target", "Mode", "Authority", "Version", "Guard", "Status"
+                    "Target", "Health", "Needs attention", "Mode", "Authority", "Version", "Guard"
                 )
                 yield table
+                yield Static(
+                    "READY = registered/no active issue; LEARNING = insufficient observations; "
+                    "VALIDATING = candidate under observation; QUARANTINED/REPAIRING/DEVIATION require review.",
+                    id="overview-status-legend",
+                )
+                with Horizontal(id="overview-actions"):
+                    yield Button("Guard evidence", id="overview-guard", disabled=True)
+                    yield Button("Behavior history", id="overview-behavior", disabled=True)
+                    yield Button("Related logs", id="overview-logs", disabled=True)
+                    yield Button("Investigate target", id="overview-investigate", disabled=True, variant="primary")
                 yield RichLog(id="target-details", wrap=True, markup=True)
             with TabPane("Guard", id="guard"):
+                yield Static(
+                    "Guard shows observed runtime behavior and departures from accepted expectations. "
+                    "Select a target before using evidence actions.",
+                    id="guard-help",
+                )
                 with Horizontal(id="guard-actions"):
                     yield Button("Refresh", id="guard-refresh", variant="primary")
-                    yield Button("Summary", id="guard-summary")
-                    yield Button("Events", id="guard-events")
-                    yield Button("Deviations", id="guard-deviations")
-                    yield Button("Inspections", id="guard-inspections")
-                    yield Button("Accept baseline", id="guard-baseline")
-                    yield Button("LLM assist", id="guard-assess")
+                    yield Button("Summary", id="guard-summary", disabled=True)
+                    yield Button("Events", id="guard-events", disabled=True)
+                    yield Button("Deviations", id="guard-deviations", disabled=True)
+                    yield Button("Inspections", id="guard-inspections", disabled=True)
+                    yield Checkbox("I reviewed baseline evidence", id="guard-baseline-confirm", disabled=True)
+                    yield Button("Accept baseline", id="guard-baseline", disabled=True)
+                    yield Button("LLM assist", id="guard-assess", disabled=True)
+                with Horizontal(id="guard-filter-row"):
+                    yield Input(placeholder="Filter Guard targets or states", id="guard-filter")
+                    yield Button("Clear filter", id="guard-filter-clear")
                 with Grid(id="guard-split"):
                     with Vertical(classes="guard-pane"):
                         yield Static("Guard operational status", classes="context-pane-title")
                         table = DataTable(id="guard-table")
                         table.cursor_type = "row"
-                        table.add_columns("Target", "Status", "Last check", "Violations", "Escalations")
+                        table.add_columns("Target", "Guard state", "Severity", "Last evidence", "Findings", "Escalations")
                         yield table
                     with Vertical(classes="guard-pane"):
                         yield Static("Select a Guard target", id="guard-detail-title", classes="context-pane-title")
                         yield RichLog(id="guard-output", wrap=True, markup=True)
+                with Horizontal(id="guard-context-actions"):
+                    yield Button("Behavior history", id="guard-open-behavior", disabled=True)
+                    yield Button("Related logs", id="guard-open-logs", disabled=True)
+                    yield Button("Investigate findings", id="guard-open-investigate", disabled=True, variant="primary")
             with TabPane("Behavior", id="behavior"):
                 yield Static(
                     "Snapshots are evidence, not accuracy guarantees. Calls/target shows collection coverage; "
@@ -902,12 +947,20 @@ class CaretakerConsoleApp(App):
             for target in self._target_records
             if self._target_matches_filter(target, expression)
         ]
+        self._displayed_target_records.sort(
+            key=lambda target: (
+                0 if self._target_attention_reason(target) != "none" else 1,
+                str(target.get("target_id") or ""),
+            )
+        )
         table = self.query_one("#targets-table", DataTable)
         table.clear()
         for target in self._displayed_target_records:
             target_id = str(target.get("target_id", ""))
             table.add_row(
                 target_id,
+                str(target.get("status") or "READY"),
+                self._target_attention_reason(target),
                 str(target.get("repair_mode") or "-"),
                 str(target.get("repair_authority") or "-"),
                 str(
@@ -916,7 +969,6 @@ class CaretakerConsoleApp(App):
                     else "-"
                 ),
                 "yes" if target.get("guard_enabled") else "no",
-                str(target.get("status") or "READY"),
                 key=target_id,
             )
 
@@ -933,6 +985,25 @@ class CaretakerConsoleApp(App):
             details.write("No targets match the current filter.")
         else:
             details.write("No runtime targets were returned.")
+
+    def _target_attention_reason(self, target: dict[str, Any]) -> str:
+        target_id = str(target.get("target_id") or "")
+        status = str(target.get("status") or "READY").upper()
+        if status in {"REPAIRING", "QUARANTINED", "FAILED", "VALIDATING"}:
+            return status.lower()
+        guard = next(
+            (item for item in self._guard_records if str(item.get("target_id") or "") == target_id),
+            None,
+        )
+        if guard and int(guard.get("violation_count") or 0) > 0:
+            return f"{guard.get('violation_count')} Guard finding(s)"
+        if any(
+            str(item.get("target_id") or "") == target_id
+            and item.get("state") in {"WAITING", "FAILED", "ROLLBACK", "BLOCKED", "ERROR"}
+            for item in self._repair_records
+        ):
+            return "Repair review"
+        return "none"
 
     async def refresh_targets(self) -> None:
         if not self._application_running:
@@ -1035,7 +1106,8 @@ class CaretakerConsoleApp(App):
             target_decisions = [item for item in decisions if self._subject_target(item) == target_id]
             records.append({
                 "target_id": target_id,
-                "status": target.get("status") or "READY",
+                "status": self._guard_state(summary, deviations, inspections),
+                "severity": self._guard_severity(deviations),
                 "last_check": self._latest_evidence_time(inspections, deviations),
                 "violation_count": len(deviations),
                 "escalation_count": len(target_decisions),
@@ -1045,21 +1117,72 @@ class CaretakerConsoleApp(App):
                 "decisions": target_decisions,
             })
         self._guard_records = records
+        self._apply_guard_filter()
+        self._apply_target_filter()
+
+    @staticmethod
+    def _guard_severity(deviations: Any) -> str:
+        ranks = {"CRITICAL": 4, "HIGH": 3, "ERROR": 3, "WARNING": 2, "WARN": 2, "MEDIUM": 2, "LOW": 1, "INFO": 0}
+        best = "NONE"
+        best_rank = -1
+        for item in deviations or ():
+            if not isinstance(item, dict):
+                continue
+            value = str(item.get("severity") or "").upper()
+            if not value:
+                try:
+                    score = float(item.get("significance_score") or 0)
+                except (TypeError, ValueError):
+                    score = 0
+                value = "HIGH" if score >= 80 else "WARNING" if score >= 60 else "LOW"
+            rank = ranks.get(value, 0)
+            if rank > best_rank:
+                best, best_rank = value, rank
+        return best
+
+    @staticmethod
+    def _guard_state(summary: Any, deviations: Any, inspections: Any) -> str:
+        if deviations:
+            return "DEVIATION"
+        if inspections:
+            return "HEALTHY"
+        if summary:
+            return "LEARNING"
+        return "NO EVIDENCE"
+
+    def _apply_guard_filter(self) -> None:
+        expression = self.query_one("#guard-filter", Input).value.strip().casefold()
+        records = [
+            record for record in self._guard_records
+            if not expression or expression in json.dumps(record, default=str).casefold()
+        ]
+        records.sort(
+            key=lambda record: (
+                0 if record.get("status") == "DEVIATION" else 1,
+                self._attention_priority(record.get("severity"))[0],
+                str(record.get("target_id") or ""),
+            )
+        )
         table = self.query_one("#guard-table", DataTable)
         table.clear()
         for record in records:
             table.add_row(
                 record["target_id"],
                 str(record["status"]),
+                str(record["severity"]),
                 str(record["last_check"]),
                 str(record["violation_count"]),
                 str(record["escalation_count"]),
                 key=record["target_id"],
             )
-        if not records:
+        if not self._guard_records:
             output = self.query_one("#guard-output", RichLog)
             output.clear()
             output.write("No Guard-enabled runtime targets are currently available.")
+        elif not records:
+            output = self.query_one("#guard-output", RichLog)
+            output.clear()
+            output.write("No Guard targets match the current filter.")
 
     @classmethod
     def _is_investigation_candidate(cls, record: dict[str, Any]) -> bool:
@@ -1258,8 +1381,43 @@ class CaretakerConsoleApp(App):
             if record is None:
                 return
             self._selected_guard_target = target_id
-            self.query_one("#guard-detail-title", Static).update(f"Guard target {target_id}")
-            self._write_json("#guard-output", record)
+            for button_id in (
+                "#guard-summary", "#guard-events", "#guard-deviations",
+                "#guard-inspections", "#guard-assess", "#guard-open-behavior",
+                "#guard-open-logs", "#guard-open-investigate",
+            ):
+                self.query_one(button_id, Button).disabled = False
+            confirmation = self.query_one("#guard-baseline-confirm", Checkbox)
+            confirmation.value = False
+            confirmation.disabled = record.get("summary") is None
+            self.query_one("#guard-baseline", Button).disabled = True
+            self.query_one("#guard-detail-title", Static).update(
+                f"Guard target {target_id} | {record.get('status')} | severity {record.get('severity')}"
+            )
+            output = self.query_one("#guard-output", RichLog)
+            output.clear()
+            output.write(
+                f"[b]Operational assessment[/b] {record.get('status')}\n"
+                f"[b]Last evidence[/b] {record.get('last_check')}\n"
+                f"[b]Active findings[/b] {record.get('violation_count')}\n"
+                f"[b]Escalations/decisions[/b] {record.get('escalation_count')}"
+            )
+            deviations = record.get("deviations") or ()
+            if deviations:
+                output.write("\n[b]Why this target needs attention[/b]")
+                for deviation in deviations[:10]:
+                    explanations = deviation.get("explanations") or () if isinstance(deviation, dict) else ()
+                    output.write(
+                        f"  • {explanations[0] if explanations else 'Observed behavior departed from expectations'}"
+                    )
+            elif record.get("status") == "NO EVIDENCE":
+                output.write("\n[yellow]No Guard evidence has been recorded yet; this is not the same as healthy.[/yellow]")
+            elif record.get("status") == "LEARNING":
+                output.write("\n[yellow]Guard has observations but has not established enough evidence for a healthy assessment.[/yellow]")
+            if record.get("summary") is None:
+                output.write("\nBaseline acceptance is unavailable because no aggregate summary exists.")
+            else:
+                output.write("\nReview Summary, Events, Deviations, and Inspections before accepting a baseline.")
             return
 
         if event.data_table.id == "investigate-table":
@@ -1401,7 +1559,12 @@ class CaretakerConsoleApp(App):
         if not row:
             return
         target_id = str(row[0])
+        self._selected_target = target_id
         self._set_operator_context(target=target_id)
+        for button_id in (
+            "#overview-guard", "#overview-behavior", "#overview-logs", "#overview-investigate"
+        ):
+            self.query_one(button_id, Button).disabled = False
         self.query_one("#behavior-subject", Input).value = target_id
         if not self._application_running:
             details = self.query_one("#target-details", RichLog)
@@ -1416,14 +1579,28 @@ class CaretakerConsoleApp(App):
                 self._request("runtime-target-state", target=target_id),
                 self._request("runtime-target-policy", target=target_id),
             )
-            self._write_json(
-                "#target-details",
-                {
-                    "target": target_id,
-                    "state": state.get("state"),
-                    "policy": policy.get("policy"),
-                },
+            target_record = next(
+                (item for item in self._target_records if str(item.get("target_id")) == target_id),
+                {},
             )
+            details = self.query_one("#target-details", RichLog)
+            details.clear()
+            details.write(
+                f"[b]{target_id}[/b]\n"
+                f"Health: {target_record.get('status', 'READY')}\n"
+                f"Needs attention: {self._target_attention_reason(target_record)}\n"
+                f"Repair mode: {target_record.get('repair_mode') or '-'}; "
+                f"operator authority: {target_record.get('repair_authority') or '-'}; "
+                f"Guard: {'enabled' if target_record.get('guard_enabled') else 'disabled'}\n"
+                "Use the buttons above to inspect evidence or start an investigation."
+            )
+            details.write("\n[b]Technical state and effective policy[/b]")
+            details.write(json.dumps(
+                {"state": state.get("state"), "policy": policy.get("policy")},
+                indent=2,
+                sort_keys=True,
+                default=str,
+            ))
         except Exception as exc:
             self._write_json(
                 "#target-details",
@@ -1829,6 +2006,14 @@ class CaretakerConsoleApp(App):
             self._apply_log_filter()
         elif event.input.id == "targets-filter":
             self._apply_target_filter()
+        elif event.input.id == "guard-filter":
+            self._apply_guard_filter()
+
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        if event.checkbox.id == "guard-baseline-confirm":
+            self.query_one("#guard-baseline", Button).disabled = not (
+                event.value and self._selected_guard_target
+            )
 
     @staticmethod
     def _log_level(severity: Any) -> str:
@@ -2380,6 +2565,32 @@ class CaretakerConsoleApp(App):
             if button == "context-clear":
                 self._set_operator_context()
                 return
+            if button == "guard-filter-clear":
+                self.query_one("#guard-filter", Input).value = ""
+                self._apply_guard_filter()
+                return
+            if button.startswith("overview-"):
+                target = self._selected_target
+                if not target:
+                    raise ValueError("Select a target from Overview first")
+                if button == "overview-guard":
+                    self._selected_guard_target = target
+                    self._activate_tab("guard")
+                    return
+                if button == "overview-behavior":
+                    self.query_one("#behavior-subject", Input).value = target
+                    self._activate_tab("behavior")
+                    return
+                if button == "overview-logs":
+                    self.query_one("#logs-filter", Input).value = f"target:{target}"
+                    self._apply_log_filter()
+                    self._activate_tab("logs")
+                    return
+                if button == "overview-investigate":
+                    self.query_one("#investigate-target", Input).value = target
+                    self.query_one("#investigate-objective", Input).value = f"Investigate operational issues for {target}"
+                    self._activate_tab("investigate")
+                    return
             if button in {"attention-open", "attention-investigate"}:
                 record = self._selected_attention_record
                 if record is None:
@@ -2523,6 +2734,20 @@ class CaretakerConsoleApp(App):
                 target = self._selected_guard_target
                 if not target:
                     raise ValueError("Select a Guard target from the operational status table first")
+                if button == "guard-open-behavior":
+                    self.query_one("#behavior-subject", Input).value = target
+                    self._activate_tab("behavior")
+                    return
+                if button == "guard-open-logs":
+                    self.query_one("#logs-filter", Input).value = f"target:{target} channel:guard"
+                    self._apply_log_filter()
+                    self._activate_tab("logs")
+                    return
+                if button == "guard-open-investigate":
+                    self.query_one("#investigate-target", Input).value = target
+                    self.query_one("#investigate-objective", Input).value = f"Investigate Guard findings for {target}"
+                    self._activate_tab("investigate")
+                    return
                 command_map = {
                     "guard-summary": "runtime-guard-summary",
                     "guard-events": "runtime-guard-events",
@@ -2533,6 +2758,10 @@ class CaretakerConsoleApp(App):
                 }
                 response = await self._request(command_map[button], target=target, limit=100)
                 self._write_json("#guard-output", response)
+                if button == "guard-baseline":
+                    self.query_one("#guard-baseline-confirm", Checkbox).value = False
+                    self.query_one("#guard-baseline", Button).disabled = True
+                    await self.refresh_guard()
                 return
             if button == "logs-investigate":
                 record = self._selected_log_record

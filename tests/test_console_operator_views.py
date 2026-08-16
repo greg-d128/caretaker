@@ -203,3 +203,14 @@ def test_attention_view_combines_operator_issues_and_shared_context(tmp_path):
             assert app.query_one("#context-clear", Button).disabled is False
 
     asyncio.run(exercise())
+
+
+def test_guard_operator_state_distinguishes_no_evidence_learning_and_findings():
+    assert CaretakerConsoleApp._guard_state(None, [], []) == "NO EVIDENCE"
+    assert CaretakerConsoleApp._guard_state({"calls": 1}, [], []) == "LEARNING"
+    assert CaretakerConsoleApp._guard_state({"calls": 10}, [], [{"ok": True}]) == "HEALTHY"
+    assert CaretakerConsoleApp._guard_state({}, [{"severity": "HIGH"}], []) == "DEVIATION"
+    assert CaretakerConsoleApp._guard_severity([
+        {"severity": "LOW"},
+        {"severity": "HIGH"},
+    ]) == "HIGH"

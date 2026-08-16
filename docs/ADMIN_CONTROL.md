@@ -95,6 +95,18 @@ fallback files, and the bounded record limit. A shared context banner retains
 the selected target, incident, and call while the operator moves between views;
 **Clear context** returns to the unscoped console.
 
+The **Overview** view sorts targets needing attention ahead of ordinary targets
+and explains its operator-facing health states. Selecting a target provides a
+plain-language summary plus direct navigation to Guard evidence, Behavior
+history, correlated Logs, or an Investigation; raw FunctionSlot state and the
+effective policy remain available as technical detail.
+
+The **Guard** view distinguishes `NO EVIDENCE`, `LEARNING`, `HEALTHY`, and
+`DEVIATION` instead of reusing Repair lifecycle states. Findings are sorted
+first and summarized in plain language. Baseline acceptance remains disabled
+until an aggregate summary exists and the operator explicitly confirms that the
+available summary, events, deviations, and inspections were reviewed.
+
 The filter field accepts ordinary case-insensitive text and compact field
 selectors. Multiple terms are combined with AND semantics. Examples:
 
