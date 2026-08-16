@@ -1686,31 +1686,79 @@ class RepairEngine:
         policy_summary: str,
     ) -> RepairRequest:
         failure = incident.failure
+        context_policy = target.policy.context
         traceback_summary = ""
-        if hasattr(failure, "traceback"):
-            traceback_summary = "\n".join(
-                f"{frame.filename}:{frame.line_number} in {frame.function_name}: {frame.source_line or ''}"
-                for frame in failure.traceback
-            )
-        state_summary = "\n".join(
-            f"{item.path}: {item.before.representation if item.before else '<missing>'} -> "
-            f"{item.after.representation if item.after else '<missing>'}"
-            for item in incident.state_differences
-        ) or "No captured state changes."
+        if context_policy.include_traceback and hasattr(failure, "traceback"):
+            traceback_lines: list[str] = []
+            for frame in failure.traceback:
+                line = (
+                    f"{frame.filename}:{frame.line_number} in {frame.function_name}: "
+                    f"{frame.source_line or ''}"
+                )
+                if context_policy.send_local_values and frame.locals:
+                    local_summary = ", ".join(
+                        f"{name}={value.representation}"
+                        for name, value in sorted(frame.locals.items())
+                    )
+                    line += f"\n  locals: {local_summary}"
+                traceback_lines.append(line)
+            traceback_summary = "\n".join(traceback_lines)
+        elif not context_policy.include_traceback:
+            traceback_summary = "Traceback omitted by repair context policy."
+
+        if context_policy.include_state_diff:
+            state_summary = "\n".join(
+                f"{item.path}: {item.before.representation if item.before else '<missing>'} -> "
+                f"{item.after.representation if item.after else '<missing>'}"
+                for item in incident.state_differences
+            ) or "No captured state changes."
+        else:
+            state_summary = "State differences omitted by repair context policy."
         all_cases = target.registered_cases + self.regression.registered_cases_for_target(target.target_id)
-        cases = "\n".join(
-            f"- {case.name}: args={case.args!r}, kwargs={dict(case.kwargs)!r}, expected={case.expected!r}, expected_exception={case.expected_exception!r}"
-            for case in all_cases
-        ) or "No registered or regression cases."
+        if context_policy.send_argument_values:
+            cases = "\n".join(
+                f"- {case.name}: args={case.args!r}, kwargs={dict(case.kwargs)!r}, "
+                f"expected={case.expected!r}, expected_exception={case.expected_exception!r}"
+                for case in all_cases
+            ) or "No registered or regression cases."
+        else:
+            cases = "\n".join(
+                f"- {case.name}: input/output values omitted; "
+                f"expected_exception={case.expected_exception!r}"
+                for case in all_cases
+            ) or "No registered or regression cases."
+        log_records = tuple(incident.logs)[-max(0, context_policy.maximum_log_records):]
         logs_summary = "\n".join(
             f"{record.timestamp.isoformat()} {record.level} {record.logger_name}: "
             f"{self._redact_log_message(record.message)}"
-            for record in incident.logs
+            for record in log_records
         ) or "No correlated logs."
         logs_summary = logs_summary[: target.policy.context.maximum_context_characters]
-        incident_summary = f"Trigger: {incident.trigger.name}\nFailure: {failure!r}"
+        incident_summary = f"Trigger: {incident.trigger.name}\nFailure type: {type(failure).__name__}"
+        if context_policy.send_argument_values:
+            arguments = ", ".join(
+                f"{name}={value.representation}"
+                for name, value in sorted(incident.call.bound_arguments.items())
+            )
+            incident_summary += f"\nCall arguments: {arguments or '<none>'}"
+            failure_arguments = getattr(failure, "arguments", ())
+            if failure_arguments:
+                incident_summary += "\nException arguments: " + ", ".join(
+                    item.representation for item in failure_arguments
+                )
+        else:
+            exception_type = getattr(failure, "exception_type", None)
+            if exception_type:
+                incident_summary += f"\nException: {exception_type}"
         if incident.metadata:
-            incident_summary += f"\nAdditional evidence: {incident.metadata!r}"
+            if context_policy.send_argument_values:
+                incident_summary += f"\nAdditional evidence: {incident.metadata!r}"
+            else:
+                incident_summary += (
+                    "\nAdditional evidence fields: "
+                    + ", ".join(sorted(map(str, incident.metadata)))
+                    + " (values omitted by repair context policy)"
+                )
         guard_summary = "No Guard evidence."
         if (
             self.guard is not None
@@ -1740,7 +1788,11 @@ class RepairEngine:
             target_id=target.target_id,
             function_name=target.display_name.split(".")[-1],
             module_name=target.source.module_name,
-            original_source=version.source or inspect.getsource(version.implementation),
+            original_source=(
+                version.source or inspect.getsource(version.implementation)
+                if context_policy.include_source
+                else "Source omitted by repair context policy."
+            ),
             incident_summary=incident_summary,
             traceback_summary=traceback_summary,
             state_summary=state_summary,

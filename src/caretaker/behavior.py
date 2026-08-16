@@ -168,6 +168,7 @@ def verify_envelope(
     envelope: Mapping[str, Any],
     *,
     identity_journal: SigningIdentityJournal | None = None,
+    minimum_integrity: RuntimeRecordIntegrityMode = RuntimeRecordIntegrityMode.HASH_CHAINED,
 ) -> tuple[bool, str | None]:
     snapshot = envelope.get("snapshot")
     integrity = envelope.get("integrity")
@@ -180,8 +181,11 @@ def verify_envelope(
 
     signed_value = integrity.get("artifact_signature")
     if signed_value is None:
-        # Legacy/unsigned snapshots remain hash-verifiable.  The derived state
-        # is intentionally not treated as cryptographic authenticity.
+        if minimum_integrity is not RuntimeRecordIntegrityMode.HASH_CHAINED:
+            return False, (
+                "snapshot is unsigned but policy requires "
+                f"{minimum_integrity.name} integrity"
+            )
         return True, None
     if not isinstance(signed_value, Mapping):
         return False, "snapshot artifact signature is malformed"
@@ -191,6 +195,11 @@ def verify_envelope(
         return False, f"snapshot artifact signature cannot be decoded: {type(exc).__name__}: {exc}"
     if artifact.artifact_kind != "behavior-snapshot":
         return False, f"unexpected signed artifact kind: {artifact.artifact_kind}"
+    if (
+        minimum_integrity is RuntimeRecordIntegrityMode.EXTERNAL_SIGNED
+        and artifact.signer_mode is not RuntimeRecordIntegrityMode.EXTERNAL_SIGNED
+    ):
+        return False, "snapshot is not signed by the required external authority"
     if artifact.content_hash != expected:
         return False, "snapshot signature does not bind the current content hash"
     if str(artifact.context.get("snapshot_id") or "") != str(snapshot.get("snapshot_id") or ""):
@@ -214,9 +223,19 @@ class BehaviorSnapshotStore:
         root: str | Path,
         *,
         artifact_signer: RuntimeArtifactSigningService | None = None,
+        minimum_integrity: RuntimeRecordIntegrityMode | None = None,
     ) -> None:
         self.root = Path(root)
         self.artifact_signer = artifact_signer
+        self.minimum_integrity = (
+            minimum_integrity
+            if minimum_integrity is not None
+            else (
+                artifact_signer.mode
+                if artifact_signer is not None
+                else RuntimeRecordIntegrityMode.HASH_CHAINED
+            )
+        )
         self.identity_journal = (
             artifact_signer.journal
             if artifact_signer is not None
@@ -242,7 +261,11 @@ class BehaviorSnapshotStore:
             pass
 
     def save(self, envelope: Mapping[str, Any]) -> Path:
-        ok, error = verify_envelope(envelope, identity_journal=self.identity_journal)
+        ok, error = verify_envelope(
+            envelope,
+            identity_journal=self.identity_journal,
+            minimum_integrity=self.minimum_integrity,
+        )
         if not ok:
             raise ValueError(error or "invalid behavior snapshot")
         snapshot_id = UUID(str(envelope["snapshot"]["snapshot_id"]))
@@ -360,7 +383,11 @@ class BehaviorSnapshotStore:
         identifier = UUID(str(snapshot_id))
         path = self.snapshot_directory / f"{identifier}.json"
         envelope = json.loads(path.read_text(encoding="utf-8"))
-        ok, error = verify_envelope(envelope, identity_journal=self.identity_journal)
+        ok, error = verify_envelope(
+            envelope,
+            identity_journal=self.identity_journal,
+            minimum_integrity=self.minimum_integrity,
+        )
         if not ok:
             raise ValueError(f"Behavior snapshot {identifier} failed verification: {error}")
         return envelope
@@ -370,7 +397,11 @@ class BehaviorSnapshotStore:
         for path in sorted(self.snapshot_directory.glob("*.json")):
             try:
                 envelope = json.loads(path.read_text(encoding="utf-8"))
-                ok, error = verify_envelope(envelope, identity_journal=self.identity_journal)
+                ok, error = verify_envelope(
+                    envelope,
+                    identity_journal=self.identity_journal,
+                    minimum_integrity=self.minimum_integrity,
+                )
                 snapshot = dict(envelope.get("snapshot") or {})
                 integrity = dict(envelope.get("integrity") or {})
                 snapshot["integrity"] = integrity
@@ -463,12 +494,19 @@ class BehaviorSnapshotStore:
         if content_hash(record) != str(integrity.get("content_sha256") or ""):
             return None
         signed_value = integrity.get("artifact_signature")
+        if not signed_value and self.minimum_integrity is not RuntimeRecordIntegrityMode.HASH_CHAINED:
+            return None
         if signed_value:
             try:
                 artifact = deserialize_signed_artifact(signed_value)
             except Exception:
                 return None
             if artifact.artifact_kind != "guard-baseline-reference" or artifact.content_hash != integrity["content_sha256"]:
+                return None
+            if (
+                self.minimum_integrity is RuntimeRecordIntegrityMode.EXTERNAL_SIGNED
+                and artifact.signer_mode is not RuntimeRecordIntegrityMode.EXTERNAL_SIGNED
+            ):
                 return None
             if not artifact.public_key_fingerprint:
                 return None
@@ -491,7 +529,11 @@ class BehaviorSnapshotStore:
         identifier = UUID(str(snapshot_id))
         path = self.snapshot_directory / f"{identifier}.json"
         envelope = json.loads(path.read_text(encoding="utf-8"))
-        ok, error = verify_envelope(envelope, identity_journal=self.identity_journal)
+        ok, error = verify_envelope(
+            envelope,
+            identity_journal=self.identity_journal,
+            minimum_integrity=self.minimum_integrity,
+        )
         if not ok:
             raise ValueError(f"Cannot delete invalid behavior snapshot {identifier}: {error}")
         snapshot = envelope["snapshot"]
@@ -521,7 +563,11 @@ class BehaviorSnapshotStore:
         for identifier in identifiers:
             path = self.snapshot_directory / f"{identifier}.json"
             envelope = json.loads(path.read_text(encoding="utf-8"))
-            ok, error = verify_envelope(envelope, identity_journal=self.identity_journal)
+            ok, error = verify_envelope(
+                envelope,
+                identity_journal=self.identity_journal,
+                minimum_integrity=self.minimum_integrity,
+            )
             if not ok:
                 raise ValueError(f"Cannot archive invalid behavior snapshot {identifier}: {error}")
             members.append((path, envelope))
@@ -657,8 +703,11 @@ class BehaviorSnapshotStore:
                         public_key = public_key_from_identity_records(identity_records, fingerprint)
                         if public_key is None or not verify_signed_artifact(artifact, public_key):
                             errors.append("archive artifact signature is invalid")
-            elif self.artifact_signer is not None:
-                errors.append("archive is missing the expected runtime artifact signature")
+            elif self.minimum_integrity is not RuntimeRecordIntegrityMode.HASH_CHAINED:
+                errors.append(
+                    "archive is unsigned but policy requires "
+                    f"{self.minimum_integrity.name} integrity"
+                )
 
             verified_snapshots = 0
             for item in manifest.get("snapshots") or ():
@@ -674,7 +723,11 @@ class BehaviorSnapshotStore:
                 if expected != observed:
                     errors.append(f"{member_name}: manifest content hash mismatch")
                     continue
-                ok, error = _verify_envelope_with_identity_records(envelope, identity_records)
+                ok, error = _verify_envelope_with_identity_records(
+                    envelope,
+                    identity_records,
+                    minimum_integrity=self.minimum_integrity,
+                )
                 if not ok:
                     errors.append(f"{member_name}: {error}")
                     continue
@@ -744,6 +797,8 @@ def _tar_json(archive: tarfile.TarFile, name: str, *, required: bool = True) -> 
 def _verify_envelope_with_identity_records(
     envelope: Mapping[str, Any],
     identity_records: tuple[Mapping[str, Any], ...],
+    *,
+    minimum_integrity: RuntimeRecordIntegrityMode = RuntimeRecordIntegrityMode.HASH_CHAINED,
 ) -> tuple[bool, str | None]:
     snapshot = envelope.get("snapshot")
     integrity = envelope.get("integrity")
@@ -754,6 +809,11 @@ def _verify_envelope_with_identity_records(
         return False, "snapshot content hash does not match the integrity envelope"
     signed_value = integrity.get("artifact_signature")
     if signed_value is None:
+        if minimum_integrity is not RuntimeRecordIntegrityMode.HASH_CHAINED:
+            return False, (
+                "snapshot is unsigned but archive policy requires "
+                f"{minimum_integrity.name} integrity"
+            )
         return True, None
     if not isinstance(signed_value, Mapping):
         return False, "snapshot artifact signature is malformed"
@@ -763,6 +823,11 @@ def _verify_envelope_with_identity_records(
         return False, f"snapshot artifact signature cannot be decoded: {type(exc).__name__}: {exc}"
     if artifact.artifact_kind != "behavior-snapshot" or artifact.content_hash != expected:
         return False, "snapshot artifact signature binds the wrong artifact or content hash"
+    if (
+        minimum_integrity is RuntimeRecordIntegrityMode.EXTERNAL_SIGNED
+        and artifact.signer_mode is not RuntimeRecordIntegrityMode.EXTERNAL_SIGNED
+    ):
+        return False, "snapshot is not signed by the required external authority"
     if str(artifact.context.get("snapshot_id") or "") != str(snapshot.get("snapshot_id") or ""):
         return False, "snapshot artifact signature context does not match snapshot identity"
     fingerprint = artifact.public_key_fingerprint

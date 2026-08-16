@@ -16,6 +16,7 @@ from typing import Any, Mapping, Protocol
 from uuid import UUID, uuid4
 
 from .models import (
+    AnchorFailureAction,
     KeyTransition,
     RuntimeIdentityAnchoringState,
     RuntimeRecordIntegrityMode,
@@ -914,6 +915,22 @@ class RuntimeArtifactSigningService:
         external_signer: ExternalArtifactSigner | ExternalManifestSigner | None = None,
         first_event_sequence: int = 0,
     ) -> None:
+        if policy.algorithm.strip().lower() != "ed25519":
+            raise SigningUnavailable(
+                f"Unsupported runtime signing algorithm {policy.algorithm!r}; only ed25519 is implemented"
+            )
+        if (
+            policy.require_external_anchor
+            and policy.mode is not RuntimeRecordIntegrityMode.EXTERNAL_SIGNED
+        ):
+            if policy.external_anchor_failure_action is AnchorFailureAction.REFUSE_SIGNED_MODE:
+                raise SigningUnavailable(
+                    "An external signing anchor is required, but no external anchoring backend is configured"
+                )
+            if policy.external_anchor_failure_action is AnchorFailureAction.STOP_APPLICATION:
+                raise SystemExit(
+                    "Caretaker stopped because an external signing anchor is required but unavailable"
+                )
         self.policy = policy
         self.application_id = application_id
         self.run_id = run_id

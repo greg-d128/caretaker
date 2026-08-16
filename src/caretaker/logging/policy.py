@@ -188,14 +188,20 @@ class RuntimeSigningPolicy:
 
 def runtime_integrity_assurance(policy: RuntimeSigningPolicy) -> dict[str, object]:
     """Return explicit assurance properties for operator/status reporting."""
-    externally_anchored = (
-        policy.mode is RuntimeRecordIntegrityMode.EXTERNAL_SIGNED
-        or policy.require_external_anchor
-    )
+    # EXTERNAL_SIGNED is itself an externally held signing authority. Merely
+    # requesting an external anchor for an ephemeral chain does not establish
+    # that an anchor was actually created or verified.
+    externally_anchored = policy.mode is RuntimeRecordIntegrityMode.EXTERNAL_SIGNED
     return {
         "record_integrity_mode": policy.mode.name,
         "identity_anchor_required": policy.require_external_anchor,
-        "externally_anchored_expected": externally_anchored,
+        "externally_anchored_expected": (
+            externally_anchored or policy.require_external_anchor
+        ),
+        "externally_anchored_verified": externally_anchored,
+        "external_anchor_requirement_satisfied": (
+            not policy.require_external_anchor or externally_anchored
+        ),
         "corpus_replacement_resistant": externally_anchored,
     }
 

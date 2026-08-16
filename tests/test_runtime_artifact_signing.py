@@ -204,3 +204,61 @@ def test_archive_restore_refuses_snapshot_id_collision(tmp_path):
     with pytest.raises(ValueError, match="already exists with different content"):
         store.restore_archive(archive_path)
     service.close()
+
+
+def test_signed_snapshot_cannot_be_downgraded_to_hash_only(tmp_path):
+    service = RuntimeArtifactSigningService(
+        policy=RuntimeSigningPolicy(
+            mode=RuntimeRecordIntegrityMode.EPHEMERAL_SIGNED,
+            run_signer_in_separate_process=False,
+        ),
+        application_id="demo",
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        root=tmp_path,
+    )
+    store = BehaviorSnapshotStore(tmp_path, artifact_signer=service)
+    envelope = store.create(_capture())
+    path = store.snapshot_directory / f"{envelope['snapshot']['snapshot_id']}.json"
+    import json
+    tampered = json.loads(path.read_text(encoding="utf-8"))
+    tampered["integrity"].pop("artifact_signature", None)
+    tampered["integrity"]["signature_state"] = "UNSIGNED"
+    path.write_text(json.dumps(tampered), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="requires EPHEMERAL_SIGNED"):
+        store.load(envelope["snapshot"]["snapshot_id"])
+    service.close()
+
+
+def test_external_integrity_requirement_rejects_ephemeral_signature(tmp_path):
+    service = RuntimeArtifactSigningService(
+        policy=RuntimeSigningPolicy(
+            mode=RuntimeRecordIntegrityMode.EPHEMERAL_SIGNED,
+            run_signer_in_separate_process=False,
+        ),
+        application_id="demo",
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        root=tmp_path,
+    )
+    writer = BehaviorSnapshotStore(tmp_path, artifact_signer=service)
+    envelope = writer.create(_capture())
+    reader = BehaviorSnapshotStore(
+        tmp_path,
+        minimum_integrity=RuntimeRecordIntegrityMode.EXTERNAL_SIGNED,
+    )
+    with pytest.raises(ValueError, match="required external authority"):
+        reader.load(envelope["snapshot"]["snapshot_id"])
+    service.close()
+
+
+def test_unimplemented_signing_algorithm_is_rejected(tmp_path):
+    with pytest.raises(SigningUnavailable, match="only ed25519 is implemented"):
+        RuntimeArtifactSigningService(
+            policy=RuntimeSigningPolicy(algorithm="rsa"),
+            application_id="demo",
+            run_id=uuid4(),
+            process_start_id=uuid4(),
+            root=tmp_path,
+        )

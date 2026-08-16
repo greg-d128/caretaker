@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import threading
+from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -45,6 +46,7 @@ from caretaker.guard.policy import (
     LLMReviewPolicy,
 )
 from caretaker.provider import CandidateBatch, RepairRequest
+from caretaker.policy import ContextPolicy
 from tests.guard_targets import failing
 
 
@@ -184,6 +186,30 @@ def test_repair_provider_receives_guard_evidence() -> None:
     assert wrapped(2) == 2
     assert provider.request is not None
     assert "unusual.example:443" in provider.request.guard_summary
+
+
+def test_repair_context_policy_omits_protected_llm_context() -> None:
+    provider = CapturingRepairProvider()
+    engine = RepairEngine(provider=provider)
+    policy = replace(
+        _repair_policy(),
+        context=ContextPolicy(
+            include_source=False,
+            include_traceback=False,
+            include_state_diff=False,
+            send_argument_values=False,
+            send_local_values=False,
+        ),
+    )
+    wrapped = repair(policy=policy, engine=engine)(failing)
+
+    assert wrapped(123456789) == 123456789
+    assert provider.request is not None
+    assert provider.request.original_source == "Source omitted by repair context policy."
+    assert provider.request.traceback_summary == "Traceback omitted by repair context policy."
+    assert provider.request.state_summary == "State differences omitted by repair context policy."
+    assert "123456789" not in provider.request.incident_summary
+    assert "broken" not in provider.request.incident_summary
 
 
 def test_module_variant_with_wrong_hash_is_quarantined(tmp_path: Path) -> None:

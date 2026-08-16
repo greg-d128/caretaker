@@ -97,6 +97,18 @@ def test_runtime_integrity_assurance_distinguishes_hash_chain_from_external_anch
     assert external["corpus_replacement_resistant"] is True
 
 
+def test_requesting_external_anchor_does_not_claim_it_was_verified() -> None:
+    from caretaker.logging.policy import RuntimeSigningPolicy, runtime_integrity_assurance
+
+    assurance = runtime_integrity_assurance(
+        RuntimeSigningPolicy(require_external_anchor=True)
+    )
+    assert assurance["externally_anchored_expected"] is True
+    assert assurance["externally_anchored_verified"] is False
+    assert assurance["external_anchor_requirement_satisfied"] is False
+    assert assurance["corpus_replacement_resistant"] is False
+
+
 def test_worker_restart_exhaustion_disables_component_by_default() -> None:
     from caretaker.logging.models import WorkerFailureAction
     from caretaker.logging.policy import WorkerRestartPolicy
