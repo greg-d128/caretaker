@@ -4,7 +4,7 @@ import asyncio
 
 from caretaker.console import CaretakerConsoleApp
 from rich.text import Text
-from textual.widgets import Button, Checkbox, Static
+from textual.widgets import Button, Checkbox, DataTable, Static
 
 
 def test_target_runtime_state_marks_candidate_probation_as_validating():
@@ -547,17 +547,14 @@ def test_behavior_actions_use_subject_scoped_reference_workflow(tmp_path):
             assert app.query_one("#behavior-set-reference", Button).disabled is True
             assert app.query_one("#behavior-compare", Button).disabled is True
             assert app.query_one("#behavior-archive", Button).disabled is True
-            assert app.query_one("#behavior-delete", Button).disabled is True
             assert str(app.query_one("#behavior-archive", Button).label) == "Archive selected"
-            assert str(app.query_one("#behavior-delete", Button).label) == "Delete selected"
             assert str(app.query_one("#behavior-manage-confirm", Checkbox).label) == (
-                "Confirm archive/delete selected"
+                "Confirm archive selected"
             )
 
             app.query_one("#behavior-manage-confirm", Checkbox).value = True
             await pilot.pause()
             assert app.query_one("#behavior-archive", Button).disabled is False
-            assert app.query_one("#behavior-delete", Button).disabled is False
 
             app._selected_behavior_snapshot = "older"
             app._refresh_behavior_actions()
@@ -571,6 +568,20 @@ def test_behavior_actions_use_subject_scoped_reference_workflow(tmp_path):
             assert app._behavior_references["function:lab.probe"] == "older"
             assert app.query_one("#behavior-set-reference", Button).disabled is True
             assert app.query_one("#behavior-compare", Button).disabled is True
+
+    asyncio.run(exercise())
+
+
+def test_stale_table_selection_after_refresh_is_ignored(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            table = app.query_one("#behavior-table", DataTable)
+            stale_key = table.add_row("1", "function", "lab.probe")
+            table.clear()
+            event = DataTable.RowSelected(table, 0, stale_key)
+            await app.on_data_table_row_selected(event)
 
     asyncio.run(exercise())
 

@@ -109,7 +109,7 @@ fallback evidence. **Overview**, **Guard**, **Behavior**, **Repair**, **Policy**
 related evidence without requiring operators to copy internal IDs.
 
 Consequential actions fail closed. Guard baseline acceptance, Behavior snapshot
-archive/delete, Repair approval/rejection, unsigned or signed policy application,
+archiving, Repair approval/rejection, unsigned or signed policy application,
 and runtime-lease release require an explicit review acknowledgement. Repair
 rejection and policy application also require an operator reason. Behavior and
 LLM comparisons are advisory evidence rather than correctness guarantees; the UI

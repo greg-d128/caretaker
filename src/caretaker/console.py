@@ -23,6 +23,7 @@ from textual.widgets import (
     TabbedContent,
     TabPane,
 )
+from textual.widgets.data_table import RowDoesNotExist
 
 from .logging.ipc import control_request, unix_socket_exists
 from .logging.segments import read_segment
@@ -577,9 +578,8 @@ class CaretakerConsoleApp(App):
                     yield Button("Explain comparison", id="behavior-assess-comparison", disabled=True)
                 with Horizontal(id="behavior-manage-actions"):
                     yield Button("LLM history", id="behavior-assess-history")
-                    yield Checkbox("Confirm archive/delete selected", id="behavior-manage-confirm", disabled=True)
+                    yield Checkbox("Confirm archive selected", id="behavior-manage-confirm", disabled=True)
                     yield Button("Archive selected", id="behavior-archive", variant="warning", disabled=True)
-                    yield Button("Delete selected", id="behavior-delete", variant="error", disabled=True)
 
             with TabPane("Repair", id="repair"):
                 yield Static(
@@ -1445,8 +1445,14 @@ class CaretakerConsoleApp(App):
         )
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        if event.data_table.id == "attention-table":
+        try:
             row = event.data_table.get_row(event.row_key)
+        except RowDoesNotExist:
+            # A refresh may rebuild a table while Textual still has a queued
+            # selection event for one of its former rows.
+            return
+
+        if event.data_table.id == "attention-table":
             if not row:
                 return
             try:
@@ -1476,7 +1482,6 @@ class CaretakerConsoleApp(App):
             output.write(json.dumps(record.get("payload") or {}, indent=2, sort_keys=True, default=str))
             return
         if event.data_table.id == "guard-table":
-            row = event.data_table.get_row(event.row_key)
             if not row:
                 return
             target_id = str(row[0])
@@ -1525,7 +1530,6 @@ class CaretakerConsoleApp(App):
             return
 
         if event.data_table.id == "investigate-table":
-            row = event.data_table.get_row(event.row_key)
             try:
                 record = self._investigation_records[int(row[0]) - 1]
             except (TypeError, ValueError, IndexError):
@@ -1550,7 +1554,6 @@ class CaretakerConsoleApp(App):
             return
 
         if event.data_table.id == "logs-table":
-            row = event.data_table.get_row(event.row_key)
             if not row:
                 return
             try:
@@ -1584,7 +1587,6 @@ class CaretakerConsoleApp(App):
             return
 
         if event.data_table.id == "behavior-table":
-            row = event.data_table.get_row(event.row_key)
             if not row:
                 return
             try:
@@ -1620,7 +1622,6 @@ class CaretakerConsoleApp(App):
             return
 
         if event.data_table.id == "repair-table":
-            row = event.data_table.get_row(event.row_key)
             if not row:
                 return
             try:
@@ -1679,7 +1680,6 @@ class CaretakerConsoleApp(App):
             return
 
         if event.data_table.id == "policy-table":
-            row = event.data_table.get_row(event.row_key)
             if not row:
                 return
             try:
@@ -1700,7 +1700,6 @@ class CaretakerConsoleApp(App):
 
         if event.data_table.id != "targets-table":
             return
-        row = event.data_table.get_row(event.row_key)
         if not row:
             return
         target_id = str(row[0])
@@ -1980,7 +1979,6 @@ class CaretakerConsoleApp(App):
             manage_confirm.value = False
         confirmed = bool(selected and manage_confirm.value)
         self.query_one("#behavior-archive", Button).disabled = not confirmed
-        self.query_one("#behavior-delete", Button).disabled = not confirmed
 
         def identity(record: dict[str, Any] | None) -> str:
             if record is None:
@@ -3103,7 +3101,6 @@ class CaretakerConsoleApp(App):
                     "behavior-set-reference",
                     "behavior-compare",
                     "behavior-archive",
-                    "behavior-delete",
                 } and not snapshot_id:
                     raise ValueError("Select a behavior snapshot first")
                 if button == "behavior-set-reference":
@@ -3179,19 +3176,6 @@ class CaretakerConsoleApp(App):
                     response = await self._request(
                         "behavior-archive", snapshot_ids=[snapshot_id]
                     )
-                    self._behavior_references = {
-                        subject: reference_id
-                        for subject, reference_id in self._behavior_references.items()
-                        if reference_id != snapshot_id
-                    }
-                    self._selected_behavior_snapshot = None
-                    self._write_json("#behavior-output", response)
-                    await self.refresh_behavior()
-                    return
-                if button == "behavior-delete":
-                    if not self.query_one("#behavior-manage-confirm", Checkbox).value:
-                        raise ValueError("Confirm that you intend to permanently delete the selected snapshot")
-                    response = await self._request("behavior-delete", snapshot_id=snapshot_id)
                     self._behavior_references = {
                         subject: reference_id
                         for subject, reference_id in self._behavior_references.items()
