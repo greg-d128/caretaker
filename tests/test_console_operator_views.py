@@ -547,11 +547,13 @@ def test_behavior_actions_use_subject_scoped_reference_workflow(tmp_path):
             assert app.query_one("#behavior-set-reference", Button).disabled is True
             assert app.query_one("#behavior-compare", Button).disabled is True
             assert app.query_one("#behavior-archive", Button).disabled is True
-            assert str(app.query_one("#behavior-archive", Button).label) == "Archive selected"
+            assert str(app.query_one("#behavior-archive", Button).label) == "Archive generation"
             assert str(app.query_one("#behavior-manage-confirm", Checkbox).label) == (
-                "Confirm archive selected"
+                "Confirm archive generation"
             )
 
+            app.query_one("#behavior-archive-reason").value = "Superseded behavior"
+            await pilot.pause()
             app.query_one("#behavior-manage-confirm", Checkbox).value = True
             await pilot.pause()
             assert app.query_one("#behavior-archive", Button).disabled is False

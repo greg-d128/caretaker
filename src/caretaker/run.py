@@ -399,19 +399,41 @@ def main(argv: list[str] | None = None) -> int:
             }
 
         if command == "behavior-archive":
-            snapshot_ids = request.get("snapshot_ids") or ()
-            if isinstance(snapshot_ids, str):
-                snapshot_ids = [snapshot_ids]
-            path = behavior_store.archive(snapshot_ids, remove=True)
+            subject_key = str(request.get("subject_key") or "").strip()
+            generation_id = str(request.get("generation_id") or "").strip()
+            reason = str(request.get("reason") or "").strip()
+            if not subject_key or not generation_id:
+                raise ValueError("behavior-archive requires subject_key and generation_id")
+            if not reason:
+                raise ValueError("behavior-archive requires an operator reason")
+            path, snapshot_ids = behavior_store.archive_generation(
+                subject_key,
+                generation_id,
+                reason=reason,
+            )
             behavior_revision["value"] += 1
             runtime.event(
                 logger_name="caretaker.behavior",
                 severity=20,
                 channel=LogChannel.GUARD,
                 message="Behavior snapshots archived",
-                fields={"snapshot_ids": list(snapshot_ids), "archive_path": str(path)},
+                fields={
+                    "snapshot_ids": snapshot_ids,
+                    "snapshot_count": len(snapshot_ids),
+                    "subject_key": subject_key,
+                    "generation_id": generation_id,
+                    "reason": reason,
+                    "archive_path": str(path),
+                },
             )
-            return {"ok": True, "archive": str(path)}
+            return {
+                "ok": True,
+                "archive": str(path),
+                "snapshot_count": len(snapshot_ids),
+                "subject_key": subject_key,
+                "generation_id": generation_id,
+                "reason": reason,
+            }
 
         if command == "behavior-archive-list":
             return {"ok": True, "archives": list(behavior_store.list_archives())}

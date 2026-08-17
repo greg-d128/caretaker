@@ -318,6 +318,36 @@ def test_archive_contains_manifest_and_removes_snapshot(tmp_path: Path):
         assert manifest["snapshots"][0]["snapshot_id"] == snapshot_id
 
 
+def test_archive_generation_removes_all_epochs_and_records_reason(tmp_path: Path):
+    store = BehaviorSnapshotStore(tmp_path)
+    first = store.create(_capture(code_hash="a" * 64, events=10))
+    second = store.create(_capture(code_hash="a" * 64, events=20))
+    other = store.create(_capture(code_hash="b" * 64, events=30))
+    subject_key = first["snapshot"]["subject_key"]
+    generation_id = first["snapshot"]["generation_id"]
+
+    archive_path, archived_ids = store.archive_generation(
+        subject_key,
+        generation_id,
+        reason="Superseded by the deployed generation",
+    )
+
+    assert set(archived_ids) == {
+        first["snapshot"]["snapshot_id"],
+        second["snapshot"]["snapshot_id"],
+    }
+    assert {item["snapshot_id"] for item in store.list()} == {
+        other["snapshot"]["snapshot_id"]
+    }
+    with tarfile.open(archive_path, "r:gz") as archive:
+        manifest_file = archive.extractfile("manifest.json")
+        assert manifest_file is not None
+        manifest = json.loads(manifest_file.read())
+    assert manifest["reason"] == "Superseded by the deployed generation"
+    assert manifest["subject_key"] == subject_key
+    assert manifest["generation_id"] == generation_id
+
+
 def test_snapshot_chain_survives_archive_and_delete(tmp_path):
     store = BehaviorSnapshotStore(tmp_path)
     first = store.create(_capture(code_hash="a" * 64, events=10))

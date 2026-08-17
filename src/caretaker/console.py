@@ -568,7 +568,7 @@ class CaretakerConsoleApp(App):
                         yield Static("Selected snapshot / comparison", id="behavior-detail-title", classes="behavior-pane-title")
                         yield RichLog(id="behavior-output", wrap=True, markup=True)
                 yield Static(
-                    "Select a generation. Set Reference changes that subject's green reference; Compare epochs compares each row's representative sealed epoch and also reports cumulative generation coverage.",
+                    "Select a generation. Set Reference changes that subject's green reference; Compare epochs compares each row's representative sealed epoch and also reports cumulative generation coverage. Archiving removes every active snapshot in the selected generation and records your reason.",
                     id="behavior-selection-status",
                 )
                 with Horizontal(id="behavior-compare-actions"):
@@ -578,8 +578,13 @@ class CaretakerConsoleApp(App):
                     yield Button("Explain comparison", id="behavior-assess-comparison", disabled=True)
                 with Horizontal(id="behavior-manage-actions"):
                     yield Button("LLM history", id="behavior-assess-history")
-                    yield Checkbox("Confirm archive selected", id="behavior-manage-confirm", disabled=True)
-                    yield Button("Archive selected", id="behavior-archive", variant="warning", disabled=True)
+                    yield Input(
+                        placeholder="Reason for archiving this generation",
+                        id="behavior-archive-reason",
+                        max_length=500,
+                    )
+                    yield Checkbox("Confirm archive generation", id="behavior-manage-confirm", disabled=True)
+                    yield Button("Archive generation", id="behavior-archive", variant="warning", disabled=True)
 
             with TabPane("Repair", id="repair"):
                 yield Static(
@@ -1599,6 +1604,7 @@ class CaretakerConsoleApp(App):
                 return
             self._selected_behavior_snapshot = snapshot_id
             self._behavior_view_mode = "detail"
+            self.query_one("#behavior-archive-reason", Input).value = ""
             self.query_one("#behavior-manage-confirm", Checkbox).value = False
             behavior_target = str((record.get("subject") or {}).get("target_id") or "")
             self._set_operator_context(target=behavior_target or None)
@@ -1974,10 +1980,11 @@ class CaretakerConsoleApp(App):
         )
         self.query_one("#behavior-assess-comparison", Button).disabled = self._behavior_last_comparison is None
         manage_confirm = self.query_one("#behavior-manage-confirm", Checkbox)
-        manage_confirm.disabled = selected is None
-        if selected is None:
+        reason = self.query_one("#behavior-archive-reason", Input).value.strip()
+        manage_confirm.disabled = selected is None or not reason
+        if manage_confirm.disabled:
             manage_confirm.value = False
-        confirmed = bool(selected and manage_confirm.value)
+        confirmed = bool(selected and reason and manage_confirm.value)
         self.query_one("#behavior-archive", Button).disabled = not confirmed
 
         def identity(record: dict[str, Any] | None) -> str:
@@ -2368,6 +2375,9 @@ class CaretakerConsoleApp(App):
             "investigate-minutes", "investigate-model",
         }:
             self._update_investigation_scope()
+        elif event.input.id == "behavior-archive-reason":
+            self.query_one("#behavior-manage-confirm", Checkbox).value = False
+            self._refresh_behavior_actions()
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         if event.checkbox.id == "guard-baseline-confirm":
@@ -3172,16 +3182,32 @@ class CaretakerConsoleApp(App):
                     return
                 if button == "behavior-archive":
                     if not self.query_one("#behavior-manage-confirm", Checkbox).value:
-                        raise ValueError("Confirm that you intend to archive the selected snapshot")
+                        raise ValueError("Confirm that you intend to archive the selected generation")
+                    reason = self.query_one("#behavior-archive-reason", Input).value.strip()
+                    if not reason:
+                        raise ValueError("Enter a reason for archiving the selected generation")
+                    selected = self._behavior_record(snapshot_id)
+                    if selected is None:
+                        raise ValueError("Select a behavior generation first")
+                    subject_key = str(selected.get("subject_key") or "")
+                    generation_id = str(selected.get("generation_id") or "")
                     response = await self._request(
-                        "behavior-archive", snapshot_ids=[snapshot_id]
+                        "behavior-archive",
+                        subject_key=subject_key,
+                        generation_id=generation_id,
+                        reason=reason,
                     )
                     self._behavior_references = {
                         subject: reference_id
                         for subject, reference_id in self._behavior_references.items()
-                        if reference_id != snapshot_id
+                        if not (
+                            subject == subject_key
+                            and str((self._behavior_record(reference_id) or {}).get("generation_id") or "")
+                            == generation_id
+                        )
                     }
                     self._selected_behavior_snapshot = None
+                    self.query_one("#behavior-archive-reason", Input).value = ""
                     self._write_json("#behavior-output", response)
                     await self.refresh_behavior()
                     return

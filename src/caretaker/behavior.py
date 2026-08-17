@@ -836,7 +836,15 @@ class BehaviorSnapshotStore:
             self._snapshot_rows_signature = None
         self._invalidate_summary_cache()
 
-    def archive(self, snapshot_ids: Iterable[UUID | str], *, remove: bool = True) -> Path:
+    def archive(
+        self,
+        snapshot_ids: Iterable[UUID | str],
+        *,
+        remove: bool = True,
+        reason: str | None = None,
+        subject_key: str | None = None,
+        generation_id: str | None = None,
+    ) -> Path:
         identifiers = tuple(UUID(str(item)) for item in snapshot_ids)
         if not identifiers:
             raise ValueError("At least one behavior snapshot is required for archiving")
@@ -857,6 +865,9 @@ class BehaviorSnapshotStore:
             "schema_version": 1,
             "archive_id": str(archive_id),
             "created_at": utcnow().isoformat(),
+            "reason": str(reason or "").strip() or None,
+            "subject_key": subject_key,
+            "generation_id": generation_id,
             "snapshots": [
                 {
                     "snapshot_id": item[1]["snapshot"]["snapshot_id"],
@@ -917,8 +928,44 @@ class BehaviorSnapshotStore:
             with self._summary_cache_lock:
                 self._snapshot_rows_cache = None
                 self._snapshot_rows_signature = None
-            self._invalidate_summary_cache()
+        self._invalidate_summary_cache()
         return path
+
+    def archive_generation(
+        self,
+        subject_key: str,
+        generation_id: str,
+        *,
+        reason: str,
+        remove: bool = True,
+    ) -> tuple[Path, tuple[str, ...]]:
+        """Archive every active snapshot represented by one generation row."""
+        normalized_subject = str(subject_key).strip()
+        normalized_generation = str(generation_id).strip()
+        normalized_reason = str(reason).strip()
+        if not normalized_subject or not normalized_generation:
+            raise ValueError("A subject key and generation ID are required")
+        if not normalized_reason:
+            raise ValueError("An operator reason is required")
+        if len(normalized_reason) > 500:
+            raise ValueError("The archive reason must be 500 characters or fewer")
+        snapshot_ids = tuple(
+            str(item.get("snapshot_id"))
+            for item in self.list()
+            if str(item.get("subject_key") or "") == normalized_subject
+            and str(item.get("generation_id") or "") == normalized_generation
+            and item.get("snapshot_id")
+        )
+        if not snapshot_ids:
+            raise ValueError("The selected behavior generation has no active snapshots")
+        path = self.archive(
+            snapshot_ids,
+            remove=remove,
+            reason=normalized_reason,
+            subject_key=normalized_subject,
+            generation_id=normalized_generation,
+        )
+        return path, snapshot_ids
 
     def list_archives(self) -> tuple[dict[str, Any], ...]:
         rows: list[dict[str, Any]] = []
@@ -1024,6 +1071,9 @@ class BehaviorSnapshotStore:
             "snapshot_count": len(manifest.get("snapshots") or ()),
             "verified_snapshots": verified_snapshots,
             "archive_id": manifest.get("archive_id"),
+            "reason": manifest.get("reason"),
+            "subject_key": manifest.get("subject_key"),
+            "generation_id": manifest.get("generation_id"),
             "signed": signature_value is not None,
         }
 
