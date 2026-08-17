@@ -1972,7 +1972,7 @@ class CaretakerConsoleApp(App):
         integrity = envelope.get("integrity") or {}
         subject = snapshot.get("subject") or {}
         profile = snapshot.get("profile") or {}
-        evidence, calls_target = self._behavior_evidence(snapshot)
+        evidence, calls_target = self._behavior_evidence(summary or snapshot)
         title = str(snapshot.get("subject_key") or snapshot.get("snapshot_id") or "Behavior snapshot")
         self.query_one("#behavior-detail-title", Static).update(title)
         output = self.query_one("#behavior-output", RichLog)
@@ -2006,6 +2006,14 @@ class CaretakerConsoleApp(App):
             f"[b]Signature[/b] {signature_detail}"
             f"\n[b]Evidence[/b] {evidence} ({calls_target} completed calls/collection target)"
         )
+        if summary is not None:
+            summary_profile = summary.get("profile") or {}
+            output.write(
+                f"[b]Generation coverage[/b] {summary_profile.get('coverage_call_count', 0)} completed calls "
+                f"across {summary_profile.get('coverage_snapshot_count', summary.get('snapshot_count', 1))} "
+                f"verified disjoint epoch(s); the artifact below contains "
+                f"{profile.get('call_count', 0)} call(s)."
+            )
         output.write(
             "[yellow]This indicates evidence volume only; it does not guarantee statistical accuracy or representative workload coverage.[/yellow]"
         )

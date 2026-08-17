@@ -149,6 +149,26 @@ def test_manual_capture_atomically_cuts_disjoint_generation_epochs(tmp_path: Pat
     assert summary["profile"]["coverage_snapshot_count"] == 3
 
 
+def test_pending_epochs_materialize_in_subject_generation_sequence(tmp_path: Path) -> None:
+    repository = BehaviorStatisticsRepository(
+        tmp_path,
+        materialize_after_samples=1,
+        checkpoint_every_samples=1,
+    )
+    target_id = "ordered.target"
+    for duration in (0.1, 0.2, 0.3, 0.4):
+        repository.observe_event(
+            _completed(target_id, duration), monitoring_configuration={"sampling": {"every": 1}}
+        )
+
+    store = BehaviorSnapshotStore(tmp_path)
+    envelopes = repository.materialize_pending(store, maximum=100)
+
+    assert [item["snapshot"]["epoch_sequence"] for item in envelopes] == [1, 2, 3, 4]
+    summary = store.list_summaries()[0]
+    assert summary["profile"]["coverage_call_count"] == 4
+
+
 def test_monitoring_configuration_change_seals_old_generation_but_stage_change_does_not(tmp_path: Path) -> None:
     repository = BehaviorStatisticsRepository(
         tmp_path,

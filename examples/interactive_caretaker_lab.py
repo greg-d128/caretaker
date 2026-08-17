@@ -657,7 +657,7 @@ if LAB_OLLAMA_MODEL:
             llm_review=LLMReviewPolicy(enabled=True),
             snapshots=BehaviorSnapshotPolicy(
                 checkpoint_every_samples=1,
-                materialize_after_samples=1,
+                materialize_after_samples=100,
             ),
         ),
         provider=OllamaBehaviorAssessmentProvider(model=LAB_OLLAMA_MODEL),
@@ -668,7 +668,7 @@ else:
             collectors=LAB_GUARD_COLLECTORS,
             snapshots=BehaviorSnapshotPolicy(
                 checkpoint_every_samples=1,
-                materialize_after_samples=1,
+                materialize_after_samples=100,
             ),
         )
     )
@@ -1352,6 +1352,10 @@ class CaretakerLabApp(App):
         else:
             self._output({"result": result})
         finally:
+            try:
+                GUARD.seal_behavior_snapshot(spec.target_id, reason="lab-manual-execution")
+            except Exception as exc:
+                self._output(f"Behavior snapshot seal failed: {type(exc).__name__}: {exc}")
             try:
                 GUARD.close_target_window(spec.target_id)
             except Exception as exc:

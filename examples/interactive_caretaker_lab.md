@@ -79,7 +79,11 @@ The 1,000-call action runs in the background, reports progress every 50 calls,
 and changes to **Cancel 1000-run** while active. It does not explicitly close the
 selected target's Guard window between calls; it closes the remaining window once
 at the end. This avoids forcing a partial window after every call and makes the
-action useful for filling a behavior-statistics generation.
+action useful for filling a behavior-statistics generation. The lab seals batch
+statistics in 100-call epochs, so a completed run contributes ten bounded,
+disjoint artifacts whose generation coverage is displayed cumulatively. A normal
+single **Execute function** click is sealed explicitly so it remains visible
+without waiting for another 99 calls.
 The active implementation is still used, so deliberately slow or networked variants
 can make the sequence take substantially longer.
 

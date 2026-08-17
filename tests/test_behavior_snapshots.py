@@ -109,6 +109,37 @@ def test_snapshot_summaries_collapse_disjoint_windows_to_latest_generation(tmp_p
     assert [item["calls"] for item in summaries[0]["activity_windows"]] == [1, 1, 1]
 
 
+def test_snapshot_summary_uses_largest_contiguous_coverage_when_epochs_materialize_out_of_order(
+    tmp_path: Path,
+):
+    store = BehaviorSnapshotStore(tmp_path)
+    captures = []
+    for epoch in (1, 2, 3):
+        capture = _capture(code_hash="a" * 64, events=2)
+        capture["profile"]["call_count"] = 1
+        capture["profile"]["sampling_provenance"] = {"statistics_target": 1000}
+        capture.update({
+            "complete_epoch": True,
+            "epoch_sequence": epoch,
+            "first_sample_sequence": epoch,
+            "last_sample_sequence": epoch,
+            "seal_reason": "sample-target-reached",
+        })
+        captures.append(capture)
+
+    # Snapshot creation time reflects supervisor materialization order, which is
+    # not necessarily application epoch order.
+    store.create(captures[2])
+    store.create(captures[0])
+    store.create(captures[1])
+
+    summary = store.list_summaries()[0]
+
+    assert summary["epoch_sequence"] == 3
+    assert summary["profile"]["coverage_call_count"] == 3
+    assert summary["profile"]["coverage_snapshot_count"] == 3
+
+
 def test_snapshot_summaries_sort_subject_then_newest_generation(tmp_path: Path):
     store = BehaviorSnapshotStore(tmp_path)
     old = _capture(code_hash="a" * 64, events=1)

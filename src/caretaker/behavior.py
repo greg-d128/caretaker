@@ -550,7 +550,19 @@ class BehaviorSnapshotStore:
             # The operator list is analytical: a later overlapping/legacy view
             # must not mask an already proven cumulative epoch for this generation.
             analytical_history = cumulative_history or [history[-1]]
-            latest = dict(analytical_history[-1])
+            # Pending captures may be materialized out of epoch order (older
+            # versions used random UUID filenames). Creation time therefore does
+            # not prove which artifact contains the largest contiguous prefix.
+            # Select by verified cumulative coverage first so a late-materialized
+            # early epoch cannot make displayed coverage regress.
+            latest = dict(max(
+                analytical_history,
+                key=lambda item: (
+                    int((item.get("profile") or {}).get("coverage_call_count") or 0),
+                    int(item.get("epoch_sequence") or 0),
+                    str(item.get("created_at") or ""),
+                ),
+            ))
             latest["first_seen_at"] = min(
                 str(item.get("observation_started_at") or item.get("created_at") or "")
                 for item in analytical_history
@@ -1629,7 +1641,22 @@ class BehaviorStatisticsRepository:
         maximum: int = 100,
     ) -> tuple[dict[str, Any], ...]:
         materialized: list[dict[str, Any]] = []
-        for path in sorted(self.pending_directory.glob("*.json"))[: max(1, maximum)]:
+        def pending_order(path: Path) -> tuple[str, str, str, int, str]:
+            try:
+                row = json.loads(path.read_text(encoding="utf-8"))
+                capture = row.get("capture") or {}
+                return (
+                    str(row.get("queued_at") or ""),
+                    str(capture.get("subject_key") or ""),
+                    str(capture.get("generation_id") or ""),
+                    int(capture.get("epoch_sequence") or 0),
+                    path.name,
+                )
+            except Exception:
+                return ("~invalid", "", "", 0, path.name)
+
+        pending = sorted(self.pending_directory.glob("*.json"), key=pending_order)
+        for path in pending[: max(1, maximum)]:
             try:
                 row = json.loads(path.read_text(encoding="utf-8"))
                 capture = row["capture"]
