@@ -588,6 +588,22 @@ def test_stale_table_selection_after_refresh_is_ignored(tmp_path):
     asyncio.run(exercise())
 
 
+def test_behavior_archive_controls_fit_in_console(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(100, 55)) as pilot:
+            app._activate_tab("behavior")
+            await pilot.pause()
+            reason = app.query_one("#behavior-archive-reason")
+            archive = app.query_one("#behavior-archive", Button)
+            assert reason.region.width >= 18
+            assert archive.region.width > 0
+            assert archive.region.right <= app.size.width
+
+    asyncio.run(exercise())
+
+
 def test_consequential_console_actions_fail_closed(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 

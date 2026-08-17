@@ -302,6 +302,8 @@ class CaretakerConsoleApp(App):
     }
     #behavior-subject { width: 1fr; min-width: 24; }
     #behavior-model { width: 1fr; min-width: 18; }
+    #behavior-archive-reason { width: 1fr; min-width: 18; }
+    #behavior-manage-confirm { width: auto; }
     #behavior-toolbar Button, #behavior-compare-actions Button, #behavior-manage-actions Button {
         width: auto;
         min-width: 12;
