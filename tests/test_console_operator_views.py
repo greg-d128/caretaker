@@ -131,6 +131,18 @@ def test_behavior_evidence_distinguishes_preliminary_from_collection_target():
     }) == ("PRELIMINARY", "gen 12/1000")
 
 
+def test_behavior_activity_histogram_is_bounded_and_relative():
+    record = {"activity_windows": [
+        {"calls": 1}, {"calls": 5}, {"calls": 10}, {"calls": 0},
+    ]}
+
+    histogram = CaretakerConsoleApp._behavior_activity_histogram(record)
+
+    assert len(histogram) == 4
+    assert histogram[2] == "█"
+    assert CaretakerConsoleApp._behavior_activity_histogram({}) == "-"
+
+
 def test_behavior_actions_explain_and_enforce_a_b_workflow(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 

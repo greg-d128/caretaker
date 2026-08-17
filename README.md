@@ -105,6 +105,9 @@ and runtime-lease release require an explicit review acknowledgement. Repair
 rejection and policy application also require an operator reason. Behavior and
 LLM comparisons are advisory evidence rather than correctness guarantees; the UI
 shows collection coverage, generation, integrity, evidence scope, and omissions.
+The Behavior list retains one latest row per subject and generation, sorted by
+subject and newest generation, with first/last-seen times and bounded hourly
+call-activity bars so hot functions do not crowd rare generations out of view.
 
 The console uses the same authenticated local Unix control plane as the
 supervisor. It does not expose arbitrary shell commands or Python execution.

@@ -69,6 +69,10 @@ def _profile(value: Mapping[str, Any] | None) -> dict[str, Any]:
         "distinct_resource_count": int(source.get("distinct_resource_count") or 0),
         "statistics": dict(source.get("statistics") or {}),
         "sampling_provenance": dict(source.get("sampling_provenance") or {}),
+        "call_frequency_buckets": {
+            str(key): int(item)
+            for key, item in dict(source.get("call_frequency_buckets") or {}).items()
+        },
         "success_count": int(source.get("success_count") or 0),
         "failure_count": int(source.get("failure_count") or 0),
     }
@@ -103,6 +107,8 @@ def snapshot_payload(
         "schema_version": SCHEMA_VERSION,
         "snapshot_id": str(uuid4()),
         "created_at": utcnow().isoformat(),
+        "observation_started_at": capture.get("observation_started_at"),
+        "observation_ended_at": capture.get("observation_ended_at"),
         "scope": scope,
         "subject": subject,
         "subject_key": subject_key,
@@ -422,7 +428,11 @@ class BehaviorSnapshotStore:
         return tuple(rows)
 
     def list_summaries(self, *, limit: int = 200) -> tuple[dict[str, Any], ...]:
-        """Return bounded metadata suitable for an operator list view."""
+        """Return the latest snapshot for every subject/generation.
+
+        Grouping precedes the limit so repeated snapshots from a hot generation
+        cannot crowd a rare generation out of the operator list.
+        """
         all_rows = self.list()
         cumulative_reasons = {
             "sample-target-reached",
@@ -449,9 +459,8 @@ class BehaviorSnapshotStore:
             progress = (calls + int(profile.get("call_count") or 0), snapshots + 1)
             generation_totals[key] = progress
             snapshot_progress[str(row.get("snapshot_id") or "")] = progress
-        rows = all_rows[:max(1, limit)]
         summaries = []
-        for row in rows:
+        for row in all_rows:
             profile = dict(row.get("profile") or {})
             key = (str(row.get("subject_key") or ""), str(row.get("generation_id") or ""))
             window_calls = int(profile.get("call_count") or 0)
@@ -465,6 +474,8 @@ class BehaviorSnapshotStore:
                 for key in (
                     "snapshot_id",
                     "created_at",
+                    "observation_started_at",
+                    "observation_ended_at",
                     "scope",
                     "subject_key",
                     "subject",
@@ -484,12 +495,60 @@ class BehaviorSnapshotStore:
                     "success_count": int(profile.get("success_count") or 0),
                     "failure_count": int(profile.get("failure_count") or 0),
                     "sampling_provenance": dict(profile.get("sampling_provenance") or {}),
+                    "call_frequency_buckets": dict(profile.get("call_frequency_buckets") or {}),
                     "coverage_call_count": generation_calls if cumulative else window_calls,
                     "coverage_snapshot_count": generation_snapshots if cumulative else 1,
                     "coverage_kind": "generation" if cumulative else "snapshot",
                 }
             })
-        return tuple(summaries)
+        grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for summary in summaries:
+            key = (
+                str(summary.get("subject_key") or ""),
+                str(summary.get("generation_id") or ""),
+            )
+            grouped.setdefault(key, []).append(summary)
+
+        latest_rows: list[dict[str, Any]] = []
+        for history in grouped.values():
+            history.sort(key=lambda item: str(item.get("created_at") or ""))
+            latest = dict(history[-1])
+            latest["first_seen_at"] = min(
+                str(item.get("observation_started_at") or item.get("created_at") or "")
+                for item in history
+            )
+            latest["last_seen_at"] = max(
+                str(item.get("observation_ended_at") or item.get("created_at") or "")
+                for item in history
+            )
+            latest["snapshot_count"] = len(history)
+            hourly: dict[str, int] = {}
+            for item in history:
+                for bucket, calls in dict(
+                    (item.get("profile") or {}).get("call_frequency_buckets") or {}
+                ).items():
+                    hourly[str(bucket)] = hourly.get(str(bucket), 0) + int(calls)
+            if hourly:
+                latest["activity_kind"] = "utc-hour"
+                latest["activity_windows"] = [
+                    {"started_at": bucket, "calls": hourly[bucket]}
+                    for bucket in sorted(hourly)[-24:]
+                ]
+            else:
+                latest["activity_kind"] = "saved-window"
+                latest["activity_windows"] = [
+                    {
+                        "started_at": item.get("observation_started_at") or item.get("created_at"),
+                        "ended_at": item.get("observation_ended_at") or item.get("created_at"),
+                        "calls": int((item.get("profile") or {}).get("call_count") or 0),
+                    }
+                    for item in history[-12:]
+                ]
+            latest_rows.append(latest)
+        # Stable two-pass sorting gives subject ascending, newest generation first.
+        latest_rows.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+        latest_rows.sort(key=lambda item: str(item.get("subject_key") or "").casefold())
+        return tuple(latest_rows[:max(1, limit)])
 
     def accept_guard_baseline(
         self,
@@ -1120,6 +1179,7 @@ class BehaviorStatisticsRepository:
             "distinct_resource_count": 0,
             "omitted_resource_observations": 0,
             "duration_seconds": _empty_distribution(),
+            "call_frequency_buckets": {},
             "strata": {},
         }
 
@@ -1223,6 +1283,7 @@ class BehaviorStatisticsRepository:
                 "statistics_target": self.statistics_target,
                 "strata": strata,
             },
+            "call_frequency_buckets": dict(state.get("call_frequency_buckets") or {}),
         }
         return {
             "scope": "function",
@@ -1234,6 +1295,8 @@ class BehaviorStatisticsRepository:
             "monitoring_fingerprint": state.get("monitoring_fingerprint"),
             "statistics_schema_version": int(state.get("statistics_schema_version") or STATISTICS_SCHEMA_VERSION),
             "generation_id": state.get("generation_id"),
+            "observation_started_at": state.get("created_at"),
+            "observation_ended_at": state.get("last_updated_at"),
             "seal_reason": reason,
             "environment_fingerprint": state.get("environment_fingerprint"),
             "workload_label": state.get("workload_label"),
@@ -1326,6 +1389,11 @@ class BehaviorStatisticsRepository:
             completed_call = kind_name == "FUNCTION_CALL" and str(getattr(event, "operation", "")) == "function.call.completed"
             if completed_call:
                 state["sample_count"] = int(state.get("sample_count") or 0) + 1
+                hour = utcnow().replace(minute=0, second=0, microsecond=0).isoformat()
+                frequency = state.setdefault("call_frequency_buckets", {})
+                frequency[hour] = int(frequency.get(hour) or 0) + 1
+                for expired in sorted(frequency)[:-24]:
+                    frequency.pop(expired, None)
                 stratum["sample_count"] = int(stratum.get("sample_count") or 0) + 1
                 outcome = getattr(getattr(event, "outcome", None), "name", "")
                 if outcome == "SUCCEEDED":

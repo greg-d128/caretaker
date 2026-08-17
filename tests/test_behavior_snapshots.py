@@ -89,7 +89,7 @@ def test_snapshot_list_summaries_omit_large_profile_details(tmp_path: Path):
     assert "filesystem_roots" not in summaries[0]["profile"]
 
 
-def test_snapshot_summaries_accumulate_disjoint_generation_windows(tmp_path: Path):
+def test_snapshot_summaries_collapse_disjoint_windows_to_latest_generation(tmp_path: Path):
     store = BehaviorSnapshotStore(tmp_path)
     capture = _capture(code_hash="a" * 64, events=3)
     capture["seal_reason"] = "sample-target-reached"
@@ -101,10 +101,58 @@ def test_snapshot_summaries_accumulate_disjoint_generation_windows(tmp_path: Pat
 
     summaries = store.list_summaries()
 
-    assert len(summaries) == 3
-    assert {item["profile"]["coverage_call_count"] for item in summaries} == {1, 2, 3}
-    assert {item["profile"]["coverage_snapshot_count"] for item in summaries} == {1, 2, 3}
-    assert {item["profile"]["coverage_kind"] for item in summaries} == {"generation"}
+    assert len(summaries) == 1
+    assert summaries[0]["profile"]["coverage_call_count"] == 3
+    assert summaries[0]["profile"]["coverage_snapshot_count"] == 3
+    assert summaries[0]["profile"]["coverage_kind"] == "generation"
+    assert summaries[0]["snapshot_count"] == 3
+    assert [item["calls"] for item in summaries[0]["activity_windows"]] == [1, 1, 1]
+
+
+def test_snapshot_summaries_sort_subject_then_newest_generation(tmp_path: Path):
+    store = BehaviorSnapshotStore(tmp_path)
+    old = _capture(code_hash="a" * 64, events=1)
+    store.create(old)
+    newer = _capture(code_hash="b" * 64, events=2)
+    store.create(newer)
+    other = _capture(code_hash="c" * 64, events=3)
+    other["subject_key"] = "function:lab.alpha"
+    other["subject"] = {"target_id": "lab.alpha"}
+    other.pop("generation_id", None)
+    store.create(other)
+
+    summaries = store.list_summaries()
+
+    assert [item["subject_key"] for item in summaries] == [
+        "function:lab.alpha",
+        "function:lab.divide",
+        "function:lab.divide",
+    ]
+    divide = [item for item in summaries if item["subject_key"] == "function:lab.divide"]
+    assert [item["code_hash"] for item in divide] == ["b" * 64, "a" * 64]
+
+
+def test_snapshot_summaries_aggregate_bounded_hourly_call_activity(tmp_path: Path):
+    store = BehaviorSnapshotStore(tmp_path)
+    first = _capture(code_hash="a" * 64, events=2)
+    first["profile"]["call_frequency_buckets"] = {
+        "2026-08-17T10:00:00+00:00": 2,
+    }
+    second = _capture(code_hash="a" * 64, events=3)
+    second["profile"]["call_frequency_buckets"] = {
+        "2026-08-17T10:00:00+00:00": 1,
+        "2026-08-17T11:00:00+00:00": 2,
+    }
+    store.create(first)
+    store.create(second)
+
+    summary = store.list_summaries()[0]
+
+    assert summary["activity_kind"] == "utc-hour"
+    assert summary["activity_windows"] == [
+        {"started_at": "2026-08-17T10:00:00+00:00", "calls": 3},
+        {"started_at": "2026-08-17T11:00:00+00:00", "calls": 2},
+    ]
 
 
 def test_archive_contains_manifest_and_removes_snapshot(tmp_path: Path):

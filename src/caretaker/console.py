@@ -524,8 +524,11 @@ class CaretakerConsoleApp(App):
                     yield Button("Investigate findings", id="guard-open-investigate", disabled=True, variant="primary")
             with TabPane("Behavior", id="behavior"):
                 yield Static(
-                    "Snapshots are evidence, not accuracy guarantees. Calls/target shows collection coverage; "
-                    "a code change starts a new generation but earlier snapshots remain comparable. "
+                    "One row is the latest snapshot for each subject/generation, sorted by subject then newest generation. "
+                    "Generation is a fingerprint of code and monitoring semantics—not a signature. "
+                    "First/last seen and recent hourly call activity keep rare generations visible. "
+                    "Snapshots are evidence, not accuracy guarantees. Calls/target shows cumulative generation coverage; "
+                    "a code or monitoring change starts a new generation but earlier generations remain comparable. "
                     "An active-window comparison reads unsaved observations; it never executes the function.",
                     id="behavior-help",
                 )
@@ -548,7 +551,10 @@ class CaretakerConsoleApp(App):
                         yield Static("Behavior snapshots", id="behavior-list-title", classes="behavior-pane-title")
                         table = DataTable(id="behavior-table")
                         table.cursor_type = "row"
-                        table.add_columns("#", "Role", "Created", "Subject", "Generation", "Coverage", "Evidence", "Integrity")
+                        table.add_columns(
+                            "#", "Role", "Subject", "Generation", "First seen", "Last seen",
+                            "Coverage", "Recent activity", "Evidence", "Integrity",
+                        )
                         yield table
                     with Vertical(classes="behavior-pane"):
                         yield Static("Selected snapshot / comparison", id="behavior-detail-title", classes="behavior-pane-title")
@@ -1584,7 +1590,7 @@ class CaretakerConsoleApp(App):
                 self.query_one("#behavior-subject", Input).value = str(subject_value)
             try:
                 response = await self._request("behavior-get", snapshot_id=snapshot_id)
-                self._show_behavior_snapshot(response.get("envelope") or {})
+                self._show_behavior_snapshot(response.get("envelope") or {}, summary=record)
             except Exception as exc:
                 self._write_json(
                     "#behavior-output",
@@ -1794,9 +1800,8 @@ class CaretakerConsoleApp(App):
                 if record.get("scope") == "module"
                 else subject.get("target_id") or record.get("subject_key")
             )
-            created = str(record.get("created_at") or "-")
-            if "T" in created:
-                created = created.replace("T", " ").replace("+00:00", "Z")[:19]
+            first_seen = self._behavior_display_time(record.get("first_seen_at"))
+            last_seen = self._behavior_display_time(record.get("last_seen_at"))
             evidence, calls_target = self._behavior_evidence(record)
             snapshot_id = str(record.get("snapshot_id") or "")
             roles = []
@@ -1810,18 +1815,38 @@ class CaretakerConsoleApp(App):
             table.add_row(
                 str(index),
                 ",".join(roles),
-                created,
                 str(label or "-"),
                 self._behavior_short_hash(record.get("generation_id")),
+                first_seen,
+                last_seen,
                 calls_target,
+                self._behavior_activity_histogram(record),
                 evidence,
                 integrity,
             )
         subjects = len({str(item.get("subject_key")) for item in self._behavior_records})
         self.query_one("#behavior-list-title", Static).update(
-            f"Behavior snapshots: showing {len(self._displayed_behavior_records)}/{len(self._behavior_records)} "
-            f"across {subjects} subject{'s' if subjects != 1 else ''}"
+            f"Behavior generations: showing {len(self._displayed_behavior_records)}/{len(self._behavior_records)} "
+            f"across {subjects} subject{'s' if subjects != 1 else ''}; one latest snapshot per generation"
         )
+
+    @staticmethod
+    def _behavior_display_time(value: Any) -> str:
+        text = str(value or "-")
+        if "T" in text:
+            return text.replace("T", " ").replace("+00:00", "Z")[:19]
+        return text
+
+    @staticmethod
+    def _behavior_activity_histogram(record: dict[str, Any]) -> str:
+        calls = [int(item.get("calls") or 0) for item in record.get("activity_windows", ())]
+        if not calls:
+            return "-"
+        levels = "▁▂▃▄▅▆▇█"
+        maximum = max(calls)
+        if maximum <= 0:
+            return "▁" * len(calls)
+        return "".join(levels[min(len(levels) - 1, round(value * (len(levels) - 1) / maximum))] for value in calls)
 
     def _behavior_record(self, snapshot_id: str | None) -> dict[str, Any] | None:
         return next(
@@ -1937,7 +1962,12 @@ class CaretakerConsoleApp(App):
             return f"{absolute:+} (new base)"
         return f"{absolute:+} ({relative * 100:+.1f}%)"
 
-    def _show_behavior_snapshot(self, envelope: dict[str, Any]) -> None:
+    def _show_behavior_snapshot(
+        self,
+        envelope: dict[str, Any],
+        *,
+        summary: dict[str, Any] | None = None,
+    ) -> None:
         snapshot = envelope.get("snapshot") or {}
         integrity = envelope.get("integrity") or {}
         subject = snapshot.get("subject") or {}
@@ -1956,6 +1986,11 @@ class CaretakerConsoleApp(App):
         output.write(
             f"[b]Snapshot[/b] {snapshot.get('snapshot_id', '-')}\n"
             f"[b]Created[/b] {snapshot.get('created_at', '-')}\n"
+            f"[b]Generation first seen[/b] {(summary or {}).get('first_seen_at', snapshot.get('observation_started_at') or snapshot.get('created_at', '-'))}\n"
+            f"[b]Generation last seen[/b] {(summary or {}).get('last_seen_at', snapshot.get('observation_ended_at') or snapshot.get('created_at', '-'))}\n"
+            f"[b]Saved windows[/b] {(summary or {}).get('snapshot_count', 1)}  "
+            f"[b]Call activity[/b] {self._behavior_activity_histogram(summary or {}) or '-'} "
+            f"(oldest → newest; {(summary or {}).get('activity_kind', 'single snapshot')})\n"
             f"[b]Scope[/b] {snapshot.get('scope', '-')}\n"
             f"[b]Subject[/b] {subject.get('module_name', '-')}{':' + str(subject.get('qualified_name')) if subject.get('qualified_name') else ''}\n"
             f"[b]Code hash[/b] {snapshot.get('code_hash_kind', '-')}: {snapshot.get('code_hash', '-')}\n"
