@@ -109,6 +109,32 @@ def test_snapshot_summaries_collapse_disjoint_windows_to_latest_generation(tmp_p
     assert [item["calls"] for item in summaries[0]["activity_windows"]] == [1, 1, 1]
 
 
+def test_snapshot_summary_cache_is_invalidated_when_new_epoch_is_saved(tmp_path: Path):
+    store = BehaviorSnapshotStore(tmp_path)
+    capture = _capture(code_hash="a" * 64, events=2)
+    capture["seal_reason"] = "sample-target-reached"
+    capture["profile"]["call_count"] = 1
+
+    store.create(capture)
+    assert store.list_summaries()[0]["profile"]["coverage_call_count"] == 1
+
+    store.create(capture)
+    assert store.list_summaries()[0]["profile"]["coverage_call_count"] == 2
+
+
+def test_snapshot_row_cache_rechecks_filesystem_metadata_for_tampering(tmp_path: Path):
+    store = BehaviorSnapshotStore(tmp_path)
+    envelope = store.create(_capture(code_hash="a" * 64, events=2))
+    assert store.list()[0]["verified"] is True
+
+    path = store.snapshot_directory / f"{envelope['snapshot']['snapshot_id']}.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["snapshot"]["profile"]["event_count"] = 999
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert store.list()[0]["verified"] is False
+
+
 def test_snapshot_summary_uses_largest_contiguous_coverage_when_epochs_materialize_out_of_order(
     tmp_path: Path,
 ):

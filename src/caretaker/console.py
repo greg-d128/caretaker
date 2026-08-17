@@ -741,7 +741,7 @@ class CaretakerConsoleApp(App):
             "investigate",
             "behavior-assess",
             "behavior-assess-history",
-        } else 5.0
+        } else 30.0 if command == "behavior-list" else 5.0
         response = await asyncio.to_thread(
             control_request, self.socket_path, request, timeout=timeout
         )
@@ -832,7 +832,13 @@ class CaretakerConsoleApp(App):
             behavior_revision != self._behavior_loaded_revision
             and self.query_one(TabbedContent).active == "behavior"
         ):
-            await self.refresh_behavior()
+            try:
+                await self.refresh_behavior()
+            except Exception as exc:
+                self.query_one("#behavior-list-title", Static).update(
+                    f"Behavior auto-refresh delayed: {type(exc).__name__}: {exc}. "
+                    "Existing data remains visible; Caretaker will retry."
+                )
         running = bool(status.get("application_running"))
         self._application_running = running
         runtime_value = status.get("runtime")

@@ -285,6 +285,33 @@ def test_active_behavior_tab_refreshes_when_supervisor_revision_changes(tmp_path
     asyncio.run(exercise())
 
 
+def test_behavior_auto_refresh_failure_is_contained_and_retried(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            app.socket_path = tmp_path / "control.sock"
+            app.query_one("TabbedContent").active = "behavior"
+            app._behavior_loaded_revision = 1
+
+            async def request(command: str, **payload):
+                if command == "status":
+                    return {"ok": True, "application_running": False, "behavior_revision": 2}
+                if command == "behavior-list":
+                    raise TimeoutError("summary scan still running")
+                raise AssertionError(command)
+
+            app._request = request  # type: ignore[method-assign]
+            await app.refresh_status()
+
+            assert app._behavior_loaded_revision == 1
+            assert "auto-refresh delayed" in str(
+                app.query_one("#behavior-list-title", Static).render()
+            )
+
+    asyncio.run(exercise())
+
+
 def test_behavior_table_marks_one_green_reference_per_subject(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 

@@ -270,6 +270,27 @@ class BehaviorSnapshotStore:
             self.tombstone_directory.chmod(0o700)
         except OSError:
             pass
+        self._summary_cache_lock = threading.RLock()
+        self._snapshot_rows_cache: dict[str, dict[str, Any]] | None = None
+        self._snapshot_rows_signature: dict[str, tuple[int, int]] | None = None
+        self._snapshot_version = 0
+
+    def _invalidate_summary_cache(self) -> None:
+        with self._summary_cache_lock:
+            self._snapshot_version += 1
+
+    @staticmethod
+    def _listed_snapshot(
+        envelope: Mapping[str, Any],
+        *,
+        verified: bool,
+        verification_error: str | None,
+    ) -> dict[str, Any]:
+        snapshot = dict(envelope.get("snapshot") or {})
+        snapshot["integrity"] = dict(envelope.get("integrity") or {})
+        snapshot["verified"] = verified
+        snapshot["verification_error"] = verification_error
+        return snapshot
 
     def save(self, envelope: Mapping[str, Any]) -> Path:
         ok, error = verify_envelope(
@@ -289,6 +310,15 @@ class BehaviorSnapshotStore:
             pass
         temporary.replace(path)
         self._update_chain_head(envelope)
+        with self._summary_cache_lock:
+            if self._snapshot_rows_cache is not None:
+                self._snapshot_rows_cache[str(snapshot_id)] = self._listed_snapshot(
+                    envelope, verified=True, verification_error=None
+                )
+                if self._snapshot_rows_signature is not None:
+                    stat = path.stat()
+                    self._snapshot_rows_signature[path.name] = (stat.st_mtime_ns, stat.st_size)
+        self._invalidate_summary_cache()
         return path
 
     def create(
@@ -404,8 +434,25 @@ class BehaviorSnapshotStore:
         return envelope
 
     def list(self) -> tuple[dict[str, Any], ...]:
+        paths = sorted(self.snapshot_directory.glob("*.json"))
+        signature: dict[str, tuple[int, int]] = {}
+        for path in paths:
+            try:
+                stat = path.stat()
+            except FileNotFoundError:
+                continue
+            signature[path.name] = (stat.st_mtime_ns, stat.st_size)
+        with self._summary_cache_lock:
+            if (
+                self._snapshot_rows_cache is not None
+                and self._snapshot_rows_signature == signature
+            ):
+                cached_rows = [dict(item) for item in self._snapshot_rows_cache.values()]
+                cached_rows.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+                return tuple(cached_rows)
+            version = self._snapshot_version
         rows: list[dict[str, Any]] = []
-        for path in sorted(self.snapshot_directory.glob("*.json")):
+        for path in paths:
             try:
                 envelope = json.loads(path.read_text(encoding="utf-8"))
                 ok, error = verify_envelope(
@@ -413,12 +460,9 @@ class BehaviorSnapshotStore:
                     identity_journal=self.identity_journal,
                     minimum_integrity=self.minimum_integrity,
                 )
-                snapshot = dict(envelope.get("snapshot") or {})
-                integrity = dict(envelope.get("integrity") or {})
-                snapshot["integrity"] = integrity
-                snapshot["verified"] = ok
-                snapshot["verification_error"] = error
-                rows.append(snapshot)
+                rows.append(self._listed_snapshot(
+                    envelope, verified=ok, verification_error=error
+                ))
             except Exception as exc:
                 rows.append({
                     "snapshot_id": path.stem,
@@ -430,6 +474,13 @@ class BehaviorSnapshotStore:
                     "integrity": {"signature_state": "INVALID"},
                 })
         rows.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+        with self._summary_cache_lock:
+            if self._snapshot_version == version:
+                self._snapshot_rows_cache = {
+                    str(item.get("snapshot_id") or item.get("subject_key") or index): dict(item)
+                    for index, item in enumerate(rows)
+                }
+                self._snapshot_rows_signature = signature
         return tuple(rows)
 
     def list_summaries(self, *, limit: int = 200) -> tuple[dict[str, Any], ...]:
@@ -438,6 +489,7 @@ class BehaviorSnapshotStore:
         Grouping precedes the limit so repeated snapshots from a hot generation
         cannot crowd a rare generation out of the operator list.
         """
+        normalized_limit = max(1, int(limit))
         all_rows = self.list()
         cumulative_reasons = {
             "sample-target-reached",
@@ -637,13 +689,14 @@ class BehaviorSnapshotStore:
             depth += 1
         selected_ids = {
             str(row.get("snapshot_id") or "")
-            for row in fair_order[:max(1, limit)]
+            for row in fair_order[:normalized_limit]
         }
         selected = [
             row for row in latest_rows
             if str(row.get("snapshot_id") or "") in selected_ids
         ]
-        return tuple(selected)
+        result = tuple(selected)
+        return result
 
     def accept_guard_baseline(
         self,
@@ -778,6 +831,10 @@ class BehaviorSnapshotStore:
             pass
         temporary.replace(tombstone_path)
         path.unlink()
+        with self._summary_cache_lock:
+            self._snapshot_rows_cache = None
+            self._snapshot_rows_signature = None
+        self._invalidate_summary_cache()
 
     def archive(self, snapshot_ids: Iterable[UUID | str], *, remove: bool = True) -> Path:
         identifiers = tuple(UUID(str(item)) for item in snapshot_ids)
@@ -857,6 +914,10 @@ class BehaviorSnapshotStore:
         if remove:
             for member, _envelope in members:
                 member.unlink()
+            with self._summary_cache_lock:
+                self._snapshot_rows_cache = None
+                self._snapshot_rows_signature = None
+            self._invalidate_summary_cache()
         return path
 
     def list_archives(self) -> tuple[dict[str, Any], ...]:
@@ -997,6 +1058,11 @@ class BehaviorSnapshotStore:
                 temporary.replace(target)
                 self._update_chain_head(envelope)
                 restored.append(snapshot_id)
+        if restored:
+            with self._summary_cache_lock:
+                self._snapshot_rows_cache = None
+                self._snapshot_rows_signature = None
+            self._invalidate_summary_cache()
         return tuple(restored)
 
 
