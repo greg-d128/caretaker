@@ -117,6 +117,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     behavior_statistics = BehaviorStatisticsRepository(policy.directory)
     behavior_revision = {"value": 0}
+    behavior_collection_id = str(uuid4())
     runtime.event(
         logger_name="caretaker.authority",
         severity=30 if authority.effective.overall_assurance in {"GUARANTEE_VIOLATED", "INVALID_AUTHORITY_CHAIN"} else 20,
@@ -227,6 +228,7 @@ def main(argv: list[str] | None = None) -> int:
                     signing_identity = asdict(identity) if hasattr(identity, "__dataclass_fields__") else dict(identity)
             return {"ok": True, "application_pid": child.pid if child else None,
                     "application_running": child.poll() is None if child else False,
+                    "behavior_collection_id": behavior_collection_id,
                     "behavior_revision": behavior_revision["value"],
                     "policy_generation": runtime.effective.generation,
                     "active_leases": list(leases),
@@ -247,6 +249,7 @@ def main(argv: list[str] | None = None) -> int:
             limit = max(1, min(int(request.get("limit", 500)), 500))
             return {
                 "ok": True,
+                "collection_id": behavior_collection_id,
                 "revision": behavior_revision["value"],
                 "snapshots": list(behavior_store.list_summaries(limit=limit)),
             }

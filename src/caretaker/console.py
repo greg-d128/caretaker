@@ -411,6 +411,7 @@ class CaretakerConsoleApp(App):
         self._policy_preview: dict[str, Any] | None = None
         self._behavior_records: list[dict[str, Any]] = []
         self._displayed_behavior_records: list[dict[str, Any]] = []
+        self._behavior_collection_id: str | None = None
         self._behavior_loaded_revision: int | None = None
         self._selected_behavior_snapshot: str | None = None
         self._behavior_references: dict[str, str] = {}
@@ -827,9 +828,13 @@ class CaretakerConsoleApp(App):
             return
 
         self._last_status = status
+        behavior_collection_id = str(status.get("behavior_collection_id") or "")
         behavior_revision = int(status.get("behavior_revision") or 0)
         if (
-            behavior_revision != self._behavior_loaded_revision
+            (
+                behavior_collection_id != (self._behavior_collection_id or "")
+                or behavior_revision != self._behavior_loaded_revision
+            )
             and self.query_one(TabbedContent).active == "behavior"
         ):
             try:
@@ -1755,6 +1760,14 @@ class CaretakerConsoleApp(App):
         previous_subject = str((previous_selection or {}).get("subject_key") or "")
         previous_generation = str((previous_selection or {}).get("generation_id") or "")
         response = await self._request("behavior-list")
+        collection_id = str(response.get("collection_id") or "")
+        collection_changed = collection_id != (self._behavior_collection_id or "")
+        if collection_changed:
+            previous_subject = ""
+            previous_generation = ""
+            self._selected_behavior_snapshot = None
+            self._behavior_references.clear()
+        self._behavior_collection_id = collection_id
         self._behavior_loaded_revision = int(response.get("revision") or 0)
         self._behavior_records = [
             dict(item) for item in response.get("snapshots", ()) if isinstance(item, dict)

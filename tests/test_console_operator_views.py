@@ -233,6 +233,7 @@ def test_active_behavior_tab_refreshes_when_supervisor_revision_changes(tmp_path
         async with app.run_test(size=(180, 55)):
             app.socket_path = tmp_path / "control.sock"
             app.query_one("TabbedContent").active = "behavior"
+            app._behavior_collection_id = "collection-a"
             app._behavior_loaded_revision = 1
             app._behavior_records = [{
                 "snapshot_id": "old-epoch",
@@ -246,10 +247,16 @@ def test_active_behavior_tab_refreshes_when_supervisor_revision_changes(tmp_path
             async def request(command: str, **payload):
                 requests.append(command)
                 if command == "status":
-                    return {"ok": True, "application_running": False, "behavior_revision": 2}
+                    return {
+                        "ok": True,
+                        "application_running": False,
+                        "behavior_collection_id": "collection-a",
+                        "behavior_revision": 2,
+                    }
                 if command == "behavior-list":
                     return {
                         "ok": True,
+                        "collection_id": "collection-a",
                         "revision": 2,
                         "snapshots": [{
                             "snapshot_id": "new-epoch",
@@ -279,6 +286,7 @@ def test_active_behavior_tab_refreshes_when_supervisor_revision_changes(tmp_path
 
             assert requests == ["status", "behavior-list", "behavior-get"]
             assert app._behavior_loaded_revision == 2
+            assert app._behavior_collection_id == "collection-a"
             assert app._behavior_records[0]["snapshot_id"] == "new-epoch"
             assert app._selected_behavior_snapshot == "new-epoch"
 
@@ -296,7 +304,12 @@ def test_behavior_auto_refresh_failure_is_contained_and_retried(tmp_path):
 
             async def request(command: str, **payload):
                 if command == "status":
-                    return {"ok": True, "application_running": False, "behavior_revision": 2}
+                    return {
+                        "ok": True,
+                        "application_running": False,
+                        "behavior_collection_id": "collection-a",
+                        "behavior_revision": 2,
+                    }
                 if command == "behavior-list":
                     raise TimeoutError("summary scan still running")
                 raise AssertionError(command)
@@ -308,6 +321,53 @@ def test_behavior_auto_refresh_failure_is_contained_and_retried(tmp_path):
             assert "auto-refresh delayed" in str(
                 app.query_one("#behavior-list-title", Static).render()
             )
+
+    asyncio.run(exercise())
+
+
+def test_behavior_collection_identity_clears_stale_state_when_revision_restarts(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            app.socket_path = tmp_path / "control.sock"
+            app.query_one("TabbedContent").active = "behavior"
+            app._behavior_collection_id = "old-collection"
+            app._behavior_loaded_revision = 0
+            app._behavior_records = [{
+                "snapshot_id": "old-snapshot",
+                "subject_key": "function:lab.behavior_probe",
+                "profile": {"coverage_call_count": 1000, "coverage_kind": "generation"},
+            }]
+            app._selected_behavior_snapshot = "old-snapshot"
+            app._behavior_references = {
+                "function:lab.behavior_probe": "old-snapshot",
+            }
+
+            async def request(command: str, **payload):
+                if command == "status":
+                    return {
+                        "ok": True,
+                        "application_running": False,
+                        "behavior_collection_id": "new-collection",
+                        "behavior_revision": 0,
+                    }
+                if command == "behavior-list":
+                    return {
+                        "ok": True,
+                        "collection_id": "new-collection",
+                        "revision": 0,
+                        "snapshots": [],
+                    }
+                raise AssertionError(command)
+
+            app._request = request  # type: ignore[method-assign]
+            await app.refresh_status()
+
+            assert app._behavior_collection_id == "new-collection"
+            assert app._behavior_records == []
+            assert app._selected_behavior_snapshot is None
+            assert app._behavior_references == {}
 
     asyncio.run(exercise())
 
