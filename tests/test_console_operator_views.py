@@ -379,6 +379,59 @@ def test_behavior_auto_refresh_preserves_open_comparison(tmp_path):
     asyncio.run(exercise())
 
 
+def test_behavior_refresh_pins_exact_reference_when_generation_representative_advances(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            app.socket_path = tmp_path / "control.sock"
+            app._behavior_collection_id = "collection-a"
+            app._behavior_loaded_revision = 1
+            app._behavior_records = [{
+                "snapshot_id": "good-reference-epoch",
+                "subject_key": "function:lab.behavior_probe",
+                "generation_id": "unchanged-code",
+                "created_at": "2026-08-17T10:00:00+00:00",
+                "profile": {"coverage_call_count": 100, "coverage_kind": "generation"},
+            }]
+            app._behavior_references = {
+                "function:lab.behavior_probe": "good-reference-epoch",
+            }
+
+            async def request(command: str, **payload):
+                assert command == "behavior-list"
+                return {
+                    "ok": True,
+                    "collection_id": "collection-a",
+                    "revision": 2,
+                    "snapshots": [{
+                        "snapshot_id": "bad-new-epoch",
+                        "subject_key": "function:lab.behavior_probe",
+                        "generation_id": "unchanged-code",
+                        "created_at": "2026-08-17T11:00:00+00:00",
+                        "profile": {"coverage_call_count": 200, "coverage_kind": "generation"},
+                    }],
+                }
+
+            app._request = request  # type: ignore[method-assign]
+            await app.refresh_behavior()
+
+            assert app._behavior_references == {
+                "function:lab.behavior_probe": "good-reference-epoch",
+            }
+            assert {item["snapshot_id"] for item in app._behavior_records} == {
+                "good-reference-epoch", "bad-new-epoch",
+            }
+            pinned = app._behavior_record("good-reference-epoch")
+            assert pinned is not None
+            assert pinned["pinned_reference_epoch"] is True
+            app._selected_behavior_snapshot = "bad-new-epoch"
+            app._refresh_behavior_actions()
+            assert app.query_one("#behavior-compare", Button).disabled is False
+
+    asyncio.run(exercise())
+
+
 def test_behavior_collection_identity_clears_stale_state_when_revision_restarts(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 

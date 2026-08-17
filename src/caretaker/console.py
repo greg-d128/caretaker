@@ -1758,6 +1758,11 @@ class CaretakerConsoleApp(App):
         return text[:12] if text != "-" else text
 
     async def refresh_behavior(self) -> None:
+        previous_records = {
+            str(item.get("snapshot_id") or ""): dict(item)
+            for item in self._behavior_records
+            if item.get("snapshot_id")
+        }
         previous_selection = self._behavior_record(self._selected_behavior_snapshot)
         previous_subject = str((previous_selection or {}).get("subject_key") or "")
         previous_generation = str((previous_selection or {}).get("generation_id") or "")
@@ -1777,6 +1782,16 @@ class CaretakerConsoleApp(App):
             dict(item) for item in response.get("snapshots", ()) if isinstance(item, dict)
         ]
         snapshot_ids = {str(item.get("snapshot_id") or "") for item in self._behavior_records}
+        if not collection_changed:
+            # A compact generation summary advances to a new representative epoch
+            # as evidence arrives. Keep the exact operator-selected reference
+            # artifact pinned and visible instead of silently moving the reference.
+            for reference_id in self._behavior_references.values():
+                pinned = previous_records.get(reference_id)
+                if reference_id not in snapshot_ids and pinned is not None:
+                    pinned["pinned_reference_epoch"] = True
+                    self._behavior_records.append(pinned)
+                    snapshot_ids.add(reference_id)
         if self._selected_behavior_snapshot not in snapshot_ids:
             replacement = next(
                 (
@@ -3164,6 +3179,11 @@ class CaretakerConsoleApp(App):
                     response = await self._request(
                         "behavior-archive", snapshot_ids=[snapshot_id]
                     )
+                    self._behavior_references = {
+                        subject: reference_id
+                        for subject, reference_id in self._behavior_references.items()
+                        if reference_id != snapshot_id
+                    }
                     self._selected_behavior_snapshot = None
                     self._write_json("#behavior-output", response)
                     await self.refresh_behavior()
@@ -3172,6 +3192,11 @@ class CaretakerConsoleApp(App):
                     if not self.query_one("#behavior-manage-confirm", Checkbox).value:
                         raise ValueError("Confirm that you intend to permanently delete the selected snapshot")
                     response = await self._request("behavior-delete", snapshot_id=snapshot_id)
+                    self._behavior_references = {
+                        subject: reference_id
+                        for subject, reference_id in self._behavior_references.items()
+                        if reference_id != snapshot_id
+                    }
                     self._selected_behavior_snapshot = None
                     self._write_json("#behavior-output", response)
                     await self.refresh_behavior()
