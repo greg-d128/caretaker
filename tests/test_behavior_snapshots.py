@@ -251,6 +251,28 @@ def test_overlapping_epoch_range_cannot_mask_prior_generation_coverage(tmp_path:
     assert summary["profile"]["coverage_call_count"] == 2
 
 
+def test_missing_epoch_is_disclosed_without_discarding_later_disjoint_coverage(tmp_path: Path):
+    store = BehaviorSnapshotStore(tmp_path)
+    for epoch, first, last, calls in ((1, 1, 2, 2), (3, 101, 200, 100)):
+        capture = _capture(code_hash="a" * 64, events=calls * 2)
+        capture["profile"]["call_count"] = calls
+        capture.update({
+            "complete_epoch": True,
+            "epoch_sequence": epoch,
+            "first_sample_sequence": first,
+            "last_sample_sequence": last,
+            "seal_reason": "sample-target-reached",
+        })
+        store.create(capture)
+
+    summary = store.list_summaries()[0]
+
+    assert summary["profile"]["coverage_call_count"] == 102
+    assert summary["profile"]["coverage_snapshot_count"] == 2
+    assert summary["profile"]["coverage_gap_count"] == 1
+    assert summary["profile"]["coverage_missing_sample_count"] == 98
+
+
 def test_archive_contains_manifest_and_removes_snapshot(tmp_path: Path):
     store = BehaviorSnapshotStore(tmp_path)
     envelope = store.create(_capture(code_hash="a" * 64, events=10))

@@ -2014,6 +2014,12 @@ class CaretakerConsoleApp(App):
                 f"verified disjoint epoch(s); the artifact below contains "
                 f"{profile.get('call_count', 0)} call(s)."
             )
+            if int(summary_profile.get("coverage_gap_count") or 0):
+                output.write(
+                    f"[yellow]Evidence continuity has {summary_profile.get('coverage_gap_count')} gap(s); "
+                    f"approximately {summary_profile.get('coverage_missing_sample_count', 0)} sample sequence(s) "
+                    "were not materialized. Later disjoint samples are included in coverage.[/yellow]"
+                )
         output.write(
             "[yellow]This indicates evidence volume only; it does not guarantee statistical accuracy or representative workload coverage.[/yellow]"
         )

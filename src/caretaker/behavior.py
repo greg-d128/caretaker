@@ -450,9 +450,9 @@ class BehaviorSnapshotStore:
         def is_complete_epoch(row: Mapping[str, Any]) -> bool:
             return bool(row.get("complete_epoch")) or row.get("seal_reason") in cumulative_reasons
 
-        generation_totals: dict[tuple[str, str], tuple[int, int]] = {}
+        generation_totals: dict[tuple[str, str], tuple[int, int, int, int]] = {}
         generation_last_sequence: dict[tuple[str, str], int] = {}
-        snapshot_progress: dict[str, tuple[int, int]] = {}
+        snapshot_progress: dict[str, tuple[int, int, int, int]] = {}
         ordered_rows = sorted(
             all_rows,
             key=lambda item: (
@@ -473,16 +473,36 @@ class BehaviorSnapshotStore:
             if first_sequence is not None:
                 first_sequence = int(first_sequence)
                 previous_last = generation_last_sequence.get(key)
-                if previous_last is not None and first_sequence != previous_last + 1:
+                # A gap means some evidence was not durably materialized; it does
+                # not invalidate later, disjoint evidence. Overlap, however, would
+                # double-count calls and must remain excluded.
+                if previous_last is not None and first_sequence <= previous_last:
                     continue
                 if window_calls:
                     if last_sequence is None or int(last_sequence) - first_sequence + 1 != window_calls:
                         continue
-                    generation_last_sequence[key] = int(last_sequence)
+                    current_last = int(last_sequence)
+                    gap_count = 1 if previous_last is not None and first_sequence > previous_last + 1 else 0
+                    missing_samples = (
+                        first_sequence - previous_last - 1
+                        if previous_last is not None and first_sequence > previous_last + 1
+                        else 0
+                    )
+                    generation_last_sequence[key] = current_last
                 else:
+                    gap_count = 0
+                    missing_samples = 0
                     generation_last_sequence.setdefault(key, first_sequence - 1)
-            calls, snapshots = generation_totals.get(key, (0, 0))
-            progress = (calls + window_calls, snapshots + 1)
+            else:
+                gap_count = 0
+                missing_samples = 0
+            calls, snapshots, gaps, missing = generation_totals.get(key, (0, 0, 0, 0))
+            progress = (
+                calls + window_calls,
+                snapshots + 1,
+                gaps + gap_count,
+                missing + missing_samples,
+            )
             generation_totals[key] = progress
             snapshot_progress[str(row.get("snapshot_id") or "")] = progress
         summaries = []
@@ -491,9 +511,9 @@ class BehaviorSnapshotStore:
             key = (str(row.get("subject_key") or ""), str(row.get("generation_id") or ""))
             window_calls = int(profile.get("call_count") or 0)
             cumulative = str(row.get("snapshot_id") or "") in snapshot_progress
-            generation_calls, generation_snapshots = snapshot_progress.get(
+            generation_calls, generation_snapshots, generation_gaps, missing_samples = snapshot_progress.get(
                 str(row.get("snapshot_id") or ""),
-                (window_calls, 1),
+                (window_calls, 1, 0, 0),
             )
             summaries.append({
                 key: row.get(key)
@@ -530,6 +550,8 @@ class BehaviorSnapshotStore:
                     "coverage_call_count": generation_calls if cumulative else window_calls,
                     "coverage_snapshot_count": generation_snapshots if cumulative else 1,
                     "coverage_kind": "generation" if cumulative else "snapshot",
+                    "coverage_gap_count": generation_gaps if cumulative else 0,
+                    "coverage_missing_sample_count": missing_samples if cumulative else 0,
                 }
             })
         grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
