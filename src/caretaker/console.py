@@ -366,6 +366,9 @@ class CaretakerConsoleApp(App):
         padding: 0 1;
         align-vertical: middle;
     }
+    #policy-presets { height: 4; padding: 0 1; align-vertical: middle; }
+    #policy-presets Button { width: auto; min-width: 16; margin-left: 1; }
+    #policy-preview-output { height: 5; padding: 1 2; border: solid $surface-lighten-2; }
     #policy-target { width: 1fr; min-width: 18; }
     #policy-path { width: 2fr; min-width: 24; }
     #policy-value { width: 1fr; min-width: 18; }
@@ -404,6 +407,7 @@ class CaretakerConsoleApp(App):
         self._authority_snapshot: dict[str, Any] = {}
         self._authority_rows: list[dict[str, Any]] = []
         self._selected_authority_lease: str | None = None
+        self._policy_preview: dict[str, Any] | None = None
         self._behavior_records: list[dict[str, Any]] = []
         self._displayed_behavior_records: list[dict[str, Any]] = []
         self._selected_behavior_snapshot: str | None = None
@@ -621,6 +625,11 @@ class CaretakerConsoleApp(App):
                                 disabled=True,
                             )
             with TabPane("Policy", id="policy"):
+                yield Static(
+                    "Review assurance and violations first. Runtime leases are temporary audited changes; "
+                    "use a preset or preview an advanced setting before applying it.",
+                    id="policy-help",
+                )
                 yield Static("Authority policy state unavailable", id="policy-summary")
                 with Grid(id="policy-split"):
                     with Vertical(classes="policy-pane"):
@@ -636,11 +645,17 @@ class CaretakerConsoleApp(App):
                     yield Input(placeholder="Target id / glob (required for repair.*)", id="policy-target")
                     yield Input(placeholder="Policy path, e.g. repair.authority", id="policy-path")
                     yield Input(placeholder='Value as JSON or text, e.g. "AUTOMATIC_ELIGIBLE_REPAIRS"', id="policy-value")
+                with Horizontal(id="policy-presets"):
+                    yield Button("Preset: require approval", id="policy-preset-approval")
+                    yield Button("Preset: automatic eligible repair", id="policy-preset-automatic")
+                    yield Button("Preview change", id="policy-preview", variant="primary")
+                    yield Checkbox("I reviewed scope and guarantee impact", id="policy-confirm", disabled=True)
+                yield Static("No policy change previewed", id="policy-preview-output")
                 with Horizontal(id="policy-lease-row-2"):
                     yield Input(value="3600", placeholder="Seconds", id="policy-duration")
                     yield Input(placeholder="Incident reason / operator justification", id="policy-reason")
                     yield Checkbox("Explicit override", id="policy-override")
-                    yield Button("Apply lease", id="policy-apply", variant="warning")
+                    yield Button("Apply previewed lease", id="policy-apply", variant="warning", disabled=True)
                     yield Button("Release lease", id="policy-release", disabled=True)
                     yield Button("Refresh", id="policy-refresh")
                 with Horizontal(id="policy-signed-row"):
@@ -2132,6 +2147,12 @@ class CaretakerConsoleApp(App):
             self._apply_behavior_filter()
         elif event.input.id == "repair-filter":
             self._apply_repair_filter()
+        elif event.input.id in {"policy-target", "policy-path", "policy-value", "policy-duration", "policy-reason"}:
+            self._policy_preview = None
+            self.query_one("#policy-confirm", Checkbox).value = False
+            self.query_one("#policy-confirm", Checkbox).disabled = True
+            self.query_one("#policy-apply", Button).disabled = True
+            self.query_one("#policy-preview-output", Static).update("Inputs changed; preview the policy change again.")
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         if event.checkbox.id == "guard-baseline-confirm":
@@ -2141,6 +2162,18 @@ class CaretakerConsoleApp(App):
         elif event.checkbox.id == "repair-approve-confirm":
             self.query_one("#repair-approve", Button).disabled = not (
                 event.value and self._selected_repair_approval and self._application_running
+            )
+        elif event.checkbox.id == "policy-confirm":
+            self.query_one("#policy-apply", Button).disabled = not (
+                event.value and self._policy_preview is not None
+            )
+        elif event.checkbox.id == "policy-override":
+            self._policy_preview = None
+            self.query_one("#policy-confirm", Checkbox).value = False
+            self.query_one("#policy-confirm", Checkbox).disabled = True
+            self.query_one("#policy-apply", Button).disabled = True
+            self.query_one("#policy-preview-output", Static).update(
+                "Override choice changed; preview the guarantee impact again."
             )
 
     @staticmethod
@@ -3049,30 +3082,63 @@ class CaretakerConsoleApp(App):
             if button == "policy-refresh":
                 await self.refresh_authority()
                 return
-            if button == "policy-apply":
+            if button in {"policy-preset-approval", "policy-preset-automatic"}:
+                self.query_one("#policy-path", Input).value = "repair.authority"
+                self.query_one("#policy-value", Input).value = (
+                    "REQUIRE_OPERATOR_APPROVAL"
+                    if button == "policy-preset-approval"
+                    else "AUTOMATIC_ELIGIBLE_REPAIRS"
+                )
+                if self._context_target:
+                    self.query_one("#policy-target", Input).value = self._context_target
+                self.query_one("#policy-preview-output", Static).update(
+                    "Preset loaded. Confirm target scope, duration, and reason, then Preview change."
+                )
+                return
+            if button == "policy-preview":
                 path = self.query_one("#policy-path", Input).value.strip()
-                if not path:
-                    raise ValueError("Enter a policy path")
                 target = self.query_one("#policy-target", Input).value.strip()
-                value = self._parse_policy_value(self.query_one("#policy-value", Input).value)
                 reason = self.query_one("#policy-reason", Input).value.strip()
-                if not reason:
-                    raise ValueError("Temporary policy leases require an incident/operator reason")
-                duration = int(self.query_one("#policy-duration", Input).value.strip() or "3600")
-                override = self.query_one("#policy-override", Checkbox).value
+                if not path or not reason:
+                    raise ValueError("Preview requires a policy path and incident/operator reason")
+                if path.startswith("repair.") and not target:
+                    raise ValueError("Temporary repair policy changes require a target id or glob")
+                preview = {
+                    "path": path,
+                    "value": self._parse_policy_value(self.query_one("#policy-value", Input).value),
+                    "target": target or None,
+                    "duration_seconds": int(self.query_one("#policy-duration", Input).value.strip() or "3600"),
+                    "reason": reason,
+                    "override_constraints": self.query_one("#policy-override", Checkbox).value,
+                }
+                self._policy_preview = preview
+                impact = (
+                    "WARNING: explicit override may violate a higher-authority guarantee."
+                    if preview["override_constraints"] else
+                    "Higher-authority constraints remain enforced; the supervisor may reject this lease."
+                )
+                self.query_one("#policy-preview-output", Static).update(
+                    f"Temporary change: {path} = {preview['value']} | target={target or 'GLOBAL'} | "
+                    f"expires after {preview['duration_seconds']}s | {impact}"
+                )
+                self.query_one("#policy-confirm", Checkbox).disabled = False
+                return
+            if button == "policy-apply":
+                if self._policy_preview is None:
+                    raise ValueError("Preview and confirm the policy change first")
+                preview = self._policy_preview
                 response = await self._request(
                     "authority-lease-acquire",
-                    path=path,
-                    value=value,
-                    target=target or None,
-                    reason=reason,
-                    duration_seconds=duration,
-                    override_constraints=override,
+                    **preview,
                 )
                 self._write_json("#policy-output", response)
                 await self.refresh_authority()
                 await self.refresh_status()
                 await self.refresh_targets()
+                self._policy_preview = None
+                self.query_one("#policy-confirm", Checkbox).value = False
+                self.query_one("#policy-confirm", Checkbox).disabled = True
+                self.query_one("#policy-apply", Button).disabled = True
                 return
             if button == "policy-apply-signed":
                 descriptor = self.query_one("#policy-signed-descriptor", Input).value.strip()

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from caretaker.console import CaretakerConsoleApp
-from textual.widgets import Button, Static
+from textual.widgets import Button, Checkbox, Static
 
 
 def test_target_runtime_state_marks_candidate_probation_as_validating():
@@ -216,3 +216,40 @@ def test_guard_operator_state_distinguishes_no_evidence_learning_and_findings():
         {"severity": "LOW"},
         {"severity": "HIGH"},
     ]) == "HIGH"
+
+
+def test_policy_change_requires_preview_and_acknowledgement(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)) as pilot:
+            app._activate_tab("policy")
+            await pilot.pause()
+            app.query_one("#policy-target").value = "lab.probe"
+            app.query_one("#policy-path").value = "repair.authority"
+            app.query_one("#policy-value").value = "REQUIRE_OPERATOR_APPROVAL"
+            app.query_one("#policy-reason").value = "incident review"
+            await pilot.pause()
+            await pilot.click("#policy-preview")
+
+            assert app._policy_preview == {
+                "path": "repair.authority",
+                "value": "REQUIRE_OPERATOR_APPROVAL",
+                "target": "lab.probe",
+                "duration_seconds": 3600,
+                "reason": "incident review",
+                "override_constraints": False,
+            }
+            assert app.query_one("#policy-confirm", Checkbox).disabled is False
+            assert app.query_one("#policy-apply", Button).disabled is True
+
+            app.query_one("#policy-confirm", Checkbox).value = True
+            await pilot.pause()
+            assert app.query_one("#policy-apply", Button).disabled is False
+
+            app.query_one("#policy-value").value = "AUTOMATIC_ELIGIBLE_REPAIRS"
+            await pilot.pause()
+            assert app._policy_preview is None
+            assert app.query_one("#policy-apply", Button).disabled is True
+
+    asyncio.run(exercise())

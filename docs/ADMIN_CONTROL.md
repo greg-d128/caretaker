@@ -127,6 +127,14 @@ Approval remains disabled until the candidate and evidence gaps are explicitly
 acknowledged. Selected episodes link directly to triggering Logs, Guard evidence,
 and Investigation.
 
+The **Policy** view separates inspection from mutation. Common Repair authority
+changes can be loaded as presets; advanced paths remain available, but every
+unsigned lease must be previewed before it can be applied. The preview states
+the exact path/value, target scope, expiration, reason, and whether an explicit
+constraint override may violate a higher-authority guarantee. Any edited input
+invalidates the preview, and the operator must acknowledge the scope and
+guarantee impact before **Apply previewed lease** becomes available.
+
 The filter field accepts ordinary case-insensitive text and compact field
 selectors. Multiple terms are combined with AND semantics. Examples:
 
