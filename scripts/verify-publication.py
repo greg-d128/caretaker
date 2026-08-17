@@ -16,7 +16,7 @@ def main() -> int:
     slots = json.loads(root.read_text())["key_slots"]
     public_keys = [directory / f"caretaker-key-{slot.lower()}.asc" for slot in sorted(slots)]
     root_signatures = [directory / f"root.json.key-{slot.lower()}.asc" for slot in sorted(slots)]
-    common = ["--root", str(root), "--artifact-root", "."]
+    common = ["--root", str(root), "--artifact-root", str(directory)]
     for path in public_keys:
         common += ["--public-key", str(path)]
     for path in root_signatures:

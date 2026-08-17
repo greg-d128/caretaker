@@ -56,3 +56,50 @@ def test_make_help_groups_signing_commands_by_role() -> None:
     assert "Release coordinator:" in result.stdout
     assert "Signing station:" in result.stdout
     assert "make sign-release-set KEY_SLOT=a" in result.stdout
+
+
+def test_signing_bundle_contains_only_reviewable_station_material(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    root = source / "root.json"
+    _root(root)
+    for name in ("release-manifest.json", "protected-manifest.json"):
+        (source / name).write_text('{"schema_version":1}\n', encoding="utf-8")
+    keys = source / "keys"
+    keys.mkdir()
+    for slot in "abc":
+        (keys / f"caretaker-key-{slot}.asc").write_text(
+            f"PUBLIC KEY {slot}\n", encoding="utf-8"
+        )
+    output = tmp_path / "station"
+
+    subprocess.run([
+        sys.executable,
+        str(ROOT / "scripts/create-signing-bundle.py"),
+        "--output", str(output),
+        "--root", str(root),
+        "--release-manifest", str(source / "release-manifest.json"),
+        "--protected-manifest", str(source / "protected-manifest.json"),
+        "--public-key-dir", str(keys),
+    ], check=True)
+
+    assert {path.name for path in output.iterdir()} == {
+        "Makefile", "README.txt", "SHA256SUMS", "root.json",
+        "release-manifest.json", "protected-manifest.json",
+        "caretaker-key-a.asc", "caretaker-key-b.asc", "caretaker-key-c.asc",
+        "sign-code.sh", "check-signing-key.py", "signing-status.py",
+    }
+    assert "make sign-release-set KEY_SLOT=a" in (output / "README.txt").read_text()
+    assert "release-manifest.json" in (output / "SHA256SUMS").read_text()
+
+    repeated = subprocess.run([
+        sys.executable,
+        str(ROOT / "scripts/create-signing-bundle.py"),
+        "--output", str(output),
+        "--root", str(root),
+        "--release-manifest", str(source / "release-manifest.json"),
+        "--protected-manifest", str(source / "protected-manifest.json"),
+        "--public-key-dir", str(keys),
+    ], text=True, capture_output=True)
+    assert repeated.returncode == 2
+    assert "output already exists" in repeated.stderr

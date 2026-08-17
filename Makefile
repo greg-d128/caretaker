@@ -9,6 +9,8 @@ SIGNATURE ?= $(MANIFEST).asc
 ROOT ?= root.json
 PUBLICATION_DIR ?= .
 PUBLIC_KEYS ?=
+PUBLIC_KEY_DIR ?= .
+SIGNING_BUNDLE_DIR ?= signing-bundle
 TOOLS_PYTHON := $(if $(wildcard $(BIN)/python),$(BIN)/python,$(PYTHON))
 PACKAGE_VERSION ?= $(shell sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml | head -n 1)
 ROOT_VERSION ?= $(shell $(TOOLS_PYTHON) -c 'import json; print(json.load(open("$(ROOT)"))["root_version"])' 2>/dev/null)
@@ -16,7 +18,7 @@ INTEGRITY := PYTHONPATH=src $(TOOLS_PYTHON) -m caretaker.integrity.cli
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup test compile check wheel build verify-wheel root-check signing-check signing-status release-check release-manifest protected-manifest manifests generate-release-manifest generate-protected-manifest generate-manifests inspect-integrity sign sign-file sign-root sign-release sign-protected sign-release-set sign-all sign-station-bundle verify-signature verify-all verify-publication lab lab-console profile clean distclean
+.PHONY: help setup test compile check wheel build verify-wheel root-check signing-check signing-status signing-bundle release-check release-manifest protected-manifest manifests generate-release-manifest generate-protected-manifest generate-manifests inspect-integrity sign sign-file sign-root sign-release sign-protected sign-release-set sign-all sign-station-bundle verify-signature verify-all verify-publication lab lab-console profile clean distclean
 
 help: ## Show commands grouped by operator role
 	@printf '%s\n' \
@@ -31,6 +33,7 @@ help: ## Show commands grouped by operator role
 	  '  generate-manifests       Generate release and protected manifests' \
 	  '  inspect-integrity        Display root/manifest metadata and hashes' \
 	  '  signing-status           Show missing artifacts, keys, and signatures' \
+	  '  signing-bundle           Build the minimal offline-station directory' \
 	  '  verify-publication       Verify the assembled three-key publication' '' \
 	  'Signing station:' \
 	  '  signing-check            Verify this station owns KEY_SLOT' \
@@ -67,7 +70,12 @@ build: ## Build the wheel and source distribution in dist/
 
 root-check: ## Validate root policy and optional PUBLIC_KEYS
 	$(INTEGRITY) inspect "$(ROOT)"
-	$(PYTHON) scripts/check-root.py "$(ROOT)" . $(PUBLIC_KEYS)
+	@keys='$(PUBLIC_KEYS)'; \
+	if test -z "$$keys"; then \
+	  for slot in a b c; do candidate='$(PUBLIC_KEY_DIR)'/caretaker-key-$$slot.asc; test ! -f "$$candidate" || keys="$$keys $$candidate"; done; \
+	fi; \
+	test -n "$$keys" || echo 'Public certificate checks skipped: set PUBLIC_KEY_DIR or PUBLIC_KEYS.'; \
+	$(TOOLS_PYTHON) scripts/check-root.py "$(ROOT)" . $$keys
 
 signing-check: ## Check signing identity (prompts only for missing KEY_SLOT)
 	@slot='$(KEY_SLOT)'; key='$(SIGNING_KEY)'; \
@@ -80,6 +88,14 @@ signing-check: ## Check signing identity (prompts only for missing KEY_SLOT)
 
 signing-status: ## Show publication artifacts, signatures, and the next missing step
 	$(TOOLS_PYTHON) scripts/signing-status.py "$(PUBLICATION_DIR)" "$(ROOT)"
+
+signing-bundle: root-check ## Build a minimal offline signing-station directory
+	$(TOOLS_PYTHON) scripts/create-signing-bundle.py \
+	  --output "$(SIGNING_BUNDLE_DIR)" \
+	  --root "$(ROOT)" \
+	  --release-manifest release-manifest.json \
+	  --protected-manifest protected-manifest.json \
+	  --public-key-dir "$(PUBLIC_KEY_DIR)"
 
 release-check: root-check ## Check clean source and release inputs
 	@test -z "$$(git status --porcelain)" || { echo "Git worktree or index has uncommitted changes" >&2; exit 2; }
@@ -112,7 +128,7 @@ manifests: root-check ## Generate both manifests (prompts for missing versions)
 	test "$$release" -gt 0 && test "$$protected" -gt 0 || { echo 'Manifest versions must be positive integers' >&2; exit 2; }; \
 	$(MAKE) --no-print-directory release-manifest MANIFEST_VERSION="$$release" PACKAGE_VERSION="$(PACKAGE_VERSION)" ROOT="$(ROOT)" || exit $$?; \
 	$(MAKE) --no-print-directory protected-manifest MANIFEST_VERSION="$$protected" PACKAGE_VERSION="$(PACKAGE_VERSION)" ROOT="$(ROOT)" || exit $$?; \
-	printf '\nNext steps:\n  1. Review both manifests and record their SHA-256 values.\n  2. Copy root.json and both manifests to each signing station.\n  3. Run make sign-all independently on stations A, B, and C.\n'
+	printf '\nNext steps:\n  1. Run make inspect-integrity and review both manifests.\n  2. Run make signing-bundle PUBLIC_KEY_DIR=<certificate-directory>.\n  3. Transfer the bundle and run make sign-release-set KEY_SLOT=<station-slot>.\n'
 
 inspect-integrity: ## Display root and available manifest metadata and hashes
 	$(INTEGRITY) inspect "$(ROOT)"
@@ -122,7 +138,7 @@ inspect-integrity: ## Display root and available manifest metadata and hashes
 sign-file: ## Advanced: sign one explicitly selected file/fingerprint
 	@test -f "$(MANIFEST)" || { echo "Manifest not found: $(MANIFEST)" >&2; echo "Generate and review a canonical release manifest before signing." >&2; exit 2; }
 	@key='$(SIGNING_KEY)'; \
-	if test -z "$$key"; then printf 'Full primary signing-key fingerprint: ' >/dev/tty 2>/dev/null && IFS= read -r key </dev/tty || { echo 'SIGNING_KEY is required (non-interactive example: make sign SIGNING_KEY=FULL_FINGERPRINT)' >&2; exit 2; }; fi; \
+	if test -z "$$key"; then printf 'Full primary signing-key fingerprint: ' >/dev/tty 2>/dev/null && IFS= read -r key </dev/tty || { echo 'SIGNING_KEY is required (advanced example: make sign-file SIGNING_KEY=FULL_FINGERPRINT)' >&2; exit 2; }; fi; \
 	./scripts/sign-code.sh "$(MANIFEST)" "$$key" "$(SIGNATURE)"
 
 sign: sign-file ## Compatibility alias for sign-file

@@ -2,33 +2,45 @@
 
 Release-signing authority and private-key handling remain outside the Caretaker runtime. The repository includes a small `scripts/sign-code.sh` convenience wrapper that delegates one detached signature to GnuPG; it contains no key import, passphrase, private-key storage, or cryptographic implementation.
 
-## Simple manifest signing
+## Short, ordinary workflow
 
-After generating and reviewing a canonical manifest, sign it with one full primary fingerprint:
-
-```bash
-make sign SIGNING_KEY=FULL_PRIMARY_FINGERPRINT_A
-```
-
-For an attended terminal, the variable may be omitted and Make will ask for it:
-
-```text
-$ make sign
-Full primary signing-key fingerprint: 0123456789ABCDEF0123456789ABCDEF01234567
-```
-
-Prompts are deliberately limited to missing, non-secret identifiers and version
-numbers. Make never asks for a private key or OpenPGP passphrase; GnuPG owns any
-passphrase interaction. In CI, redirected input, or another non-interactive
-environment, specify variables explicitly. The command fails instead of waiting
-indefinitely when `/dev/tty` is unavailable.
-
-The Makefile defaults to `MANIFEST=release-manifest.json` and
-`SIGNATURE=release-manifest.json.asc`. Override either value when signing a
-different manifest or when naming signatures by signer, for example:
+On the coordinator, place the three public certificates under their conventional
+names, generate the manifests, inspect them, and create the minimal station bundle:
 
 ```bash
-make sign \
+make generate-manifests RELEASE_MANIFEST_VERSION=1 PROTECTED_MANIFEST_VERSION=1
+make inspect-integrity
+make signing-bundle PUBLIC_KEY_DIR=release-keys SIGNING_BUNDLE_DIR=station-input
+```
+
+Transfer `station-input` to one signing station. After comparing its
+`SHA256SUMS` and artifact hashes with the coordinator, use that station's slot:
+
+```bash
+cd station-input
+make status
+make check KEY_SLOT=a
+make sign-release-set KEY_SLOT=a
+```
+
+Repeat in the independent B and C environments. The key fingerprint does not need
+to be typed: `root.json` maps each slot to its authorized primary fingerprint, and
+the check fails unless the station has a usable secret signing subkey for that
+identity. Make never asks for a private key or OpenPGP passphrase; GnuPG owns any
+passphrase interaction.
+
+Root signatures are a separate authorization artifact. Use `make sign-root
+KEY_SLOT=a` when establishing or rotating `root.json`; an ordinary release with
+an unchanged, already-authorized root normally uses the existing root signatures.
+Use `make sign-station-bundle KEY_SLOT=a` only when the coordinator explicitly
+requests root plus both manifests.
+
+The advanced `sign-file` command signs one explicitly selected file and does not
+provide the slot-oriented publication workflow:
+
+```bash
+make sign-file \
+  MANIFEST=release-manifest.json \
   SIGNING_KEY=FULL_PRIMARY_FINGERPRINT_A \
   SIGNATURE=release-manifest.json.key-a.asc
 ```
@@ -36,7 +48,11 @@ make sign \
 `MANIFEST.in` is Python packaging metadata and is not the canonical integrity
 manifest. Do not sign it as a substitute for `release-manifest.json`.
 
-The target displays the manifest SHA-256, asks the configured GnuPG environment to create an armored detached signature, and immediately runs `gpg --verify`. It refuses to overwrite an existing signature. The script does not generate a manifest, select a key, import private material, or decide that the reviewed bytes are suitable for release. If the default manifest is absent, the target explains that it must be generated and reviewed first.
+Every signing target displays the artifact SHA-256, asks the configured GnuPG
+environment to create an armored detached signature, and immediately runs
+`gpg --verify`. It refuses to overwrite an existing signature. The script does
+not generate a manifest, import private material, or decide that reviewed bytes
+are suitable for release.
 
 Run the target separately for keys A, B, and C, preferably in independent signing environments as described below. The Make target is convenience, not a replacement for manifest review or threshold independence.
 
@@ -45,16 +61,17 @@ Run the target separately for keys A, B, and C, preferably in independent signin
 The coordinator validates the finalized public root and generates both manifests:
 
 ```bash
-make root-check PUBLIC_KEYS='caretaker-key-a.asc caretaker-key-b.asc caretaker-key-c.asc'
-make release-check PUBLIC_KEYS='caretaker-key-a.asc caretaker-key-b.asc caretaker-key-c.asc'
-make manifests RELEASE_MANIFEST_VERSION=1 PROTECTED_MANIFEST_VERSION=1
+make root-check PUBLIC_KEY_DIR=release-keys
+make release-check PUBLIC_KEY_DIR=release-keys
+make generate-manifests RELEASE_MANIFEST_VERSION=1 PROTECTED_MANIFEST_VERSION=1
 make inspect-integrity
+make signing-status PUBLICATION_DIR=.
 ```
 
 The attended equivalent prompts for the two version numbers:
 
 ```text
-$ make manifests
+$ make generate-manifests
 Release manifest version (positive integer): 1
 Protected manifest version (positive integer): 1
 ```
@@ -62,7 +79,7 @@ Protected manifest version (positive integer): 1
 For automation, keep inputs explicit:
 
 ```bash
-make manifests \
+make generate-manifests \
   RELEASE_MANIFEST_VERSION=1 \
   PROTECTED_MANIFEST_VERSION=1
 ```
@@ -76,16 +93,15 @@ explicitly supplies `FORCE=1` after deciding that regeneration is intended.
 On signing station A, after independently comparing the document hashes:
 
 ```bash
-make signing-check KEY_SLOT=a SIGNING_KEY=FULL_PRIMARY_FINGERPRINT_A
-make sign-all KEY_SLOT=a SIGNING_KEY=FULL_PRIMARY_FINGERPRINT_A
+make signing-check KEY_SLOT=a
+make sign-release-set KEY_SLOT=a
 ```
 
 Or allow the attended command to request the public identifiers once:
 
 ```text
-$ make sign-all
+$ make sign-release-set
 Key slot (a, b, or c): a
-Full primary key fingerprint for slot a: 0123456789ABCDEF0123456789ABCDEF01234567
 ```
 
 Stations B and C use their own slot and primary fingerprint. `signing-check`
@@ -96,7 +112,7 @@ After collecting the three public certificates and all detached signatures in
 one directory, perform complete publication verification:
 
 ```bash
-make verify-all PUBLICATION_DIR=.
+make verify-publication PUBLICATION_DIR=.
 ```
 
 For a single detached signature already known to the local GnuPG keyring:
@@ -113,18 +129,18 @@ The quality-of-life targets finish with an explicit **Next steps** block:
 
 - manifest generation directs the coordinator to inspect the canonical JSON,
   record its hash, and transfer the reviewed files to signing stations;
-- `signing-check` identifies the corresponding `sign-all` invocation;
+- `signing-check` identifies the corresponding `sign-release-set` invocation;
 - signing directs the station operator to export only `.asc` files, return them
   with the reviewed hashes, and repeat independently for the remaining slots;
-- after A, B, and C signatures are collected, run `make verify-all
+- after A, B, and C signatures are collected, run `make verify-publication
   PUBLICATION_DIR=.` on the complete public directory.
 
 Example single-artifact station workflow:
 
 ```bash
 # Inputs may instead be entered at the prompts.
-make signing-check KEY_SLOT=b SIGNING_KEY=FULL_PRIMARY_FINGERPRINT_B
-make sign-release KEY_SLOT=b SIGNING_KEY=FULL_PRIMARY_FINGERPRINT_B
+make signing-check KEY_SLOT=b
+make sign-release KEY_SLOT=b
 
 # Return this public file to the coordinator:
 # release-manifest.json.key-b.asc
@@ -133,9 +149,9 @@ make sign-release KEY_SLOT=b SIGNING_KEY=FULL_PRIMARY_FINGERPRINT_B
 Example complete station workflow:
 
 ```bash
-make sign-all KEY_SLOT=c SIGNING_KEY=FULL_PRIMARY_FINGERPRINT_C
-# Return root.json.key-c.asc, release-manifest.json.key-c.asc,
-# and protected-manifest.json.key-c.asc.
+make sign-release-set KEY_SLOT=c
+# Return release-manifest.json.key-c.asc and
+# protected-manifest.json.key-c.asc.
 ```
 
 Do not run `FORCE=1` merely because a manifest or signature already exists.
