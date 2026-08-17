@@ -1178,8 +1178,8 @@ def _build_target_specs() -> None:
             function=behavior_probe, variant_key="behavior",
             parameter_labels=(),
             hints=(
-                "Use Benign to establish a behavior baseline. Bad enumerates home-directory "
-                "metadata to a bounded depth without opening file contents. Malicious performs "
+                "Use Normal to establish a behavior baseline. Faulty enumerates home-directory "
+                "metadata to a bounded depth without opening file contents. High-risk performs "
                 "the same bounded scan and attempts an HTTPS HEAD request to www.google.com. "
                 "Use Behavior-only change rather than Unauthorized code mutation so the target code hash "
                 "stays constant while its observed behavior changes."
@@ -1256,11 +1256,11 @@ class CaretakerLabApp(App):
         yield Static("Caretaker Lab > Divide two values", id="breadcrumb")
         with Horizontal(id="body"):
             with Vertical(id="menu"):
-                yield Label("Application functions")
+                yield Label("Test scenarios")
                 for key, spec in TARGETS.items():
                     yield Button(f"{key}. {spec.title}", id=f"target-{key}")
-                yield Label("\nImplementation experiments")
-                yield Button("Reset all substitutions", id="reset-all")
+                yield Label("\nChange simulations")
+                yield Button("Reset all simulated changes", id="reset-all")
                 yield Static(
                     "\nObserve in a second terminal with:\n"
                     "caretaker-console --data-directory <lab data dir>",
@@ -1274,13 +1274,13 @@ class CaretakerLabApp(App):
                 yield Input(id="parameter-2", classes="parameter")
                 yield Input(id="parameter-3", classes="parameter")
                 with Horizontal(id="execution-bar"):
-                    yield Button("Execute function", id="execute", variant="primary")
-                    yield Button("Execute 1000 times", id="execute-many")
-                yield Label("Select a variant for one of the modification actions below (selection alone does not apply it)")
+                    yield Button("Run once", id="execute", variant="primary")
+                    yield Button("Run 1,000-call sample", id="execute-many")
+                yield Label("Select a behavior for one of the change simulations below (selection alone does not apply it)")
                 with Horizontal(id="modification-bar"):
-                    yield Button("Select Benign", id="variant-benign")
-                    yield Button("Select Bad", id="variant-bad")
-                    yield Button("Select Malicious", id="variant-malicious")
+                    yield Button("Select normal", id="variant-benign")
+                    yield Button("Select faulty", id="variant-bad")
+                    yield Button("Select high-risk", id="variant-malicious")
                 yield Label("Apply the selected variant as one of these simulated changes")
                 with Horizontal(id="action-bar"):
                     yield Button("Behavior-only change", id="substitute")
@@ -1334,22 +1334,22 @@ class CaretakerLabApp(App):
             and self.selected_variant != active_behavior
         )
         execution_source = (
-            f"code mutation {CODE_MUTATIONS[spec.target_id]}"
+            f"code-tampering simulation ({CODE_MUTATIONS[spec.target_id]})"
             if spec.target_id in CODE_MUTATIONS else
-            f"FunctionSlot version {current.number}"
+            f"replacement version {current.number}"
             if current.number != 0 else
             f"behavior {active_behavior}"
         )
         instruction = (
-            "SELECTION NOT APPLIED — choose Behavior-only change, Unauthorized code mutation, "
+            "Selected behavior is not active — choose Behavior-only change, Unauthorized code mutation, "
             "or Unvalidated replacement."
             if pending_selection else
             f"Execute will run {execution_source}."
         )
         self.query_one("#variant-state", Static).update(
-            f"Executing behavior={active_behavior}   modification selection={self.selected_variant}   "
-            f"slot-version={current.number}   slot-state={slot.state.name}   "
-            f"code-mutation={CODE_MUTATIONS.get(spec.target_id, '-')}\n{instruction}"
+            f"Active behavior={active_behavior}   selected behavior={self.selected_variant}   "
+            f"replacement version={current.number}   replacement state={slot.state.name}   "
+            f"code-tampering simulation={CODE_MUTATIONS.get(spec.target_id, '-')}\n{instruction}"
         )
         batch_running = self._batch_task is not None and not self._batch_task.done()
         self.query_one("#execute", Button).disabled = pending_selection or batch_running
@@ -1432,7 +1432,7 @@ class CaretakerLabApp(App):
                 GUARD.close_target_window(spec.target_id)
             except Exception as exc:
                 self._output(f"Guard window close failed: {type(exc).__name__}: {exc}")
-            batch_button.label = "Execute 1000 times"
+            batch_button.label = "Run 1,000-call sample"
             batch_button.variant = "default"
             execute_button.disabled = False
             self._batch_task = None
@@ -1575,7 +1575,7 @@ class CaretakerLabApp(App):
                         self._seal_before_change(target_spec, "reset-all-substitutions")
                     ACTIVE_VARIANTS[target_spec.variant_key] = "benign"
                 self.selected_variant = "benign"
-                self._set_breadcrumb("Reset all substitutions")
+                self._set_breadcrumb("Reset all simulated changes")
                 self._output("All behavior substitutions are benign. FunctionSlot versions were not changed.")
                 self._refresh_variant_state()
         except Exception as exc:

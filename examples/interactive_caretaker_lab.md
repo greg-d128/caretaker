@@ -69,8 +69,8 @@ The left side selects one of nine application targets. The main panel shows:
 - a short list of ideas worth trying;
 - editable function arguments;
 - the currently selected behavior and FunctionSlot state;
-- an **Execute function** action;
-- an **Execute 1000 times** action that runs the selected function with valid
+- a **Run once** action;
+- a **Run 1,000-call sample** action that runs the selected function with valid
   randomized arguments and a random delay of up to 0.5 seconds between calls;
 - controls for benign/bad/malicious implementation experiments;
 - a local result/error log.
@@ -82,7 +82,7 @@ at the end. This avoids forcing a partial window after every call and makes the
 action useful for filling a behavior-statistics generation. The lab seals batch
 statistics in 100-call epochs, so a completed run contributes ten bounded,
 disjoint artifacts whose generation coverage is displayed cumulatively. A normal
-single **Execute function** click is sealed explicitly so it remains visible
+single **Run once** click is sealed explicitly so it remains visible
 without waiting for another 99 calls.
 The active implementation is still used, so deliberately slow or networked variants
 can make the sequence take substantially longer.
@@ -91,7 +91,7 @@ can make the sequence take substantially longer.
 
 The three **Select ...** buttons only choose a candidate variant. They do not
 change what Execute runs. While the selection differs from the active implementation,
-both Execute actions are disabled and the state line says **SELECTION NOT APPLIED**.
+both Run actions are disabled and the state line says **Selected behavior is not active**.
 Choose one of the following actions first:
 
 - **Behavior-only change** changes the dispatcher's runtime behavior without
@@ -103,10 +103,10 @@ Choose one of the following actions first:
   code generation. Internally, the lab replaces the function's `__code__` object.
 - **Unvalidated replacement** seals the preceding epoch and activates the selection as
   a new FunctionSlot version while deliberately bypassing normal candidate validation.
-- **Rollback replacement**, **Restore original**, and **Reset all substitutions** seal
+- **Rollback replacement**, **Restore original**, and **Reset all simulated changes** seal
   affected evidence before changing execution state.
-- **Execute function** collects one call and explicitly seals it for immediate
-  inspection. **Execute 1000 times** collects calls into automatic 100-call epochs.
+- **Run once** collects one call and explicitly seals it for immediate
+  inspection. **Run 1,000-call sample** collects calls into automatic 100-call epochs.
 
 Selecting a variant therefore never creates behavior evidence by itself. Applying
 or restoring a variant creates a collection boundary, and executing the target
@@ -138,7 +138,7 @@ In `caretaker-console`:
 
 Back in the lab:
 
-1. Select **Bad**.
+1. Select **faulty**.
 2. Select **Behavior-only change**.
 3. Execute division again with `10` and `2`.
 
@@ -171,7 +171,7 @@ These demonstrate the difference between bad input and a bad implementation.
 1. Restore a target to benign behavior.
 2. Run it once or more.
 3. In the Caretaker console, accept its Guard baseline.
-4. In the lab select **Malicious** and **Behavior-only change**.
+4. In the lab select **high-risk** and **Behavior-only change**.
 5. Run the target again.
 6. Wait up to one supervisor refresh interval, press `r`, and inspect:
    - Guard events;
