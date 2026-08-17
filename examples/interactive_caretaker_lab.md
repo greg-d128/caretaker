@@ -63,15 +63,25 @@ states such as `INCIDENT_ACTIVE`, `VALIDATING`, or `AWAITING_APPROVAL`.
 
 ## Lab UI
 
-The left side selects one of eight application targets. The main panel shows:
+The left side selects one of nine application targets. The main panel shows:
 
 - a breadcrumb showing the current target/action;
 - a short list of ideas worth trying;
 - editable function arguments;
 - the currently selected behavior and FunctionSlot state;
 - an **Execute function** action;
+- an **Execute 1000 times** action that runs the selected function with valid
+  randomized arguments and a random delay of up to 0.5 seconds between calls;
 - controls for benign/bad/malicious implementation experiments;
 - a local result/error log.
+
+The 1,000-call action runs in the background, reports progress every 50 calls,
+and changes to **Cancel 1000-run** while active. It does not explicitly close the
+selected target's Guard window between calls; it closes the remaining window once
+at the end. This avoids forcing a partial window after every call and makes the
+action useful for filling a behavior-statistics generation.
+The active implementation is still used, so deliberately slow or networked variants
+can make the sequence take substantially longer.
 
 The lab deliberately does not duplicate Guard, Repair, approval, or logging
 screens. Those belong to `caretaker-console`.

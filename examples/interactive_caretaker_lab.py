@@ -24,6 +24,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import random
 import subprocess
 import sys
 import time
@@ -1032,6 +1033,8 @@ class TargetSpec:
 
 
 TARGETS: dict[str, TargetSpec] = {}
+BATCH_EXECUTION_COUNT = 1_000
+BATCH_MAX_DELAY_SECONDS = 0.5
 
 
 def _default_arguments(spec: TargetSpec) -> tuple[str, ...]:
@@ -1048,6 +1051,42 @@ def _default_arguments(spec: TargetSpec) -> tuple[str, ...]:
         "behavior": (),
     }
     return values[spec.variant_key]
+
+
+def _random_arguments(spec: TargetSpec, rng: random.Random) -> tuple[str, ...]:
+    """Return a safe, valid argument set for one scripted lab execution."""
+    assert SERVERS is not None
+    choices = {
+        "divide": (
+            ("10", "2"), ("9", "3"), ("22", "7"), ("-12", "4"), ("1.5", "0.5"),
+        ),
+        "list": ((str(WORKSPACE),), (str(WORKSPACE / "nested"),), (str(WORKSPACE / "notes"),)),
+        "web": (
+            (f"{SERVERS.application_base}/page",),
+            (f"{SERVERS.application_base}/page?sample=one",),
+            (f"{SERVERS.application_base}/page?sample=two",),
+        ),
+        "search": tuple(
+            (str(WORKSPACE), word)
+            for word in ("caretaker", "demo", "note", "banana", "synthetic")
+        ),
+        "api": tuple(
+            (SERVERS.application_base, endpoint, value)
+            for endpoint in ("/api/status", "/api/echo")
+            for value in ("example", "caretaker", "42")
+        ),
+        "transform": tuple(
+            (value,) for value in ("Caretaker test", "hello world", "123", "mixed Case", "symbols !?_")
+        ),
+        # Reuse a bounded set of files so a long run does not leave 1,000 artifacts.
+        "write": tuple(
+            (f"notes/batch-{index}.txt", f"Caretaker batch sample {value}")
+            for index, value in enumerate(("alpha", "beta", "gamma", "delta", "epsilon"), start=1)
+        ),
+        "slow": (("0.00",), ("0.01",), ("0.02",), ("0.05",), ("0.10",)),
+        "behavior": ((),),
+    }
+    return rng.choice(choices[spec.variant_key])
 
 
 def _build_target_specs() -> None:
@@ -1193,7 +1232,8 @@ class CaretakerLabApp(App):
     #target-hints { height: 7; margin-bottom: 1; }
     #variant-state { height: 2; }
     .parameter { margin-bottom: 1; }
-    #execute { width: 20; margin: 1 0; }
+    #execution-bar { height: auto; margin: 1 0; }
+    #execution-bar Button { width: 24; margin-right: 1; }
     #modification-bar { height: auto; margin-top: 1; }
     #modification-bar Button { margin-right: 1; }
     #action-bar { height: auto; margin-bottom: 1; }
@@ -1207,6 +1247,7 @@ class CaretakerLabApp(App):
         super().__init__()
         self.selected_key = "1"
         self.selected_variant = "benign"
+        self._batch_task: asyncio.Task[None] | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -1230,7 +1271,9 @@ class CaretakerLabApp(App):
                 yield Input(id="parameter-1", classes="parameter")
                 yield Input(id="parameter-2", classes="parameter")
                 yield Input(id="parameter-3", classes="parameter")
-                yield Button("Execute function", id="execute", variant="primary")
+                with Horizontal(id="execution-bar"):
+                    yield Button("Execute function", id="execute", variant="primary")
+                    yield Button("Execute 1000 times", id="execute-many")
                 yield Label("Implementation variant to apply")
                 with Horizontal(id="modification-bar"):
                     yield Button("Benign", id="variant-benign")
@@ -1316,6 +1359,55 @@ class CaretakerLabApp(App):
             self._refresh_variant_state()
             self._output("Inspect the same target in caretaker-console before making the next change.")
 
+    async def _execute_many(self, spec: TargetSpec) -> None:
+        rng = random.Random()
+        completed = 0
+        failures = 0
+        last_result: Any = None
+        batch_button = self.query_one("#execute-many", Button)
+        execute_button = self.query_one("#execute", Button)
+        batch_button.label = "Cancel 1000-run"
+        batch_button.variant = "warning"
+        execute_button.disabled = True
+        self._set_breadcrumb(spec.title, f"Execute {BATCH_EXECUTION_COUNT} times")
+        self._output(
+            f"Starting {BATCH_EXECUTION_COUNT} executions of {spec.target_id} with valid randomized "
+            f"parameters and 0-{BATCH_MAX_DELAY_SECONDS:.1f}s delays. Click Cancel 1000-run to stop."
+        )
+        try:
+            for number in range(1, BATCH_EXECUTION_COUNT + 1):
+                args = _random_arguments(spec, rng)
+                try:
+                    last_result = await asyncio.to_thread(spec.function, *args)
+                except Exception as exc:
+                    failures += 1
+                    last_result = f"{type(exc).__name__}: {exc}"
+                completed = number
+                if number == 1 or number % 50 == 0 or number == BATCH_EXECUTION_COUNT:
+                    self._output(
+                        f"Batch progress: {number}/{BATCH_EXECUTION_COUNT}; failures={failures}; "
+                        f"latest arguments={args!r}"
+                    )
+                if number < BATCH_EXECUTION_COUNT:
+                    await asyncio.sleep(rng.uniform(0.0, BATCH_MAX_DELAY_SECONDS))
+        except asyncio.CancelledError:
+            self._output(f"Batch cancelled after {completed}/{BATCH_EXECUTION_COUNT} executions.")
+        finally:
+            try:
+                GUARD.close_target_window(spec.target_id)
+            except Exception as exc:
+                self._output(f"Guard window close failed: {type(exc).__name__}: {exc}")
+            batch_button.label = "Execute 1000 times"
+            batch_button.variant = "default"
+            execute_button.disabled = False
+            self._batch_task = None
+            self._refresh_variant_state()
+        if completed:
+            self._output(
+                f"Batch finished: completed={completed}, failures={failures}, last result={last_result!r}. "
+                "Inspect this target's collected generation in caretaker-console."
+            )
+
     def _substitute(self) -> None:
         spec = self.spec
         ACTIVE_VARIANTS[spec.variant_key] = self.selected_variant
@@ -1400,6 +1492,13 @@ class CaretakerLabApp(App):
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button = event.button.id or ""
         try:
+            if (
+                self._batch_task is not None
+                and not self._batch_task.done()
+                and button != "execute-many"
+            ):
+                self._output("Cancel the active 1000-run before selecting or modifying another target.")
+                return
             if button.startswith("target-"):
                 self._show_target(button.removeprefix("target-"))
                 return
@@ -1410,6 +1509,11 @@ class CaretakerLabApp(App):
                 return
             if button == "execute":
                 await self._execute()
+            elif button == "execute-many":
+                if self._batch_task is not None and not self._batch_task.done():
+                    self._batch_task.cancel()
+                else:
+                    self._batch_task = asyncio.create_task(self._execute_many(self.spec))
             elif button == "substitute":
                 self._substitute()
             elif button == "mutate":
