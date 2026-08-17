@@ -242,7 +242,7 @@ impact; acknowledge **I reviewed scope and guarantee impact** before applying.
 Changing any input invalidates the preview. Releasing a selected lease requires
 the separate **Confirm release** acknowledgement.
 
-If the change violates an application-owner constraint, select **Explicit override**. The repair can
+If the change violates an application-owner constraint, select **Allow constraint override**. The repair can
 proceed, but the application-owner guarantee becomes `VIOLATED` for that effective generation.
 
 ### Requiring signed temporary leases
@@ -303,7 +303,8 @@ components and reports the failure.
 
 ## Console assurance states
 
-The Policy tab shows static authority layers, runtime leases, signatures, guarantee state,
+The Policy tab presents static authority layers as policy sources and runtime leases as temporary
+changes. It shows signatures, assurance/guarantee state,
 violations, and detailed provenance. The status line includes the overall authority state.
 
 Important overall states include:

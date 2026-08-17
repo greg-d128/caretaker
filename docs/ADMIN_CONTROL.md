@@ -155,7 +155,7 @@ metadata existed show a labeled histogram of up to twelve saved windows and fall
 back to saved time for first/last seen.
 
 For a registered function, one authoritative accumulator owns each generation.
-Automatic materialization and **Close function epoch** atomically close that
+Automatic materialization and **Save current function sample** atomically close that
 accumulator and install an empty successor under the same lock. Completed calls
 receive monotonically increasing generation-scoped sample numbers, and every
 closed epoch records its ID, ordinal, and inclusive sample range. Consumers such
@@ -180,16 +180,16 @@ reports how many such generations are hidden.
 
 Every subject has an independent comparison reference. Its newest analytical
 generation is the default **REFERENCE** and is rendered in green. Selecting an
-older generation enables **Compare**, which always compares that row with the
+older generation enables **Compare with reference**, which always compares that row with the
 green reference for the same subject. **Set Reference** moves the green designation
 for only that subject; references for other subjects are unchanged. The result
 labels its sides **Reference** and **Selected**, so comparison direction remains
 explicit without A/B terminology.
 
 Snapshots can be filtered by subject, generation, evidence state, or integrity
-state. The table reports collection coverage and artifact integrity, while detail
+state. The table reports collected calls and artifact integrity, while detail
 reports environment/workload labels, sampling strata, resource coverage, epoch
-boundaries, and monitoring provenance. **Close function epoch** does not execute
+boundaries, and monitoring provenance. **Save current function sample** does not execute
 the target function.
 
 The **Repair** view lists waiting decisions first and supports target, state,
@@ -229,7 +229,7 @@ warning, error, and critical records. Supported selectors are `level`,
 `channel`, `target`, `logger`, and `message`; unqualified text searches the full
 JSON record.
 
-Selecting a log enables contextual navigation. **Investigate correlated** applies
+Selecting a log enables contextual navigation. **Investigate related events** applies
 the available target/incident/call identifiers, shows the matching evidence queue,
 and opens Investigate. This is identifier correlation, not semantic similarity.
 **Open related tab** routes Guard records to the selected
@@ -276,7 +276,7 @@ than requiring an operator to know a target ID in advance. It builds a bounded
 logging interrogation bundle for the selected target, call, or incident and
 recent time window, and includes recent Guard deviations when available.
 
-With no model selected, Caretaker performs deterministic interrogation only. If
+With no model selected, Caretaker performs built-in analysis without AI. If
 the operator explicitly supplies an Ollama model, the supervisor sends the
 bounded evidence bundle to the loopback Ollama endpoint through
 `OllamaRootCauseProvider`. Remote endpoints remain disallowed by default.
@@ -291,6 +291,6 @@ and advisory limitation before technical assessment detail.
 
 The Logs view explicitly reports live-supervisor versus persisted-fallback
 source, loaded/maximum record counts, ordering, and refresh behavior. Its
-**Investigate correlated** action is identifier-based correlation—not semantic
+**Investigate related events** action is identifier-based correlation—not semantic
 similarity—and selected records render message and target/incident/call context
 before raw technical JSON.

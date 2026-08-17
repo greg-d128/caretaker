@@ -485,7 +485,8 @@ class CaretakerConsoleApp(App):
                 table = DataTable(id="targets-table")
                 table.cursor_type = "row"
                 table.add_columns(
-                    "Target", "Health", "Needs attention", "Mode", "Authority", "Version", "Guard"
+                    "Target", "Health", "Needs attention", "Repair mode", "Repair approval",
+                    "Active version", "Runtime monitoring"
                 )
                 yield table
                 yield Static(
@@ -507,13 +508,13 @@ class CaretakerConsoleApp(App):
                 )
                 with Horizontal(id="guard-actions"):
                     yield Button("Refresh", id="guard-refresh", variant="primary")
-                    yield Button("Summary", id="guard-summary", disabled=True)
-                    yield Button("Events", id="guard-events", disabled=True)
+                    yield Button("Behavior summary", id="guard-summary", disabled=True)
+                    yield Button("Observed activity", id="guard-events", disabled=True)
                     yield Button("Deviations", id="guard-deviations", disabled=True)
-                    yield Button("Inspections", id="guard-inspections", disabled=True)
+                    yield Button("Code inspections", id="guard-inspections", disabled=True)
                     yield Checkbox("I reviewed baseline evidence", id="guard-baseline-confirm", disabled=True)
-                    yield Button("Accept baseline", id="guard-baseline", disabled=True)
-                    yield Button("LLM assist", id="guard-assess", disabled=True)
+                    yield Button("Accept as expected", id="guard-baseline", disabled=True)
+                    yield Button("Analyze with local AI", id="guard-assess", disabled=True)
                 with Horizontal(id="guard-filter-row"):
                     yield Input(placeholder="Filter Guard targets or states", id="guard-filter")
                     yield Button("Clear filter", id="guard-filter-clear")
@@ -547,8 +548,8 @@ class CaretakerConsoleApp(App):
                         placeholder="Target id for function capture, or module name for module capture",
                         id="behavior-subject",
                     )
-                    yield Button("Close function epoch", id="behavior-capture-function", variant="primary")
-                    yield Button("Save module observations", id="behavior-capture-module", variant="primary")
+                    yield Button("Save current function sample", id="behavior-capture-function", variant="primary")
+                    yield Button("Save current module sample", id="behavior-capture-module", variant="primary")
                     yield Button("Refresh", id="behavior-refresh")
                 with Horizontal(id="behavior-filter-row"):
                     yield Input(
@@ -560,28 +561,28 @@ class CaretakerConsoleApp(App):
                     yield Checkbox("Show older generations", id="behavior-show-older")
                 with Grid(id="behavior-split"):
                     with Vertical(classes="behavior-pane"):
-                        yield Static("Behavior snapshots", id="behavior-list-title", classes="behavior-pane-title")
+                        yield Static("Behavior generations", id="behavior-list-title", classes="behavior-pane-title")
                         table = DataTable(id="behavior-table")
                         table.cursor_type = "row"
                         table.add_columns(
                             "#", "Role", "Subject", "Generation", "First seen", "Last seen",
-                            "Coverage", "Recent activity", "Evidence", "Integrity",
+                            "Collected calls", "Recent activity", "Evidence", "Integrity",
                         )
                         yield table
                     with Vertical(classes="behavior-pane"):
-                        yield Static("Selected snapshot / comparison", id="behavior-detail-title", classes="behavior-pane-title")
+                        yield Static("Selected generation / comparison", id="behavior-detail-title", classes="behavior-pane-title")
                         yield RichLog(id="behavior-output", wrap=True, markup=True)
                 yield Static(
                     "Select a generation. Set Reference changes that subject's green reference; Compare epochs compares each row's representative sealed epoch and also reports cumulative generation coverage. Archiving removes every active snapshot in the selected generation and records your reason.",
                     id="behavior-selection-status",
                 )
                 with Horizontal(id="behavior-compare-actions"):
-                    yield Input(placeholder="Ollama model for advisory analysis", id="behavior-model")
+                    yield Input(placeholder="Local AI model name (Ollama)", id="behavior-model")
                     yield Button("Set Reference", id="behavior-set-reference", disabled=True)
-                    yield Button("Compare epochs", id="behavior-compare", disabled=True, variant="primary")
-                    yield Button("Explain comparison", id="behavior-assess-comparison", disabled=True)
+                    yield Button("Compare with reference", id="behavior-compare", disabled=True, variant="primary")
+                    yield Button("Explain with local AI", id="behavior-assess-comparison", disabled=True)
                 with Horizontal(id="behavior-manage-actions"):
-                    yield Button("LLM history", id="behavior-assess-history")
+                    yield Button("AI history analysis", id="behavior-assess-history")
                     yield Input(
                         placeholder="Reason for archiving this generation",
                         id="behavior-archive-reason",
@@ -597,7 +598,7 @@ class CaretakerConsoleApp(App):
                     id="repair-help",
                 )
                 with Horizontal(id="repair-toolbar"):
-                    yield Button("Refresh repair", id="repair-refresh")
+                    yield Button("Refresh", id="repair-refresh")
                     yield Input(placeholder="Filter by target, state, episode, or description", id="repair-filter")
                 with Grid(id="repair-split"):
                     with Vertical(classes="repair-pane"):
@@ -608,7 +609,7 @@ class CaretakerConsoleApp(App):
                         )
                         table = DataTable(id="repair-table")
                         table.cursor_type = "row"
-                        table.add_columns("#", "State", "Time", "Target", "Description", "Episode")
+                        table.add_columns("#", "State", "Time", "Target", "Description", "Repair case")
                         yield table
                     with Vertical(classes="repair-pane"):
                         yield Static(
@@ -624,12 +625,12 @@ class CaretakerConsoleApp(App):
                                 id="repair-reason",
                             )
                             yield Button(
-                                "View source",
+                                "View proposed code",
                                 id="repair-source",
                                 disabled=True,
                             )
-                            yield Button("Approve", id="repair-approve", variant="success", disabled=True)
-                            yield Button("Reject", id="repair-reject", variant="error", disabled=True)
+                            yield Button("Activate replacement", id="repair-approve", variant="success", disabled=True)
+                            yield Button("Reject replacement", id="repair-reject", variant="error", disabled=True)
                         with Horizontal(id="repair-context-actions"):
                             yield Button("Triggering logs", id="repair-open-logs", disabled=True)
                             yield Button("Guard evidence", id="repair-open-guard", disabled=True)
@@ -643,10 +644,10 @@ class CaretakerConsoleApp(App):
                 yield Static("Authority policy state unavailable", id="policy-summary")
                 with Grid(id="policy-split"):
                     with Vertical(classes="policy-pane"):
-                        yield Static("Authority layers and runtime leases", classes="policy-pane-title")
+                        yield Static("Policy sources and temporary changes", classes="policy-pane-title")
                         table = DataTable(id="policy-table")
                         table.cursor_type = "row"
-                        table.add_columns("#", "Kind", "Authority", "Signature", "Guarantee", "Violations")
+                        table.add_columns("#", "Source", "Authority", "Signature", "Assurance status", "Violations")
                         yield table
                     with Vertical(classes="policy-pane"):
                         yield Static("Selected policy authority record", id="policy-detail-title", classes="policy-pane-title")
@@ -664,14 +665,14 @@ class CaretakerConsoleApp(App):
                 with Horizontal(id="policy-lease-row-2"):
                     yield Input(value="3600", placeholder="Seconds", id="policy-duration")
                     yield Input(placeholder="Incident reason / operator justification", id="policy-reason")
-                    yield Checkbox("Explicit override", id="policy-override")
+                    yield Checkbox("Allow constraint override", id="policy-override")
                     yield Button("Apply previewed lease", id="policy-apply", variant="warning", disabled=True)
                     yield Checkbox("Confirm release", id="policy-release-confirm", disabled=True)
-                    yield Button("Release lease", id="policy-release", disabled=True)
+                    yield Button("End temporary change", id="policy-release", disabled=True)
                     yield Button("Refresh", id="policy-refresh")
                 with Horizontal(id="policy-signed-row"):
                     yield Input(
-                        placeholder="Signed lease descriptor below policy/runtime-leases/",
+                        placeholder="Signed policy-change file under policy/runtime-leases/",
                         id="policy-signed-descriptor",
                     )
                     yield Checkbox("I reviewed signed scope", id="policy-signed-confirm", disabled=True)
@@ -682,8 +683,8 @@ class CaretakerConsoleApp(App):
                     yield Input(placeholder="Incident UUID (optional)", id="investigate-incident")
                     yield Input(placeholder="Call UUID (optional)", id="investigate-call")
                     yield Input(value="15", placeholder="Minutes", id="investigate-minutes")
-                    yield Input(placeholder="Ollama model (blank = deterministic)", id="investigate-model")
-                    yield Button("Investigate", id="investigate-run", variant="primary")
+                    yield Input(placeholder="Local AI model (blank = built-in analysis)", id="investigate-model")
+                    yield Button("Build investigation report", id="investigate-run", variant="primary")
                 with Horizontal(classes="toolbar"):
                     yield Input(
                         value="Investigate the current Caretaker incident",
@@ -691,14 +692,14 @@ class CaretakerConsoleApp(App):
                         id="investigate-objective",
                     )
                 yield Static(
-                    "Leave the model blank for deterministic analysis. Entering a model explicitly "
+                    "Leave the model blank for built-in analysis without AI. Entering a model explicitly "
                     "sends the bounded evidence bundle to the configured local Ollama endpoint.",
                     id="investigate-help",
                 )
                 yield Static("Scope: last 15 minutes, all available evidence", id="investigate-scope")
                 with Grid(id="investigate-split"):
                     with Vertical(classes="investigate-pane"):
-                        yield Static("Recent items worth investigating", classes="context-pane-title")
+                        yield Static("Recent warnings and unusual activity", classes="context-pane-title")
                         table = DataTable(id="investigate-table")
                         table.cursor_type = "row"
                         table.add_columns("#", "Time", "Level", "Channel", "Target", "Description")
@@ -729,7 +730,7 @@ class CaretakerConsoleApp(App):
                         table.add_columns("#", "Time", "Level", "Channel", "Target", "Message")
                         yield table
                         with Horizontal(id="logs-actions"):
-                            yield Button("Investigate correlated", id="logs-investigate", disabled=True, variant="primary")
+                            yield Button("Investigate related events", id="logs-investigate", disabled=True, variant="primary")
                             yield Button("Open related tab", id="logs-related", disabled=True)
                     with Vertical(classes="logs-pane"):
                         yield Static(

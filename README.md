@@ -124,7 +124,7 @@ allocated across subjects before older generations, so hot or frequently changed
 functions do not crowd rare functions out of view. Exceptional evidence whose
 exclusive sample range cannot be proven is labeled `partial`.
 Each subject's newest analytical generation is its default green comparison
-reference. Operators select another generation and use **Compare**, or use
+reference. Operators select another generation and use **Compare with reference**, or use
 **Set Reference** to change only that subject's reference.
 
 The persistent **Save Report** button exports the active tab's visible summaries,
