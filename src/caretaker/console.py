@@ -538,7 +538,7 @@ class CaretakerConsoleApp(App):
                         placeholder="Target id for function capture, or module name for module capture",
                         id="behavior-subject",
                     )
-                    yield Button("Save function observations", id="behavior-capture-function", variant="primary")
+                    yield Button("Close function epoch", id="behavior-capture-function", variant="primary")
                     yield Button("Save module observations", id="behavior-capture-module", variant="primary")
                     yield Button("Refresh", id="behavior-refresh")
                 with Horizontal(id="behavior-filter-row"):
@@ -547,7 +547,7 @@ class CaretakerConsoleApp(App):
                         id="behavior-filter",
                     )
                     yield Button("Clear filter", id="behavior-filter-clear")
-                    yield Checkbox("Show zero-call partials", id="behavior-show-zero-partials")
+                    yield Checkbox("Show zero-call evidence", id="behavior-show-zero-calls")
                 with Grid(id="behavior-split"):
                     with Vertical(classes="behavior-pane"):
                         yield Static("Behavior snapshots", id="behavior-list-title", classes="behavior-pane-title")
@@ -1761,12 +1761,12 @@ class CaretakerConsoleApp(App):
     def _apply_behavior_filter(self) -> None:
         expression = self.query_one("#behavior-filter", Input).value.strip().casefold()
         tokens = expression.split()
-        show_zero_partials = self.query_one("#behavior-show-zero-partials", Checkbox).value
-        hidden_zero_partials = 0
+        show_zero_calls = self.query_one("#behavior-show-zero-calls", Checkbox).value
+        hidden_zero_calls = 0
         self._displayed_behavior_records = []
         for record in self._behavior_records:
-            if self._behavior_is_zero_call_partial(record) and not show_zero_partials:
-                hidden_zero_partials += 1
+            if self._behavior_is_zero_call(record) and not show_zero_calls:
+                hidden_zero_calls += 1
                 continue
             evidence, _coverage = self._behavior_evidence(record)
             integrity = "invalid" if record.get("verified") is False else str(
@@ -1836,15 +1836,14 @@ class CaretakerConsoleApp(App):
         self.query_one("#behavior-list-title", Static).update(
             f"Behavior generations: showing {len(self._displayed_behavior_records)}/{len(self._behavior_records)} "
             f"across {subjects} subject{'s' if subjects != 1 else ''}; one latest snapshot per generation; "
-            f"{hidden_zero_partials} zero-call partial{'s' if hidden_zero_partials != 1 else ''} hidden"
+            f"{hidden_zero_calls} zero-call generation{'s' if hidden_zero_calls != 1 else ''} hidden"
         )
 
     @staticmethod
-    def _behavior_is_zero_call_partial(record: dict[str, Any]) -> bool:
+    def _behavior_is_zero_call(record: dict[str, Any]) -> bool:
         profile = record.get("profile") or {}
-        coverage_kind = str(profile.get("coverage_kind") or "snapshot")
         calls = int(profile.get("coverage_call_count", profile.get("call_count")) or 0)
-        return coverage_kind != "generation" and calls == 0
+        return calls == 0
 
     @staticmethod
     def _behavior_display_time(value: Any) -> str:
@@ -2007,6 +2006,9 @@ class CaretakerConsoleApp(App):
             f"[b]Saved windows[/b] {(summary or {}).get('snapshot_count', 1)}  "
             f"[b]Call activity[/b] {self._behavior_activity_histogram(summary or {}) or '-'} "
             f"(oldest → newest; {(summary or {}).get('activity_kind', 'single snapshot')})\n"
+            f"[b]Epoch[/b] {snapshot.get('epoch_sequence') or '-'}  id={snapshot.get('epoch_id') or '-'}  "
+            f"samples={snapshot.get('first_sample_sequence') or '-'}..{snapshot.get('last_sample_sequence') or '-'}  "
+            f"complete={'yes' if snapshot.get('complete_epoch') else 'no'}\n"
             f"[b]Scope[/b] {snapshot.get('scope', '-')}\n"
             f"[b]Subject[/b] {subject.get('module_name', '-')}{':' + str(subject.get('qualified_name')) if subject.get('qualified_name') else ''}\n"
             f"[b]Code hash[/b] {snapshot.get('code_hash_kind', '-')}: {snapshot.get('code_hash', '-')}\n"
@@ -2297,7 +2299,7 @@ class CaretakerConsoleApp(App):
             self.query_one("#repair-reject", Button).disabled = disabled
         elif event.checkbox.id == "behavior-manage-confirm":
             self._refresh_behavior_actions()
-        elif event.checkbox.id == "behavior-show-zero-partials":
+        elif event.checkbox.id == "behavior-show-zero-calls":
             self._apply_behavior_filter()
         elif event.checkbox.id == "policy-confirm":
             self.query_one("#policy-apply", Button).disabled = not (

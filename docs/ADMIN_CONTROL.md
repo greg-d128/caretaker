@@ -143,18 +143,27 @@ buckets and actual observation-window boundaries; older snapshots made before th
 metadata existed show a labeled histogram of up to twelve saved windows and fall
 back to saved time for first/last seen.
 
-Coverage labels use `gen current/target` when Caretaker can safely accumulate
-disjoint captures across the generation. They use `partial current/target` when
-the value describes only the selected non-cumulative capture, such as a manual or
-potentially overlapping snapshot. `partial` does not mean the artifact is damaged.
+For a registered function, one authoritative accumulator owns each generation.
+Automatic materialization and **Close function epoch** atomically close that
+accumulator and install an empty successor under the same lock. Completed calls
+receive monotonically increasing generation-scoped sample numbers, and every
+closed epoch records its ID, ordinal, and inclusive sample range. Consumers such
+as Behavior, Guard, baselines, and investigations can reuse the immutable epoch;
+they do not need overlapping captures of the same calls.
+
+Coverage labels use `gen current/target` only when the closed epoch ranges are
+contiguous, non-overlapping, and consistent with their call counts. They use
+`partial current/target` for legacy, module, external, active-view, or malformed
+captures whose exclusive ownership cannot be proven. `partial` does not mean the
+artifact is damaged, but ordinary function capture should now produce `gen`.
 In either case, the target measures evidence volume rather than correctness or
 workload representativeness.
 
-Zero-call `partial` generations are retained because they may contain event-only
+Zero-call generations are retained because they may contain event-only
 forensic evidence such as imports, filesystem access, network activity,
 subprocesses, or dynamic code. They cannot support call-duration, outcome-rate,
 or call-frequency analysis, so the Behavior list hides them by default. Select
-**Show zero-call partials** when investigating event-only evidence; the list title
+**Show zero-call evidence** when investigating event-only evidence; the list title
 reports how many such generations are hidden.
 
 The **Behavior** view treats a selected latest snapshot as comparison operand B.

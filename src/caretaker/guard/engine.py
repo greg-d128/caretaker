@@ -796,7 +796,7 @@ class GuardEngine(GuardFacade):
 
     def behavior_capture(self, target_id: str, *, calls: int = 50) -> dict[str, object]:
         if self.behavior_statistics is not None:
-            capture = self.behavior_statistics.current_capture(target_id)
+            capture = self.behavior_statistics.cut_capture(target_id)
             if capture is not None:
                 return capture
         summary = self.current_behavior_summary(target_id, calls=calls)

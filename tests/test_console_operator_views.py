@@ -143,21 +143,21 @@ def test_behavior_activity_histogram_is_bounded_and_relative():
     assert CaretakerConsoleApp._behavior_activity_histogram({}) == "-"
 
 
-def test_behavior_zero_call_partial_is_forensic_not_analytical():
-    assert CaretakerConsoleApp._behavior_is_zero_call_partial({
+def test_behavior_zero_call_evidence_is_forensic_not_analytical():
+    assert CaretakerConsoleApp._behavior_is_zero_call({
         "profile": {
             "call_count": 0,
             "event_count": 12,
             "coverage_kind": "snapshot",
         }
     }) is True
-    assert CaretakerConsoleApp._behavior_is_zero_call_partial({
+    assert CaretakerConsoleApp._behavior_is_zero_call({
         "profile": {
             "coverage_call_count": 0,
             "coverage_kind": "generation",
         }
-    }) is False
-    assert CaretakerConsoleApp._behavior_is_zero_call_partial({
+    }) is True
+    assert CaretakerConsoleApp._behavior_is_zero_call({
         "profile": {
             "call_count": 1,
             "coverage_kind": "snapshot",
@@ -165,7 +165,7 @@ def test_behavior_zero_call_partial_is_forensic_not_analytical():
     }) is False
 
 
-def test_behavior_list_hides_zero_call_partials_until_requested(tmp_path):
+def test_behavior_list_hides_zero_call_evidence_until_requested(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 
     async def exercise() -> None:
@@ -185,9 +185,9 @@ def test_behavior_list_hides_zero_call_partials_until_requested(tmp_path):
             app._apply_behavior_filter()
             assert [item["snapshot_id"] for item in app._displayed_behavior_records] == ["analyzable"]
             title = str(app.query_one("#behavior-list-title", Static).render())
-            assert "1 zero-call partial hidden" in title
+            assert "1 zero-call generation hidden" in title
 
-            app.query_one("#behavior-show-zero-partials", Checkbox).value = True
+            app.query_one("#behavior-show-zero-calls", Checkbox).value = True
             await pilot.pause()
             assert {item["snapshot_id"] for item in app._displayed_behavior_records} == {
                 "event-only", "analyzable",

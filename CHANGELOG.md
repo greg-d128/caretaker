@@ -55,7 +55,7 @@
   seen, cumulative evidence coverage, and bounded hourly call-activity bars.
 - Label non-cumulative Behavior coverage as `partial` rather than the ambiguous
   `window`, while retaining `gen` for safely cumulative generation coverage.
-- Keep zero-call partial generations as event-only forensic evidence but hide
+- Keep zero-call generations as event-only forensic evidence but hide
   them from the default analytical list behind an explicit visibility control.
 - Open on a unified Attention queue, retain shared target/incident/call context
   across all eight tabs, and report evidence freshness, source, and bounded scope.
@@ -85,6 +85,9 @@
 
 ### Adaptive behavior and persistent baselines
 
+- Make registered-function capture a singular sequence of atomic, non-overlapping
+  epochs. Manual capture closes the active epoch, installs a successor, and records
+  generation-scoped sample ranges that are validated before cumulative coverage.
 - Add lightweight adaptive instrumentation with policy-controlled promotion through pre-repair BEHAVIOR evidence collection and policy-controlled demotion after accepted repair lifecycle stages.
 - Separate repair lifecycle from observation intensity and use `LIGHTWEIGHT -> BEHAVIOR -> REPAIR -> BEHAVIOR -> VALIDATION -> LONG_TERM_ACCEPTANCE` as the operator lifecycle.
 - Add generation-scoped call-count behavior sampling, bounded online duration statistics, reservoir-backed p10/p50/p90/p95/p99 estimates, sampling-stage provenance, and automatic snapshot materialization.

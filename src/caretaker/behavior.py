@@ -109,6 +109,11 @@ def snapshot_payload(
         "created_at": utcnow().isoformat(),
         "observation_started_at": capture.get("observation_started_at"),
         "observation_ended_at": capture.get("observation_ended_at"),
+        "epoch_id": capture.get("epoch_id"),
+        "epoch_sequence": capture.get("epoch_sequence"),
+        "first_sample_sequence": capture.get("first_sample_sequence"),
+        "last_sample_sequence": capture.get("last_sample_sequence"),
+        "complete_epoch": bool(capture.get("complete_epoch", False)),
         "scope": scope,
         "subject": subject,
         "subject_key": subject_key,
@@ -437,26 +442,47 @@ class BehaviorSnapshotStore:
         cumulative_reasons = {
             "sample-target-reached",
             "maximum-snapshot-age-reached",
-            "guard-baseline-accepted",
+            "operator-epoch-cut",
+            "code-or-monitoring-configuration-changed",
+            "shutdown",
         }
+
+        def is_complete_epoch(row: Mapping[str, Any]) -> bool:
+            return bool(row.get("complete_epoch")) or row.get("seal_reason") in cumulative_reasons
+
         generation_totals: dict[tuple[str, str], tuple[int, int]] = {}
+        generation_last_sequence: dict[tuple[str, str], int] = {}
         snapshot_progress: dict[str, tuple[int, int]] = {}
         ordered_rows = sorted(
             all_rows,
             key=lambda item: (
                 str(item.get("subject_key") or ""),
                 str(item.get("generation_id") or ""),
-                int(item.get("snapshot_sequence") or 0),
+                int(item.get("epoch_sequence") or item.get("snapshot_sequence") or 0),
                 str(item.get("created_at") or ""),
             ),
         )
         for row in ordered_rows:
-            if row.get("seal_reason") not in cumulative_reasons:
+            if not is_complete_epoch(row):
                 continue
             key = (str(row.get("subject_key") or ""), str(row.get("generation_id") or ""))
-            calls, snapshots = generation_totals.get(key, (0, 0))
             profile = row.get("profile") or {}
-            progress = (calls + int(profile.get("call_count") or 0), snapshots + 1)
+            window_calls = int(profile.get("call_count") or 0)
+            first_sequence = row.get("first_sample_sequence")
+            last_sequence = row.get("last_sample_sequence")
+            if first_sequence is not None:
+                first_sequence = int(first_sequence)
+                previous_last = generation_last_sequence.get(key)
+                if previous_last is not None and first_sequence != previous_last + 1:
+                    continue
+                if window_calls:
+                    if last_sequence is None or int(last_sequence) - first_sequence + 1 != window_calls:
+                        continue
+                    generation_last_sequence[key] = int(last_sequence)
+                else:
+                    generation_last_sequence.setdefault(key, first_sequence - 1)
+            calls, snapshots = generation_totals.get(key, (0, 0))
+            progress = (calls + window_calls, snapshots + 1)
             generation_totals[key] = progress
             snapshot_progress[str(row.get("snapshot_id") or "")] = progress
         summaries = []
@@ -464,7 +490,7 @@ class BehaviorSnapshotStore:
             profile = dict(row.get("profile") or {})
             key = (str(row.get("subject_key") or ""), str(row.get("generation_id") or ""))
             window_calls = int(profile.get("call_count") or 0)
-            cumulative = row.get("seal_reason") in cumulative_reasons
+            cumulative = str(row.get("snapshot_id") or "") in snapshot_progress
             generation_calls, generation_snapshots = snapshot_progress.get(
                 str(row.get("snapshot_id") or ""),
                 (window_calls, 1),
@@ -476,6 +502,11 @@ class BehaviorSnapshotStore:
                     "created_at",
                     "observation_started_at",
                     "observation_ended_at",
+                    "epoch_id",
+                    "epoch_sequence",
+                    "first_sample_sequence",
+                    "last_sample_sequence",
+                    "complete_epoch",
                     "scope",
                     "subject_key",
                     "subject",
@@ -1146,6 +1177,8 @@ class BehaviorStatisticsRepository:
         code_hash_kind: str,
         monitoring_configuration: Mapping[str, Any],
         monitoring_fingerprint: str,
+        epoch_sequence: int = 1,
+        first_sample_sequence: int = 1,
     ) -> dict[str, Any]:
         subject_key = f"function:{target_id}"
         generation = behavior_generation_id(
@@ -1169,6 +1202,11 @@ class BehaviorStatisticsRepository:
             "workload_label": self.workload_label,
             "created_at": now,
             "last_updated_at": now,
+            "epoch_id": str(uuid4()),
+            "epoch_sequence": max(1, int(epoch_sequence)),
+            "first_sample_sequence": max(1, int(first_sample_sequence)),
+            "last_sample_sequence": None,
+            "next_sample_sequence": max(1, int(first_sample_sequence)),
             "sample_count": 0,
             "event_count": 0,
             "success_count": 0,
@@ -1297,6 +1335,11 @@ class BehaviorStatisticsRepository:
             "generation_id": state.get("generation_id"),
             "observation_started_at": state.get("created_at"),
             "observation_ended_at": state.get("last_updated_at"),
+            "epoch_id": state.get("epoch_id"),
+            "epoch_sequence": state.get("epoch_sequence"),
+            "first_sample_sequence": state.get("first_sample_sequence"),
+            "last_sample_sequence": state.get("last_sample_sequence"),
+            "complete_epoch": reason != "active",
             "seal_reason": reason,
             "environment_fingerprint": state.get("environment_fingerprint"),
             "workload_label": state.get("workload_label"),
@@ -1388,6 +1431,9 @@ class BehaviorStatisticsRepository:
 
             completed_call = kind_name == "FUNCTION_CALL" and str(getattr(event, "operation", "")) == "function.call.completed"
             if completed_call:
+                sample_sequence = int(state.get("next_sample_sequence") or 1)
+                state["last_sample_sequence"] = sample_sequence
+                state["next_sample_sequence"] = sample_sequence + 1
                 state["sample_count"] = int(state.get("sample_count") or 0) + 1
                 hour = utcnow().replace(minute=0, second=0, microsecond=0).isoformat()
                 frequency = state.setdefault("call_frequency_buckets", {})
@@ -1427,8 +1473,11 @@ class BehaviorStatisticsRepository:
                         code_hash_kind=code_hash_kind,
                         monitoring_configuration=configuration,
                         monitoring_fingerprint=monitoring_fp,
+                        epoch_sequence=int(state.get("epoch_sequence") or 1) + 1,
+                        first_sample_sequence=int(state.get("next_sample_sequence") or 1),
                     )
                     self._active[target_id] = state
+                    self._checkpoint(state)
                 elif samples % self.checkpoint_every_samples == 0:
                     self._checkpoint(state)
 
@@ -1438,6 +1487,27 @@ class BehaviorStatisticsRepository:
             if state is None:
                 return None
             return self._capture(state, reason="active")
+
+    def cut_capture(self, target_id: str, *, reason: str = "operator-epoch-cut") -> dict[str, Any] | None:
+        """Atomically close one target epoch and begin a disjoint successor."""
+        with self._lock:
+            state = self._load_active(target_id)
+            if state is None:
+                return None
+            capture = self._capture(state, reason=reason)
+            successor = self._new_state(
+                target_id=str(state["target_id"]),
+                subject=dict(state["subject"]),
+                code_hash=state.get("code_hash"),
+                code_hash_kind=str(state.get("code_hash_kind") or "unknown"),
+                monitoring_configuration=dict(state.get("monitoring_configuration") or {}),
+                monitoring_fingerprint=str(state.get("monitoring_fingerprint") or ""),
+                epoch_sequence=int(state.get("epoch_sequence") or 1) + 1,
+                first_sample_sequence=int(state.get("next_sample_sequence") or 1),
+            )
+            self._active[target_id] = successor
+            self._checkpoint(successor)
+            return capture
 
     def queue_guard_baseline(
         self,
@@ -1497,8 +1567,19 @@ class BehaviorStatisticsRepository:
             if state is None:
                 return None
             path = self._queue(state, reason=reason)
-            self._active_path(target_id).unlink(missing_ok=True)
-            self._active.pop(target_id, None)
+            if path is not None:
+                successor = self._new_state(
+                    target_id=str(state["target_id"]),
+                    subject=dict(state["subject"]),
+                    code_hash=state.get("code_hash"),
+                    code_hash_kind=str(state.get("code_hash_kind") or "unknown"),
+                    monitoring_configuration=dict(state.get("monitoring_configuration") or {}),
+                    monitoring_fingerprint=str(state.get("monitoring_fingerprint") or ""),
+                    epoch_sequence=int(state.get("epoch_sequence") or 1) + 1,
+                    first_sample_sequence=int(state.get("next_sample_sequence") or 1),
+                )
+                self._active[target_id] = successor
+                self._checkpoint(successor)
             return path
 
     def checkpoint_all(self) -> None:

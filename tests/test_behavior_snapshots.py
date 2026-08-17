@@ -155,6 +155,35 @@ def test_snapshot_summaries_aggregate_bounded_hourly_call_activity(tmp_path: Pat
     ]
 
 
+def test_overlapping_epoch_ranges_are_not_reported_as_generation_coverage(tmp_path: Path):
+    store = BehaviorSnapshotStore(tmp_path)
+    first = _capture(code_hash="a" * 64, events=2)
+    first["profile"]["call_count"] = 2
+    first.update({
+        "complete_epoch": True,
+        "epoch_sequence": 1,
+        "first_sample_sequence": 1,
+        "last_sample_sequence": 2,
+        "seal_reason": "operator-epoch-cut",
+    })
+    overlap = _capture(code_hash="a" * 64, events=2)
+    overlap["profile"]["call_count"] = 2
+    overlap.update({
+        "complete_epoch": True,
+        "epoch_sequence": 2,
+        "first_sample_sequence": 2,
+        "last_sample_sequence": 3,
+        "seal_reason": "operator-epoch-cut",
+    })
+    store.create(first)
+    store.create(overlap)
+
+    summary = store.list_summaries()[0]
+
+    assert summary["profile"]["coverage_kind"] == "snapshot"
+    assert summary["profile"]["coverage_call_count"] == 2
+
+
 def test_archive_contains_manifest_and_removes_snapshot(tmp_path: Path):
     store = BehaviorSnapshotStore(tmp_path)
     envelope = store.create(_capture(code_hash="a" * 64, events=10))

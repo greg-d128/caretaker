@@ -92,6 +92,63 @@ def test_online_behavior_statistics_are_bounded_and_include_quantiles(tmp_path: 
     assert provenance["strata"]["LIGHTWEIGHT"]["sample_count"] == 100
 
 
+def test_manual_capture_atomically_cuts_disjoint_generation_epochs(tmp_path: Path) -> None:
+    repository = BehaviorStatisticsRepository(
+        tmp_path,
+        materialize_after_samples=10_000,
+        automatic_materialization=False,
+        checkpoint_every_samples=1,
+    )
+    target_id = "epoch.target"
+    configuration = {"sampling": {"every": 1}}
+    for duration in (0.1, 0.2):
+        repository.observe_event(
+            _completed(target_id, duration), monitoring_configuration=configuration
+        )
+
+    first = repository.cut_capture(target_id)
+    assert first is not None
+    assert first["complete_epoch"] is True
+    assert first["epoch_sequence"] == 1
+    assert (first["first_sample_sequence"], first["last_sample_sequence"]) == (1, 2)
+
+    repository.observe_event(
+        _completed(target_id, 0.3), monitoring_configuration=configuration
+    )
+    second = repository.cut_capture(target_id)
+    assert second is not None
+    assert second["epoch_sequence"] == 2
+    assert (second["first_sample_sequence"], second["last_sample_sequence"]) == (3, 3)
+    active = repository.current_capture(target_id)
+    assert active is not None
+    assert active["epoch_sequence"] == 3
+    assert active["first_sample_sequence"] == 4
+    assert active["profile"]["call_count"] == 0
+
+    restarted = BehaviorStatisticsRepository(
+        tmp_path,
+        materialize_after_samples=10_000,
+        automatic_materialization=False,
+        checkpoint_every_samples=1,
+    )
+    restarted.observe_event(
+        _completed(target_id, 0.4), monitoring_configuration=configuration
+    )
+    third = restarted.cut_capture(target_id)
+    assert third is not None
+    assert third["epoch_sequence"] == 3
+    assert (third["first_sample_sequence"], third["last_sample_sequence"]) == (4, 4)
+
+    store = BehaviorSnapshotStore(tmp_path)
+    store.create(first)
+    store.create(second)
+    store.create(third)
+    summary = store.list_summaries()[0]
+    assert summary["profile"]["coverage_kind"] == "generation"
+    assert summary["profile"]["coverage_call_count"] == 4
+    assert summary["profile"]["coverage_snapshot_count"] == 3
+
+
 def test_monitoring_configuration_change_seals_old_generation_but_stage_change_does_not(tmp_path: Path) -> None:
     repository = BehaviorStatisticsRepository(
         tmp_path,

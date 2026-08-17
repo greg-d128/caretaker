@@ -1,5 +1,27 @@
 # Observation, rollback, and regression
 
+## Behavior capture epochs
+
+Each registered function generation has one authoritative statistical
+accumulator. A completed call is assigned exactly one monotonically increasing
+sample sequence number. Automatic materialization or an operator-requested
+function capture atomically closes the current epoch and starts a successor;
+snapshot signing and storage may then proceed outside the observation lock.
+
+A closed epoch records its generation fingerprint, epoch ID and ordinal,
+first/last sample sequence, observation times, distributions, rates, resource
+evidence, and monitoring strata. Generation coverage is accumulated only when
+the stored epoch ranges are contiguous, non-overlapping, and agree with their
+reported call counts. Otherwise the snapshot remains available as `partial`
+evidence. Module summaries, active views, legacy artifacts, and externally
+supplied captures are not assumed to have exclusive epoch ownership.
+
+The same immutable epoch may be referenced by Behavior comparisons, Guard
+baselines, investigations, and other consumers. Reuse does not duplicate its
+calls in generation coverage. Global system counters remain contextual signals;
+function-attributed duration, outcome, and resource deltas are the less noisy
+inputs for per-function outlier analysis.
+
 ## Candidate observation
 
 After activation, a candidate starts in `ACTIVE_PROBATION`. Successful executions can advance it to `INITIALLY_VALIDATED` and then `LONG_TERM_ACCEPTED`.
