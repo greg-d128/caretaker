@@ -50,7 +50,7 @@
 
 ### Operator console usability
 
-- Collapse the Behavior list to one latest snapshot per subject/generation before
+- Collapse the Behavior list to one preferred analytical snapshot per subject/generation before
   applying its row limit; sort by subject/newest generation and expose first/last
   seen, cumulative evidence coverage, and bounded hourly call-activity bars.
 - Label non-cumulative Behavior coverage as `partial` rather than the ambiguous

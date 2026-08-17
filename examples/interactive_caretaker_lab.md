@@ -145,6 +145,11 @@ These demonstrate the difference between bad input and a bad implementation.
 The Guard tab is the live event view. The Behavior tab contains persisted
 statistical snapshots; this lab uses a one-completed-call snapshot threshold so
 each probe can be compared without running a production-sized sample window.
+The list shows the newest three generations for each function by default. Use
+**Show older generations** for additional returned history. **Close function
+epoch** atomically materializes the current function statistics and starts a
+non-overlapping successor; ordinary coverage is shown as `current/target`, while
+`partial` is reserved for evidence without provable exclusive sample ranges.
 
 The contained malicious variants intentionally add unrelated filesystem,
 subprocess, and loopback-network activity so Guard has obvious new behavior to
@@ -232,7 +237,8 @@ The most useful observations are:
 - **Guard**: operational state, last evidence, violations, escalations, baseline
   evidence, and related Behavior/Logs/Investigation links;
 - **Behavior**: snapshot coverage and integrity, A/B generation comparisons,
-  active unsaved observations, resource changes, and snapshot provenance;
+  the newest three generations per function, hourly call activity, active unsaved
+  observations, resource changes, epoch ranges, and snapshot provenance;
 - **Repair**: waiting decisions first, candidate/evidence summary, source, and
   correlated evidence;
 - **Policy**: authority assurance, violations, previewed temporary leases,

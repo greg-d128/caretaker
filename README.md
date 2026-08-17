@@ -54,7 +54,16 @@ LIGHTWEIGHT → BEHAVIOR → REPAIR → BEHAVIOR → VALIDATION → LONG_TERM_AC
 
 The lifecycle stage and observation intensity are separate. Repair cannot skip the pre-repair BEHAVIOR evidence gate, and an accepted repaired function may later return to LIGHTWEIGHT observation without losing its accepted lifecycle state.
 
-Behavior samples update a bounded statistical accumulator. Code changes or changes to monitoring semantics seal the active generation and start another. Sealed snapshots contain online statistics and bounded distribution samples, including p10/p50/p90/p95/p99 duration summaries, sampling-stage provenance, resource observations, code identity, and monitoring fingerprints. Accepted Guard baselines reference immutable sealed snapshots and can be reconstructed after restart without replaying all raw events.
+Behavior samples update one bounded epoch accumulator per function generation.
+Automatic materialization and operator capture atomically close that epoch and
+start a disjoint successor; generation-scoped sample ranges prevent calls from
+being counted twice. Code or monitoring-semantic changes seal the active epoch
+and start another generation. Sealed snapshots contain online statistics and
+bounded distribution samples, including p10/p50/p90/p95/p99 duration summaries,
+hourly call activity, sampling-stage provenance, resource observations, code
+identity, monitoring fingerprints, and epoch boundaries. Accepted Guard baselines
+reference immutable sealed snapshots and can be reconstructed after restart
+without replaying all raw events.
 
 When secure runtime signing is configured, snapshots and behavior archives use the same runtime artifact signer as secure event manifests. External-signed mode never silently falls back to ephemeral signing. Ephemeral public identities and signed key transitions are retained in a separate Signing Identity Journal with independent retention.
 
@@ -105,9 +114,12 @@ and runtime-lease release require an explicit review acknowledgement. Repair
 rejection and policy application also require an operator reason. Behavior and
 LLM comparisons are advisory evidence rather than correctness guarantees; the UI
 shows collection coverage, generation, integrity, evidence scope, and omissions.
-The Behavior list retains one latest row per subject and generation, sorted by
-subject and newest generation, with first/last-seen times and bounded hourly
-call-activity bars so hot functions do not crowd rare generations out of view.
+The Behavior list prefers cumulative epoch evidence and displays the newest three
+generations per subject by default, sorted by subject and newest generation, with
+first/last-seen times and bounded hourly call-activity bars. Summary capacity is
+allocated across subjects before older generations, so hot or frequently changed
+functions do not crowd rare functions out of view. Exceptional evidence whose
+exclusive sample range cannot be proven is labeled `partial`.
 
 The console uses the same authenticated local Unix control plane as the
 supervisor. It does not expose arbitrary shell commands or Python execution.

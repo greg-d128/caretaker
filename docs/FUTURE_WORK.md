@@ -124,11 +124,15 @@ An accepted Guard baseline survives process restart without replaying the entire
 Use four related but distinct concepts:
 
 1. **Behavior generation key**: defines which observations are statistically compatible.
-2. **Active behavior snapshot**: updateable statistical accumulator for one behavior generation.
-3. **Sealed behavior snapshot**: immutable, hashed, and signed materialization of an active snapshot.
+2. **Active behavior epoch**: the singular updateable statistical accumulator for one function generation.
+3. **Sealed epoch snapshot**: immutable, hashed, and signed materialization of one exclusive sample range.
 4. **Accepted Guard baseline**: immutable acceptance record that references a sealed snapshot.
 
-An accepted baseline must never be updated in place by later observations. New observations update the current active snapshot. This preserves the existing Guard property that observed behavior does not automatically become trusted behavior.
+An accepted baseline must never be updated in place by later observations. New
+observations update the current active epoch. Closing it atomically installs a
+disjoint successor, allowing several consumers to reference the same sealed range
+without double-counting calls. This preserves the existing Guard property that
+observed behavior does not automatically become trusted behavior.
 
 ### Behavior generation key
 
@@ -157,9 +161,9 @@ When Guard registers a target after startup:
 4. Load the referenced sealed behavior snapshot.
 5. Verify its content hash and required signature/identity chain before using it as a baseline.
 6. Hydrate `BaselineManager` directly from the verified baseline instead of relearning it from raw events.
-7. Query for the latest active-snapshot checkpoint for the same generation key.
+7. Query for the latest active-epoch checkpoint for the same generation key.
 8. If the checkpoint is compatible, restore its statistical accumulators and continue updating them.
-9. If the checkpoint belongs to an older generation, retain/seal it as the previous generation and create a new active accumulator.
+9. If the checkpoint belongs to an older generation, retain/seal it as the previous generation and create a new active epoch.
 10. If no compatible accepted baseline exists, begin candidate baseline learning for the current generation.
 
 If baseline verification fails, policy decides whether Guard continues without an accepted baseline, enters a degraded state, requires operator action, or prevents an operation that explicitly requires an accepted baseline.
@@ -187,15 +191,17 @@ Configured monitoring semantics include the set/depth of collectors and the samp
 
 When the generation changes:
 
-1. stop updating the current active snapshot;
-2. materialize any final checkpoint;
-3. seal and sign the old snapshot if it has useful observations;
+1. atomically close the current active epoch;
+2. record its epoch ID, ordinal, sample-sequence range, and observation boundaries;
+3. materialize, seal, and sign the epoch if it has useful observations;
 4. retain it in snapshot storage;
-5. start a fresh active snapshot for the new generation.
+5. start a fresh active epoch for the new generation.
 
 A runtime transition from LIGHTWEIGHT to BEHAVIOR under the same configured adaptive policy does not itself invalidate the generation. Instead, samples are stratified by instrumentation level and sampling regime. This avoids continuously rotating snapshots merely because adaptive observation became more intense while still preventing sparse and dense samples from being silently treated as identical populations.
 
-If the configured LIGHTWEIGHT/BEHAVIOR sampling rates, collector capabilities, or normalization rules change, the monitoring fingerprint changes and the active snapshot rotates.
+If the configured LIGHTWEIGHT/BEHAVIOR sampling rates, collector capabilities,
+or normalization rules change, the monitoring fingerprint changes and the active
+epoch closes before the new generation begins.
 
 ### Statistical model
 
@@ -251,7 +257,7 @@ Security-sensitive novelty detection must not mistake truncation for proof that 
 
 ### Sampling provenance
 
-Every active/sealed snapshot should record:
+Every active/sealed epoch should record:
 
 - total executions represented;
 - sampled executions;
@@ -264,19 +270,24 @@ Every active/sealed snapshot should record:
 - collector/monitoring fingerprint;
 - code identity;
 - policy fingerprint;
-- authority fingerprint.
+- authority fingerprint;
+- epoch ID and ordinal;
+- first/last generation-scoped sample sequence;
+- whether the epoch was closed atomically.
 
 Comparisons should use normalized rates and distributions rather than raw totals when sampling densities differ.
 
 ### Automatic materialization
 
-Sampling and snapshot materialization are separate operations. A sampled execution updates the active accumulator; it does not create and sign a complete snapshot.
+Sampling and snapshot materialization are separate operations. A sampled execution
+updates the active epoch; it does not create and sign a complete snapshot. Manual
+function capture closes the epoch rather than copying an overlapping view.
 
 Policy should allow sealing/materialization on:
 
 - behavior-generation invalidation;
 - a configured number of accumulated samples;
-- maximum active-snapshot age;
+- maximum active-epoch age;
 - explicit operator request;
 - pre-repair evidence completion;
 - repair activation;
@@ -284,7 +295,9 @@ Policy should allow sealing/materialization on:
 - long-term repair acceptance;
 - controlled shutdown.
 
-A periodic checkpoint of the active accumulator may be unsigned or locally integrity-protected according to policy, but an accepted Guard baseline must reference a sealed snapshot that satisfies the required signing policy.
+A periodic checkpoint of the active epoch may be unsigned or locally
+integrity-protected according to policy, but an accepted Guard baseline must
+reference a sealed snapshot that satisfies the required signing policy.
 
 ## Supervisor-owned multiprocess adaptive aggregation
 

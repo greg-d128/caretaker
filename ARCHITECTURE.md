@@ -68,21 +68,36 @@ failure rate; lifecycle-specific actions remain separate.
 
 ## Behavior generations and restart reconstruction
 
-Guard keeps an updateable statistical accumulator separate from immutable trust decisions. A behavior generation is keyed by target identity, code hash, monitoring-configuration fingerprint, and statistics schema version. Runtime transitions between LIGHTWEIGHT and BEHAVIOR are recorded as sampling strata inside the generation; changing the configured monitoring semantics seals the old generation.
+Guard keeps one updateable epoch accumulator per function generation, separate
+from immutable trust decisions. A behavior generation is keyed by target identity,
+code hash, monitoring-configuration fingerprint, and statistics schema version.
+Runtime transitions between LIGHTWEIGHT and BEHAVIOR are recorded as sampling
+strata inside the generation; changing configured monitoring semantics seals the
+active epoch and starts a new generation.
 
 ```text
-behavior samples
+behavior samples + monotonic sequence
       ↓
-active statistical snapshot          mutable/checkpointed
-      ↓ seal/materialize
-sealed behavior snapshot             immutable + hash + runtime signature
+active epoch accumulator             singular + mutable/checkpointed
+      ↓ atomic close/start successor
+sealed epoch snapshot                immutable sample range + hash + runtime signature
       ↓ accept
 accepted Guard baseline              immutable reference
 ```
 
+Every completed call belongs to one epoch. Closed epochs record an ID, ordinal,
+inclusive sample range, and observation boundaries. Generation coverage is
+cumulative only when stored ranges are contiguous, non-overlapping, and consistent
+with their reported call counts. Multiple consumers reference the same immutable
+epoch rather than independently capturing overlapping copies.
+
 Numeric distributions maintain exact online count/min/max/mean/variance plus a bounded reservoir used to derive p10/p50/p90/p95/p99. Categorical resources retain bounded frequency information and explicitly report incomplete coverage when truncated.
 
-On restart, Guard computes the current code and monitoring fingerprints, loads the exact accepted-baseline reference, verifies the sealed snapshot and signing identity chain, and hydrates `BaselineManager` directly. It never promotes a merely observed active accumulator into an accepted baseline because the process restarted.
+On restart, Guard computes the current code and monitoring fingerprints, loads
+the exact accepted-baseline reference, verifies the sealed snapshot and signing
+identity chain, and hydrates `BaselineManager` directly. It restores the compatible
+active-epoch checkpoint and its next sample sequence, but never promotes a merely
+observed epoch into an accepted baseline because the process restarted.
 
 ## Runtime artifact signing
 
