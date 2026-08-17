@@ -151,11 +151,12 @@ closed epoch records its ID, ordinal, and inclusive sample range. Consumers such
 as Behavior, Guard, baselines, and investigations can reuse the immutable epoch;
 they do not need overlapping captures of the same calls.
 
-Coverage labels use `gen current/target` only when the closed epoch ranges are
-contiguous, non-overlapping, and consistent with their call counts. They use
-`partial current/target` for legacy, module, external, active-view, or malformed
-captures whose exclusive ownership cannot be proven. `partial` does not mean the
-artifact is damaged, but ordinary function capture should now produce `gen`.
+Ordinary coverage is displayed as `current/target` when the closed epoch ranges
+are contiguous, non-overlapping, and consistent with their call counts. The
+exceptional label `partial current/target` is retained for legacy, module,
+external, active-view, or malformed captures whose exclusive ownership cannot be
+proven. `partial` does not mean the artifact is damaged; ordinary registered-
+function capture should display only the count.
 In either case, the target measures evidence volume rather than correctness or
 workload representativeness.
 

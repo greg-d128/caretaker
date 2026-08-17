@@ -54,7 +54,7 @@
   applying its row limit; sort by subject/newest generation and expose first/last
   seen, cumulative evidence coverage, and bounded hourly call-activity bars.
 - Label non-cumulative Behavior coverage as `partial` rather than the ambiguous
-  `window`, while retaining `gen` for safely cumulative generation coverage.
+  `window`; show ordinary verified generation coverage as the uncluttered count.
 - Keep zero-call generations as event-only forensic evidence but hide
   them from the default analytical list behind an explicit visibility control.
 - Open on a unified Attention queue, retain shared target/incident/call context

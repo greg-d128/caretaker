@@ -128,7 +128,7 @@ def test_behavior_evidence_distinguishes_preliminary_from_collection_target():
             "coverage_kind": "generation",
             "sampling_provenance": {"statistics_target": 1000},
         }
-    }) == ("PRELIMINARY", "gen 12/1000")
+    }) == ("PRELIMINARY", "12/1000")
 
 
 def test_behavior_activity_histogram_is_bounded_and_relative():

@@ -527,8 +527,8 @@ class CaretakerConsoleApp(App):
                     "One row is the latest snapshot for each subject/generation, sorted by subject then newest generation. "
                     "Generation is a fingerprint of code and monitoring semantics—not a signature. "
                     "First/last seen and recent hourly call activity keep rare generations visible. "
-                    "Snapshots are evidence, not accuracy guarantees. Coverage uses gen for safely cumulative "
-                    "generation evidence and partial for one non-cumulative capture; "
+                    "Snapshots are evidence, not accuracy guarantees. Ordinary coverage is cumulative across "
+                    "verified disjoint epochs; partial marks one non-cumulative capture. "
                     "a code or monitoring change starts a new generation but earlier generations remain comparable. "
                     "An active-window comparison reads unsaved observations; it never executes the function.",
                     id="behavior-help",
@@ -1952,7 +1952,7 @@ class CaretakerConsoleApp(App):
         coverage_kind = str(profile.get("coverage_kind") or "snapshot")
         provenance = profile.get("sampling_provenance") or {}
         target = int(provenance.get("statistics_target") or 0)
-        prefix = "gen " if coverage_kind == "generation" else "partial "
+        prefix = "" if coverage_kind == "generation" else "partial "
         calls_target = prefix + (f"{calls}/{target}" if target else f"{calls}/?")
         if calls <= 0:
             return "NO DATA", calls_target
