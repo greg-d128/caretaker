@@ -524,7 +524,7 @@ class CaretakerConsoleApp(App):
                     yield Button("Investigate findings", id="guard-open-investigate", disabled=True, variant="primary")
             with TabPane("Behavior", id="behavior"):
                 yield Static(
-                    "One row is the latest snapshot for each subject/generation, sorted by subject then newest generation. "
+                    "One row is the best analytical snapshot for each subject/generation, sorted by subject then newest generation. "
                     "Generation is a fingerprint of code and monitoring semantics—not a signature. "
                     "First/last seen and recent hourly call activity keep rare generations visible. "
                     "Snapshots are evidence, not accuracy guarantees. Ordinary coverage is cumulative across "
@@ -1835,7 +1835,7 @@ class CaretakerConsoleApp(App):
         subjects = len({str(item.get("subject_key")) for item in self._behavior_records})
         self.query_one("#behavior-list-title", Static).update(
             f"Behavior generations: showing {len(self._displayed_behavior_records)}/{len(self._behavior_records)} "
-            f"across {subjects} subject{'s' if subjects != 1 else ''}; one latest snapshot per generation; "
+            f"across {subjects} subject{'s' if subjects != 1 else ''}; cumulative evidence preferred per generation; "
             f"{hidden_zero_calls} zero-call generation{'s' if hidden_zero_calls != 1 else ''} hidden"
         )
 

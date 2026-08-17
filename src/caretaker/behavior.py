@@ -543,18 +543,27 @@ class BehaviorSnapshotStore:
         latest_rows: list[dict[str, Any]] = []
         for history in grouped.values():
             history.sort(key=lambda item: str(item.get("created_at") or ""))
-            latest = dict(history[-1])
+            cumulative_history = [
+                item for item in history
+                if (item.get("profile") or {}).get("coverage_kind") == "generation"
+            ]
+            # The operator list is analytical: a later overlapping/legacy view
+            # must not mask an already proven cumulative epoch for this generation.
+            analytical_history = cumulative_history or [history[-1]]
+            latest = dict(analytical_history[-1])
             latest["first_seen_at"] = min(
                 str(item.get("observation_started_at") or item.get("created_at") or "")
-                for item in history
+                for item in analytical_history
             )
             latest["last_seen_at"] = max(
                 str(item.get("observation_ended_at") or item.get("created_at") or "")
-                for item in history
+                for item in analytical_history
             )
-            latest["snapshot_count"] = len(history)
+            latest["snapshot_count"] = int(
+                (latest.get("profile") or {}).get("coverage_snapshot_count") or 1
+            )
             hourly: dict[str, int] = {}
-            for item in history:
+            for item in analytical_history:
                 for bucket, calls in dict(
                     (item.get("profile") or {}).get("call_frequency_buckets") or {}
                 ).items():
@@ -573,7 +582,7 @@ class BehaviorSnapshotStore:
                         "ended_at": item.get("observation_ended_at") or item.get("created_at"),
                         "calls": int((item.get("profile") or {}).get("call_count") or 0),
                     }
-                    for item in history[-12:]
+                    for item in analytical_history[-12:]
                 ]
             latest_rows.append(latest)
         # Stable two-pass sorting gives subject ascending, newest generation first.

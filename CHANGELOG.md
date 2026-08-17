@@ -88,6 +88,8 @@
 - Make registered-function capture a singular sequence of atomic, non-overlapping
   epochs. Manual capture closes the active epoch, installs a successor, and records
   generation-scoped sample ranges that are validated before cumulative coverage.
+- Prefer proven cumulative epoch evidence in each Behavior generation row so a
+  later legacy, module, or overlapping partial cannot mask useful analysis.
 - Add lightweight adaptive instrumentation with policy-controlled promotion through pre-repair BEHAVIOR evidence collection and policy-controlled demotion after accepted repair lifecycle stages.
 - Separate repair lifecycle from observation intensity and use `LIGHTWEIGHT -> BEHAVIOR -> REPAIR -> BEHAVIOR -> VALIDATION -> LONG_TERM_ACCEPTANCE` as the operator lifecycle.
 - Add generation-scoped call-count behavior sampling, bounded online duration statistics, reservoir-backed p10/p50/p90/p95/p99 estimates, sampling-stage provenance, and automatic snapshot materialization.

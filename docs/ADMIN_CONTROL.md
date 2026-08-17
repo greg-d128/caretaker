@@ -127,8 +127,10 @@ first and summarized in plain language. Baseline acceptance remains disabled
 until an aggregate summary exists and the operator explicitly confirms that the
 available summary, events, deviations, and inspections were reviewed.
 
-The **Behavior** list shows one row for the latest saved snapshot in each
-subject/generation pair. Grouping occurs before the response limit, so frequent
+The **Behavior** list shows one analytical row for each subject/generation pair.
+It prefers the newest snapshot with proven cumulative epoch coverage; a newer
+partial artifact cannot mask that evidence. The newest partial is used only when
+the generation has no cumulative snapshot. Grouping occurs before the response limit, so frequent
 materialization of a hot function cannot hide a rare generation. Rows are sorted
 by subject and then newest generation first. A generation ID is a deterministic
 SHA-256 fingerprint over subject, code identity, monitoring configuration, and
@@ -167,7 +169,7 @@ or call-frequency analysis, so the Behavior list hides them by default. Select
 **Show zero-call evidence** when investigating event-only evidence; the list title
 reports how many such generations are hidden.
 
-The **Behavior** view treats a selected latest snapshot as comparison operand B.
+The **Behavior** view treats the selected analytical snapshot as comparison operand B.
 **Use B as A** marks an operator baseline; after running more workload and
 refreshing, **A ↔ latest** compares that baseline with the newest snapshot for
 the same subject automatically. Snapshots are marked `A` and `LATEST`, grouped

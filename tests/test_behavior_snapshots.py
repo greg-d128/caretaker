@@ -150,12 +150,28 @@ def test_snapshot_summaries_aggregate_bounded_hourly_call_activity(tmp_path: Pat
 
     assert summary["activity_kind"] == "utc-hour"
     assert summary["activity_windows"] == [
-        {"started_at": "2026-08-17T10:00:00+00:00", "calls": 3},
+        {"started_at": "2026-08-17T10:00:00+00:00", "calls": 1},
         {"started_at": "2026-08-17T11:00:00+00:00", "calls": 2},
     ]
 
 
-def test_overlapping_epoch_ranges_are_not_reported_as_generation_coverage(tmp_path: Path):
+def test_partial_capture_does_not_mask_cumulative_generation_summary(tmp_path: Path):
+    store = BehaviorSnapshotStore(tmp_path)
+    epoch = _capture(code_hash="a" * 64, events=1)
+    epoch["seal_reason"] = "sample-target-reached"
+    epoch["profile"]["call_count"] = 1
+    cumulative = store.create(epoch)["snapshot"]
+    partial = _capture(code_hash="a" * 64, events=10)
+    store.create(partial)
+
+    summary = store.list_summaries()[0]
+
+    assert summary["snapshot_id"] == cumulative["snapshot_id"]
+    assert summary["profile"]["coverage_kind"] == "generation"
+    assert summary["profile"]["coverage_call_count"] == 1
+
+
+def test_overlapping_epoch_range_cannot_mask_prior_generation_coverage(tmp_path: Path):
     store = BehaviorSnapshotStore(tmp_path)
     first = _capture(code_hash="a" * 64, events=2)
     first["profile"]["call_count"] = 2
@@ -175,12 +191,13 @@ def test_overlapping_epoch_ranges_are_not_reported_as_generation_coverage(tmp_pa
         "last_sample_sequence": 3,
         "seal_reason": "operator-epoch-cut",
     })
-    store.create(first)
+    valid = store.create(first)["snapshot"]
     store.create(overlap)
 
     summary = store.list_summaries()[0]
 
-    assert summary["profile"]["coverage_kind"] == "snapshot"
+    assert summary["snapshot_id"] == valid["snapshot_id"]
+    assert summary["profile"]["coverage_kind"] == "generation"
     assert summary["profile"]["coverage_call_count"] == 2
 
 
