@@ -173,15 +173,19 @@ or call-frequency analysis, so the Behavior list hides them by default. Select
 **Show zero-call evidence** when investigating event-only evidence; the list title
 reports how many such generations are hidden.
 
-The **Behavior** view treats the selected analytical snapshot as comparison operand B.
-**Use B as A** marks an operator baseline; after running more workload and
-refreshing, **A ↔ latest** compares that baseline with the newest snapshot for
-the same subject automatically. Snapshots are marked `A` and `LATEST`, grouped
-by their subject/generation identity, and can be filtered by subject, generation,
-evidence state, or integrity state. The table reports collection coverage and
-artifact integrity, while snapshot detail reports environment/workload labels,
-sampling strata, resource coverage, and monitoring provenance. Saving current
-observations does not execute the target function.
+Every subject has an independent comparison reference. Its newest analytical
+generation is the default **REFERENCE** and is rendered in green. Selecting an
+older generation enables **Compare**, which always compares that row with the
+green reference for the same subject. **Set Reference** moves the green designation
+for only that subject; references for other subjects are unchanged. The result
+labels its sides **Reference** and **Selected**, so comparison direction remains
+explicit without A/B terminology.
+
+Snapshots can be filtered by subject, generation, evidence state, or integrity
+state. The table reports collection coverage and artifact integrity, while detail
+reports environment/workload labels, sampling strata, resource coverage, epoch
+boundaries, and monitoring provenance. **Close function epoch** does not execute
+the target function.
 
 The **Repair** view lists waiting decisions first and supports target, state,
 episode, and description filtering. A pending approval is rendered as a decision

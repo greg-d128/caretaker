@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from caretaker.console import CaretakerConsoleApp
+from rich.text import Text
 from textual.widgets import Button, Checkbox, Static
 
 
@@ -223,11 +224,55 @@ def test_behavior_list_shows_three_latest_generations_per_subject_by_default(tmp
             assert len(app._displayed_behavior_records) == 4
 
     asyncio.run(exercise())
-def test_behavior_actions_explain_and_enforce_a_b_workflow(tmp_path):
+
+
+def test_behavior_table_marks_one_green_reference_per_subject(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            app._behavior_records = [
+                {
+                    "snapshot_id": "alpha-new",
+                    "subject_key": "function:lab.alpha",
+                    "generation_id": "a2",
+                    "profile": {"coverage_call_count": 2, "coverage_kind": "generation"},
+                },
+                {
+                    "snapshot_id": "alpha-old",
+                    "subject_key": "function:lab.alpha",
+                    "generation_id": "a1",
+                    "profile": {"coverage_call_count": 1, "coverage_kind": "generation"},
+                },
+                {
+                    "snapshot_id": "beta-new",
+                    "subject_key": "function:lab.beta",
+                    "generation_id": "b1",
+                    "profile": {"coverage_call_count": 1, "coverage_kind": "generation"},
+                },
+            ]
+            app._behavior_references = {
+                "function:lab.alpha": "alpha-new",
+                "function:lab.beta": "beta-new",
+            }
+            app._apply_behavior_filter()
+            table = app.query_one("#behavior-table")
+            roles = [str(table.get_row_at(index)[1]) for index in range(table.row_count)]
+            assert roles == ["REFERENCE", "", "REFERENCE"]
+            reference = table.get_row_at(0)[1]
+            assert isinstance(reference, Text)
+            assert "green" in str(reference.style)
+
+    asyncio.run(exercise())
+
+
+def test_behavior_actions_use_subject_scoped_reference_workflow(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 
     async def exercise() -> None:
         async with app.run_test(size=(180, 55)) as pilot:
+            app._activate_tab("behavior")
+            await pilot.pause()
             app._application_running = True
             app._behavior_records = [
                 {
@@ -243,11 +288,11 @@ def test_behavior_actions_explain_and_enforce_a_b_workflow(tmp_path):
                     "code_hash": "b" * 64,
                 },
             ]
+            app._behavior_references = {"function:lab.probe": "newer"}
             app._selected_behavior_snapshot = "newer"
             app._refresh_behavior_actions()
-            assert app.query_one("#behavior-compare-live", Button).disabled is False
-            assert app.query_one("#behavior-compare-previous", Button).disabled is False
-            assert app.query_one("#behavior-compare-a", Button).disabled is True
+            assert app.query_one("#behavior-set-reference", Button).disabled is True
+            assert app.query_one("#behavior-compare", Button).disabled is True
             assert app.query_one("#behavior-archive", Button).disabled is True
             assert app.query_one("#behavior-delete", Button).disabled is True
 
@@ -256,13 +301,18 @@ def test_behavior_actions_explain_and_enforce_a_b_workflow(tmp_path):
             assert app.query_one("#behavior-archive", Button).disabled is False
             assert app.query_one("#behavior-delete", Button).disabled is False
 
-            app._behavior_compare_anchor = "older"
+            app._selected_behavior_snapshot = "older"
             app._refresh_behavior_actions()
-            assert app.query_one("#behavior-compare-a", Button).disabled is False
-            assert app.query_one("#behavior-compare-latest", Button).disabled is False
+            assert app.query_one("#behavior-set-reference", Button).disabled is False
+            assert app.query_one("#behavior-compare", Button).disabled is False
             status = str(app.query_one("#behavior-selection-status", Static).render())
-            assert "cross-generation allowed" in status
-            assert "A↔latest" in status
+            assert "Reference:" in status
+            assert "Compare is available" in status
+
+            await pilot.click("#behavior-set-reference")
+            assert app._behavior_references["function:lab.probe"] == "older"
+            assert app.query_one("#behavior-set-reference", Button).disabled is True
+            assert app.query_one("#behavior-compare", Button).disabled is True
 
     asyncio.run(exercise())
 

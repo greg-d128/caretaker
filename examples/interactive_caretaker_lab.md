@@ -150,6 +150,10 @@ The list shows the newest three generations for each function by default. Use
 epoch** atomically materializes the current function statistics and starts a
 non-overlapping successor; ordinary coverage is shown as `current/target`, while
 `partial` is reserved for evidence without provable exclusive sample ranges.
+The newest analytical generation for each function is green and labeled
+**REFERENCE**. Select another generation for that function and choose **Compare**;
+use **Set Reference** only when the selected generation should become that
+function's new green reference.
 
 The contained malicious variants intentionally add unrelated filesystem,
 subprocess, and loopback-network activity so Guard has obvious new behavior to
@@ -236,7 +240,7 @@ The most useful observations are:
 - **Overview**: operator health summary plus technical target/FunctionSlot state;
 - **Guard**: operational state, last evidence, violations, escalations, baseline
   evidence, and related Behavior/Logs/Investigation links;
-- **Behavior**: snapshot coverage and integrity, A/B generation comparisons,
+- **Behavior**: snapshot coverage and integrity, subject-scoped reference comparisons,
   the newest three generations per function, hourly call activity, active unsaved
   observations, resource changes, epoch ranges, and snapshot provenance;
 - **Repair**: waiting decisions first, candidate/evidence summary, source, and

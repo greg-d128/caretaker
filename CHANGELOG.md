@@ -61,7 +61,9 @@
   across all eight tabs, and report evidence freshness, source, and bounded scope.
 - Make Overview and Guard issue-first, add direct evidence/investigation links,
   and distinguish no evidence, learning, healthy, and deviation states.
-- Clarify Behavior A/B operands, code generations, active unsaved observations,
+- Replace Behavior A/B operands with green subject-scoped references, a selected
+  comparison generation, and the direct **Set Reference** / **Compare** workflow;
+  clarify code generations, active unsaved observations,
   collection coverage, integrity/provenance, resource changes, and advisory limits.
 - Put waiting Repair decisions first, expose candidate source and evidence gaps,
   and link episodes to triggering Logs, Guard evidence, and Investigation.

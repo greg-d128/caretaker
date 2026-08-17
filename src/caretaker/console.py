@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from rich.syntax import Syntax
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Grid, Horizontal, Vertical
 from textual.widgets import (
@@ -411,7 +412,7 @@ class CaretakerConsoleApp(App):
         self._behavior_records: list[dict[str, Any]] = []
         self._displayed_behavior_records: list[dict[str, Any]] = []
         self._selected_behavior_snapshot: str | None = None
-        self._behavior_compare_anchor: str | None = None
+        self._behavior_references: dict[str, str] = {}
         self._behavior_last_comparison: dict[str, Any] | None = None
         self._guard_records: list[dict[str, Any]] = []
         self._selected_guard_target: str | None = None
@@ -530,7 +531,7 @@ class CaretakerConsoleApp(App):
                     "Snapshots are evidence, not accuracy guarantees. Ordinary coverage is cumulative across "
                     "verified disjoint epochs; partial marks one non-cumulative capture. "
                     "a code or monitoring change starts a new generation but earlier generations remain comparable. "
-                    "An active-window comparison reads unsaved observations; it never executes the function.",
+                    "The newest generation is the default green reference for each subject; select another row to compare.",
                     id="behavior-help",
                 )
                 with Horizontal(id="behavior-toolbar"):
@@ -563,16 +564,13 @@ class CaretakerConsoleApp(App):
                         yield Static("Selected snapshot / comparison", id="behavior-detail-title", classes="behavior-pane-title")
                         yield RichLog(id="behavior-output", wrap=True, markup=True)
                 yield Static(
-                    "Select a snapshot as B. Optionally use another snapshot as A; unavailable actions remain disabled.",
+                    "Select a generation. Set Reference changes only that subject's green reference; Compare uses the selected row.",
                     id="behavior-selection-status",
                 )
                 with Horizontal(id="behavior-compare-actions"):
                     yield Input(placeholder="Ollama model for advisory analysis", id="behavior-model")
-                    yield Button("B ↔ active unsaved window", id="behavior-compare-live", disabled=True)
-                    yield Button("B ↔ previous", id="behavior-compare-previous", disabled=True)
-                    yield Button("Use B as A", id="behavior-set-a", disabled=True)
-                    yield Button("A ↔ selected B", id="behavior-compare-a", disabled=True)
-                    yield Button("A ↔ latest", id="behavior-compare-latest", disabled=True, variant="primary")
+                    yield Button("Set Reference", id="behavior-set-reference", disabled=True)
+                    yield Button("Compare", id="behavior-compare", disabled=True, variant="primary")
                     yield Button("Explain comparison", id="behavior-assess-comparison", disabled=True)
                 with Horizontal(id="behavior-manage-actions"):
                     yield Button("LLM history", id="behavior-assess-history")
@@ -1747,8 +1745,19 @@ class CaretakerConsoleApp(App):
         snapshot_ids = {str(item.get("snapshot_id") or "") for item in self._behavior_records}
         if self._selected_behavior_snapshot not in snapshot_ids:
             self._selected_behavior_snapshot = None
-        if self._behavior_compare_anchor not in snapshot_ids:
-            self._behavior_compare_anchor = None
+        self._behavior_references = {
+            subject: snapshot_id
+            for subject, snapshot_id in self._behavior_references.items()
+            if snapshot_id in snapshot_ids
+        }
+        for record in self._behavior_records:
+            if self._behavior_is_zero_call(record):
+                continue
+            subject = str(record.get("subject_key") or "")
+            self._behavior_references.setdefault(subject, str(record.get("snapshot_id") or ""))
+        for record in self._behavior_records:
+            subject = str(record.get("subject_key") or "")
+            self._behavior_references.setdefault(subject, str(record.get("snapshot_id") or ""))
         self._apply_behavior_filter()
         if not self._behavior_records:
             self.query_one("#behavior-detail-title", Static).update("Behavior snapshots")
@@ -1770,12 +1779,14 @@ class CaretakerConsoleApp(App):
         self._displayed_behavior_records = []
         for record in self._behavior_records:
             subject_key = str(record.get("subject_key") or "")
+            snapshot_id = str(record.get("snapshot_id") or "")
+            is_reference = snapshot_id == self._behavior_references.get(subject_key)
             rank = subject_generation_rank.get(subject_key, 0) + 1
             subject_generation_rank[subject_key] = rank
-            if rank > 3 and not show_older:
+            if rank > 3 and not show_older and not is_reference:
                 hidden_older += 1
                 continue
-            if self._behavior_is_zero_call(record) and not show_zero_calls:
+            if self._behavior_is_zero_call(record) and not show_zero_calls and not is_reference:
                 hidden_zero_calls += 1
                 continue
             evidence, _coverage = self._behavior_evidence(record)
@@ -1803,12 +1814,6 @@ class CaretakerConsoleApp(App):
             if matched:
                 self._displayed_behavior_records.append(record)
 
-        latest_by_subject: dict[str, str] = {}
-        for record in self._behavior_records:
-            latest_by_subject.setdefault(
-                str(record.get("subject_key") or ""),
-                str(record.get("snapshot_id") or ""),
-            )
         table = self.query_one("#behavior-table", DataTable)
         table.clear()
         for index, record in enumerate(self._displayed_behavior_records, start=1):
@@ -1822,19 +1827,22 @@ class CaretakerConsoleApp(App):
             last_seen = self._behavior_display_time(record.get("last_seen_at"))
             evidence, calls_target = self._behavior_evidence(record)
             snapshot_id = str(record.get("snapshot_id") or "")
-            roles = []
-            if snapshot_id == self._behavior_compare_anchor:
-                roles.append("A")
-            if snapshot_id == latest_by_subject.get(str(record.get("subject_key") or "")):
-                roles.append("LATEST")
+            subject_key = str(record.get("subject_key") or "")
+            is_reference = snapshot_id == self._behavior_references.get(subject_key)
+            role = Text("REFERENCE", style="bold green") if is_reference else Text("")
+            rendered_label = Text(str(label or "-"), style="green" if is_reference else None)
+            rendered_generation = Text(
+                self._behavior_short_hash(record.get("generation_id")),
+                style="green" if is_reference else None,
+            )
             integrity = "INVALID" if record.get("verified") is False else str(
                 (record.get("integrity") or {}).get("signature_state") or "VERIFIED"
             )
             table.add_row(
                 str(index),
-                ",".join(roles),
-                str(label or "-"),
-                self._behavior_short_hash(record.get("generation_id")),
+                role,
+                rendered_label,
+                rendered_generation,
                 first_seen,
                 last_seen,
                 calls_target,
@@ -1883,43 +1891,16 @@ class CaretakerConsoleApp(App):
             None,
         )
 
-    def _behavior_has_previous(self, selected: dict[str, Any] | None) -> bool:
-        if selected is None:
-            return False
-        subject = selected.get("subject_key")
-        created = str(selected.get("created_at") or "")
-        return any(
-            item.get("subject_key") == subject
-            and str(item.get("created_at") or "") < created
-            for item in self._behavior_records
-        )
-
-    def _behavior_latest_for_anchor(self, anchor: dict[str, Any] | None) -> dict[str, Any] | None:
-        if anchor is None:
-            return None
-        return next(
-            (
-                item for item in self._behavior_records
-                if item.get("subject_key") == anchor.get("subject_key")
-                and item is not anchor
-                and str(item.get("created_at") or "") > str(anchor.get("created_at") or "")
-            ),
-            None,
-        )
-
     def _refresh_behavior_actions(self) -> None:
         selected = self._behavior_record(self._selected_behavior_snapshot)
-        anchor = self._behavior_record(self._behavior_compare_anchor)
-        self.query_one("#behavior-compare-live", Button).disabled = not (
-            selected and self._application_running
+        subject = str((selected or {}).get("subject_key") or "")
+        reference = self._behavior_record(self._behavior_references.get(subject))
+        self.query_one("#behavior-set-reference", Button).disabled = not (
+            selected and selected is not reference
         )
-        self.query_one("#behavior-compare-previous", Button).disabled = not self._behavior_has_previous(selected)
-        self.query_one("#behavior-set-a", Button).disabled = selected is None
-        self.query_one("#behavior-compare-a", Button).disabled = not (
-            selected and anchor and selected is not anchor
+        self.query_one("#behavior-compare", Button).disabled = not (
+            selected and reference and selected is not reference
         )
-        latest = self._behavior_latest_for_anchor(anchor)
-        self.query_one("#behavior-compare-latest", Button).disabled = latest is None
         self.query_one("#behavior-assess-comparison", Button).disabled = self._behavior_last_comparison is None
         manage_confirm = self.query_one("#behavior-manage-confirm", Checkbox)
         manage_confirm.disabled = selected is None
@@ -1938,22 +1919,15 @@ class CaretakerConsoleApp(App):
                 f"snapshot {self._behavior_short_hash(record.get('snapshot_id'))}"
             )
 
-        available = []
-        if selected and self._application_running:
-            available.append("B↔active window (does not execute)")
-        if self._behavior_has_previous(selected):
-            available.append("B↔previous")
-        if selected and anchor and selected is not anchor:
-            available.append("A↔B (cross-generation allowed)")
-        if latest:
-            available.append("A↔latest")
-        next_step = ""
-        if selected and anchor is selected:
-            next_step = "  |  Next: run the function, Refresh, select the new snapshot as B"
         self.query_one("#behavior-selection-status", Static).update(
-            f"A: {identity(anchor)}  |  Selected B: {identity(selected)}  |  "
-            f"Available: {', '.join(available) if available else 'select a suitable snapshot'}"
-            f"{next_step}"
+            f"Reference: {identity(reference)}  |  Selected: {identity(selected)}  |  "
+            + (
+                "Choose another generation for this subject, then Compare."
+                if selected is reference else
+                "Compare is available; Set Reference makes the selected generation green."
+                if selected else
+                "Select a generation to inspect or compare."
+            )
         )
 
     @staticmethod
@@ -2105,13 +2079,13 @@ class CaretakerConsoleApp(App):
         subject_a = comparison.get("subject_a") or "-"
         subject_b = comparison.get("subject_b") or "-"
         self.query_one("#behavior-detail-title", Static).update(
-            f"Comparison A {subject_a} → B {subject_b}"
+            f"Reference {subject_a} → selected {subject_b}"
         )
         output = self.query_one("#behavior-output", RichLog)
         output.clear()
         for marker, operand in (
-            ("A", comparison.get("snapshot_a") or {}),
-            ("B", comparison.get("snapshot_b") or {}),
+            ("Reference", comparison.get("snapshot_a") or {}),
+            ("Selected", comparison.get("snapshot_b") or {}),
         ):
             calls = int(operand.get("call_count") or 0)
             target = int(operand.get("statistics_target") or 0)
@@ -2151,8 +2125,8 @@ class CaretakerConsoleApp(App):
         code_changed = bool(comparison.get("code_hash_changed"))
         output.write(
             f"[b]Code generation[/b] {'CHANGED' if code_changed else 'same'}\n"
-            f"A {self._behavior_short_hash(comparison.get('code_hash_a'))}  →  "
-            f"B {self._behavior_short_hash(comparison.get('code_hash_b'))}"
+            f"Reference {self._behavior_short_hash(comparison.get('code_hash_a'))}  →  "
+            f"selected {self._behavior_short_hash(comparison.get('code_hash_b'))}"
         )
         if comparison.get("monitoring_changed"):
             output.write("[yellow]Monitoring configuration changed; this comparison spans behavior generations.[/yellow]")
@@ -2165,8 +2139,8 @@ class CaretakerConsoleApp(App):
             maximum = max(before, after, 1.0)
             output.write(
                 f"\n[b]{label}[/b]  {self._behavior_delta(change)}\n"
-                f" A {self._behavior_bar(before, maximum)} {before:.2f}\n"
-                f" B {self._behavior_bar(after, maximum)} {after:.2f}"
+                f" Reference {self._behavior_bar(before, maximum)} {before:.2f}\n"
+                f" Selected  {self._behavior_bar(after, maximum)} {after:.2f}"
             )
         duration_changes = comparison.get("duration_statistics") or {}
         if duration_changes:
@@ -2180,8 +2154,8 @@ class CaretakerConsoleApp(App):
                 maximum = max(abs(before), abs(after), 1e-12)
                 output.write(
                     f" {key}: {self._behavior_delta(change)}\n"
-                    f"   A {self._behavior_bar(before, maximum, width=14)} {before:.6g}\n"
-                    f"   B {self._behavior_bar(after, maximum, width=14)} {after:.6g}"
+                    f"   Reference {self._behavior_bar(before, maximum, width=14)} {before:.6g}\n"
+                    f"   Selected  {self._behavior_bar(after, maximum, width=14)} {after:.6g}"
                 )
         kind_changes = comparison.get("event_kind_changes") or ()
         if kind_changes:
@@ -2192,8 +2166,8 @@ class CaretakerConsoleApp(App):
                 maximum = max(before, after, 1.0)
                 output.write(
                     f" {change.get('label')}: {self._behavior_delta(change)}\n"
-                    f"   A {self._behavior_bar(before, maximum, width=14)} {before:.0f}\n"
-                    f"   B {self._behavior_bar(after, maximum, width=14)} {after:.0f}"
+                    f"   Reference {self._behavior_bar(before, maximum, width=14)} {before:.0f}\n"
+                    f"   Selected  {self._behavior_bar(after, maximum, width=14)} {after:.0f}"
                 )
         resource_changes = comparison.get("resource_changes") or {}
         changed_resources = False
@@ -3026,58 +3000,41 @@ class CaretakerConsoleApp(App):
                     return
                 snapshot_id = self._selected_behavior_snapshot
                 if button in {
-                    "behavior-compare-live",
-                    "behavior-compare-previous",
-                    "behavior-set-a",
-                    "behavior-compare-a",
+                    "behavior-set-reference",
+                    "behavior-compare",
                     "behavior-archive",
                     "behavior-delete",
                 } and not snapshot_id:
                     raise ValueError("Select a behavior snapshot first")
-                if button == "behavior-compare-live":
-                    response = await self._request(
-                        "behavior-live-compare", snapshot_id=snapshot_id, calls=50
-                    )
-                    self._show_behavior_comparison(response.get("comparison") or {})
-                    return
-                if button == "behavior-compare-previous":
-                    response = await self._request(
-                        "behavior-previous-compare", snapshot_id=snapshot_id
-                    )
-                    self._show_behavior_comparison(response.get("comparison") or {})
-                    return
-                if button == "behavior-set-a":
-                    self._behavior_compare_anchor = snapshot_id
-                    await self.refresh_behavior()
+                if button == "behavior-set-reference":
+                    selected = self._behavior_record(snapshot_id)
+                    if selected is None:
+                        raise ValueError("Select a behavior generation first")
+                    subject = str(selected.get("subject_key") or "")
+                    self._behavior_references[subject] = snapshot_id
+                    self._behavior_last_comparison = None
+                    self._apply_behavior_filter()
+                    self._refresh_behavior_actions()
                     self.query_one("#behavior-detail-title", Static).update(
-                        f"Comparison A set: {snapshot_id}"
+                        f"Reference set for {subject}"
                     )
                     return
-                if button == "behavior-compare-a":
-                    if not self._behavior_compare_anchor:
-                        raise ValueError("Use Set A on the first snapshot, then select the second snapshot")
-                    if self._behavior_compare_anchor == snapshot_id:
-                        raise ValueError("Select a different snapshot to compare with A")
+                if button == "behavior-compare":
+                    selected = self._behavior_record(snapshot_id)
+                    if selected is None:
+                        raise ValueError("Select a behavior generation first")
+                    subject = str(selected.get("subject_key") or "")
+                    reference_id = self._behavior_references.get(subject)
+                    if not reference_id:
+                        raise ValueError("No reference is available for the selected subject")
+                    if reference_id == snapshot_id:
+                        raise ValueError("Select another generation for this subject to compare")
                     response = await self._request(
                         "behavior-compare",
-                        snapshot_a_id=self._behavior_compare_anchor,
+                        snapshot_a_id=reference_id,
                         snapshot_b_id=snapshot_id,
                     )
                     self._show_behavior_comparison(response.get("comparison") or {})
-                    return
-                if button == "behavior-compare-latest":
-                    anchor = self._behavior_record(self._behavior_compare_anchor)
-                    latest = self._behavior_latest_for_anchor(anchor)
-                    if anchor is None or latest is None:
-                        raise ValueError("Choose baseline A and collect a newer snapshot for the same subject first")
-                    self._selected_behavior_snapshot = str(latest.get("snapshot_id") or "")
-                    response = await self._request(
-                        "behavior-compare",
-                        snapshot_a_id=self._behavior_compare_anchor,
-                        snapshot_b_id=self._selected_behavior_snapshot,
-                    )
-                    self._show_behavior_comparison(response.get("comparison") or {})
-                    self._refresh_behavior_actions()
                     return
                 if button == "behavior-assess-comparison":
                     if self._behavior_last_comparison is None:
