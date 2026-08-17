@@ -547,6 +547,7 @@ class CaretakerConsoleApp(App):
                         id="behavior-filter",
                     )
                     yield Button("Clear filter", id="behavior-filter-clear")
+                    yield Checkbox("Show zero-call partials", id="behavior-show-zero-partials")
                 with Grid(id="behavior-split"):
                     with Vertical(classes="behavior-pane"):
                         yield Static("Behavior snapshots", id="behavior-list-title", classes="behavior-pane-title")
@@ -1760,8 +1761,13 @@ class CaretakerConsoleApp(App):
     def _apply_behavior_filter(self) -> None:
         expression = self.query_one("#behavior-filter", Input).value.strip().casefold()
         tokens = expression.split()
+        show_zero_partials = self.query_one("#behavior-show-zero-partials", Checkbox).value
+        hidden_zero_partials = 0
         self._displayed_behavior_records = []
         for record in self._behavior_records:
+            if self._behavior_is_zero_call_partial(record) and not show_zero_partials:
+                hidden_zero_partials += 1
+                continue
             evidence, _coverage = self._behavior_evidence(record)
             integrity = "invalid" if record.get("verified") is False else str(
                 (record.get("integrity") or {}).get("signature_state") or "verified"
@@ -1769,6 +1775,7 @@ class CaretakerConsoleApp(App):
             fields = {
                 "subject": str(record.get("subject_key") or "").casefold(),
                 "generation": str(record.get("generation_id") or "").casefold(),
+                "coverage": str((record.get("profile") or {}).get("coverage_kind") or "partial").casefold(),
                 "evidence": evidence.casefold(),
                 "integrity": integrity,
             }
@@ -1828,8 +1835,16 @@ class CaretakerConsoleApp(App):
         subjects = len({str(item.get("subject_key")) for item in self._behavior_records})
         self.query_one("#behavior-list-title", Static).update(
             f"Behavior generations: showing {len(self._displayed_behavior_records)}/{len(self._behavior_records)} "
-            f"across {subjects} subject{'s' if subjects != 1 else ''}; one latest snapshot per generation"
+            f"across {subjects} subject{'s' if subjects != 1 else ''}; one latest snapshot per generation; "
+            f"{hidden_zero_partials} zero-call partial{'s' if hidden_zero_partials != 1 else ''} hidden"
         )
+
+    @staticmethod
+    def _behavior_is_zero_call_partial(record: dict[str, Any]) -> bool:
+        profile = record.get("profile") or {}
+        coverage_kind = str(profile.get("coverage_kind") or "snapshot")
+        calls = int(profile.get("coverage_call_count", profile.get("call_count")) or 0)
+        return coverage_kind != "generation" and calls == 0
 
     @staticmethod
     def _behavior_display_time(value: Any) -> str:
@@ -2282,6 +2297,8 @@ class CaretakerConsoleApp(App):
             self.query_one("#repair-reject", Button).disabled = disabled
         elif event.checkbox.id == "behavior-manage-confirm":
             self._refresh_behavior_actions()
+        elif event.checkbox.id == "behavior-show-zero-partials":
+            self._apply_behavior_filter()
         elif event.checkbox.id == "policy-confirm":
             self.query_one("#policy-apply", Button).disabled = not (
                 event.value and self._policy_preview is not None

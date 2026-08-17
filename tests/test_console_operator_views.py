@@ -143,6 +143,57 @@ def test_behavior_activity_histogram_is_bounded_and_relative():
     assert CaretakerConsoleApp._behavior_activity_histogram({}) == "-"
 
 
+def test_behavior_zero_call_partial_is_forensic_not_analytical():
+    assert CaretakerConsoleApp._behavior_is_zero_call_partial({
+        "profile": {
+            "call_count": 0,
+            "event_count": 12,
+            "coverage_kind": "snapshot",
+        }
+    }) is True
+    assert CaretakerConsoleApp._behavior_is_zero_call_partial({
+        "profile": {
+            "coverage_call_count": 0,
+            "coverage_kind": "generation",
+        }
+    }) is False
+    assert CaretakerConsoleApp._behavior_is_zero_call_partial({
+        "profile": {
+            "call_count": 1,
+            "coverage_kind": "snapshot",
+        }
+    }) is False
+
+
+def test_behavior_list_hides_zero_call_partials_until_requested(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)) as pilot:
+            app._behavior_records = [
+                {
+                    "snapshot_id": "event-only",
+                    "subject_key": "function:lab.event_only",
+                    "profile": {"call_count": 0, "event_count": 4, "coverage_kind": "snapshot"},
+                },
+                {
+                    "snapshot_id": "analyzable",
+                    "subject_key": "function:lab.called",
+                    "profile": {"coverage_call_count": 2, "coverage_kind": "generation"},
+                },
+            ]
+            app._apply_behavior_filter()
+            assert [item["snapshot_id"] for item in app._displayed_behavior_records] == ["analyzable"]
+            title = str(app.query_one("#behavior-list-title", Static).render())
+            assert "1 zero-call partial hidden" in title
+
+            app.query_one("#behavior-show-zero-partials", Checkbox).value = True
+            await pilot.pause()
+            assert {item["snapshot_id"] for item in app._displayed_behavior_records} == {
+                "event-only", "analyzable",
+            }
+
+    asyncio.run(exercise())
 def test_behavior_actions_explain_and_enforce_a_b_workflow(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 

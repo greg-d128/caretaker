@@ -150,6 +150,13 @@ potentially overlapping snapshot. `partial` does not mean the artifact is damage
 In either case, the target measures evidence volume rather than correctness or
 workload representativeness.
 
+Zero-call `partial` generations are retained because they may contain event-only
+forensic evidence such as imports, filesystem access, network activity,
+subprocesses, or dynamic code. They cannot support call-duration, outcome-rate,
+or call-frequency analysis, so the Behavior list hides them by default. Select
+**Show zero-call partials** when investigating event-only evidence; the list title
+reports how many such generations are hidden.
+
 The **Behavior** view treats a selected latest snapshot as comparison operand B.
 **Use B as A** marks an operator baseline; after running more workload and
 refreshing, **A ↔ latest** compares that baseline with the newest snapshot for

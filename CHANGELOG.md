@@ -55,6 +55,8 @@
   seen, cumulative evidence coverage, and bounded hourly call-activity bars.
 - Label non-cumulative Behavior coverage as `partial` rather than the ambiguous
   `window`, while retaining `gen` for safely cumulative generation coverage.
+- Keep zero-call partial generations as event-only forensic evidence but hide
+  them from the default analytical list behind an explicit visibility control.
 - Open on a unified Attention queue, retain shared target/incident/call context
   across all eight tabs, and report evidence freshness, source, and bounded scope.
 - Make Overview and Guard issue-first, add direct evidence/investigation links,
