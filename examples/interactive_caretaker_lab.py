@@ -1181,7 +1181,7 @@ def _build_target_specs() -> None:
                 "Use Benign to establish a behavior baseline. Bad enumerates home-directory "
                 "metadata to a bounded depth without opening file contents. Malicious performs "
                 "the same bounded scan and attempts an HTTPS HEAD request to www.google.com. "
-                "Use Substitute behavior rather than Mutate __code__ so the target code hash "
+                "Use Behavior-only change rather than Unauthorized code mutation so the target code hash "
                 "stays constant while its observed behavior changes."
             ),
         ),
@@ -1236,8 +1236,10 @@ class CaretakerLabApp(App):
     #execution-bar Button { width: 24; margin-right: 1; }
     #modification-bar { height: auto; margin-top: 1; }
     #modification-bar Button { margin-right: 1; }
-    #action-bar { height: auto; margin-bottom: 1; }
+    #action-bar { height: auto; }
     #action-bar Button { margin-right: 1; }
+    #recovery-bar { height: auto; margin-bottom: 1; }
+    #recovery-bar Button { margin-right: 1; }
     #output { height: 1fr; border: solid $surface-lighten-2; }
     """
 
@@ -1279,12 +1281,15 @@ class CaretakerLabApp(App):
                     yield Button("Select Benign", id="variant-benign")
                     yield Button("Select Bad", id="variant-bad")
                     yield Button("Select Malicious", id="variant-malicious")
+                yield Label("Apply the selected variant as one of these simulated changes")
                 with Horizontal(id="action-bar"):
-                    yield Button("Apply selected behavior", id="substitute")
-                    yield Button("Mutate __code__", id="mutate", variant="warning")
-                    yield Button("Inject FunctionSlot", id="inject", variant="warning")
-                    yield Button("Rollback slot", id="rollback")
-                    yield Button("Restore target", id="restore")
+                    yield Button("Behavior-only change", id="substitute")
+                    yield Button("Unauthorized code mutation", id="mutate", variant="warning")
+                    yield Button("Unvalidated replacement", id="inject", variant="warning")
+                yield Label("Recovery controls")
+                with Horizontal(id="recovery-bar"):
+                    yield Button("Rollback replacement", id="rollback")
+                    yield Button("Restore original", id="restore")
                 yield RichLog(id="output", wrap=True, markup=True)
         yield Footer()
 
@@ -1336,7 +1341,8 @@ class CaretakerLabApp(App):
             f"behavior {active_behavior}"
         )
         instruction = (
-            "SELECTION NOT APPLIED — choose Apply selected behavior, Mutate __code__, or Inject FunctionSlot."
+            "SELECTION NOT APPLIED — choose Behavior-only change, Unauthorized code mutation, "
+            "or Unvalidated replacement."
             if pending_selection else
             f"Execute will run {execution_source}."
         )
@@ -1542,7 +1548,7 @@ class CaretakerLabApp(App):
                 self._set_breadcrumb(self.spec.title, "Modify", f"Selected {self.selected_variant}")
                 self._output(
                     f"Selected {self.selected_variant!r} for modification; execution has not changed. "
-                    "Choose Apply selected behavior, Mutate __code__, or Inject FunctionSlot."
+                    "Choose Behavior-only change, Unauthorized code mutation, or Unvalidated replacement."
                 )
                 self._refresh_variant_state()
                 return

@@ -94,16 +94,16 @@ change what Execute runs. While the selection differs from the active implementa
 both Execute actions are disabled and the state line says **SELECTION NOT APPLIED**.
 Choose one of the following actions first:
 
-- **Apply selected behavior** changes the dispatcher's runtime behavior without
+- **Behavior-only change** changes the dispatcher's runtime behavior without
   changing its code identity. It seals the preceding evidence epoch; subsequent
   calls remain in the same code/monitoring generation so behavior can be compared
   without claiming that the code changed.
-- **Mutate `__code__`** seals the preceding epoch and directly changes executable
+- **Unauthorized code mutation** seals the preceding epoch and directly changes executable
   code outside Caretaker Repair. The next observed call establishes the changed
-  code generation.
-- **Inject FunctionSlot** seals the preceding epoch and activates the selection as
-  a new slot version while deliberately bypassing normal candidate validation.
-- **Rollback slot**, **Restore target**, and **Reset all substitutions** seal
+  code generation. Internally, the lab replaces the function's `__code__` object.
+- **Unvalidated replacement** seals the preceding epoch and activates the selection as
+  a new FunctionSlot version while deliberately bypassing normal candidate validation.
+- **Rollback replacement**, **Restore original**, and **Reset all substitutions** seal
   affected evidence before changing execution state.
 - **Execute function** collects one call and explicitly seals it for immediate
   inspection. **Execute 1000 times** collects calls into automatic 100-call epochs.
@@ -139,7 +139,7 @@ In `caretaker-console`:
 Back in the lab:
 
 1. Select **Bad**.
-2. Select **Substitute behavior**.
+2. Select **Behavior-only change**.
 3. Execute division again with `10` and `2`.
 
 The bad implementation returns the wrong type, causing output validation to
@@ -171,7 +171,7 @@ These demonstrate the difference between bad input and a bad implementation.
 1. Restore a target to benign behavior.
 2. Run it once or more.
 3. In the Caretaker console, accept its Guard baseline.
-4. In the lab select **Malicious** and **Substitute behavior**.
+4. In the lab select **Malicious** and **Behavior-only change**.
 5. Run the target again.
 6. Wait up to one supervisor refresh interval, press `r`, and inspect:
    - Guard events;
@@ -203,7 +203,7 @@ observe.
 The lab exposes three different implementation-change mechanisms because they
 test different Caretaker boundaries.
 
-### Substitute behavior
+### Behavior-only change (dispatcher substitution)
 
 The stable Caretaker target remains unchanged, but its dispatcher calls another
 implementation.
@@ -215,7 +215,7 @@ Use this for:
 - new resource behavior;
 - Guard baseline/deviation experiments.
 
-### Mutate `__code__`
+### Unauthorized code mutation (`__code__` replacement)
 
 The active dispatcher's Python `__code__` object is replaced directly without
 calling Caretaker Repair.
@@ -229,7 +229,7 @@ Use this for:
 After mutation, execute the target and inspect **Guard > Inspections** in the
 Caretaker console.
 
-### Inject FunctionSlot
+### Unvalidated replacement (FunctionSlot injection)
 
 An alternate implementation is inserted directly into the FunctionSlot,
 deliberately bypassing candidate generation and validation.
