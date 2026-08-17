@@ -116,6 +116,7 @@ def main(argv: list[str] | None = None) -> int:
         policy.directory, artifact_signer=runtime.writer.signing_service
     )
     behavior_statistics = BehaviorStatisticsRepository(policy.directory)
+    behavior_revision = {"value": 0}
     runtime.event(
         logger_name="caretaker.authority",
         severity=30 if authority.effective.overall_assurance in {"GUARANTEE_VIOLATED", "INVALID_AUTHORITY_CHAIN"} else 20,
@@ -180,6 +181,7 @@ def main(argv: list[str] | None = None) -> int:
                     "signature_state": envelope["integrity"]["signature_state"],
                 },
             )
+        behavior_revision["value"] += len(envelopes)
         return len(envelopes)
 
     def recent_log_records(limit: int = 1000):
@@ -225,6 +227,7 @@ def main(argv: list[str] | None = None) -> int:
                     signing_identity = asdict(identity) if hasattr(identity, "__dataclass_fields__") else dict(identity)
             return {"ok": True, "application_pid": child.pid if child else None,
                     "application_running": child.poll() is None if child else False,
+                    "behavior_revision": behavior_revision["value"],
                     "policy_generation": runtime.effective.generation,
                     "active_leases": list(leases),
                     "runtime_signing_identity": signing_identity,
@@ -244,6 +247,7 @@ def main(argv: list[str] | None = None) -> int:
             limit = max(1, min(int(request.get("limit", 500)), 500))
             return {
                 "ok": True,
+                "revision": behavior_revision["value"],
                 "snapshots": list(behavior_store.list_summaries(limit=limit)),
             }
 
@@ -276,6 +280,7 @@ def main(argv: list[str] | None = None) -> int:
                 authority_fingerprint=authority.effective.fingerprint,
                 deployment_fingerprint=deployment_fingerprint(),
             )
+            behavior_revision["value"] += 1
             snapshot = envelope["snapshot"]
             runtime.event(
                 logger_name="caretaker.behavior",
@@ -377,6 +382,7 @@ def main(argv: list[str] | None = None) -> int:
             if isinstance(snapshot_ids, str):
                 snapshot_ids = [snapshot_ids]
             path = behavior_store.archive(snapshot_ids, remove=True)
+            behavior_revision["value"] += 1
             runtime.event(
                 logger_name="caretaker.behavior",
                 severity=20,
@@ -402,6 +408,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("behavior-archive-restore requires archive")
             path = behavior_store.resolve_archive(name)
             restored = behavior_store.restore_archive(path)
+            behavior_revision["value"] += 1
             runtime.event(
                 logger_name="caretaker.behavior",
                 severity=20,
@@ -416,6 +423,7 @@ def main(argv: list[str] | None = None) -> int:
             if not snapshot_id:
                 raise ValueError("behavior-delete requires snapshot_id")
             behavior_store.delete(snapshot_id)
+            behavior_revision["value"] += 1
             runtime.event(
                 logger_name="caretaker.behavior",
                 severity=30,

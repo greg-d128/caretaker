@@ -226,6 +226,65 @@ def test_behavior_list_shows_three_latest_generations_per_subject_by_default(tmp
     asyncio.run(exercise())
 
 
+def test_active_behavior_tab_refreshes_when_supervisor_revision_changes(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            app.socket_path = tmp_path / "control.sock"
+            app.query_one("TabbedContent").active = "behavior"
+            app._behavior_loaded_revision = 1
+            app._behavior_records = [{
+                "snapshot_id": "old-epoch",
+                "subject_key": "function:lab.behavior_probe",
+                "generation_id": "stable-generation",
+                "profile": {"coverage_call_count": 50, "coverage_kind": "generation"},
+            }]
+            app._selected_behavior_snapshot = "old-epoch"
+            requests: list[str] = []
+
+            async def request(command: str, **payload):
+                requests.append(command)
+                if command == "status":
+                    return {"ok": True, "application_running": False, "behavior_revision": 2}
+                if command == "behavior-list":
+                    return {
+                        "ok": True,
+                        "revision": 2,
+                        "snapshots": [{
+                            "snapshot_id": "new-epoch",
+                            "subject_key": "function:lab.behavior_probe",
+                            "generation_id": "stable-generation",
+                            "profile": {"coverage_call_count": 100, "coverage_kind": "generation"},
+                        }],
+                    }
+                if command == "behavior-get":
+                    assert payload["snapshot_id"] == "new-epoch"
+                    return {
+                        "ok": True,
+                        "envelope": {
+                            "snapshot": {
+                                "snapshot_id": "new-epoch",
+                                "subject_key": "function:lab.behavior_probe",
+                                "generation_id": "stable-generation",
+                                "profile": {"call_count": 100},
+                            },
+                            "integrity": {},
+                        },
+                    }
+                raise AssertionError(command)
+
+            app._request = request  # type: ignore[method-assign]
+            await app.refresh_status()
+
+            assert requests == ["status", "behavior-list", "behavior-get"]
+            assert app._behavior_loaded_revision == 2
+            assert app._behavior_records[0]["snapshot_id"] == "new-epoch"
+            assert app._selected_behavior_snapshot == "new-epoch"
+
+    asyncio.run(exercise())
+
+
 def test_behavior_table_marks_one_green_reference_per_subject(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 

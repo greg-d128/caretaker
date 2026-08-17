@@ -411,6 +411,7 @@ class CaretakerConsoleApp(App):
         self._policy_preview: dict[str, Any] | None = None
         self._behavior_records: list[dict[str, Any]] = []
         self._displayed_behavior_records: list[dict[str, Any]] = []
+        self._behavior_loaded_revision: int | None = None
         self._selected_behavior_snapshot: str | None = None
         self._behavior_references: dict[str, str] = {}
         self._behavior_last_comparison: dict[str, Any] | None = None
@@ -826,6 +827,12 @@ class CaretakerConsoleApp(App):
             return
 
         self._last_status = status
+        behavior_revision = int(status.get("behavior_revision") or 0)
+        if (
+            behavior_revision != self._behavior_loaded_revision
+            and self.query_one(TabbedContent).active == "behavior"
+        ):
+            await self.refresh_behavior()
         running = bool(status.get("application_running"))
         self._application_running = running
         runtime_value = status.get("runtime")
@@ -1738,13 +1745,31 @@ class CaretakerConsoleApp(App):
         return text[:12] if text != "-" else text
 
     async def refresh_behavior(self) -> None:
+        previous_selection = self._behavior_record(self._selected_behavior_snapshot)
+        previous_subject = str((previous_selection or {}).get("subject_key") or "")
+        previous_generation = str((previous_selection or {}).get("generation_id") or "")
         response = await self._request("behavior-list")
+        self._behavior_loaded_revision = int(response.get("revision") or 0)
         self._behavior_records = [
             dict(item) for item in response.get("snapshots", ()) if isinstance(item, dict)
         ]
         snapshot_ids = {str(item.get("snapshot_id") or "") for item in self._behavior_records}
         if self._selected_behavior_snapshot not in snapshot_ids:
-            self._selected_behavior_snapshot = None
+            replacement = next(
+                (
+                    item for item in self._behavior_records
+                    if previous_subject
+                    and str(item.get("subject_key") or "") == previous_subject
+                    and (
+                        not previous_generation
+                        or str(item.get("generation_id") or "") == previous_generation
+                    )
+                ),
+                None,
+            )
+            self._selected_behavior_snapshot = (
+                str(replacement.get("snapshot_id") or "") if replacement else None
+            )
         self._behavior_references = {
             subject: snapshot_id
             for subject, snapshot_id in self._behavior_references.items()
@@ -1766,6 +1791,13 @@ class CaretakerConsoleApp(App):
             output.write(
                 "No behavior snapshots have been saved. Run the target workload first, then save or refresh observations."
             )
+        elif self._selected_behavior_snapshot:
+            selected = self._behavior_record(self._selected_behavior_snapshot)
+            if selected is not None:
+                detail = await self._request(
+                    "behavior-get", snapshot_id=self._selected_behavior_snapshot
+                )
+                self._show_behavior_snapshot(detail.get("envelope") or {}, summary=selected)
         self._refresh_behavior_actions()
 
     def _apply_behavior_filter(self) -> None:
