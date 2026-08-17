@@ -236,6 +236,12 @@ duration: 1800
 reason:  incident INC-142 - temporary unattended recovery
 ```
 
+Load a common Repair-authority preset or enter the advanced path/value, then
+select **Preview change**. Review the exact scope, duration, reason, and guarantee
+impact; acknowledge **I reviewed scope and guarantee impact** before applying.
+Changing any input invalidates the preview. Releasing a selected lease requires
+the separate **Confirm release** acknowledgement.
+
 If the change violates an application-owner constraint, select **Explicit override**. The repair can
 proceed, but the application-owner guarantee becomes `VIOLATED` for that effective generation.
 
@@ -252,7 +258,8 @@ Once effective, an unsigned lease is rejected. A signed runtime lease is represe
 may contain settings but cannot introduce new constraints.
 
 Place its small TOML descriptor and referenced materials under the deployment's policy area and use
-the console's **Apply signed lease** action. Signed runtime lease descriptors accepted through the
+the console's **Apply signed lease** action. Enter an operator/incident reason and
+acknowledge **I reviewed signed scope** before applying. Signed runtime lease descriptors accepted through the
 control plane live below:
 
 ```text

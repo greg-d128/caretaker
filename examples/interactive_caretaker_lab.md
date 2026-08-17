@@ -48,7 +48,10 @@ caretaker-console \
   --data-directory ./examples/.caretaker-interactive-lab/caretaker-data
 ```
 
-The console status line continuously reports information such as:
+The console header reports live/cached availability, refresh time, evidence
+sources, and bounded record counts. The **Attention** tab summarizes issues such
+as incidents, waiting approvals, deviations, and degraded components. Runtime
+state still includes values such as:
 
 ```text
 Status HEALTHY | Alert NONE | Incidents 0 | Validating 0 |
@@ -87,9 +90,10 @@ In the lab select **Divide two values** and execute the defaults:
 In `caretaker-console`:
 
 1. Open the **Guard** tab.
-2. Enter `lab.divide` as the target.
-3. View **Events** and **Summary**.
-4. Select **Accept baseline**.
+2. Select `lab.divide` from the Guard target table (filter by `lab.divide` if needed).
+3. View **Summary** and the available Events, Deviations, and Inspections.
+4. Select **I reviewed baseline evidence**, then **Accept baseline**. The action
+   remains disabled until a baseline summary is available.
 
 ### 2. Introduce a bad implementation
 
@@ -104,11 +108,11 @@ fail and opening a Repair episode.
 
 In `caretaker-console`:
 
-1. Watch the status line for incident/validation activity.
-2. Open **Repair** and select **Events**.
-3. Select **Approvals**.
-4. Copy the pending episode UUID into the episode field.
-5. Select **Approve**.
+1. Select the waiting Repair item in **Attention**, then **Open related view**.
+2. Select the pending row in **Repair** and review its candidate source,
+   triggering logs, Guard evidence, and stated evidence limitations.
+3. Select **I reviewed evidence and confirm this decision**.
+4. Select **Approve**, or enter a rejection reason and select **Reject**.
 
 Run division again and inspect the target/runtime state.
 
@@ -222,14 +226,21 @@ validation gates, or override Integrity policy.
 
 The most useful observations are:
 
-- **status line**: incident, validation, approval, alert, and worker state;
-- **Overview**: registered targets, Repair mode/authority, FunctionSlot version;
-- **Guard / Events**: resource activity correlated to target calls;
-- **Guard / Deviations**: behavior compared with an accepted baseline;
-- **Guard / Inspections**: runtime/code changes;
-- **Repair / Events**: incident, generation, validation, activation, retry;
-- **Repair / Approvals**: candidates waiting for explicit operator action;
-- **Logs**: persisted Caretaker/application evidence.
+- **Attention**: incidents, deviations, waiting decisions, policy violations,
+  and degraded capabilities, with direct navigation;
+- **Overview**: operator health summary plus technical target/FunctionSlot state;
+- **Guard**: operational state, last evidence, violations, escalations, baseline
+  evidence, and related Behavior/Logs/Investigation links;
+- **Behavior**: snapshot coverage and integrity, A/B generation comparisons,
+  active unsaved observations, resource changes, and snapshot provenance;
+- **Repair**: waiting decisions first, candidate/evidence summary, source, and
+  correlated evidence;
+- **Policy**: authority assurance, violations, previewed temporary leases,
+  signed descriptors, and explicit release controls;
+- **Investigate**: filtered candidate evidence with visible target, incident,
+  call, time-window, provider, hash, and omission scope;
+- **Logs**: live or persisted evidence, filter semantics, identifier-based
+  correlation, and channel-aware routing to related tabs.
 
 A useful discipline is to make **one change, run one target, inspect evidence,
 then restore it** before trying the next experiment.

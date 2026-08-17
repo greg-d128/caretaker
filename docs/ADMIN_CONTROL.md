@@ -174,9 +174,10 @@ warning, error, and critical records. Supported selectors are `level`,
 `channel`, `target`, `logger`, and `message`; unqualified text searches the full
 JSON record.
 
-Selecting a log enables contextual navigation. **Investigate similar** applies
-the available target/channel/logger context, shows the matching evidence queue,
-and opens Investigate. **Open related tab** routes Guard records to the selected
+Selecting a log enables contextual navigation. **Investigate correlated** applies
+the available target/incident/call identifiers, shows the matching evidence queue,
+and opens Investigate. This is identifier correlation, not semantic similarity.
+**Open related tab** routes Guard records to the selected
 Guard target, Repair records to Repair, integrity/audit records to Policy, and
 targeted application records to Behavior when that context is meaningful.
 

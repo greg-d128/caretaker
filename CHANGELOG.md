@@ -47,6 +47,19 @@
 
 ### Operator console usability
 
+- Open on a unified Attention queue, retain shared target/incident/call context
+  across all eight tabs, and report evidence freshness, source, and bounded scope.
+- Make Overview and Guard issue-first, add direct evidence/investigation links,
+  and distinguish no evidence, learning, healthy, and deviation states.
+- Clarify Behavior A/B operands, code generations, active unsaved observations,
+  collection coverage, integrity/provenance, resource changes, and advisory limits.
+- Put waiting Repair decisions first, expose candidate source and evidence gaps,
+  and link episodes to triggering Logs, Guard evidence, and Investigation.
+- Add previewable policy presets and explicit scope/impact acknowledgements;
+  require confirmations for destructive snapshots, Repair decisions, signed
+  leases, and lease release, plus reasons for rejection and policy application.
+- Make Investigation scope and candidate rationale visible, and document that
+  Logs correlation is identifier-based with live/persisted source semantics.
 - Add a Repair approval source viewer that renders the proposed replacement as syntax-highlighted Python with line numbers and toggles back to the full JSON approval payload.
 - Show a per-target lifecycle status in Overview. Active post-repair candidate probation is labeled `VALIDATING`, while exact FunctionSlot and candidate states remain available in target details.
 - Add compact Overview target filtering with free-text search and `target:`, `status:`, `state:`, `mode:`, `authority:`, `guard:`, and `version:` selectors.

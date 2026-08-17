@@ -91,16 +91,25 @@ second terminal:
 caretaker-console --data-directory /var/lib/invoice-service/caretaker
 ```
 
-The status line reports current runtime state, recent alert severity, active
-Repair incidents, functions undergoing candidate validation, pending approvals,
-policy-authority assurance, degraded capabilities, and supervisor worker health. Tabs
-provide FunctionSlot/target inspection, Guard evidence and baseline actions,
-Repair approval/rejection, signed/unsigned policy-authority inspection and temporary
-runtime leases, persisted logs, and advisory Guard LLM assessment when the
-application configured an assessment provider.
+The console opens on an **Attention** queue for active incidents, Guard findings,
+waiting Repair work, policy violations, and degraded capabilities. A shared
+target/incident/call context follows selections between tabs, while source and
+freshness labels distinguish live runtime data from retained or persisted
+fallback evidence. **Overview**, **Guard**, **Behavior**, **Repair**, **Policy**,
+**Investigate**, and **Logs** provide issue-first inspection and direct links to
+related evidence without requiring operators to copy internal IDs.
+
+Consequential actions fail closed. Guard baseline acceptance, Behavior snapshot
+archive/delete, Repair approval/rejection, unsigned or signed policy application,
+and runtime-lease release require an explicit review acknowledgement. Repair
+rejection and policy application also require an operator reason. Behavior and
+LLM comparisons are advisory evidence rather than correctness guarantees; the UI
+shows collection coverage, generation, integrity, evidence scope, and omissions.
 
 The console uses the same authenticated local Unix control plane as the
 supervisor. It does not expose arbitrary shell commands or Python execution.
+See [`docs/ADMIN_CONTROL.md`](docs/ADMIN_CONTROL.md) for the first-response
+workflow and a tab-by-tab description.
 
 ## Logging-only use
 
