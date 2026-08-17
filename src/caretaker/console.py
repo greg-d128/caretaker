@@ -567,6 +567,7 @@ class CaretakerConsoleApp(App):
                     yield Button("Explain comparison", id="behavior-assess-comparison", disabled=True)
                 with Horizontal(id="behavior-manage-actions"):
                     yield Button("LLM history", id="behavior-assess-history")
+                    yield Checkbox("Confirm archive/delete B", id="behavior-manage-confirm", disabled=True)
                     yield Button("Archive B", id="behavior-archive", variant="warning", disabled=True)
                     yield Button("Delete B", id="behavior-delete", variant="error", disabled=True)
 
@@ -598,7 +599,7 @@ class CaretakerConsoleApp(App):
                         )
                         yield RichLog(id="repair-output", wrap=False, markup=True)
                         with Horizontal(id="repair-actions"):
-                            yield Checkbox("I reviewed candidate and evidence gaps", id="repair-approve-confirm", disabled=True)
+                            yield Checkbox("I reviewed evidence and confirm this decision", id="repair-approve-confirm", disabled=True)
                             yield Input(
                                 placeholder="Rejection reason (used only for Reject)",
                                 id="repair-reason",
@@ -608,22 +609,12 @@ class CaretakerConsoleApp(App):
                                 id="repair-source",
                                 disabled=True,
                             )
+                            yield Button("Approve", id="repair-approve", variant="success", disabled=True)
+                            yield Button("Reject", id="repair-reject", variant="error", disabled=True)
                         with Horizontal(id="repair-context-actions"):
                             yield Button("Triggering logs", id="repair-open-logs", disabled=True)
                             yield Button("Guard evidence", id="repair-open-guard", disabled=True)
                             yield Button("Investigate episode", id="repair-open-investigate", disabled=True, variant="primary")
-                            yield Button(
-                                "Approve",
-                                id="repair-approve",
-                                variant="success",
-                                disabled=True,
-                            )
-                            yield Button(
-                                "Reject",
-                                id="repair-reject",
-                                variant="error",
-                                disabled=True,
-                            )
             with TabPane("Policy", id="policy"):
                 yield Static(
                     "Review assurance and violations first. Runtime leases are temporary audited changes; "
@@ -656,6 +647,7 @@ class CaretakerConsoleApp(App):
                     yield Input(placeholder="Incident reason / operator justification", id="policy-reason")
                     yield Checkbox("Explicit override", id="policy-override")
                     yield Button("Apply previewed lease", id="policy-apply", variant="warning", disabled=True)
+                    yield Checkbox("Confirm release", id="policy-release-confirm", disabled=True)
                     yield Button("Release lease", id="policy-release", disabled=True)
                     yield Button("Refresh", id="policy-refresh")
                 with Horizontal(id="policy-signed-row"):
@@ -663,7 +655,8 @@ class CaretakerConsoleApp(App):
                         placeholder="Signed lease descriptor below policy/runtime-leases/",
                         id="policy-signed-descriptor",
                     )
-                    yield Button("Apply signed lease", id="policy-apply-signed", variant="primary")
+                    yield Checkbox("I reviewed signed scope", id="policy-signed-confirm", disabled=True)
+                    yield Button("Apply signed lease", id="policy-apply-signed", variant="primary", disabled=True)
             with TabPane("Investigate", id="investigate"):
                 with Horizontal(classes="toolbar"):
                     yield Input(placeholder="Target id (optional)", id="investigate-target")
@@ -1577,6 +1570,7 @@ class CaretakerConsoleApp(App):
             if not snapshot_id:
                 return
             self._selected_behavior_snapshot = snapshot_id
+            self.query_one("#behavior-manage-confirm", Checkbox).value = False
             behavior_target = str((record.get("subject") or {}).get("target_id") or "")
             self._set_operator_context(target=behavior_target or None)
             self._refresh_behavior_actions()
@@ -1624,7 +1618,7 @@ class CaretakerConsoleApp(App):
             confirmation.value = False
             confirmation.disabled = not actionable
             self.query_one("#repair-approve", Button).disabled = True
-            self.query_one("#repair-reject", Button).disabled = not actionable
+            self.query_one("#repair-reject", Button).disabled = True
             for button_id in ("#repair-open-logs", "#repair-open-guard", "#repair-open-investigate"):
                 self.query_one(button_id, Button).disabled = False
             source_button = self.query_one("#repair-source", Button)
@@ -1667,7 +1661,10 @@ class CaretakerConsoleApp(App):
             except (TypeError, ValueError, IndexError):
                 return
             self._selected_authority_lease = str(record.get("lease_id")) if record.get("lease_id") else None
-            self.query_one("#policy-release", Button).disabled = self._selected_authority_lease is None
+            release_confirm = self.query_one("#policy-release-confirm", Checkbox)
+            release_confirm.value = False
+            release_confirm.disabled = self._selected_authority_lease is None
+            self.query_one("#policy-release", Button).disabled = True
             self.query_one("#policy-detail-title", Static).update(
                 f"{record.get('kind', 'policy')} | {record.get('authority_id') or 'not configured'}"
             )
@@ -1873,8 +1870,13 @@ class CaretakerConsoleApp(App):
         latest = self._behavior_latest_for_anchor(anchor)
         self.query_one("#behavior-compare-latest", Button).disabled = latest is None
         self.query_one("#behavior-assess-comparison", Button).disabled = self._behavior_last_comparison is None
-        self.query_one("#behavior-archive", Button).disabled = selected is None
-        self.query_one("#behavior-delete", Button).disabled = selected is None
+        manage_confirm = self.query_one("#behavior-manage-confirm", Checkbox)
+        manage_confirm.disabled = selected is None
+        if selected is None:
+            manage_confirm.value = False
+        confirmed = bool(selected and manage_confirm.value)
+        self.query_one("#behavior-archive", Button).disabled = not confirmed
+        self.query_one("#behavior-delete", Button).disabled = not confirmed
 
         def identity(record: dict[str, Any] | None) -> str:
             if record is None:
@@ -2210,6 +2212,21 @@ class CaretakerConsoleApp(App):
             self.query_one("#policy-confirm", Checkbox).disabled = True
             self.query_one("#policy-apply", Button).disabled = True
             self.query_one("#policy-preview-output", Static).update("Inputs changed; preview the policy change again.")
+            if event.input.id == "policy-reason":
+                signed_confirm = self.query_one("#policy-signed-confirm", Checkbox)
+                signed_confirm.value = False
+                signed_confirm.disabled = not bool(
+                    event.value.strip()
+                    and self.query_one("#policy-signed-descriptor", Input).value.strip()
+                )
+                self.query_one("#policy-apply-signed", Button).disabled = True
+        elif event.input.id == "policy-signed-descriptor":
+            signed_confirm = self.query_one("#policy-signed-confirm", Checkbox)
+            signed_confirm.value = False
+            signed_confirm.disabled = not bool(
+                event.value.strip() and self.query_one("#policy-reason", Input).value.strip()
+            )
+            self.query_one("#policy-apply-signed", Button).disabled = True
         elif event.input.id in {
             "investigate-target", "investigate-incident", "investigate-call",
             "investigate-minutes", "investigate-model",
@@ -2222,12 +2239,26 @@ class CaretakerConsoleApp(App):
                 event.value and self._selected_guard_target
             )
         elif event.checkbox.id == "repair-approve-confirm":
-            self.query_one("#repair-approve", Button).disabled = not (
+            disabled = not (
                 event.value and self._selected_repair_approval and self._application_running
             )
+            self.query_one("#repair-approve", Button).disabled = disabled
+            self.query_one("#repair-reject", Button).disabled = disabled
+        elif event.checkbox.id == "behavior-manage-confirm":
+            self._refresh_behavior_actions()
         elif event.checkbox.id == "policy-confirm":
             self.query_one("#policy-apply", Button).disabled = not (
                 event.value and self._policy_preview is not None
+            )
+        elif event.checkbox.id == "policy-release-confirm":
+            self.query_one("#policy-release", Button).disabled = not (
+                event.value and self._selected_authority_lease
+            )
+        elif event.checkbox.id == "policy-signed-confirm":
+            self.query_one("#policy-apply-signed", Button).disabled = not (
+                event.value
+                and self.query_one("#policy-signed-descriptor", Input).value.strip()
+                and self.query_one("#policy-reason", Input).value.strip()
             )
         elif event.checkbox.id == "policy-override":
             self._policy_preview = None
@@ -2745,6 +2776,9 @@ class CaretakerConsoleApp(App):
             rows.append(record)
         self._authority_rows = rows
         self._selected_authority_lease = None
+        release_confirm = self.query_one("#policy-release-confirm", Checkbox)
+        release_confirm.value = False
+        release_confirm.disabled = True
         self.query_one("#policy-release", Button).disabled = True
 
         assurance = snapshot.get("overall_assurance", "UNCONFIGURED") if snapshot else "UNAVAILABLE"
@@ -3003,6 +3037,8 @@ class CaretakerConsoleApp(App):
                     self._write_json("#behavior-output", response.get("assessment") or response)
                     return
                 if button == "behavior-archive":
+                    if not self.query_one("#behavior-manage-confirm", Checkbox).value:
+                        raise ValueError("Confirm that you intend to archive the selected snapshot")
                     response = await self._request(
                         "behavior-archive", snapshot_ids=[snapshot_id]
                     )
@@ -3011,6 +3047,8 @@ class CaretakerConsoleApp(App):
                     await self.refresh_behavior()
                     return
                 if button == "behavior-delete":
+                    if not self.query_one("#behavior-manage-confirm", Checkbox).value:
+                        raise ValueError("Confirm that you intend to permanently delete the selected snapshot")
                     response = await self._request("behavior-delete", snapshot_id=snapshot_id)
                     self._selected_behavior_snapshot = None
                     self._write_json("#behavior-output", response)
@@ -3135,14 +3173,18 @@ class CaretakerConsoleApp(App):
                     raise ValueError("Select a pending Repair approval first")
                 if not self._application_running:
                     raise RuntimeError("The application is stopped; Repair approvals require a live runtime")
+                if not self.query_one("#repair-approve-confirm", Checkbox).value:
+                    raise ValueError("Review the evidence and confirm the Repair decision first")
                 if button == "repair-approve":
                     response = await self._request("runtime-repair-approve", episode_id=episode)
                 else:
                     reason = self.query_one("#repair-reason", Input).value.strip()
+                    if not reason:
+                        raise ValueError("Rejecting a Repair candidate requires an operator reason")
                     response = await self._request(
                         "runtime-repair-reject",
                         episode_id=episode,
-                        reason=reason or "operator rejected candidate from Caretaker console",
+                        reason=reason,
                     )
                 self._write_json("#repair-output", response)
                 await self.refresh_status()
@@ -3217,10 +3259,14 @@ class CaretakerConsoleApp(App):
                         "Enter a signed lease descriptor filename from policy/runtime-leases/"
                     )
                 reason = self.query_one("#policy-reason", Input).value.strip()
+                if not reason:
+                    raise ValueError("Applying a signed lease requires an incident/operator reason")
+                if not self.query_one("#policy-signed-confirm", Checkbox).value:
+                    raise ValueError("Review and confirm the signed lease scope first")
                 response = await self._request(
                     "authority-lease-acquire-signed",
                     descriptor=descriptor,
-                    reason=reason or "signed runtime policy lease",
+                    reason=reason,
                 )
                 self._write_json("#policy-output", response)
                 await self.refresh_authority()
@@ -3230,6 +3276,8 @@ class CaretakerConsoleApp(App):
             if button == "policy-release":
                 if not self._selected_authority_lease:
                     raise ValueError("Select a runtime policy lease first")
+                if not self.query_one("#policy-release-confirm", Checkbox).value:
+                    raise ValueError("Confirm release of the selected runtime policy lease first")
                 response = await self._request(
                     "authority-lease-release", lease_id=self._selected_authority_lease
                 )

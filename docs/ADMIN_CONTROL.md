@@ -95,6 +95,26 @@ fallback files, and the bounded record limit. A shared context banner retains
 the selected target, incident, and call while the operator moves between views;
 **Clear context** returns to the unscoped console.
 
+For a first response, use this operator workflow:
+
+1. Start in **Attention** and select the highest-priority item.
+2. Use its direct action to open the owning tab; the shared target, incident,
+   and call context follows automatically.
+3. Review the plain-language summary, then follow the related Guard, Behavior,
+   Repair, Policy, Log, and Investigation links needed to establish evidence.
+4. Treat Behavior comparisons and model assessments as evidence, not proof.
+   Check coverage, generation, integrity, source, time range, and omitted data.
+5. Before changing state, verify the exact selected object and acknowledge the
+   action. Destructive Behavior operations, Repair approval/rejection, policy
+   application, signed-lease application, and lease release all fail closed
+   without their corresponding confirmation. Repair rejection and every policy
+   application also require an explicit operator reason.
+6. Refresh to verify the resulting state, then use **Clear context** before
+   starting an unrelated investigation.
+
+Disabled actions indicate missing selection, evidence, live-runtime access, or
+confirmation; they are not hidden capabilities or undocumented parameters.
+
 The **Overview** view sorts targets needing attention ahead of ordinary targets
 and explains its operator-facing health states. Selecting a target provides a
 plain-language summary plus direct navigation to Guard evidence, Behavior
@@ -124,7 +144,8 @@ hash, authority generation, and reason approval is required. The console also
 states which assurance evidence is absent from the current approval protocol;
 operators must not interpret approval as proof of missing validation lineage.
 Approval remains disabled until the candidate and evidence gaps are explicitly
-acknowledged. Selected episodes link directly to triggering Logs, Guard evidence,
+acknowledged. The same acknowledgement gates both approval and rejection, and a
+rejection additionally requires a reason. Selected episodes link directly to triggering Logs, Guard evidence,
 and Investigation.
 
 The **Policy** view separates inspection from mutation. Common Repair authority
@@ -134,6 +155,9 @@ the exact path/value, target scope, expiration, reason, and whether an explicit
 constraint override may violate a higher-authority guarantee. Any edited input
 invalidates the preview, and the operator must acknowledge the scope and
 guarantee impact before **Apply previewed lease** becomes available.
+Signed descriptors require an explicit reason and separate scope acknowledgement.
+Releasing a selected runtime lease also requires confirmation, reducing accidental
+state changes while navigating the policy table.
 
 The filter field accepts ordinary case-insensitive text and compact field
 selectors. Multiple terms are combined with AND semantics. Examples:

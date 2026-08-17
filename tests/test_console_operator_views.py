@@ -135,7 +135,7 @@ def test_behavior_actions_explain_and_enforce_a_b_workflow(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 
     async def exercise() -> None:
-        async with app.run_test(size=(180, 55)):
+        async with app.run_test(size=(180, 55)) as pilot:
             app._application_running = True
             app._behavior_records = [
                 {
@@ -156,6 +156,13 @@ def test_behavior_actions_explain_and_enforce_a_b_workflow(tmp_path):
             assert app.query_one("#behavior-compare-live", Button).disabled is False
             assert app.query_one("#behavior-compare-previous", Button).disabled is False
             assert app.query_one("#behavior-compare-a", Button).disabled is True
+            assert app.query_one("#behavior-archive", Button).disabled is True
+            assert app.query_one("#behavior-delete", Button).disabled is True
+
+            app.query_one("#behavior-manage-confirm", Checkbox).value = True
+            await pilot.pause()
+            assert app.query_one("#behavior-archive", Button).disabled is False
+            assert app.query_one("#behavior-delete", Button).disabled is False
 
             app._behavior_compare_anchor = "older"
             app._refresh_behavior_actions()
@@ -164,6 +171,40 @@ def test_behavior_actions_explain_and_enforce_a_b_workflow(tmp_path):
             status = str(app.query_one("#behavior-selection-status", Static).render())
             assert "cross-generation allowed" in status
             assert "A↔latest" in status
+
+    asyncio.run(exercise())
+
+
+def test_consequential_console_actions_fail_closed(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)) as pilot:
+            app._application_running = True
+            app._selected_repair_approval = "episode-1"
+            repair_confirm = app.query_one("#repair-approve-confirm", Checkbox)
+            repair_confirm.disabled = False
+            repair_confirm.value = True
+            await pilot.pause()
+            assert app.query_one("#repair-approve", Button).disabled is False
+            assert app.query_one("#repair-reject", Button).disabled is False
+
+            app.query_one("#policy-reason").value = "incident-42"
+            app.query_one("#policy-signed-descriptor").value = "lease.json"
+            await pilot.pause()
+            signed_confirm = app.query_one("#policy-signed-confirm", Checkbox)
+            assert signed_confirm.disabled is False
+            assert app.query_one("#policy-apply-signed", Button).disabled is True
+            signed_confirm.value = True
+            await pilot.pause()
+            assert app.query_one("#policy-apply-signed", Button).disabled is False
+
+            app._selected_authority_lease = "lease-1"
+            release_confirm = app.query_one("#policy-release-confirm", Checkbox)
+            release_confirm.disabled = False
+            release_confirm.value = True
+            await pilot.pause()
+            assert app.query_one("#policy-release", Button).disabled is False
 
     asyncio.run(exercise())
 
