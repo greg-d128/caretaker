@@ -67,6 +67,31 @@ def _load_external_signer(specification: str | None):
     return value
 
 
+def _behavior_materialization_log(
+    envelopes: tuple[dict[str, object], ...],
+) -> tuple[str, dict[str, object]]:
+    snapshots = [dict(item.get("snapshot") or {}) for item in envelopes]
+    subjects = sorted({str(item.get("subject_key") or "unknown") for item in snapshots})
+    subject_preview = ", ".join(subjects[:3])
+    if len(subjects) > 3:
+        subject_preview += f", +{len(subjects) - 3} more"
+    count = len(snapshots)
+    message = (
+        f"Materialized {count} behavior snapshot{'s' if count != 1 else ''}"
+        + (f" for {subject_preview}" if subject_preview else "")
+    )
+    return message, {
+        "snapshot_count": count,
+        "subject_keys": subjects,
+        "snapshot_ids": [str(item.get("snapshot_id") or "") for item in snapshots],
+        "seal_reasons": sorted({str(item.get("seal_reason") or "unknown") for item in snapshots}),
+        "signature_states": sorted({
+            str((envelope.get("integrity") or {}).get("signature_state") or "unknown")
+            for envelope in envelopes
+        }),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m caretaker.run")
     parser.add_argument("--policy")
@@ -166,21 +191,14 @@ def main(argv: list[str] | None = None) -> int:
             deployment_fingerprint=deployment_fingerprint(),
             maximum=maximum,
         )
-        for envelope in envelopes:
-            snapshot = envelope["snapshot"]
+        if envelopes:
+            message, fields = _behavior_materialization_log(envelopes)
             runtime.event(
                 logger_name="caretaker.behavior",
                 severity=20,
                 channel=LogChannel.GUARD,
-                message="Behavior snapshot automatically materialized",
-                fields={
-                    "snapshot_id": snapshot["snapshot_id"],
-                    "subject_key": snapshot["subject_key"],
-                    "generation_id": snapshot.get("generation_id"),
-                    "seal_reason": snapshot.get("seal_reason"),
-                    "content_sha256": envelope["integrity"]["content_sha256"],
-                    "signature_state": envelope["integrity"]["signature_state"],
-                },
+                message=message,
+                fields=fields,
             )
         behavior_revision["value"] += len(envelopes)
         return len(envelopes)

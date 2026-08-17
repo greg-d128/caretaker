@@ -5,7 +5,7 @@ from types import ModuleType
 
 import pytest
 
-from caretaker.run import _load_external_signer
+from caretaker.run import _behavior_materialization_log, _load_external_signer
 
 
 def test_external_signer_provider_can_be_loaded_from_module_attribute(monkeypatch):
@@ -33,3 +33,32 @@ def test_external_signer_provider_requires_contract(monkeypatch):
 
     with pytest.raises(TypeError, match="public_identity"):
         _load_external_signer(f"{module.__name__}:value")
+
+
+def test_behavior_materialization_log_consolidates_artifacts_by_cycle():
+    message, fields = _behavior_materialization_log((
+        {
+            "snapshot": {
+                "snapshot_id": "snapshot-a",
+                "subject_key": "function:lab.behavior_probe",
+                "seal_reason": "sample-target-reached",
+            },
+            "integrity": {"signature_state": "HASH_CHAINED"},
+        },
+        {
+            "snapshot": {
+                "snapshot_id": "snapshot-b",
+                "subject_key": "function:lab.dependency.json.dumps",
+                "seal_reason": "sample-target-reached",
+            },
+            "integrity": {"signature_state": "HASH_CHAINED"},
+        },
+    ))
+
+    assert message == (
+        "Materialized 2 behavior snapshots for "
+        "function:lab.behavior_probe, function:lab.dependency.json.dumps"
+    )
+    assert fields["snapshot_count"] == 2
+    assert fields["snapshot_ids"] == ["snapshot-a", "snapshot-b"]
+    assert fields["signature_states"] == ["HASH_CHAINED"]
