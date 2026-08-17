@@ -127,6 +127,10 @@ Each subject's newest analytical generation is its default green comparison
 reference. Operators select another generation and use **Compare**, or use
 **Set Reference** to change only that subject's reference.
 
+The persistent **Save Report** button exports the active tab's visible summaries,
+table rows, inputs, and detail panels as a private plain-text file under
+`<data-directory>/reports/`, suitable for review before attaching to a ticket.
+
 The console uses the same authenticated local Unix control plane as the
 supervisor. It does not expose arbitrary shell commands or Python execution.
 See [`docs/ADMIN_CONTROL.md`](docs/ADMIN_CONTROL.md) for the first-response

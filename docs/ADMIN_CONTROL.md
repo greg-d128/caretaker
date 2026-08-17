@@ -93,7 +93,12 @@ The header reports when the console last refreshed, whether runtime information
 is live or cached, whether Logs and Policy came from the supervisor or persisted
 fallback files, and the bounded record limit. A shared context banner retains
 the selected target, incident, and call while the operator moves between views;
-**Clear context** returns to the unscoped console.
+**Clear context** returns to the unscoped console. **Save Report** is available
+from every tab. It writes the active tab's on-screen summaries, non-empty inputs,
+visible table rows, and detail panels to a timestamped plain-text file under
+`<data-directory>/reports/`. The directory is mode `0700` and report files are
+mode `0600`; review a report before attaching it to an external ticket because
+it can contain operational identifiers and evidence visible in the console.
 
 For a first response, use this operator workflow:
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import stat
 
 from caretaker.console import CaretakerConsoleApp
 from rich.text import Text
@@ -600,6 +601,34 @@ def test_behavior_archive_controls_fit_in_console(tmp_path):
             assert reason.region.width >= 18
             assert archive.region.width > 0
             assert archive.region.right <= app.size.width
+
+    asyncio.run(exercise())
+
+
+def test_save_report_exports_active_tab_as_private_text(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(120, 55)) as pilot:
+            app._activate_tab("behavior")
+            await pilot.pause()
+            app.query_one("#behavior-archive-reason").value = "Ticket CT-42"
+            table = app.query_one("#behavior-table", DataTable)
+            table.add_row(
+                "1", "REFERENCE", "lab.probe", "abc123", "first", "last",
+                "10/1000", "recent", "preliminary", "valid",
+            )
+            app.query_one("#behavior-output").write("Behavior comparison details")
+
+            path = app._save_active_report()
+            report = path.read_text(encoding="utf-8")
+            assert path.parent == tmp_path / "reports"
+            assert path.name.startswith("caretaker-behavior-")
+            assert stat.S_IMODE(path.stat().st_mode) == 0o600
+            assert "Tab: behavior" in report
+            assert "behavior-archive-reason: Ticket CT-42" in report
+            assert "lab.probe" in report
+            assert "Behavior comparison details" in report
 
     asyncio.run(exercise())
 

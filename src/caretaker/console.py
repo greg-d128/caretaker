@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -88,7 +89,7 @@ class CaretakerConsoleApp(App):
     }
     #operator-context { layout: horizontal; }
     #operator-context-label { width: 1fr; }
-    #context-clear { width: auto; min-width: 14; }
+    #context-clear, #save-report { width: auto; min-width: 14; margin-left: 1; }
     #attention-split {
         height: 1fr;
         min-height: 0;
@@ -444,6 +445,7 @@ class CaretakerConsoleApp(App):
                 id="operator-context-label",
             )
             yield Button("Clear context", id="context-clear", disabled=True)
+            yield Button("Save Report", id="save-report", variant="primary")
         with TabbedContent(initial="attention"):
             with TabPane("Attention", id="attention"):
                 yield Static(
@@ -2993,9 +2995,87 @@ class CaretakerConsoleApp(App):
         log.clear()
         log.write(json.dumps(value, indent=2, sort_keys=True, default=str))
 
+    @staticmethod
+    def _report_text(value: Any) -> str:
+        if isinstance(value, Text):
+            return value.plain
+        plain = getattr(value, "plain", None)
+        return str(plain if plain is not None else value).strip()
+
+    def _save_active_report(self) -> Path:
+        tabs = self.query_one(TabbedContent)
+        tab_id = str(tabs.active or "console")
+        pane = self.query_one(f"#{tab_id}", TabPane)
+        generated = datetime.now(timezone.utc)
+        sections = [
+            "Caretaker Console Report",
+            "========================",
+            f"Tab: {tab_id}",
+            f"Generated (UTC): {generated.isoformat()}",
+            f"Data directory: {self.data_directory}",
+            self._report_text(self.query_one("#operator-status", Static).render()),
+            self._report_text(self.query_one("#data-status", Static).render()),
+            self._report_text(self.query_one("#operator-context-label", Static).render()),
+        ]
+
+        nonempty_inputs = []
+        for widget in pane.query(Input):
+            value = widget.value.strip()
+            if value:
+                nonempty_inputs.append(f"{widget.id or 'input'}: {value}")
+        if nonempty_inputs:
+            sections.extend(("", "Active inputs", "-------------", *nonempty_inputs))
+
+        visible_summaries = []
+        for widget in pane.query(Static):
+            if type(widget) is not Static or not widget.display:
+                continue
+            rendered = self._report_text(widget.render())
+            if rendered and rendered not in visible_summaries:
+                visible_summaries.append(rendered)
+        if visible_summaries:
+            sections.extend(("", "On-screen summary", "-----------------", *visible_summaries))
+
+        for table in pane.query(DataTable):
+            table_name = table.id or "table"
+            sections.extend(("", table_name, "-" * len(table_name)))
+            headings = [self._report_text(column.label) for column in table.ordered_columns]
+            if headings:
+                sections.append(" | ".join(headings))
+            row_count = 0
+            for row_key in tuple(table.rows):
+                try:
+                    row = table.get_row(row_key)
+                except RowDoesNotExist:
+                    continue
+                sections.append(" | ".join(self._report_text(cell) for cell in row))
+                row_count += 1
+            if row_count == 0:
+                sections.append("(no rows)")
+
+        for log in pane.query(RichLog):
+            log_name = log.id or "details"
+            sections.extend(("", log_name, "-" * len(log_name)))
+            lines = [line.text.rstrip() for line in log.lines]
+            sections.extend(lines or ["(no details)"])
+
+        reports_directory = self.data_directory / "reports"
+        reports_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        reports_directory.chmod(0o700)
+        timestamp = generated.strftime("%Y%m%dT%H%M%S.%fZ")
+        path = reports_directory / f"caretaker-{tab_id}-{timestamp}.txt"
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as report:
+            report.write("\n".join(sections).rstrip() + "\n")
+        return path
+
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button = event.button.id or ""
         try:
+            if button == "save-report":
+                path = self._save_active_report()
+                self.notify(f"Saved report: {path}", title="Report saved", timeout=10)
+                return
             if button == "context-clear":
                 self._set_operator_context()
                 return
