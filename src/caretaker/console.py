@@ -566,13 +566,13 @@ class CaretakerConsoleApp(App):
                         yield Static("Selected snapshot / comparison", id="behavior-detail-title", classes="behavior-pane-title")
                         yield RichLog(id="behavior-output", wrap=True, markup=True)
                 yield Static(
-                    "Select a generation. Set Reference changes only that subject's green reference; Compare uses the selected row.",
+                    "Select a generation. Set Reference changes that subject's green reference; Compare epochs compares each row's representative sealed epoch and also reports cumulative generation coverage.",
                     id="behavior-selection-status",
                 )
                 with Horizontal(id="behavior-compare-actions"):
                     yield Input(placeholder="Ollama model for advisory analysis", id="behavior-model")
                     yield Button("Set Reference", id="behavior-set-reference", disabled=True)
-                    yield Button("Compare", id="behavior-compare", disabled=True, variant="primary")
+                    yield Button("Compare epochs", id="behavior-compare", disabled=True, variant="primary")
                     yield Button("Explain comparison", id="behavior-assess-comparison", disabled=True)
                 with Horizontal(id="behavior-manage-actions"):
                     yield Button("LLM history", id="behavior-assess-history")
@@ -2148,10 +2148,18 @@ class CaretakerConsoleApp(App):
         )
         output = self.query_one("#behavior-output", RichLog)
         output.clear()
+        output.write(
+            "[b]Comparison scope[/b] Behavior metrics below compare one representative sealed epoch "
+            "from each row. Generation coverage is cumulative across all verified disjoint epochs and "
+            "is shown separately; it is not substituted into epoch-local event statistics."
+        )
         for marker, operand in (
             ("Reference", comparison.get("snapshot_a") or {}),
             ("Selected", comparison.get("snapshot_b") or {}),
         ):
+            coverage = comparison.get(
+                "generation_coverage_a" if marker == "Reference" else "generation_coverage_b"
+            ) or {}
             calls = int(operand.get("call_count") or 0)
             target = int(operand.get("statistics_target") or 0)
             evidence = "target reached" if target and calls >= target else "preliminary"
@@ -2159,13 +2167,17 @@ class CaretakerConsoleApp(App):
                 f"[b]{marker}[/b] {operand.get('subject_key') or '-'}\n"
                 f"  snapshot={operand.get('snapshot_id') or 'live'}  created={operand.get('created_at') or '-'}\n"
                 f"  code={self._behavior_short_hash(operand.get('code_hash'))}  "
-                f"calls={calls}/{target or '?'} ({evidence})  events={operand.get('event_count', 0)}"
+                f"representative_epoch={operand.get('epoch_sequence') or '-'}  "
+                f"samples={operand.get('first_sample_sequence') or '-'}..{operand.get('last_sample_sequence') or '-'}\n"
+                f"  epoch calls={calls}/{target or '?'} ({evidence})  events={operand.get('event_count', 0)}\n"
+                f"  generation coverage={coverage.get('calls', calls)}/{coverage.get('target', target) or '?'} "
+                f"across {coverage.get('epochs', 1)} verified epoch(s)"
             )
         output.write(
             "[yellow]Collection targets indicate evidence volume, not guaranteed accuracy or workload representativeness.[/yellow]"
         )
         semantic_changes = comparison.get("semantic_changes") or ()
-        output.write("\n[b]What changed in observed behavior[/b]")
+        output.write("\n[b]What changed between the representative epochs[/b]")
         if semantic_changes:
             for change in semantic_changes[:40]:
                 marker = "+" if change.get("change") == "started" else "−"
@@ -3099,7 +3111,18 @@ class CaretakerConsoleApp(App):
                         snapshot_a_id=reference_id,
                         snapshot_b_id=snapshot_id,
                     )
-                    self._show_behavior_comparison(response.get("comparison") or {})
+                    comparison = dict(response.get("comparison") or {})
+                    reference = self._behavior_record(reference_id) or {}
+                    for suffix, record in (("a", reference), ("b", selected)):
+                        profile = record.get("profile") or {}
+                        provenance = profile.get("sampling_provenance") or {}
+                        comparison[f"generation_coverage_{suffix}"] = {
+                            "calls": int(profile.get("coverage_call_count", profile.get("call_count")) or 0),
+                            "epochs": int(profile.get("coverage_snapshot_count") or record.get("snapshot_count") or 1),
+                            "target": int(provenance.get("statistics_target") or 0),
+                            "gaps": int(profile.get("coverage_gap_count") or 0),
+                        }
+                    self._show_behavior_comparison(comparison)
                     return
                 if button == "behavior-assess-comparison":
                     if self._behavior_last_comparison is None:
