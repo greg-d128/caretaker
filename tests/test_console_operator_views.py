@@ -495,6 +495,11 @@ def test_behavior_actions_use_subject_scoped_reference_workflow(tmp_path):
             assert app.query_one("#behavior-compare", Button).disabled is True
             assert app.query_one("#behavior-archive", Button).disabled is True
             assert app.query_one("#behavior-delete", Button).disabled is True
+            assert str(app.query_one("#behavior-archive", Button).label) == "Archive selected"
+            assert str(app.query_one("#behavior-delete", Button).label) == "Delete selected"
+            assert str(app.query_one("#behavior-manage-confirm", Checkbox).label) == (
+                "Confirm archive/delete selected"
+            )
 
             app.query_one("#behavior-manage-confirm", Checkbox).value = True
             await pilot.pause()

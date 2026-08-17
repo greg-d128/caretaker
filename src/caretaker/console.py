@@ -577,9 +577,9 @@ class CaretakerConsoleApp(App):
                     yield Button("Explain comparison", id="behavior-assess-comparison", disabled=True)
                 with Horizontal(id="behavior-manage-actions"):
                     yield Button("LLM history", id="behavior-assess-history")
-                    yield Checkbox("Confirm archive/delete B", id="behavior-manage-confirm", disabled=True)
-                    yield Button("Archive B", id="behavior-archive", variant="warning", disabled=True)
-                    yield Button("Delete B", id="behavior-delete", variant="error", disabled=True)
+                    yield Checkbox("Confirm archive/delete selected", id="behavior-manage-confirm", disabled=True)
+                    yield Button("Archive selected", id="behavior-archive", variant="warning", disabled=True)
+                    yield Button("Delete selected", id="behavior-delete", variant="error", disabled=True)
 
             with TabPane("Repair", id="repair"):
                 yield Static(
