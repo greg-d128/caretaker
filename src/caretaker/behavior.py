@@ -588,7 +588,28 @@ class BehaviorSnapshotStore:
         # Stable two-pass sorting gives subject ascending, newest generation first.
         latest_rows.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
         latest_rows.sort(key=lambda item: str(item.get("subject_key") or "").casefold())
-        return tuple(latest_rows[:max(1, limit)])
+        by_subject: dict[str, list[dict[str, Any]]] = {}
+        for row in latest_rows:
+            by_subject.setdefault(str(row.get("subject_key") or ""), []).append(row)
+        # Allocate the bounded response breadth-first. When capacity permits,
+        # every subject gets its newest three generations before any subject gets
+        # a fourth, preventing a frequently changed function from hiding peers.
+        fair_order: list[dict[str, Any]] = []
+        depth = 0
+        while any(depth < len(rows) for rows in by_subject.values()):
+            for rows in by_subject.values():
+                if depth < len(rows):
+                    fair_order.append(rows[depth])
+            depth += 1
+        selected_ids = {
+            str(row.get("snapshot_id") or "")
+            for row in fair_order[:max(1, limit)]
+        }
+        selected = [
+            row for row in latest_rows
+            if str(row.get("snapshot_id") or "") in selected_ids
+        ]
+        return tuple(selected)
 
     def accept_guard_baseline(
         self,

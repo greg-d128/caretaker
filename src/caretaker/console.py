@@ -548,6 +548,7 @@ class CaretakerConsoleApp(App):
                     )
                     yield Button("Clear filter", id="behavior-filter-clear")
                     yield Checkbox("Show zero-call evidence", id="behavior-show-zero-calls")
+                    yield Checkbox("Show older generations", id="behavior-show-older")
                 with Grid(id="behavior-split"):
                     with Vertical(classes="behavior-pane"):
                         yield Static("Behavior snapshots", id="behavior-list-title", classes="behavior-pane-title")
@@ -1762,9 +1763,18 @@ class CaretakerConsoleApp(App):
         expression = self.query_one("#behavior-filter", Input).value.strip().casefold()
         tokens = expression.split()
         show_zero_calls = self.query_one("#behavior-show-zero-calls", Checkbox).value
+        show_older = self.query_one("#behavior-show-older", Checkbox).value
         hidden_zero_calls = 0
+        hidden_older = 0
+        subject_generation_rank: dict[str, int] = {}
         self._displayed_behavior_records = []
         for record in self._behavior_records:
+            subject_key = str(record.get("subject_key") or "")
+            rank = subject_generation_rank.get(subject_key, 0) + 1
+            subject_generation_rank[subject_key] = rank
+            if rank > 3 and not show_older:
+                hidden_older += 1
+                continue
             if self._behavior_is_zero_call(record) and not show_zero_calls:
                 hidden_zero_calls += 1
                 continue
@@ -1836,7 +1846,8 @@ class CaretakerConsoleApp(App):
         self.query_one("#behavior-list-title", Static).update(
             f"Behavior generations: showing {len(self._displayed_behavior_records)}/{len(self._behavior_records)} "
             f"across {subjects} subject{'s' if subjects != 1 else ''}; cumulative evidence preferred per generation; "
-            f"{hidden_zero_calls} zero-call generation{'s' if hidden_zero_calls != 1 else ''} hidden"
+            f"{hidden_zero_calls} zero-call generation{'s' if hidden_zero_calls != 1 else ''} hidden; "
+            f"{hidden_older} older generation{'s' if hidden_older != 1 else ''} hidden"
         )
 
     @staticmethod
@@ -2300,6 +2311,8 @@ class CaretakerConsoleApp(App):
         elif event.checkbox.id == "behavior-manage-confirm":
             self._refresh_behavior_actions()
         elif event.checkbox.id == "behavior-show-zero-calls":
+            self._apply_behavior_filter()
+        elif event.checkbox.id == "behavior-show-older":
             self._apply_behavior_filter()
         elif event.checkbox.id == "policy-confirm":
             self.query_one("#policy-apply", Button).disabled = not (

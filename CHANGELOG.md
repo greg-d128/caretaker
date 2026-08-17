@@ -90,6 +90,8 @@
   generation-scoped sample ranges that are validated before cumulative coverage.
 - Prefer proven cumulative epoch evidence in each Behavior generation row so a
   later legacy, module, or overlapping partial cannot mask useful analysis.
+- Show the three newest generations per function by default and allocate bounded
+  summary capacity across subjects before admitting fourth and older generations.
 - Add lightweight adaptive instrumentation with policy-controlled promotion through pre-repair BEHAVIOR evidence collection and policy-controlled demotion after accepted repair lifecycle stages.
 - Separate repair lifecycle from observation intensity and use `LIGHTWEIGHT -> BEHAVIOR -> REPAIR -> BEHAVIOR -> VALIDATION -> LONG_TERM_ACCEPTANCE` as the operator lifecycle.
 - Add generation-scoped call-count behavior sampling, bounded online duration statistics, reservoir-backed p10/p50/p90/p95/p99 estimates, sampling-stage provenance, and automatic snapshot materialization.

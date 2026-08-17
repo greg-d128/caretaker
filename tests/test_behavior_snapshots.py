@@ -171,6 +171,25 @@ def test_partial_capture_does_not_mask_cumulative_generation_summary(tmp_path: P
     assert summary["profile"]["coverage_call_count"] == 1
 
 
+def test_summary_limit_allocates_three_generations_per_subject_before_older_rows(tmp_path: Path):
+    store = BehaviorSnapshotStore(tmp_path)
+    for subject in ("function:lab.alpha", "function:lab.zeta"):
+        for generation in range(4):
+            capture = _capture(code_hash=str(generation) * 64, events=1)
+            capture["subject_key"] = subject
+            capture["subject"] = {"target_id": subject.removeprefix("function:")}
+            capture.pop("generation_id", None)
+            store.create(capture)
+
+    summaries = store.list_summaries(limit=6)
+
+    counts = {
+        subject: sum(item["subject_key"] == subject for item in summaries)
+        for subject in ("function:lab.alpha", "function:lab.zeta")
+    }
+    assert counts == {"function:lab.alpha": 3, "function:lab.zeta": 3}
+
+
 def test_overlapping_epoch_range_cannot_mask_prior_generation_coverage(tmp_path: Path):
     store = BehaviorSnapshotStore(tmp_path)
     first = _capture(code_hash="a" * 64, events=2)

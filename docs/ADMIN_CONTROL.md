@@ -130,7 +130,11 @@ available summary, events, deviations, and inspections were reviewed.
 The **Behavior** list shows one analytical row for each subject/generation pair.
 It prefers the newest snapshot with proven cumulative epoch coverage; a newer
 partial artifact cannot mask that evidence. The newest partial is used only when
-the generation has no cumulative snapshot. Grouping occurs before the response limit, so frequent
+the generation has no cumulative snapshot. Within the bounded 500-row response,
+the default view retains the three newest generations for every subject when they
+exist. **Show older generations**
+reveals additional returned history. Grouping and breadth-first allocation occur
+before the response limit, so frequent
 materialization of a hot function cannot hide a rare generation. Rows are sorted
 by subject and then newest generation first. A generation ID is a deterministic
 SHA-256 fingerprint over subject, code identity, monitoring configuration, and

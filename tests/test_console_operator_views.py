@@ -194,6 +194,35 @@ def test_behavior_list_hides_zero_call_evidence_until_requested(tmp_path):
             }
 
     asyncio.run(exercise())
+
+
+def test_behavior_list_shows_three_latest_generations_per_subject_by_default(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)) as pilot:
+            app._behavior_records = [
+                {
+                    "snapshot_id": f"generation-{number}",
+                    "subject_key": "function:lab.probe",
+                    "generation_id": str(number),
+                    "profile": {"coverage_call_count": number, "coverage_kind": "generation"},
+                }
+                for number in (4, 3, 2, 1)
+            ]
+            app._apply_behavior_filter()
+            assert [item["snapshot_id"] for item in app._displayed_behavior_records] == [
+                "generation-4", "generation-3", "generation-2",
+            ]
+            assert "1 older generation hidden" in str(
+                app.query_one("#behavior-list-title", Static).render()
+            )
+
+            app.query_one("#behavior-show-older", Checkbox).value = True
+            await pilot.pause()
+            assert len(app._displayed_behavior_records) == 4
+
+    asyncio.run(exercise())
 def test_behavior_actions_explain_and_enforce_a_b_workflow(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 

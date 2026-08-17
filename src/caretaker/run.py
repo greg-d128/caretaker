@@ -239,7 +239,9 @@ def main(argv: list[str] | None = None) -> int:
                     "workers": [asdict(item) for item in supervisor.workers.all()] if supervisor else [],
                     "runtime": application_runtime}
         if command == "behavior-list":
-            limit = max(1, min(int(request.get("limit", 200)), 500))
+            # Generation summaries are compact. Use the full bounded allowance so
+            # the console can retain three generations across many subjects.
+            limit = max(1, min(int(request.get("limit", 500)), 500))
             return {
                 "ok": True,
                 "snapshots": list(behavior_store.list_summaries(limit=limit)),
