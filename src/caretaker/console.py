@@ -416,6 +416,7 @@ class CaretakerConsoleApp(App):
         self._selected_behavior_snapshot: str | None = None
         self._behavior_references: dict[str, str] = {}
         self._behavior_last_comparison: dict[str, Any] | None = None
+        self._behavior_view_mode = "detail"
         self._guard_records: list[dict[str, Any]] = []
         self._selected_guard_target: str | None = None
         self._investigation_records: list[dict[str, Any]] = []
@@ -1595,6 +1596,7 @@ class CaretakerConsoleApp(App):
             if not snapshot_id:
                 return
             self._selected_behavior_snapshot = snapshot_id
+            self._behavior_view_mode = "detail"
             self.query_one("#behavior-manage-confirm", Checkbox).value = False
             behavior_target = str((record.get("subject") or {}).get("target_id") or "")
             self._set_operator_context(target=behavior_target or None)
@@ -1767,6 +1769,8 @@ class CaretakerConsoleApp(App):
             previous_generation = ""
             self._selected_behavior_snapshot = None
             self._behavior_references.clear()
+            self._behavior_last_comparison = None
+            self._behavior_view_mode = "detail"
         self._behavior_collection_id = collection_id
         self._behavior_loaded_revision = int(response.get("revision") or 0)
         self._behavior_records = [
@@ -1804,13 +1808,15 @@ class CaretakerConsoleApp(App):
             self._behavior_references.setdefault(subject, str(record.get("snapshot_id") or ""))
         self._apply_behavior_filter()
         if not self._behavior_records:
+            self._behavior_last_comparison = None
+            self._behavior_view_mode = "detail"
             self.query_one("#behavior-detail-title", Static).update("Behavior snapshots")
             output = self.query_one("#behavior-output", RichLog)
             output.clear()
             output.write(
                 "No behavior snapshots have been saved. Run the target workload first, then save or refresh observations."
             )
-        elif self._selected_behavior_snapshot:
+        elif self._selected_behavior_snapshot and self._behavior_view_mode != "comparison":
             selected = self._behavior_record(self._selected_behavior_snapshot)
             if selected is not None:
                 detail = await self._request(
@@ -2019,6 +2025,7 @@ class CaretakerConsoleApp(App):
         *,
         summary: dict[str, Any] | None = None,
     ) -> None:
+        self._behavior_view_mode = "detail"
         snapshot = envelope.get("snapshot") or {}
         integrity = envelope.get("integrity") or {}
         subject = snapshot.get("subject") or {}
@@ -2139,6 +2146,7 @@ class CaretakerConsoleApp(App):
                 )
 
     def _show_behavior_comparison(self, comparison: dict[str, Any]) -> None:
+        self._behavior_view_mode = "comparison"
         self._behavior_last_comparison = comparison
         self._refresh_behavior_actions()
         subject_a = comparison.get("subject_a") or "-"
@@ -3090,6 +3098,7 @@ class CaretakerConsoleApp(App):
                     subject = str(selected.get("subject_key") or "")
                     self._behavior_references[subject] = snapshot_id
                     self._behavior_last_comparison = None
+                    self._behavior_view_mode = "detail"
                     self._apply_behavior_filter()
                     self._refresh_behavior_actions()
                     self.query_one("#behavior-detail-title", Static).update(

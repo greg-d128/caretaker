@@ -325,6 +325,60 @@ def test_behavior_auto_refresh_failure_is_contained_and_retried(tmp_path):
     asyncio.run(exercise())
 
 
+def test_behavior_auto_refresh_preserves_open_comparison(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            app.socket_path = tmp_path / "control.sock"
+            app.query_one("TabbedContent").active = "behavior"
+            app._behavior_collection_id = "collection-a"
+            app._behavior_loaded_revision = 1
+            app._behavior_view_mode = "comparison"
+            app._behavior_last_comparison = {"snapshot_a_id": "reference", "snapshot_b_id": "selected"}
+            app._behavior_records = [{
+                "snapshot_id": "selected",
+                "subject_key": "function:lab.behavior_probe",
+                "generation_id": "generation-a",
+                "profile": {"coverage_call_count": 100, "coverage_kind": "generation"},
+            }]
+            app._selected_behavior_snapshot = "selected"
+            requests: list[str] = []
+
+            async def request(command: str, **payload):
+                requests.append(command)
+                if command == "status":
+                    return {
+                        "ok": True,
+                        "application_running": False,
+                        "behavior_collection_id": "collection-a",
+                        "behavior_revision": 2,
+                    }
+                if command == "behavior-list":
+                    return {
+                        "ok": True,
+                        "collection_id": "collection-a",
+                        "revision": 2,
+                        "snapshots": [{
+                            "snapshot_id": "selected-new",
+                            "subject_key": "function:lab.behavior_probe",
+                            "generation_id": "generation-a",
+                            "profile": {"coverage_call_count": 200, "coverage_kind": "generation"},
+                        }],
+                    }
+                raise AssertionError(f"comparison refresh must not request {command}")
+
+            app._request = request  # type: ignore[method-assign]
+            await app.refresh_status()
+
+            assert requests == ["status", "behavior-list"]
+            assert app._behavior_view_mode == "comparison"
+            assert app._behavior_last_comparison is not None
+            assert app._selected_behavior_snapshot == "selected-new"
+
+    asyncio.run(exercise())
+
+
 def test_behavior_collection_identity_clears_stale_state_when_revision_restarts(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 
