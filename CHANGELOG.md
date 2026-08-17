@@ -53,6 +53,8 @@
 - Collapse the Behavior list to one latest snapshot per subject/generation before
   applying its row limit; sort by subject/newest generation and expose first/last
   seen, cumulative evidence coverage, and bounded hourly call-activity bars.
+- Label non-cumulative Behavior coverage as `partial` rather than the ambiguous
+  `window`, while retaining `gen` for safely cumulative generation coverage.
 - Open on a unified Attention queue, retain shared target/incident/call context
   across all eight tabs, and report evidence freshness, source, and bounded scope.
 - Make Overview and Guard issue-first, add direct evidence/investigation links,

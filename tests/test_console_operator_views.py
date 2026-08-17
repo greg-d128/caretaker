@@ -114,13 +114,13 @@ def test_behavior_evidence_distinguishes_preliminary_from_collection_target():
             "call_count": 1,
             "sampling_provenance": {"statistics_target": 1000},
         }
-    }) == ("PRELIMINARY", "window 1/1000")
+    }) == ("PRELIMINARY", "partial 1/1000")
     assert CaretakerConsoleApp._behavior_evidence({
         "profile": {
             "call_count": 1000,
             "sampling_provenance": {"statistics_target": 1000},
         }
-    }) == ("TARGET REACHED", "window 1000/1000")
+    }) == ("TARGET REACHED", "partial 1000/1000")
     assert CaretakerConsoleApp._behavior_evidence({
         "profile": {
             "call_count": 1,

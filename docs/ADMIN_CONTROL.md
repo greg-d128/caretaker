@@ -143,6 +143,13 @@ buckets and actual observation-window boundaries; older snapshots made before th
 metadata existed show a labeled histogram of up to twelve saved windows and fall
 back to saved time for first/last seen.
 
+Coverage labels use `gen current/target` when Caretaker can safely accumulate
+disjoint captures across the generation. They use `partial current/target` when
+the value describes only the selected non-cumulative capture, such as a manual or
+potentially overlapping snapshot. `partial` does not mean the artifact is damaged.
+In either case, the target measures evidence volume rather than correctness or
+workload representativeness.
+
 The **Behavior** view treats a selected latest snapshot as comparison operand B.
 **Use B as A** marks an operator baseline; after running more workload and
 refreshing, **A ↔ latest** compares that baseline with the newest snapshot for
