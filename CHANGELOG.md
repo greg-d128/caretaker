@@ -4,6 +4,9 @@
 
 ### Public research release assurance
 
+- Prompt attended signing workflows for missing public key slots, fingerprints,
+  and manifest versions; retain fail-fast non-interactive behavior and print
+  concrete review, transfer, repeated-signing, and final-verification next steps.
 - State the current supply-chain scope explicitly: runtime evidence, Caretaker OpenPGP manifests, dependency behavior, import routing, and temporary function repair are implemented research areas; SBOM/advisory ingestion, registry monitoring, upgrade orchestration, modern provenance ecosystems, deployment, and external incident integrations remain roadmap work.
 - Publish the validation, isolation, same-UID control, VM-attestation, policy-truthfulness, multiprocess, and Repair restart debts in the future-work ledger.
 - Add a private vulnerability-reporting policy, supported Python/Linux scope, a current development verification report, and Forgejo CI for CPython 3.11 through 3.13.

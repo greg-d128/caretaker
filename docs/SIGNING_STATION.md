@@ -10,6 +10,19 @@ After generating and reviewing a canonical manifest, sign it with one full prima
 make sign SIGNING_KEY=FULL_PRIMARY_FINGERPRINT_A
 ```
 
+For an attended terminal, the variable may be omitted and Make will ask for it:
+
+```text
+$ make sign
+Full primary signing-key fingerprint: 0123456789ABCDEF0123456789ABCDEF01234567
+```
+
+Prompts are deliberately limited to missing, non-secret identifiers and version
+numbers. Make never asks for a private key or OpenPGP passphrase; GnuPG owns any
+passphrase interaction. In CI, redirected input, or another non-interactive
+environment, specify variables explicitly. The command fails instead of waiting
+indefinitely when `/dev/tty` is unavailable.
+
 The Makefile defaults to `MANIFEST=release-manifest.json` and
 `SIGNATURE=release-manifest.json.asc`. Override either value when signing a
 different manifest or when naming signatures by signer, for example:
@@ -38,6 +51,22 @@ make manifests RELEASE_MANIFEST_VERSION=1 PROTECTED_MANIFEST_VERSION=1
 make inspect-integrity
 ```
 
+The attended equivalent prompts for the two version numbers:
+
+```text
+$ make manifests
+Release manifest version (positive integer): 1
+Protected manifest version (positive integer): 1
+```
+
+For automation, keep inputs explicit:
+
+```bash
+make manifests \
+  RELEASE_MANIFEST_VERSION=1 \
+  PROTECTED_MANIFEST_VERSION=1
+```
+
 `root-check` rejects placeholder or duplicate primary fingerprints, role/slot
 mismatches, non-canonical JSON, unmatched protected paths, secret material in a
 supplied certificate, and certificates without usable signing subkeys.
@@ -49,6 +78,14 @@ On signing station A, after independently comparing the document hashes:
 ```bash
 make signing-check KEY_SLOT=a SIGNING_KEY=FULL_PRIMARY_FINGERPRINT_A
 make sign-all KEY_SLOT=a SIGNING_KEY=FULL_PRIMARY_FINGERPRINT_A
+```
+
+Or allow the attended command to request the public identifiers once:
+
+```text
+$ make sign-all
+Key slot (a, b, or c): a
+Full primary key fingerprint for slot a: 0123456789ABCDEF0123456789ABCDEF01234567
 ```
 
 Stations B and C use their own slot and primary fingerprint. `signing-check`
@@ -69,6 +106,42 @@ make verify-signature \
   MANIFEST=release-manifest.json \
   SIGNATURE=release-manifest.json.key-a.asc
 ```
+
+## Next steps printed by the commands
+
+The quality-of-life targets finish with an explicit **Next steps** block:
+
+- manifest generation directs the coordinator to inspect the canonical JSON,
+  record its hash, and transfer the reviewed files to signing stations;
+- `signing-check` identifies the corresponding `sign-all` invocation;
+- signing directs the station operator to export only `.asc` files, return them
+  with the reviewed hashes, and repeat independently for the remaining slots;
+- after A, B, and C signatures are collected, run `make verify-all
+  PUBLICATION_DIR=.` on the complete public directory.
+
+Example single-artifact station workflow:
+
+```bash
+# Inputs may instead be entered at the prompts.
+make signing-check KEY_SLOT=b SIGNING_KEY=FULL_PRIMARY_FINGERPRINT_B
+make sign-release KEY_SLOT=b SIGNING_KEY=FULL_PRIMARY_FINGERPRINT_B
+
+# Return this public file to the coordinator:
+# release-manifest.json.key-b.asc
+```
+
+Example complete station workflow:
+
+```bash
+make sign-all KEY_SLOT=c SIGNING_KEY=FULL_PRIMARY_FINGERPRINT_C
+# Return root.json.key-c.asc, release-manifest.json.key-c.asc,
+# and protected-manifest.json.key-c.asc.
+```
+
+Do not run `FORCE=1` merely because a manifest or signature already exists.
+First determine whether it is the already-reviewed artifact. Signature targets
+refuse overwrites; retain or deliberately remove an obsolete signature only
+after confirming its exact path and provenance.
 
 A dedicated Raspberry Pi can be used as a medium-assurance research signing environment when it is narrowly configured and normally offline.
 

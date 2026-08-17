@@ -42,55 +42,81 @@ root-check: ## Validate root policy and optional PUBLIC_KEYS
 	$(INTEGRITY) inspect "$(ROOT)"
 	$(PYTHON) scripts/check-root.py "$(ROOT)" . $(PUBLIC_KEYS)
 
-signing-check: ## Check KEY_SLOT and SIGNING_KEY on this signing station
-	@test -n "$(KEY_SLOT)" || { echo "KEY_SLOT is required (a, b, or c)" >&2; exit 2; }
-	@test -n "$(SIGNING_KEY)" || { echo "SIGNING_KEY is required" >&2; exit 2; }
-	$(PYTHON) scripts/check-signing-key.py "$(ROOT)" "$(KEY_SLOT)" "$(SIGNING_KEY)"
+signing-check: ## Check signing identity (prompts for missing KEY_SLOT/SIGNING_KEY)
+	@slot='$(KEY_SLOT)'; key='$(SIGNING_KEY)'; \
+	if test -z "$$slot"; then printf 'Key slot (a, b, or c): ' >/dev/tty 2>/dev/null && IFS= read -r slot </dev/tty || { echo 'KEY_SLOT is required (non-interactive example: make signing-check KEY_SLOT=a SIGNING_KEY=FULL_FINGERPRINT)' >&2; exit 2; }; fi; \
+	if test -z "$$key"; then printf 'Full primary key fingerprint for slot %s: ' "$$slot" >/dev/tty 2>/dev/null && IFS= read -r key </dev/tty || { echo 'SIGNING_KEY is required (use the full primary fingerprint)' >&2; exit 2; }; fi; \
+	$(PYTHON) scripts/check-signing-key.py "$(ROOT)" "$$slot" "$$key" || exit $$?; \
+	printf '\nNext steps:\n  1. Compare the artifact hashes with the coordinator.\n  2. Run make sign-all KEY_SLOT=%s SIGNING_KEY=%s\n' "$$slot" "$$key"
 
 release-check: root-check ## Check clean source and release inputs
 	@test -z "$$(git status --porcelain)" || { echo "Git worktree or index has uncommitted changes" >&2; exit 2; }
 	@test -n "$(PACKAGE_VERSION)" || { echo "PACKAGE_VERSION could not be read" >&2; exit 2; }
 	@echo "Release inputs valid: version $(PACKAGE_VERSION), commit $$(git rev-parse HEAD)"
 
-release-manifest: root-check ## Generate release manifest; requires MANIFEST_VERSION
-	@test -n "$(MANIFEST_VERSION)" || { echo "MANIFEST_VERSION is required" >&2; exit 2; }
-	@test "$(FORCE)" = 1 || test ! -e release-manifest.json || { echo "release-manifest.json exists; use FORCE=1 only after deciding to replace it" >&2; exit 2; }
-	$(INTEGRITY) generate-manifest --root-dir . --output release-manifest.json --project caretaker --package-version "$(PACKAGE_VERSION)" --manifest-type release --manifest-version "$(MANIFEST_VERSION)" --root-version "$(ROOT_VERSION)" --root-policy "$(ROOT)" --include 'src/caretaker/**/*.py'
+release-manifest: root-check ## Generate release manifest (prompts for MANIFEST_VERSION)
+	@version='$(MANIFEST_VERSION)'; \
+	if test -z "$$version"; then printf 'Release manifest version (positive integer): ' >/dev/tty 2>/dev/null && IFS= read -r version </dev/tty || { echo 'MANIFEST_VERSION is required (non-interactive example: make release-manifest MANIFEST_VERSION=1)' >&2; exit 2; }; fi; \
+	case "$$version" in ''|*[!0-9]*) echo 'MANIFEST_VERSION must be a positive integer' >&2; exit 2;; esac; \
+	test "$$version" -gt 0 || { echo 'MANIFEST_VERSION must be a positive integer' >&2; exit 2; }; \
+	test "$(FORCE)" = 1 || test ! -e release-manifest.json || { echo "release-manifest.json exists; use FORCE=1 only after deciding to replace it" >&2; exit 2; }; \
+	$(INTEGRITY) generate-manifest --root-dir . --output release-manifest.json --project caretaker --package-version "$(PACKAGE_VERSION)" --manifest-type release --manifest-version "$$version" --root-version "$(ROOT_VERSION)" --root-policy "$(ROOT)" --include 'src/caretaker/**/*.py' || exit $$?; \
+	printf '\nNext steps:\n  1. Run make inspect-integrity and review release-manifest.json.\n  2. Transfer the reviewed manifest to each signing station.\n  3. On each station run make sign-release (it will prompt if needed).\n'
 
-protected-manifest: root-check ## Generate protected manifest; requires MANIFEST_VERSION
-	@test -n "$(MANIFEST_VERSION)" || { echo "MANIFEST_VERSION is required" >&2; exit 2; }
-	@test "$(FORCE)" = 1 || test ! -e protected-manifest.json || { echo "protected-manifest.json exists; use FORCE=1 only after deciding to replace it" >&2; exit 2; }
-	$(INTEGRITY) generate-manifest --root-dir . --output protected-manifest.json --project caretaker --package-version "$(PACKAGE_VERSION)" --manifest-type protected --manifest-version "$(MANIFEST_VERSION)" --root-version "$(ROOT_VERSION)" --root-policy "$(ROOT)"
+protected-manifest: root-check ## Generate protected manifest (prompts for MANIFEST_VERSION)
+	@version='$(MANIFEST_VERSION)'; \
+	if test -z "$$version"; then printf 'Protected manifest version (positive integer): ' >/dev/tty 2>/dev/null && IFS= read -r version </dev/tty || { echo 'MANIFEST_VERSION is required (non-interactive example: make protected-manifest MANIFEST_VERSION=1)' >&2; exit 2; }; fi; \
+	case "$$version" in ''|*[!0-9]*) echo 'MANIFEST_VERSION must be a positive integer' >&2; exit 2;; esac; \
+	test "$$version" -gt 0 || { echo 'MANIFEST_VERSION must be a positive integer' >&2; exit 2; }; \
+	test "$(FORCE)" = 1 || test ! -e protected-manifest.json || { echo "protected-manifest.json exists; use FORCE=1 only after deciding to replace it" >&2; exit 2; }; \
+	$(INTEGRITY) generate-manifest --root-dir . --output protected-manifest.json --project caretaker --package-version "$(PACKAGE_VERSION)" --manifest-type protected --manifest-version "$$version" --root-version "$(ROOT_VERSION)" --root-policy "$(ROOT)" || exit $$?; \
+	printf '\nNext steps:\n  1. Run make inspect-integrity and review protected-manifest.json.\n  2. Transfer the reviewed manifest to each signing station.\n  3. On each station run make sign-protected (it will prompt if needed).\n'
 
-manifests: root-check ## Generate both manifests with explicit version variables
-	@test -n "$(RELEASE_MANIFEST_VERSION)" || { echo "RELEASE_MANIFEST_VERSION is required" >&2; exit 2; }
-	@test -n "$(PROTECTED_MANIFEST_VERSION)" || { echo "PROTECTED_MANIFEST_VERSION is required" >&2; exit 2; }
-	$(MAKE) release-manifest MANIFEST_VERSION="$(RELEASE_MANIFEST_VERSION)" PACKAGE_VERSION="$(PACKAGE_VERSION)" ROOT="$(ROOT)"
-	$(MAKE) protected-manifest MANIFEST_VERSION="$(PROTECTED_MANIFEST_VERSION)" PACKAGE_VERSION="$(PACKAGE_VERSION)" ROOT="$(ROOT)"
+manifests: root-check ## Generate both manifests (prompts for missing versions)
+	@release='$(RELEASE_MANIFEST_VERSION)'; protected='$(PROTECTED_MANIFEST_VERSION)'; \
+	if test -z "$$release"; then printf 'Release manifest version (positive integer): ' >/dev/tty 2>/dev/null && IFS= read -r release </dev/tty || { echo 'RELEASE_MANIFEST_VERSION is required' >&2; exit 2; }; fi; \
+	if test -z "$$protected"; then printf 'Protected manifest version (positive integer): ' >/dev/tty 2>/dev/null && IFS= read -r protected </dev/tty || { echo 'PROTECTED_MANIFEST_VERSION is required' >&2; exit 2; }; fi; \
+	case "$$release:$$protected" in *[!0-9:]*) echo 'Manifest versions must be positive integers' >&2; exit 2;; esac; \
+	test "$$release" -gt 0 && test "$$protected" -gt 0 || { echo 'Manifest versions must be positive integers' >&2; exit 2; }; \
+	$(MAKE) --no-print-directory release-manifest MANIFEST_VERSION="$$release" PACKAGE_VERSION="$(PACKAGE_VERSION)" ROOT="$(ROOT)" || exit $$?; \
+	$(MAKE) --no-print-directory protected-manifest MANIFEST_VERSION="$$protected" PACKAGE_VERSION="$(PACKAGE_VERSION)" ROOT="$(ROOT)" || exit $$?; \
+	printf '\nNext steps:\n  1. Review both manifests and record their SHA-256 values.\n  2. Copy root.json and both manifests to each signing station.\n  3. Run make sign-all independently on stations A, B, and C.\n'
 
 inspect-integrity: ## Display root and available manifest metadata and hashes
 	$(INTEGRITY) inspect "$(ROOT)"
 	@test ! -f release-manifest.json || $(INTEGRITY) inspect release-manifest.json
 	@test ! -f protected-manifest.json || $(INTEGRITY) inspect protected-manifest.json
 
-sign: ## Sign release-manifest.json (override with MANIFEST/SIGNATURE)
+sign: ## Sign one manifest (prompts for missing SIGNING_KEY)
 	@test -f "$(MANIFEST)" || { echo "Manifest not found: $(MANIFEST)" >&2; echo "Generate and review a canonical release manifest before signing." >&2; exit 2; }
-	@test -n "$(SIGNING_KEY)" || { echo "SIGNING_KEY is required" >&2; exit 2; }
-	./scripts/sign-code.sh "$(MANIFEST)" "$(SIGNING_KEY)" "$(SIGNATURE)"
+	@key='$(SIGNING_KEY)'; \
+	if test -z "$$key"; then printf 'Full primary signing-key fingerprint: ' >/dev/tty 2>/dev/null && IFS= read -r key </dev/tty || { echo 'SIGNING_KEY is required (non-interactive example: make sign SIGNING_KEY=FULL_FINGERPRINT)' >&2; exit 2; }; fi; \
+	./scripts/sign-code.sh "$(MANIFEST)" "$$key" "$(SIGNATURE)"
 
-sign-root: signing-check ## Sign root.json using KEY_SLOT and SIGNING_KEY
-	./scripts/sign-code.sh "$(ROOT)" "$(SIGNING_KEY)" "$(ROOT).key-$$(printf '%s' "$(KEY_SLOT)" | tr 'A-Z' 'a-z').asc"
+sign-root: ## Sign root.json (prompts for missing slot/key)
+	@$(MAKE) --no-print-directory _sign-artifacts SIGN_ARTIFACTS='$(ROOT)'
 
-sign-release: signing-check ## Sign release manifest using KEY_SLOT and SIGNING_KEY
-	./scripts/sign-code.sh release-manifest.json "$(SIGNING_KEY)" "release-manifest.json.key-$$(printf '%s' "$(KEY_SLOT)" | tr 'A-Z' 'a-z').asc"
+sign-release: ## Sign release manifest (prompts for missing slot/key)
+	@$(MAKE) --no-print-directory _sign-artifacts SIGN_ARTIFACTS='release-manifest.json'
 
-sign-protected: signing-check ## Sign protected manifest using KEY_SLOT and SIGNING_KEY
-	./scripts/sign-code.sh protected-manifest.json "$(SIGNING_KEY)" "protected-manifest.json.key-$$(printf '%s' "$(KEY_SLOT)" | tr 'A-Z' 'a-z').asc"
+sign-protected: ## Sign protected manifest (prompts for missing slot/key)
+	@$(MAKE) --no-print-directory _sign-artifacts SIGN_ARTIFACTS='protected-manifest.json'
 
-sign-all: signing-check ## Sign root and both manifests on one signing station
-	$(MAKE) sign-root KEY_SLOT="$(KEY_SLOT)" SIGNING_KEY="$(SIGNING_KEY)" ROOT="$(ROOT)"
-	$(MAKE) sign-release KEY_SLOT="$(KEY_SLOT)" SIGNING_KEY="$(SIGNING_KEY)" ROOT="$(ROOT)"
-	$(MAKE) sign-protected KEY_SLOT="$(KEY_SLOT)" SIGNING_KEY="$(SIGNING_KEY)" ROOT="$(ROOT)"
+sign-all: ## Sign root and both manifests (prompts once for missing slot/key)
+	@$(MAKE) --no-print-directory _sign-artifacts SIGN_ARTIFACTS='$(ROOT) release-manifest.json protected-manifest.json'
+
+.PHONY: _sign-artifacts
+_sign-artifacts:
+	@slot='$(KEY_SLOT)'; key='$(SIGNING_KEY)'; \
+	if test -z "$$slot"; then printf 'Key slot (a, b, or c): ' >/dev/tty 2>/dev/null && IFS= read -r slot </dev/tty || { echo 'KEY_SLOT is required (non-interactive example: make sign-all KEY_SLOT=a SIGNING_KEY=FULL_FINGERPRINT)' >&2; exit 2; }; fi; \
+	if test -z "$$key"; then printf 'Full primary key fingerprint for slot %s: ' "$$slot" >/dev/tty 2>/dev/null && IFS= read -r key </dev/tty || { echo 'SIGNING_KEY is required (use the full primary fingerprint)' >&2; exit 2; }; fi; \
+	$(PYTHON) scripts/check-signing-key.py "$(ROOT)" "$$slot" "$$key" || exit $$?; \
+	slot=$$(printf '%s' "$$slot" | tr 'A-Z' 'a-z'); \
+	for artifact in $(SIGN_ARTIFACTS); do \
+		test -f "$$artifact" || { echo "Artifact not found: $$artifact" >&2; exit 2; }; \
+		./scripts/sign-code.sh "$$artifact" "$$key" "$$artifact.key-$$slot.asc" || exit $$?; \
+	done; \
+	printf '\nNext steps:\n  1. Export only the .asc signature file(s); do not export private key material.\n  2. Return the signature(s) to the coordinator with the reviewed SHA-256 values.\n  3. Repeat on the other independent signing stations.\n  4. After collecting A, B, and C, run make verify-all PUBLICATION_DIR=.\n'
 
 verify-signature: ## Verify detached SIGNATURE over MANIFEST with local GnuPG
 	@test -f "$(MANIFEST)" || { echo "Manifest not found: $(MANIFEST)" >&2; exit 2; }
