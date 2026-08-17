@@ -203,3 +203,14 @@ bounded evidence bundle to the loopback Ollama endpoint through
 
 The resulting assessment is advisory evidence. It cannot approve a repair,
 override candidate validation, or bypass Integrity policy.
+
+The Investigation scope is shown before execution and exposes target, incident,
+call, time window, and analysis provider. Candidate rows explain why they were
+selected. Results identify their evidence hash, omitted-record count, provider,
+and advisory limitation before technical assessment detail.
+
+The Logs view explicitly reports live-supervisor versus persisted-fallback
+source, loaded/maximum record counts, ordering, and refresh behavior. Its
+**Investigate correlated** action is identifier-based correlation—not semantic
+similarity—and selected records render message and target/incident/call context
+before raw technical JSON.

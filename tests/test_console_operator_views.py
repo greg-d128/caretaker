@@ -253,3 +253,15 @@ def test_policy_change_requires_preview_and_acknowledgement(tmp_path):
             assert app.query_one("#policy-apply", Button).disabled is True
 
     asyncio.run(exercise())
+
+
+def test_investigation_candidates_explain_why_they_are_selected():
+    assert CaretakerConsoleApp._investigation_reason({
+        "channel": "GUARD", "severity": 20,
+    }) == "Guard evidence"
+    assert CaretakerConsoleApp._investigation_reason({
+        "channel": "APPLICATION", "severity": 40,
+    }) == "Error-level event"
+    assert CaretakerConsoleApp._investigation_reason({
+        "channel": "APPLICATION", "severity": 30,
+    }) == "Warning-level event"

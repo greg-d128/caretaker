@@ -667,6 +667,9 @@ class CaretakerConsoleApp(App):
             with TabPane("Investigate", id="investigate"):
                 with Horizontal(classes="toolbar"):
                     yield Input(placeholder="Target id (optional)", id="investigate-target")
+                    yield Input(placeholder="Incident UUID (optional)", id="investigate-incident")
+                    yield Input(placeholder="Call UUID (optional)", id="investigate-call")
+                    yield Input(value="15", placeholder="Minutes", id="investigate-minutes")
                     yield Input(placeholder="Ollama model (blank = deterministic)", id="investigate-model")
                     yield Button("Investigate", id="investigate-run", variant="primary")
                 with Horizontal(classes="toolbar"):
@@ -680,6 +683,7 @@ class CaretakerConsoleApp(App):
                     "sends the bounded evidence bundle to the configured local Ollama endpoint.",
                     id="investigate-help",
                 )
+                yield Static("Scope: last 15 minutes, all available evidence", id="investigate-scope")
                 with Grid(id="investigate-split"):
                     with Vertical(classes="investigate-pane"):
                         yield Static("Recent items worth investigating", classes="context-pane-title")
@@ -691,6 +695,12 @@ class CaretakerConsoleApp(App):
                         yield Static("Select an item or investigate the current period", id="investigate-detail-title", classes="context-pane-title")
                         yield RichLog(id="investigate-output", wrap=True, markup=True)
             with TabPane("Logs", id="logs"):
+                yield Static(
+                    "Showing a bounded evidence window. Correlated investigation uses target/channel/logger identifiers; "
+                    "it is not semantic similarity. Select a record to expose navigation.",
+                    id="logs-help",
+                )
+                yield Static("Logs not loaded", id="logs-source-status")
                 with Grid(id="logs-split"):
                     with Vertical(classes="logs-pane"):
                         with Horizontal(id="logs-filter-row"):
@@ -707,7 +717,7 @@ class CaretakerConsoleApp(App):
                         table.add_columns("#", "Time", "Level", "Channel", "Target", "Message")
                         yield table
                         with Horizontal(id="logs-actions"):
-                            yield Button("Investigate similar", id="logs-investigate", disabled=True, variant="primary")
+                            yield Button("Investigate correlated", id="logs-investigate", disabled=True, variant="primary")
                             yield Button("Open related tab", id="logs-related", disabled=True)
                     with Vertical(classes="logs-pane"):
                         yield Static(
@@ -1256,8 +1266,41 @@ class CaretakerConsoleApp(App):
                 self._log_level(record.get("severity")),
                 self._compact_log_text(record.get("channel"), limit=14) or "-",
                 self._compact_log_text(record.get("target_id"), limit=24) or "-",
-                self._compact_log_text(record.get("message"), limit=64) or "-",
+                self._compact_log_text(
+                    f"{self._investigation_reason(record)}: {record.get('message') or '-'}",
+                    limit=64,
+                ),
             )
+
+    @staticmethod
+    def _investigation_reason(record: dict[str, Any]) -> str:
+        channel = str(record.get("channel") or "").upper()
+        try:
+            severity = int(record.get("severity") or 0)
+        except (TypeError, ValueError):
+            severity = 0
+        if channel == "GUARD":
+            return "Guard evidence"
+        if channel == "REPAIR":
+            return "Repair activity"
+        if channel in {"INTEGRITY", "AUDIT", "EMERGENCY"}:
+            return f"{channel.title()} security evidence"
+        if severity >= 40:
+            return "Error-level event"
+        if severity >= 30:
+            return "Warning-level event"
+        return "Correlated evidence"
+
+    def _update_investigation_scope(self) -> None:
+        target = self.query_one("#investigate-target", Input).value.strip() or "all targets"
+        incident = self.query_one("#investigate-incident", Input).value.strip() or "any incident"
+        call = self.query_one("#investigate-call", Input).value.strip() or "any call"
+        minutes = self.query_one("#investigate-minutes", Input).value.strip() or "15"
+        model = self.query_one("#investigate-model", Input).value.strip()
+        method = f"local Ollama model {model}" if model else "deterministic local analysis"
+        self.query_one("#investigate-scope", Static).update(
+            f"Scope: last {minutes} minute(s) | {target} | {incident} | {call} | {method} | bounded evidence bundle"
+        )
 
     def _activate_tab(self, tab_id: str) -> None:
         self.query_one(TabbedContent).active = tab_id
@@ -1477,6 +1520,10 @@ class CaretakerConsoleApp(App):
             )
             if target:
                 self.query_one("#investigate-target", Input).value = target
+            if record.get("incident_id"):
+                self.query_one("#investigate-incident", Input).value = str(record["incident_id"])
+            if record.get("call_id"):
+                self.query_one("#investigate-call", Input).value = str(record["call_id"])
             self.query_one("#investigate-detail-title", Static).update(
                 f"Selected {record.get('channel', '-')} evidence | {target or 'no target'}"
             )
@@ -1504,7 +1551,17 @@ class CaretakerConsoleApp(App):
             )
             self.query_one("#logs-investigate", Button).disabled = False
             self.query_one("#logs-related", Button).disabled = False
-            self._write_json("#logs-output", record)
+            output = self.query_one("#logs-output", RichLog)
+            output.clear()
+            output.write(
+                f"[b]{self._log_level(record.get('severity'))} {record.get('channel') or '-'}[/b]\n"
+                f"{record.get('message') or '-'}\n"
+                f"Target: {record.get('target_id') or 'unscoped'}\n"
+                f"Incident: {record.get('incident_id') or 'none'}  Call: {record.get('call_id') or 'none'}\n"
+                "Use Investigate correlated for identifier-based evidence gathering; Open related tab follows channel/target routing."
+            )
+            output.write("\n[b]Technical record[/b]")
+            output.write(json.dumps(record, indent=2, sort_keys=True, default=str))
             return
 
         if event.data_table.id == "behavior-table":
@@ -2153,6 +2210,11 @@ class CaretakerConsoleApp(App):
             self.query_one("#policy-confirm", Checkbox).disabled = True
             self.query_one("#policy-apply", Button).disabled = True
             self.query_one("#policy-preview-output", Static).update("Inputs changed; preview the policy change again.")
+        elif event.input.id in {
+            "investigate-target", "investigate-incident", "investigate-call",
+            "investigate-minutes", "investigate-model",
+        }:
+            self._update_investigation_scope()
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         if event.checkbox.id == "guard-baseline-confirm":
@@ -2340,6 +2402,10 @@ class CaretakerConsoleApp(App):
             records = self._local_log_records(200)
             self._logs_source = "persisted fallback"
         self._log_records = self._sorted_log_records(records)
+        self.query_one("#logs-source-status", Static).update(
+            f"Source: {self._logs_source} | loaded {len(self._log_records)}/maximum 200 records | "
+            "newest first | refresh with R"
+        )
         self._selected_log_record = None
         self.query_one("#logs-investigate", Button).disabled = True
         self.query_one("#logs-related", Button).disabled = True
@@ -3008,6 +3074,10 @@ class CaretakerConsoleApp(App):
                 self._selected_investigation_record = record
                 if target:
                     self.query_one("#investigate-target", Input).value = target
+                if record.get("incident_id"):
+                    self.query_one("#investigate-incident", Input).value = str(record["incident_id"])
+                if record.get("call_id"):
+                    self.query_one("#investigate-call", Input).value = str(record["call_id"])
                 message = self._compact_log_text(record.get("message"), limit=100)
                 self.query_one("#investigate-objective", Input).value = (
                     f"Investigate evidence similar to: {message}"
@@ -3170,19 +3240,31 @@ class CaretakerConsoleApp(App):
                 return
             if button == "investigate-run":
                 target = self.query_one("#investigate-target", Input).value.strip()
+                incident = self.query_one("#investigate-incident", Input).value.strip()
+                call = self.query_one("#investigate-call", Input).value.strip()
+                minutes = max(1, min(int(self.query_one("#investigate-minutes", Input).value.strip() or "15"), 1440))
                 model = self.query_one("#investigate-model", Input).value.strip()
                 objective = self.query_one("#investigate-objective", Input).value.strip()
-                selected = self._selected_investigation_record or {}
                 response = await self._request(
                     "investigate",
                     target=target or None,
-                    call_id=selected.get("call_id"),
-                    incident_id=selected.get("incident_id"),
+                    call_id=call or None,
+                    incident_id=incident or None,
                     model=model or None,
                     objective=objective or "Investigate the current Caretaker incident",
-                    minutes=15,
+                    minutes=minutes,
                 )
-                self._write_json("#investigate-output", response)
+                output = self.query_one("#investigate-output", RichLog)
+                output.clear()
+                output.write(
+                    f"[b]Investigation result[/b] provider={response.get('provider', 'deterministic')}\n"
+                    f"Evidence hash: {response.get('evidence_hash', '-')}\n"
+                    f"Omitted records: {response.get('omitted_record_count', 0)}\n"
+                    "This assessment is advisory and cannot approve Repair or override policy."
+                )
+                assessment = response.get("assessment") or {}
+                output.write("\n[b]Assessment[/b]")
+                output.write(json.dumps(assessment, indent=2, sort_keys=True, default=str))
                 return
         except Exception as exc:
             output = "#guard-output" if button.startswith("guard-") else "#repair-output"
