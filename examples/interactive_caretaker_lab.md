@@ -87,6 +87,31 @@ without waiting for another 99 calls.
 The active implementation is still used, so deliberately slow or networked variants
 can make the sequence take substantially longer.
 
+### What the modification controls do
+
+The three **Select ...** buttons only choose a candidate variant. They do not
+change what Execute runs. While the selection differs from the active implementation,
+both Execute actions are disabled and the state line says **SELECTION NOT APPLIED**.
+Choose one of the following actions first:
+
+- **Apply selected behavior** changes the dispatcher's runtime behavior without
+  changing its code identity. It seals the preceding evidence epoch; subsequent
+  calls remain in the same code/monitoring generation so behavior can be compared
+  without claiming that the code changed.
+- **Mutate `__code__`** seals the preceding epoch and directly changes executable
+  code outside Caretaker Repair. The next observed call establishes the changed
+  code generation.
+- **Inject FunctionSlot** seals the preceding epoch and activates the selection as
+  a new slot version while deliberately bypassing normal candidate validation.
+- **Rollback slot**, **Restore target**, and **Reset all substitutions** seal
+  affected evidence before changing execution state.
+- **Execute function** collects one call and explicitly seals it for immediate
+  inspection. **Execute 1000 times** collects calls into automatic 100-call epochs.
+
+Selecting a variant therefore never creates behavior evidence by itself. Applying
+or restoring a variant creates a collection boundary, and executing the target
+provides the observations after that boundary.
+
 The lab deliberately does not duplicate Guard, Repair, approval, or logging
 screens. Those belong to `caretaker-console`.
 

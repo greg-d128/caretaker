@@ -1230,7 +1230,7 @@ class CaretakerLabApp(App):
     #work { width: 1fr; padding: 1 2; }
     #target-title { text-style: bold; margin-bottom: 1; }
     #target-hints { height: 7; margin-bottom: 1; }
-    #variant-state { height: 2; }
+    #variant-state { height: 3; }
     .parameter { margin-bottom: 1; }
     #execution-bar { height: auto; margin: 1 0; }
     #execution-bar Button { width: 24; margin-right: 1; }
@@ -1274,13 +1274,13 @@ class CaretakerLabApp(App):
                 with Horizontal(id="execution-bar"):
                     yield Button("Execute function", id="execute", variant="primary")
                     yield Button("Execute 1000 times", id="execute-many")
-                yield Label("Implementation variant to apply")
+                yield Label("Select a variant for one of the modification actions below (selection alone does not apply it)")
                 with Horizontal(id="modification-bar"):
-                    yield Button("Benign", id="variant-benign")
-                    yield Button("Bad", id="variant-bad")
-                    yield Button("Malicious", id="variant-malicious")
+                    yield Button("Select Benign", id="variant-benign")
+                    yield Button("Select Bad", id="variant-bad")
+                    yield Button("Select Malicious", id="variant-malicious")
                 with Horizontal(id="action-bar"):
-                    yield Button("Substitute behavior", id="substitute")
+                    yield Button("Apply selected behavior", id="substitute")
                     yield Button("Mutate __code__", id="mutate", variant="warning")
                     yield Button("Inject FunctionSlot", id="inject", variant="warning")
                     yield Button("Rollback slot", id="rollback")
@@ -1301,6 +1301,7 @@ class CaretakerLabApp(App):
     def _show_target(self, key: str) -> None:
         self.selected_key = key
         spec = self.spec
+        self.selected_variant = ACTIVE_VARIANTS[spec.variant_key]
         self._set_breadcrumb(spec.title)
         self.query_one("#target-title", Static).update(f"{spec.title}  [{spec.target_id}]")
         self.query_one("#target-hints", Static).update("Ideas to try:\n" + textwrap.fill(spec.hints, width=90))
@@ -1321,11 +1322,35 @@ class CaretakerLabApp(App):
         spec = self.spec
         slot = spec.function.__caretaker_target__.slot
         current = slot.load()
-        self.query_one("#variant-state", Static).update(
-            f"Behavior={ACTIVE_VARIANTS[spec.variant_key]}   selected={self.selected_variant}   "
-            f"slot-version={current.number}   slot-state={slot.state.name}   "
-            f"code-mutation={CODE_MUTATIONS.get(spec.target_id, '-')}"
+        active_behavior = ACTIVE_VARIANTS[spec.variant_key]
+        pending_selection = (
+            current.number == 0
+            and spec.target_id not in CODE_MUTATIONS
+            and self.selected_variant != active_behavior
         )
+        execution_source = (
+            f"code mutation {CODE_MUTATIONS[spec.target_id]}"
+            if spec.target_id in CODE_MUTATIONS else
+            f"FunctionSlot version {current.number}"
+            if current.number != 0 else
+            f"behavior {active_behavior}"
+        )
+        instruction = (
+            "SELECTION NOT APPLIED — choose Apply selected behavior, Mutate __code__, or Inject FunctionSlot."
+            if pending_selection else
+            f"Execute will run {execution_source}."
+        )
+        self.query_one("#variant-state", Static).update(
+            f"Executing behavior={active_behavior}   modification selection={self.selected_variant}   "
+            f"slot-version={current.number}   slot-state={slot.state.name}   "
+            f"code-mutation={CODE_MUTATIONS.get(spec.target_id, '-')}\n{instruction}"
+        )
+        batch_running = self._batch_task is not None and not self._batch_task.done()
+        self.query_one("#execute", Button).disabled = pending_selection or batch_running
+        self.query_one("#execute-many", Button).disabled = pending_selection and not batch_running
+
+    def _seal_before_change(self, spec: TargetSpec, action: str) -> None:
+        GUARD.seal_behavior_snapshot(spec.target_id, reason=f"lab-before-{action}")
 
     def _arguments(self) -> tuple[str, ...]:
         count = len(self.spec.parameter_labels)
@@ -1414,11 +1439,13 @@ class CaretakerLabApp(App):
 
     def _substitute(self) -> None:
         spec = self.spec
+        if ACTIVE_VARIANTS[spec.variant_key] != self.selected_variant:
+            self._seal_before_change(spec, "behavior-substitution")
         ACTIVE_VARIANTS[spec.variant_key] = self.selected_variant
         self._set_breadcrumb(spec.title, "Modify", "Behavior substitution")
         self._output(
-            f"Behavior substitution for {spec.target_id} is now {self.selected_variant!r}. "
-            "The FunctionSlot itself was not changed."
+            f"Applied {self.selected_variant!r} as the executing behavior for {spec.target_id}. "
+            "The prior collection epoch was sealed; the FunctionSlot itself was not changed."
         )
         self._refresh_variant_state()
 
@@ -1431,6 +1458,7 @@ class CaretakerLabApp(App):
         variant = VARIANTS[spec.variant_key][self.selected_variant]
         if implementation.__code__.co_argcount != variant.__code__.co_argcount:
             raise RuntimeError("Selected variant has an incompatible signature")
+        self._seal_before_change(spec, "code-mutation")
         implementation.__code__ = variant.__code__
         CODE_MUTATIONS[spec.target_id] = self.selected_variant
         self._set_breadcrumb(spec.title, "Modify", "Runtime __code__ mutation")
@@ -1442,6 +1470,7 @@ class CaretakerLabApp(App):
 
     def _inject(self) -> None:
         spec = self.spec
+        self._seal_before_change(spec, "slot-injection")
         implementation = VARIANTS[spec.variant_key][self.selected_variant]
         source = textwrap.dedent(inspect.getsource(implementation))
         source_hash = hashlib.sha256(source.encode("utf-8")).hexdigest()
@@ -1474,6 +1503,7 @@ class CaretakerLabApp(App):
         slot = spec.function.__caretaker_target__.slot
         if slot.previous() is None:
             raise RuntimeError("No previous FunctionSlot version exists")
+        self._seal_before_change(spec, "slot-rollback")
         failed = slot.rollback(slot.load().number)
         self._set_breadcrumb(spec.title, "Modify", "Rollback")
         self._output(f"Rolled back version {failed.number}; active version={slot.load().number}")
@@ -1481,6 +1511,7 @@ class CaretakerLabApp(App):
 
     def _restore(self) -> None:
         spec = self.spec
+        self._seal_before_change(spec, "target-restore")
         _restore_code_object(spec)
         slot = spec.function.__caretaker_target__.slot
         count = 0
@@ -1509,6 +1540,10 @@ class CaretakerLabApp(App):
             if button.startswith("variant-"):
                 self.selected_variant = button.removeprefix("variant-")
                 self._set_breadcrumb(self.spec.title, "Modify", f"Selected {self.selected_variant}")
+                self._output(
+                    f"Selected {self.selected_variant!r} for modification; execution has not changed. "
+                    "Choose Apply selected behavior, Mutate __code__, or Inject FunctionSlot."
+                )
                 self._refresh_variant_state()
                 return
             if button == "execute":
@@ -1529,8 +1564,10 @@ class CaretakerLabApp(App):
             elif button == "restore":
                 self._restore()
             elif button == "reset-all":
-                for key in ACTIVE_VARIANTS:
-                    ACTIVE_VARIANTS[key] = "benign"
+                for target_spec in TARGETS.values():
+                    if ACTIVE_VARIANTS[target_spec.variant_key] != "benign":
+                        self._seal_before_change(target_spec, "reset-all-substitutions")
+                    ACTIVE_VARIANTS[target_spec.variant_key] = "benign"
                 self.selected_variant = "benign"
                 self._set_breadcrumb("Reset all substitutions")
                 self._output("All behavior substitutions are benign. FunctionSlot versions were not changed.")
