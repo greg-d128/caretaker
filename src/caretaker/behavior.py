@@ -1487,6 +1487,12 @@ class BehaviorStatisticsRepository:
         if not target_id:
             return
         identity = event.code_identity
+        kind_name = getattr(
+            getattr(event, "event_kind", None),
+            "name",
+            str(getattr(event, "event_kind", "UNKNOWN")),
+        )
+        defines_target_generation = kind_name == "FUNCTION_CALL"
         code_hash = identity.source_hash or identity.bytecode_hash
         code_hash_kind = "function-source-sha256" if identity.source_hash else "function-bytecode-sha256"
         event_attributes = dict(getattr(event, "attributes", {}) or {})
@@ -1503,6 +1509,14 @@ class BehaviorStatisticsRepository:
         }
         with self._lock:
             state = self._load_active(target_id)
+            if state is not None and not defines_target_generation:
+                # Resource/audit events are attributed to the active target, but
+                # their code identity identifies the helper that emitted the
+                # operation (socket, pathlib, checkpoint machinery, and so on).
+                # They enrich the target generation; they must never redefine it.
+                code_hash = state.get("code_hash")
+                code_hash_kind = str(state.get("code_hash_kind") or code_hash_kind)
+                subject = dict(state.get("subject") or subject)
             expected_generation = behavior_generation_id(
                 subject_key=f"function:{target_id}",
                 code_hash=code_hash,
@@ -1527,7 +1541,6 @@ class BehaviorStatisticsRepository:
 
             state["last_updated_at"] = utcnow().isoformat()
             state["event_count"] = int(state.get("event_count") or 0) + 1
-            kind_name = getattr(getattr(event, "event_kind", None), "name", str(getattr(event, "event_kind", "UNKNOWN")))
             kinds = state.setdefault("event_kind_counts", {})
             kinds[kind_name] = int(kinds.get(kind_name) or 0) + 1
             stage = str(event_attributes.get("observation_stage") or "GUARD")

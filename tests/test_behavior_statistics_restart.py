@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import threading
+from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -90,6 +91,34 @@ def test_online_behavior_statistics_are_bounded_and_include_quantiles(tmp_path: 
     assert statistics["histogram_bounds"] == sorted(statistics["histogram_bounds"])
     provenance = capture["profile"]["sampling_provenance"]
     assert provenance["strata"]["LIGHTWEIGHT"]["sample_count"] == 100
+
+
+def test_attributed_resource_identity_does_not_reset_function_generation(tmp_path: Path) -> None:
+    repository = BehaviorStatisticsRepository(
+        tmp_path,
+        materialize_after_samples=100,
+        checkpoint_every_samples=1,
+    )
+    target_id = "audit.target"
+    configuration = {"sampling": {"every": 1}}
+
+    for number in range(100):
+        repository.observe_event(
+            _completed(target_id, 0.001), monitoring_configuration=configuration
+        )
+        resource_event = replace(
+            _network(target_id, f"127.0.0.1:{8000 + number % 2}"),
+            code_identity=identify_function(_network),
+        )
+        repository.observe_event(resource_event, monitoring_configuration=configuration)
+
+    store = BehaviorSnapshotStore(tmp_path)
+    repository.materialize_pending(store, maximum=100)
+    summaries = store.list_summaries()
+
+    assert len(summaries) == 1
+    assert summaries[0]["profile"]["coverage_call_count"] == 100
+    assert summaries[0]["profile"]["coverage_snapshot_count"] == 1
 
 
 def test_manual_capture_atomically_cuts_disjoint_generation_epochs(tmp_path: Path) -> None:
