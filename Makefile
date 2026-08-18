@@ -87,7 +87,7 @@ signing-check: ## Check signing identity (prompts only for missing KEY_SLOT)
 	printf '\nResolved slot %s to primary fingerprint %s.\nNext steps:\n  1. Compare the artifact hashes with the coordinator.\n  2. Run make sign-release-set KEY_SLOT=%s\n' "$$slot" "$$expected" "$$slot"
 
 signing-status: ## Show publication artifacts, signatures, and the next missing step
-	$(TOOLS_PYTHON) scripts/signing-status.py "$(PUBLICATION_DIR)" "$(ROOT)"
+	$(TOOLS_PYTHON) scripts/signing-status.py "$(PUBLICATION_DIR)" "$(ROOT)" "$(PUBLIC_KEY_DIR)"
 
 signing-bundle: root-check ## Build a minimal offline signing-station directory
 	$(TOOLS_PYTHON) scripts/create-signing-bundle.py \

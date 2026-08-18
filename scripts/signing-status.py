@@ -12,11 +12,12 @@ ARTIFACTS = ("root.json", "release-manifest.json", "protected-manifest.json")
 
 
 def main() -> int:
-    if len(sys.argv) not in {1, 2, 3}:
-        print("usage: signing-status.py [PUBLICATION_DIR] [ROOT]", file=sys.stderr)
+    if len(sys.argv) not in {1, 2, 3, 4}:
+        print("usage: signing-status.py [PUBLICATION_DIR] [ROOT] [PUBLIC_KEY_DIR]", file=sys.stderr)
         return 2
     directory = Path(sys.argv[1] if len(sys.argv) >= 2 else ".")
     root_path = Path(sys.argv[2]) if len(sys.argv) >= 3 else directory / "root.json"
+    public_key_directory = Path(sys.argv[3]) if len(sys.argv) >= 4 else directory
     if not root_path.is_file():
         print(f"Root policy: MISSING ({root_path})")
         print("Next action: provide root.json before generating or signing manifests.")
@@ -40,8 +41,9 @@ def main() -> int:
     missing_keys: list[str] = []
     for slot in sorted(slots):
         filename = f"caretaker-key-{slot.lower()}.asc"
-        present = (directory / filename).is_file()
-        print(f"Public key {slot}: {'present' if present else 'MISSING'} ({filename})")
+        path = public_key_directory / filename
+        present = path.is_file()
+        print(f"Public key {slot}: {'present' if present else 'MISSING'} ({path})")
         if not present:
             missing_keys.append(slot)
 
