@@ -35,6 +35,25 @@ an unchanged, already-authorized root normally uses the existing root signatures
 Use `make sign-station-bundle KEY_SLOT=a` only when the coordinator explicitly
 requests root plus both manifests.
 
+Framework policy is another separately signed artifact. The current Caretaker
+root authorizes it through the existing `protected` role, so no root change is
+needed. After creating and reviewing a canonical framework authority layer, each
+station signs the exact same file:
+
+```bash
+make sign-framework-policy \
+  FRAMEWORK_POLICY=framework-policy.json \
+  KEY_SLOT=a
+```
+
+Repeat for B and C. The outputs are
+`framework-policy.json.key-a.asc`, `key-b.asc`, and `key-c.asc`. Configure the
+authority stack with `role = "protected"`, `verification_mode =
+"full-publication"`, and all three signature paths. The command rejects
+non-canonical JSON, a non-framework layer, an unknown role, an unauthorized
+slot, an unavailable secret signing subkey, and an existing output file. It
+does not create or decide the contents of the framework policy.
+
 The advanced `sign-file` command signs one explicitly selected file and does not
 provide the slot-oriented publication workflow:
 

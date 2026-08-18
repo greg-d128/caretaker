@@ -112,10 +112,14 @@ public_keys = [
 [[layers]]
 kind = "framework"
 path = "framework-policy.json"
-role = "policy-framework"
-signatures = ["framework-policy.json.asc"]
+role = "protected"
+signatures = [
+  "framework-policy.json.key-a.asc",
+  "framework-policy.json.key-b.asc",
+  "framework-policy.json.key-c.asc",
+]
 require_signature = true
-verification_mode = "authorization-threshold"
+verification_mode = "full-publication"
 
 [[layers]]
 kind = "application"
@@ -133,6 +137,12 @@ signatures = ["deployment-policy.json.asc"]
 require_signature = true
 verification_mode = "authorization-threshold"
 ```
+
+The official Caretaker root already authorizes framework policy through its
+`protected` role. A deployment may instead define a dedicated
+`policy-framework` role in its independently signed authority root. The role
+named in the stack must actually exist in that root; a valid signature from an
+identity not authorized for the selected role is rejected.
 
 The application section may be omitted completely.
 

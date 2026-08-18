@@ -12,6 +12,8 @@ PUBLIC_KEYS ?=
 PUBLIC_KEY_DIR ?= release-keys
 SIGNING_BUNDLE_DIR ?= signing-bundle
 TRUSTED_FINGERPRINTS ?=
+FRAMEWORK_POLICY ?= framework-policy.json
+FRAMEWORK_POLICY_ROLE ?= protected
 TOOLS_PYTHON := $(if $(wildcard $(BIN)/python),$(BIN)/python,$(PYTHON))
 PACKAGE_VERSION ?= $(shell sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml | head -n 1)
 ROOT_VERSION ?= $(shell $(TOOLS_PYTHON) -c 'import json; print(json.load(open("$(ROOT)"))["root_version"])' 2>/dev/null)
@@ -19,7 +21,7 @@ INTEGRITY := PYTHONPATH=src $(TOOLS_PYTHON) -m caretaker.integrity.cli
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup test compile check wheel build verify-wheel root-check signing-check signing-status signing-bundle release-check release-manifest protected-manifest manifests generate-release-manifest generate-protected-manifest generate-manifests inspect-integrity sign sign-file sign-root sign-release sign-protected sign-release-set sign-all sign-station-bundle verify-signature verify-all verify-publication lab lab-verified lab-console profile clean distclean
+.PHONY: help setup test compile check wheel build verify-wheel root-check signing-check signing-status signing-bundle release-check release-manifest protected-manifest manifests generate-release-manifest generate-protected-manifest generate-manifests inspect-integrity sign sign-file sign-root sign-release sign-protected sign-framework-policy sign-release-set sign-all sign-station-bundle verify-signature verify-all verify-publication lab lab-verified lab-console profile clean distclean
 
 help: ## Show commands grouped by operator role
 	@printf '%s\n' \
@@ -40,6 +42,7 @@ help: ## Show commands grouped by operator role
 	  '  signing-check            Verify this station owns KEY_SLOT' \
 	  '  sign-release             Sign the release manifest for KEY_SLOT' \
 	  '  sign-protected           Sign the protected manifest for KEY_SLOT' \
+	  '  sign-framework-policy    Sign a canonical framework policy for KEY_SLOT' \
 	  '  sign-release-set         Sign both manifests for KEY_SLOT' \
 	  '  sign-root                Sign root.json for KEY_SLOT' \
 	  '  sign-station-bundle      Sign root and both manifests for KEY_SLOT' '' \
@@ -153,6 +156,19 @@ sign-release: ## Sign release manifest (prompts for missing slot)
 
 sign-protected: ## Sign protected manifest (prompts for missing slot)
 	@$(MAKE) --no-print-directory _sign-artifacts SIGN_ARTIFACTS='protected-manifest.json'
+
+sign-framework-policy: ## Sign canonical framework policy under FRAMEWORK_POLICY_ROLE
+	@PYTHONPATH=src $(TOOLS_PYTHON) scripts/check-framework-policy.py "$(FRAMEWORK_POLICY)" "$(ROOT)" "$(FRAMEWORK_POLICY_ROLE)"
+	@slot='$(KEY_SLOT)'; key='$(SIGNING_KEY)'; \
+	if test -z "$$slot"; then printf 'Key slot (a, b, or c): ' >/dev/tty 2>/dev/null && IFS= read -r slot </dev/tty || { echo 'KEY_SLOT is required (example: make sign-framework-policy KEY_SLOT=a)' >&2; exit 2; }; fi; \
+	expected=$$($(TOOLS_PYTHON) -c 'import json,sys; print(json.load(open(sys.argv[1]))["key_slots"].get(sys.argv[2].upper(), ""))' "$(ROOT)" "$$slot") || exit $$?; \
+	test -n "$$expected" || { echo "Unknown KEY_SLOT: $$slot" >&2; exit 2; }; \
+	$(TOOLS_PYTHON) -c 'import json,sys; root=json.load(open(sys.argv[1])); role=root["roles"].get(sys.argv[2]); raise SystemExit(0 if role and sys.argv[3].upper() in {item.upper() for item in role["authorized_primary_fingerprints"]} else 2)' "$(ROOT)" "$(FRAMEWORK_POLICY_ROLE)" "$$expected" || { echo "Slot $$slot is not authorized for role $(FRAMEWORK_POLICY_ROLE)" >&2; exit 2; }; \
+	test -n "$$key" || key="$$expected"; \
+	$(TOOLS_PYTHON) scripts/check-signing-key.py "$(ROOT)" "$$slot" "$$key" || exit $$?; \
+	slot=$$(printf '%s' "$$slot" | tr 'A-Z' 'a-z'); \
+	./scripts/sign-code.sh "$(FRAMEWORK_POLICY)" "$$key" "$(FRAMEWORK_POLICY).key-$$slot.asc"; \
+	printf '\nCreated one framework-policy signature for slot %s.\nNext steps:\n  1. Return only the .asc file to the coordinator.\n  2. Repeat independently for the remaining slots.\n  3. Configure the authority stack with role = "%s" and all collected signatures.\n' "$$slot" "$(FRAMEWORK_POLICY_ROLE)"
 
 sign-all: ## Compatibility: sign root and both manifests for one slot
 	@$(MAKE) --no-print-directory _sign-artifacts SIGN_ARTIFACTS='$(ROOT) release-manifest.json protected-manifest.json'

@@ -98,6 +98,40 @@ def test_verify_wheel_selects_current_package_version() -> None:
     assert "find dist -maxdepth 1 -type f -name '*.whl' -print -quit" not in makefile
 
 
+def test_framework_policy_check_requires_canonical_framework_layer(tmp_path: Path) -> None:
+    root = tmp_path / "root.json"
+    repository_root = json.loads((ROOT / "root.json").read_text(encoding="utf-8"))
+    root.write_text(json.dumps(repository_root), encoding="utf-8")
+    framework = ROOT / "examples/policy_authority/framework-policy.json"
+    valid = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts/check-framework-policy.py"),
+            str(framework),
+            str(root),
+            "protected",
+        ],
+        text=True,
+        capture_output=True,
+    )
+    assert valid.returncode == 0, valid.stderr
+
+    application = ROOT / "examples/policy_authority/application-policy.json"
+    invalid = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts/check-framework-policy.py"),
+            str(application),
+            str(root),
+            "protected",
+        ],
+        text=True,
+        capture_output=True,
+    )
+    assert invalid.returncode == 2
+    assert "not 'framework'" in invalid.stderr
+
+
 def test_signing_bundle_contains_only_reviewable_station_material(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()
