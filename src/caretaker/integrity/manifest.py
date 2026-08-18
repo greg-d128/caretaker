@@ -341,7 +341,7 @@ def validate_manifest_scope(
     if manifest.coverage_patterns:
         covered: set[str] = set()
         for pattern in manifest.coverage_patterns:
-            for path in root_dir.glob(pattern):
+            for path in _glob_paths(root_dir, pattern):
                 if not path.is_file():
                     continue
                 resolved = path.resolve()
@@ -360,7 +360,7 @@ def validate_manifest_scope(
     if manifest.manifest_type is ManifestType.PROTECTED:
         required: set[str] = set()
         for pattern in (*root.protected_paths, *root.sealed_paths):
-            for path in root_dir.glob(pattern):
+            for path in _glob_paths(root_dir, pattern):
                 if path.is_file():
                     resolved = path.resolve()
                     try:
@@ -384,7 +384,7 @@ def validate_manifest_scope(
 def _selected_files(root: Path, include: Sequence[str], exclude: Sequence[str]) -> Iterable[Path]:
     candidates: set[Path] = set()
     for pattern in include:
-        for path in root.glob(pattern):
+        for path in _glob_paths(root, pattern):
             if path.is_file():
                 candidates.add(path.resolve())
     for path in sorted(candidates, key=lambda item: item.relative_to(root).as_posix()):
@@ -392,6 +392,13 @@ def _selected_files(root: Path, include: Sequence[str], exclude: Sequence[str]) 
         if any(fnmatch.fnmatch(relative, pattern) for pattern in exclude):
             continue
         yield path
+
+
+def _glob_paths(root: Path, pattern: str) -> Iterable[Path]:
+    """Expand recursive directory patterns consistently across Python versions."""
+
+    normalized = f"{pattern}/*" if pattern == "**" or pattern.endswith("/**") else pattern
+    return root.glob(normalized)
 
 
 def _resolve_integrity_class(
