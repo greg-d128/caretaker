@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import stat
+from pathlib import Path
 
 from caretaker.console import CaretakerConsoleApp
 from rich.text import Text
@@ -55,6 +56,10 @@ def test_target_filter_supports_named_fields_and_free_text():
         "guard_enabled": True,
         "slot_state": "CANDIDATE_ACTIVE",
         "candidate_state": "ACTIVE_PROBATION",
+        "slot_role": "TARGET_IMPLEMENTATION",
+        "observation_level": "BEHAVIOR",
+        "lifecycle_stage": "pre-repair-behavior",
+        "lifecycle_label": "BEHAVIOR",
         "status": "VALIDATING",
     }
 
@@ -65,8 +70,24 @@ def test_target_filter_supports_named_fields_and_free_text():
     assert CaretakerConsoleApp._target_matches_filter(
         target, "state:probation mode:auto version:1"
     )
+    assert CaretakerConsoleApp._target_matches_filter(
+        target, "role:target level:behavior lifecycle:pre-repair"
+    )
     assert not CaretakerConsoleApp._target_matches_filter(target, "guard:no")
     assert not CaretakerConsoleApp._target_matches_filter(target, "status:healthy")
+
+
+def test_overview_presents_slot_role_and_escalation_level():
+    assert CaretakerConsoleApp._slot_role_display("TARGET_IMPLEMENTATION") == "target"
+    assert CaretakerConsoleApp._slot_role_display("OUTPUT_VALIDATOR") == "validator"
+    assert CaretakerConsoleApp._observation_display("LIGHTWEIGHT") == "normal"
+    assert CaretakerConsoleApp._observation_display("BEHAVIOR") == "escalated: behavior"
+    app = CaretakerConsoleApp(None, Path("."))
+    assert app._target_attention_reason({
+        "target_id": "lab.probe",
+        "status": "READY",
+        "observation_level": "BEHAVIOR",
+    }) == "behavior escalation"
 
 
 def test_repair_source_extracts_pending_approval_source():

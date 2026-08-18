@@ -477,7 +477,7 @@ class CaretakerConsoleApp(App):
                     yield Input(
                         placeholder=(
                             "Filter targets: text, status:validating, mode:automatic, "
-                            "authority:approval, guard:yes"
+                            "authority:approval, role:target, level:behavior, guard:yes"
                         ),
                         id="targets-filter",
                     )
@@ -486,7 +486,7 @@ class CaretakerConsoleApp(App):
                 table.cursor_type = "row"
                 table.add_columns(
                     "Target", "Health", "Needs attention", "Repair mode", "Repair approval",
-                    "Active version", "Runtime monitoring"
+                    "Slot role", "Observation", "Active version", "Runtime monitoring"
                 )
                 yield table
                 yield Static(
@@ -985,6 +985,12 @@ class CaretakerConsoleApp(App):
             "mode": str(target.get("repair_mode") or "").casefold(),
             "authority": str(target.get("repair_authority") or "").casefold(),
             "guard": ("yes" if target.get("guard_enabled") else "no"),
+            "role": str(target.get("slot_role") or "").casefold(),
+            "level": str(target.get("observation_level") or "").casefold(),
+            "lifecycle": " ".join((
+                str(target.get("lifecycle_stage") or ""),
+                str(target.get("lifecycle_label") or ""),
+            )).casefold(),
             "version": str(
                 target.get("function_version")
                 if target.get("function_version") is not None
@@ -999,6 +1005,9 @@ class CaretakerConsoleApp(App):
                 fields["mode"],
                 fields["authority"],
                 fields["guard"],
+                fields["role"],
+                fields["level"],
+                fields["lifecycle"],
                 fields["version"],
                 str(target.get("display_name") or "").casefold(),
                 str(target.get("module") or "").casefold(),
@@ -1044,6 +1053,8 @@ class CaretakerConsoleApp(App):
                 self._target_attention_reason(target),
                 str(target.get("repair_mode") or "-"),
                 str(target.get("repair_authority") or "-"),
+                self._slot_role_display(target.get("slot_role")),
+                self._observation_display(target.get("observation_level")),
                 str(
                     target.get("function_version")
                     if target.get("function_version") is not None
@@ -1067,11 +1078,36 @@ class CaretakerConsoleApp(App):
         else:
             details.write("No runtime targets were returned.")
 
+    @classmethod
+    def _slot_role_display(cls, value: Any) -> str:
+        role = cls._enum_name(value)
+        return {
+            "TARGET_IMPLEMENTATION": "target",
+            "OUTPUT_VALIDATOR": "validator",
+            "OUTPUT_COMPARATOR": "comparator",
+            "SNAPSHOTTER": "snapshotter",
+            "RESTORER": "restorer",
+        }.get(role, role.casefold().replace("_", " ") if role else "-")
+
+    @classmethod
+    def _observation_display(cls, value: Any) -> str:
+        level = cls._enum_name(value)
+        if level == "LIGHTWEIGHT":
+            return "normal"
+        if level in {"BEHAVIOR", "REPAIR"}:
+            return f"escalated: {level.casefold()}"
+        return level.casefold() if level else "-"
+
     def _target_attention_reason(self, target: dict[str, Any]) -> str:
         target_id = str(target.get("target_id") or "")
         status = str(target.get("status") or "READY").upper()
         if status in {"REPAIRING", "QUARANTINED", "FAILED", "VALIDATING"}:
             return status.lower()
+        observation_level = self._enum_name(target.get("observation_level"))
+        if observation_level == "REPAIR":
+            return "repair escalation"
+        if observation_level == "BEHAVIOR":
+            return "behavior escalation"
         guard = next(
             (item for item in self._guard_records if str(item.get("target_id") or "") == target_id),
             None,
@@ -1747,6 +1783,10 @@ class CaretakerConsoleApp(App):
                 f"Repair mode: {target_record.get('repair_mode') or '-'}; "
                 f"operator authority: {target_record.get('repair_authority') or '-'}; "
                 f"Guard: {'enabled' if target_record.get('guard_enabled') else 'disabled'}\n"
+                f"Slot role: {self._slot_role_display(target_record.get('slot_role'))}; "
+                f"observation: {self._observation_display(target_record.get('observation_level'))}; "
+                f"lifecycle: {target_record.get('lifecycle_label') or target_record.get('lifecycle_stage') or '-'}\n"
+                f"Escalation reason: {target_record.get('escalation_reason') or 'none'}\n"
                 "Use the buttons above to inspect evidence or start an investigation."
             )
             details.write("\n[b]Technical state and effective policy[/b]")

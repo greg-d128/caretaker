@@ -31,6 +31,8 @@ def test_operator_registry_exposes_repair_and_guard_targets():
     assert status["target_count"] == 1
     assert status["current_status"] == "HEALTHY"
     assert registry.targets()[0]["target_id"] == "test.operator.sample"
+    assert registry.targets()[0]["slot_role"] == "TARGET_IMPLEMENTATION"
+    assert registry.targets()[0]["observation_level"] is None
 
 
 def test_operator_runtime_reports_validation_activity():

@@ -124,7 +124,13 @@ The **Overview** view sorts targets needing attention ahead of ordinary targets
 and explains its operator-facing health states. Selecting a target provides a
 plain-language summary plus direct navigation to Guard evidence, Behavior
 history, correlated Logs, or an Investigation; raw FunctionSlot state and the
-effective policy remain available as technical detail.
+effective policy remain available as technical detail. **Slot role** identifies
+whether the slot holds a target implementation, validator, comparator, or another
+supported auxiliary role. **Observation** reports `normal` for lightweight
+instrumentation and explicitly labels Behavior or Repair observation as
+`escalated`. The selected-target panel also shows the adaptive lifecycle stage
+and recorded escalation reason. Filters accept `role:`, `level:`, and
+`lifecycle:` selectors.
 
 The **Guard** view distinguishes `NO EVIDENCE`, `LEARNING`, `HEALTHY`, and
 `DEVIATION` instead of reusing Repair lifecycle states. Findings are sorted

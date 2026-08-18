@@ -261,10 +261,15 @@ class OperatorRuntimeRegistry:
         }
 
     def targets(self) -> list[dict[str, Any]]:
+        # Imported lazily because adaptive instrumentation publishes into the
+        # operator registry and therefore already depends on this module.
+        from .adaptive import get_adaptive_state
+
         result: dict[str, dict[str, Any]] = {}
         for engine in self.repair_engines():
             for target in engine.registry.all():
                 version = target.slot.load()
+                adaptive = dict(get_adaptive_state(target.target_id) or {})
                 result[target.target_id] = {
                     "target_id": target.target_id,
                     "display_name": target.display_name,
@@ -273,10 +278,15 @@ class OperatorRuntimeRegistry:
                     "repair_mode": target.policy.mode.name,
                     "repair_authority": target.policy.authority.name,
                     "integrity_class": target.integrity_class.name,
+                    "slot_role": target.slot.role.name,
                     "function_version": version.number,
                     "candidate_id": str(version.candidate_id) if version.candidate_id else None,
                     "repair_in_progress": target.slot.state.name == "REPAIRING",
                     "guard_enabled": target.policy.guard.enabled,
+                    "observation_level": adaptive.get("level"),
+                    "lifecycle_stage": adaptive.get("stage"),
+                    "lifecycle_label": adaptive.get("stage_label"),
+                    "escalation_reason": adaptive.get("promotion_reason"),
                 }
         for guard in self.guard_engines():
             for target_id in guard.registered_target_ids():
@@ -288,10 +298,15 @@ class OperatorRuntimeRegistry:
                         "repair_mode": None,
                         "repair_authority": None,
                         "integrity_class": None,
+                        "slot_role": None,
                         "function_version": None,
                         "candidate_id": None,
                         "repair_in_progress": False,
                         "guard_enabled": True,
+                        "observation_level": None,
+                        "lifecycle_stage": None,
+                        "lifecycle_label": None,
+                        "escalation_reason": None,
                     },
                 )
         return [result[key] for key in sorted(result)]
