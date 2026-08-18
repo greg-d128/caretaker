@@ -28,9 +28,14 @@ its live Repair and Guard objects:
 
 ```bash
 PYTHONPATH=src:. python -m caretaker.run \
+  --authority-stack profiles/sandbox-stack.toml \
   --data-directory ./examples/.caretaker-interactive-lab/caretaker-data \
   examples.interactive_caretaker_lab
 ```
+
+`make lab` and `make lab-verified` select this unsigned, non-production Sandbox
+profile automatically. It intentionally preserves the different Repair authority
+levels embedded in the lab targets so all demonstrations remain available.
 
 The lab itself opens as a Textual UI.
 

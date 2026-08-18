@@ -109,6 +109,11 @@ def test_verified_lab_has_overridable_published_fingerprint_defaults() -> None:
     assert "TRUSTED_FINGERPRINTS='...'" in makefile
 
 
+def test_lab_targets_select_the_explicit_sandbox_authority_stack() -> None:
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    assert makefile.count("--authority-stack profiles/sandbox-stack.toml") == 2
+
+
 def test_framework_policy_check_requires_canonical_framework_layer(tmp_path: Path) -> None:
     root = tmp_path / "root.json"
     repository_root = json.loads((ROOT / "root.json").read_text(encoding="utf-8"))

@@ -212,7 +212,7 @@ verify-all: ## Verify conventional root, release, and protected publication file
 verify-publication: verify-all ## Verify the assembled publication
 
 lab: ## Run the interactive Caretaker lab under caretaker-run
-	PYTHONPATH=src:. $(BIN)/python -m caretaker.run --data-directory ./examples/.caretaker-interactive-lab/caretaker-data examples.interactive_caretaker_lab
+	PYTHONPATH=src:. $(BIN)/python -m caretaker.run --authority-stack profiles/sandbox-stack.toml --data-directory ./examples/.caretaker-interactive-lab/caretaker-data examples.interactive_caretaker_lab
 
 lab-verified: ## Run lab after verifying the signed source publication
 	@test -n "$(TRUSTED_FINGERPRINTS)" || { echo 'TRUSTED_FINGERPRINTS is empty; supply independently confirmed full fingerprints' >&2; exit 2; }
@@ -220,6 +220,7 @@ lab-verified: ## Run lab after verifying the signed source publication
 	for fingerprint in $(TRUSTED_FINGERPRINTS); do args="$$args --integrity-trusted-fingerprint $$fingerprint"; done; \
 	PYTHONPATH=src:. $(BIN)/python -m caretaker.run \
 	  --integrity-publication-directory . --integrity-artifact-root . $$args \
+	  --authority-stack profiles/sandbox-stack.toml \
 	  --data-directory ./examples/.caretaker-interactive-lab/caretaker-data \
 	  examples.interactive_caretaker_lab
 

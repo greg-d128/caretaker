@@ -1,0 +1,8 @@
+schema_version = 1
+
+# Deliberately unsigned and suitable only for the interactive laboratory. The
+# sandbox profile preserves the per-target policies embedded in the lab.
+[[layers]]
+kind = "framework"
+path = "caretaker-sandbox-v1.json"
+require_signature = false

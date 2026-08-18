@@ -11,10 +11,12 @@ import caretaker.profiles as profiles_module
 from caretaker.authority import (
     AuthorityKind,
     AuthorityPolicyError,
+    PolicyAuthoritySupervisor,
     ConstraintOperator,
     PolicyAuthorityLayer,
     PolicyConstraint,
     PolicySetting,
+    load_policy_authority_layer,
     write_policy_authority_layer,
 )
 from caretaker.profiles import (
@@ -64,6 +66,24 @@ def test_profile_identity_separates_lineage_name_and_version() -> None:
     assert identity.name == "Caretaker Balanced"
     assert identity.version == 1
     assert identity.policy_surface_version == CURRENT_POLICY_SURFACE_VERSION
+
+
+def test_repository_sandbox_profile_and_stack_are_explicitly_nonproduction() -> None:
+    profile = load_policy_authority_layer(
+        Path(__file__).parents[1] / "profiles/caretaker-sandbox-v1.json"
+    )
+    identity = profile_identity(profile, required=True)
+    assert identity is not None
+    assert identity.lineage == "caretaker.sandbox"
+    assert identity.signer_role is None
+    assert profile.constraints == ()
+    assert not any(item.path == "repair.authority" for item in profile.settings)
+    assert profile.metadata["purpose"].startswith("demonstration only")
+
+    supervisor = PolicyAuthoritySupervisor.from_stack_file(
+        Path(__file__).parents[1] / "profiles/sandbox-stack.toml"
+    )
+    assert supervisor.effective.overall_assurance == "PARTIAL_OR_UNSIGNED"
 
 
 def test_continuation_binds_exact_predecessor_fingerprint() -> None:
