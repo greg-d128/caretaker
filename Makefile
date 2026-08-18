@@ -11,7 +11,9 @@ PUBLICATION_DIR ?= .
 PUBLIC_KEYS ?=
 PUBLIC_KEY_DIR ?= release-keys
 SIGNING_BUNDLE_DIR ?= signing-bundle
-TRUSTED_FINGERPRINTS ?=
+# Published Caretaker root identities. Override from an independently trusted
+# source when bootstrapping a checkout: make lab-verified TRUSTED_FINGERPRINTS='...'
+TRUSTED_FINGERPRINTS ?= 1AA1C739DE9A94B146BD324D335D05E357D334C9 0ABD39F4E11DC0E48D88D536CD9FF2A7E82753BE F4632C96E4D3C93AE0E894564A9B0D2FBA85B411
 FRAMEWORK_POLICY ?= framework-policy.json
 FRAMEWORK_POLICY_ROLE ?= protected
 TOOLS_PYTHON := $(if $(wildcard $(BIN)/python),$(BIN)/python,$(PYTHON))
@@ -213,7 +215,7 @@ lab: ## Run the interactive Caretaker lab under caretaker-run
 	PYTHONPATH=src:. $(BIN)/python -m caretaker.run --data-directory ./examples/.caretaker-interactive-lab/caretaker-data examples.interactive_caretaker_lab
 
 lab-verified: ## Run lab after verifying the signed source publication
-	@test -n "$(TRUSTED_FINGERPRINTS)" || { echo 'TRUSTED_FINGERPRINTS is required; use independently confirmed full fingerprints' >&2; exit 2; }
+	@test -n "$(TRUSTED_FINGERPRINTS)" || { echo 'TRUSTED_FINGERPRINTS is empty; supply independently confirmed full fingerprints' >&2; exit 2; }
 	@args=''; \
 	for fingerprint in $(TRUSTED_FINGERPRINTS); do args="$$args --integrity-trusted-fingerprint $$fingerprint"; done; \
 	PYTHONPATH=src:. $(BIN)/python -m caretaker.run \

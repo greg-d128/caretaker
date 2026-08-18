@@ -98,6 +98,17 @@ def test_verify_wheel_selects_current_package_version() -> None:
     assert "find dist -maxdepth 1 -type f -name '*.whl' -print -quit" not in makefile
 
 
+def test_verified_lab_has_overridable_published_fingerprint_defaults() -> None:
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    root = json.loads((ROOT / "root.json").read_text(encoding="utf-8"))
+    default_line = next(
+        line for line in makefile.splitlines() if line.startswith("TRUSTED_FINGERPRINTS ?=")
+    )
+    defaults = default_line.partition("?=")[2].split()
+    assert defaults == list(root["key_slots"].values())
+    assert "TRUSTED_FINGERPRINTS='...'" in makefile
+
+
 def test_framework_policy_check_requires_canonical_framework_layer(tmp_path: Path) -> None:
     root = tmp_path / "root.json"
     repository_root = json.loads((ROOT / "root.json").read_text(encoding="utf-8"))

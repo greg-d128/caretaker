@@ -145,11 +145,26 @@ fail-closed. Without these options, the console reports release integrity as
 and behavior-evidence signing.
 
 For the included source-tree laboratory, the Makefile provides the equivalent
-shortcut:
+shortcut using the published Caretaker fingerprints recorded as overridable
+Make defaults:
 
 ```bash
-make lab-verified TRUSTED_FINGERPRINTS="FULL_FINGERPRINT_A FULL_FINGERPRINT_B FULL_FINGERPRINT_C"
+make lab-verified
 ```
+
+For first-use bootstrap, high-assurance operation, or a fork with its own root,
+override those defaults with fingerprints obtained independently:
+
+```bash
+make lab-verified \
+  TRUSTED_FINGERPRINTS="FULL_FINGERPRINT_A FULL_FINGERPRINT_B FULL_FINGERPRINT_C"
+```
+
+The configured values are checked against the public certificates, root
+signatures, signer authorization, and manifest signatures. A wrong override
+fails startup. Defaults stored in the same repository provide convenience and
+consistency after a trusted checkout; they cannot independently authenticate a
+checkout that may already have been replaced.
 
 This verifies the source tree described by the manifests. An installed wheel
 has a different filesystem layout and needs a publication manifest generated
