@@ -1,6 +1,6 @@
-# Isolated Execution for Caretaker 0.6.0a1
+# Isolated Execution for Caretaker 0.6.0
 
-**Applies to:** Caretaker `0.6.0a1`
+**Applies to:** Caretaker `0.6.0`
 **Status:** operator, validation-backend, and research deployment guidance
 **Scope:** candidate-validation isolation plus isolation of the complete application and Caretaker runtime
 **Built-in validation backends:** PROCESS, rootless Podman CONTAINER, and Multipass VM. Docker-rootless and EXTERNAL adapters remain future work.
@@ -116,7 +116,7 @@ Apply these rules to every isolated environment:
 
 ## 4. Caretaker-specific limitations
 
-The environment described here does not change these `0.6.0a1` properties:
+The environment described here does not change these `0.6.0` properties:
 
 - PROCESS candidate validation uses a subprocess; CONTAINER and VM backends provide stronger configured boundaries;
 - arbitrary hard interruption remains deferred;
@@ -148,7 +148,7 @@ isolated/
         README.md
 
 dist/
-    caretaker-0.6.0a1-py3-none-any.whl
+    caretaker-0.6.0-py3-none-any.whl
 
 policy/
     application.toml
@@ -213,7 +213,7 @@ Save as `isolated/docker/Dockerfile`:
 ```dockerfile
 FROM python:3.13-slim
 
-ARG CARETAKER_WHEEL=caretaker-0.6.0a1-py3-none-any.whl
+ARG CARETAKER_WHEEL=caretaker-0.6.0-py3-none-any.whl
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -275,9 +275,9 @@ services:
       context: ../..
       dockerfile: isolated/docker/Dockerfile
       args:
-        CARETAKER_WHEEL: caretaker-0.6.0a1-py3-none-any.whl
+        CARETAKER_WHEEL: caretaker-0.6.0-py3-none-any.whl
 
-    image: caretaker-subject:0.6.0a1
+    image: caretaker-subject:0.6.0
     container_name: caretaker-subject
 
     user: "10001:10001"
@@ -498,7 +498,7 @@ docker compose \
   -f isolated/docker/compose.yaml \
   down --volumes --remove-orphans
 
-docker image rm caretaker-subject:0.6.0a1
+docker image rm caretaker-subject:0.6.0
 rm -rf exported-evidence
 ```
 
@@ -636,7 +636,7 @@ Transfer the wheel:
 
 ```bash
 multipass transfer \
-  dist/caretaker-0.6.0a1-py3-none-any.whl \
+  dist/caretaker-0.6.0-py3-none-any.whl \
   caretaker-lab:/tmp/caretaker.whl
 ```
 
@@ -799,7 +799,7 @@ Use a new VM or a restored clean snapshot for each version.
 Recommended sequence:
 
 1. Launch and provision the clean VM.
-2. Install Caretaker `0.6.0a1`.
+2. Install Caretaker `0.6.0`.
 3. Install application or dependency version A.
 4. Verify integrity and record exact identities.
 5. Run representative workloads in Research mode.
@@ -821,7 +821,7 @@ Recommended sequence:
 11. Correlate Guard's internal attribution with an external observer.
 12. Treat differences as evidence requiring interpretation, not proof of compromise.
 
-Caretaker `0.6.0a1` contains the identity, baseline, deviation, inspection, and evidence contracts for this workflow. A complete automated old-versus-new environment runner remains future work.
+Caretaker `0.6.0` contains the identity, baseline, deviation, inspection, and evidence contracts for this workflow. A complete automated old-versus-new environment runner remains future work.
 
 ## 25. External packet observation
 
@@ -892,13 +892,13 @@ After provisioning and before running the subject:
 
 ```bash
 multipass snapshot caretaker-lab \
-  --name clean-caretaker-0.6.0a1
+  --name clean-caretaker-0.6.0
 ```
 
 Restore between campaigns when supported by the installed Multipass release:
 
 ```bash
-multipass restore caretaker-lab.clean-caretaker-0.6.0a1
+multipass restore caretaker-lab.clean-caretaker-0.6.0
 ```
 
 A new VM remains preferable when testing persistence, rollback, root continuity, or suspected environment compromise.
@@ -958,7 +958,7 @@ Export the runtime public-key fingerprint or manifest commitment to a location t
 
 ### Strongest supported architecture
 
-Use the external signer protocol or independent evidence witnessing. The built-in `0.6.0a1` event writer remains local, so reliable remote shipping requires an operator-supplied process or future `LogSink`.
+Use the external signer protocol or independent evidence witnessing. The built-in `0.6.0` event writer remains local, so reliable remote shipping requires an operator-supplied process or future `LogSink`.
 
 ## 31. Incident workflow in an isolated environment
 

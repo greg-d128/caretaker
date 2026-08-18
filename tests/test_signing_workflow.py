@@ -92,6 +92,12 @@ def test_make_help_groups_signing_commands_by_role() -> None:
     assert "make sign-release-set KEY_SLOT=a" in result.stdout
 
 
+def test_verify_wheel_selects_current_package_version() -> None:
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    assert 'wheel="dist/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl"' in makefile
+    assert "find dist -maxdepth 1 -type f -name '*.whl' -print -quit" not in makefile
+
+
 def test_signing_bundle_contains_only_reviewable_station_material(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()

@@ -1,4 +1,4 @@
-Caretaker 0.6.0a1 development verification status
+Caretaker 0.6.0 development verification status
 =================================================
 
 Status date
@@ -69,7 +69,7 @@ Historical Caretaker 0.5.0a1 verification report
 Historical notice
 -----------------
 This report records verification performed for 0.5.0a1. It is retained as release
-history and is not a verification report for the current 0.6.0a1 research tree.
+history and is not a verification report for the current 0.6.0 research tree.
 Current features, test counts, security debt, and isolation backends differ. Do
 not use the results below as evidence that the current checkout has been verified.
 

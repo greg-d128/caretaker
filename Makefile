@@ -203,8 +203,8 @@ profile: ## Open the Textual Caretaker Profile Editor
 verify-wheel: wheel ## Install and test the wheel in a temporary virtual environment
 	@tmp="$$(mktemp -d)"; \
 	trap 'rm -rf "$$tmp"' EXIT; \
-	wheel="$$(find dist -maxdepth 1 -type f -name '*.whl' -print -quit)"; \
-	test -n "$$wheel" || { echo "No wheel found in dist/" >&2; exit 1; }; \
+	wheel="dist/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl"; \
+	test -f "$$wheel" || { echo "Current-version wheel not found: $$wheel" >&2; exit 1; }; \
 	wheel="$$(realpath "$$wheel")"; \
 	$(PYTHON) -m venv "$$tmp/venv"; \
 	"$$tmp/venv/bin/python" -m pip install --quiet --upgrade pip pytest; \

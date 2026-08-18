@@ -72,7 +72,7 @@ POLICY_CAPABILITIES: tuple[PolicyCapability, ...] = (
     PolicyCapability(
         "authority.runtime-leases",
         1,
-        "0.6.0a1",
+        "0.6.0",
         "Runtime policy authority",
         "Controls temporary authority leases and whether higher-assurance deployments require signed leases.",
         "Review who may change effective policy during an incident and whether unsigned runtime authority is acceptable.",
@@ -117,7 +117,7 @@ POLICY_CAPABILITIES: tuple[PolicyCapability, ...] = (
     PolicyCapability(
         "adaptive.instrumentation",
         2,
-        "0.6.0a1",
+        "0.6.0",
         "Adaptive lightweight instrumentation",
         "Controls lightweight dependency/function observation, promotion, evidence-gated repair escalation, sampling, and demotion.",
         "Review changes for hot-path overhead, observation scope, repair eligibility, evidence sufficiency, and demotion behavior.",
@@ -126,7 +126,7 @@ POLICY_CAPABILITIES: tuple[PolicyCapability, ...] = (
     PolicyCapability(
         "guard.behavior-snapshots",
         2,
-        "0.6.0a1",
+        "0.6.0",
         "Persistent behavior statistics and snapshots",
         "Controls bounded behavior statistics, automatic materialization, restart reconstruction, and accepted-baseline snapshot handling.",
         "Review sampling/statistics cost, generation compatibility, automatic materialization, and baseline persistence semantics.",
@@ -135,7 +135,7 @@ POLICY_CAPABILITIES: tuple[PolicyCapability, ...] = (
     PolicyCapability(
         "repair.validation-isolation",
         2,
-        "0.6.0a1",
+        "0.6.0",
         "Validation isolation requirements",
         "Controls the minimum isolation capability required before a repair candidate may pass validation and the fail-closed action when that backend is unavailable.",
         "Review whether automatic repair can run with PROCESS, CONTAINER, VM, or EXTERNAL isolation and how unavailable stronger isolation is handled.",
@@ -147,7 +147,7 @@ POLICY_CAPABILITIES: tuple[PolicyCapability, ...] = (
     PolicyCapability(
         "logging.signing-identity-journal",
         2,
-        "0.6.0a1",
+        "0.6.0",
         "Runtime signing identity retention",
         "Controls the independent signing-identity journal used to retain public identities and ephemeral key transitions required to verify signed runtime artifacts.",
         "Review identity retention against the longest retained signed artifact and the configured runtime signing assurance mode.",

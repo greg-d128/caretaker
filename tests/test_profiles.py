@@ -39,7 +39,7 @@ def _profile(**changes) -> PolicyAuthorityLayer:
         "name": "Caretaker Balanced",
         "version": 1,
         "description": "General-purpose profile",
-        "caretaker_minimum": "0.6.0a1",
+        "caretaker_minimum": "0.6.0",
         "caretaker_tested_through": caretaker.__version__,
         "settings": (
             PolicySetting("repair.authority", "REQUIRE_OPERATOR_APPROVAL"),

@@ -1,4 +1,4 @@
-# Migration to Caretaker 0.6.0a1
+# Migration to Caretaker 0.6.0
 
 ## Compatibility
 

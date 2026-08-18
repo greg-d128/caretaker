@@ -10,7 +10,7 @@ from caretaker.logging.models import LogChannel, LogEnvelope
 def _record(*, occurred_at: datetime, call_id, incident_id) -> LogEnvelope:
     return LogEnvelope(
         schema_version=1,
-        writer_version="0.6.0a1",
+        writer_version="0.6.0",
         record_id=uuid4(),
         occurred_at=occurred_at,
         monotonic_ns=1,

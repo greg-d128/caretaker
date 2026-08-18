@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.0a1
+## 0.6.0
 
 ### Public research release assurance
 

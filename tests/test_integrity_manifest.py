@@ -63,7 +63,7 @@ def test_manifest_excludes_transient_python_bytecode(tmp_path: Path) -> None:
     manifest = build_manifest(
         root_dir=root,
         project="caretaker",
-        package_version="0.6.0a1",
+        package_version="0.6.0",
         manifest_type=ManifestType.PROTECTED,
         manifest_version=1,
         root_version=1,
