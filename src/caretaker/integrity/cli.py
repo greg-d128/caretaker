@@ -8,6 +8,7 @@ from pathlib import Path
 from .gpg import GPGUnavailableError, GPGVerifier
 from .instructions import render_gpg_verification_commands
 from .manifest import (
+    TRANSIENT_ARTIFACT_PATTERNS,
     build_manifest,
     load_manifest,
     load_root,
@@ -143,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
 def _generate_manifest(args: argparse.Namespace) -> int:
     path_classes = None
     include_patterns = list(args.include)
-    exclude_patterns = list(args.exclude)
+    exclude_patterns = [*TRANSIENT_ARTIFACT_PATTERNS, *args.exclude]
     if args.root_policy:
         root_policy = load_root(args.root_policy)
         if root_policy.root_version != args.root_version:

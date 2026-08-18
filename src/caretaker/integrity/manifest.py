@@ -21,6 +21,14 @@ from .models import (
 )
 
 
+TRANSIENT_ARTIFACT_PATTERNS = (
+    "__pycache__/**",
+    "**/__pycache__/**",
+    "*.py[co]",
+    "**/*.py[co]",
+)
+
+
 def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
@@ -46,7 +54,7 @@ def build_manifest(
     manifest_version: int,
     root_version: int,
     include: Sequence[str] = ("**/*.py",),
-    exclude: Sequence[str] = (),
+    exclude: Sequence[str] = TRANSIENT_ARTIFACT_PATTERNS,
     integrity_class: IntegrityClass | None = None,
     path_classes: Mapping[str, IntegrityClass] | None = None,
     previous_manifest_sha256: str | None = None,
@@ -356,7 +364,13 @@ def validate_manifest_scope(
                 if path.is_file():
                     resolved = path.resolve()
                     try:
-                        required.add(resolved.relative_to(root_dir).as_posix())
+                        relative = resolved.relative_to(root_dir).as_posix()
+                        if any(
+                            fnmatch.fnmatch(relative, excluded)
+                            for excluded in manifest.excluded_patterns
+                        ):
+                            continue
+                        required.add(relative)
                     except ValueError:
                         errors.append(f"Protected path resolves outside artifact root: {path}")
         missing = sorted(required - observed_paths)

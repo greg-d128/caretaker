@@ -9,7 +9,7 @@ SIGNATURE ?= $(MANIFEST).asc
 ROOT ?= root.json
 PUBLICATION_DIR ?= .
 PUBLIC_KEYS ?=
-PUBLIC_KEY_DIR ?= .
+PUBLIC_KEY_DIR ?= release-keys
 SIGNING_BUNDLE_DIR ?= signing-bundle
 TOOLS_PYTHON := $(if $(wildcard $(BIN)/python),$(BIN)/python,$(PYTHON))
 PACKAGE_VERSION ?= $(shell sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml | head -n 1)
@@ -187,7 +187,7 @@ verify-signature: ## Verify detached SIGNATURE over MANIFEST with local GnuPG
 	gpg --verify "$(SIGNATURE)" "$(MANIFEST)"
 
 verify-all: ## Verify conventional root, release, and protected publication files
-	PYTHONPATH=src $(TOOLS_PYTHON) scripts/verify-publication.py "$(PUBLICATION_DIR)"
+	PYTHONPATH=src $(TOOLS_PYTHON) scripts/verify-publication.py "$(PUBLICATION_DIR)" "$(PUBLIC_KEY_DIR)"
 
 verify-publication: verify-all ## Verify the assembled publication
 

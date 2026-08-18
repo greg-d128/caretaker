@@ -12,9 +12,15 @@ from caretaker.integrity.cli import main as integrity_main
 
 def main() -> int:
     directory = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
+    public_key_directory = Path(sys.argv[2]) if len(sys.argv) > 2 else directory / "release-keys"
+    if not public_key_directory.is_dir():
+        public_key_directory = directory
     root = directory / "root.json"
     slots = json.loads(root.read_text())["key_slots"]
-    public_keys = [directory / f"caretaker-key-{slot.lower()}.asc" for slot in sorted(slots)]
+    public_keys = [
+        public_key_directory / f"caretaker-key-{slot.lower()}.asc"
+        for slot in sorted(slots)
+    ]
     root_signatures = [directory / f"root.json.key-{slot.lower()}.asc" for slot in sorted(slots)]
     common = ["--root", str(root), "--artifact-root", str(directory)]
     for path in public_keys:

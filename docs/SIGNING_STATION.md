@@ -89,6 +89,9 @@ mismatches, non-canonical JSON, unmatched protected paths, secret material in a
 supplied certificate, and certificates without usable signing subkeys.
 Manifest targets refuse to replace an existing manifest unless the operator
 explicitly supplies `FORCE=1` after deciding that regeneration is intended.
+Generation excludes Python bytecode and `__pycache__` contents automatically;
+these interpreter-specific build artifacts must never enter a source manifest.
+It does not run `make clean` or otherwise delete files from the source tree.
 
 On signing station A, after independently comparing the document hashes:
 
@@ -114,6 +117,9 @@ one directory, perform complete publication verification:
 ```bash
 make verify-publication PUBLICATION_DIR=.
 ```
+
+By default, publication verification reads public certificates from
+`release-keys/`. Set `PUBLIC_KEY_DIR` explicitly when they are stored elsewhere.
 
 For a single detached signature already known to the local GnuPG keyring:
 

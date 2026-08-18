@@ -14,6 +14,8 @@ from caretaker.integrity import (
     write_manifest,
 )
 from caretaker.integrity.canonical import assert_canonical_json, canonical_json_bytes
+from caretaker.integrity.manifest import validate_manifest_scope
+from caretaker.integrity.models import RolePolicy, RootMetadata
 
 
 def test_manifest_is_canonical_and_verifies_artifacts(tmp_path: Path) -> None:
@@ -49,3 +51,38 @@ def test_manifest_is_canonical_and_verifies_artifacts(tmp_path: Path) -> None:
 def test_canonical_metadata_rejects_float() -> None:
     with pytest.raises(TypeError):
         canonical_json_bytes({"score": 1.5})
+
+
+def test_manifest_excludes_transient_python_bytecode(tmp_path: Path) -> None:
+    root = tmp_path / "tree"
+    cache = root / "protected" / "__pycache__"
+    cache.mkdir(parents=True)
+    (root / "protected" / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (cache / "module.cpython-312.pyc").write_bytes(b"generated")
+
+    manifest = build_manifest(
+        root_dir=root,
+        project="caretaker",
+        package_version="0.6.0a1",
+        manifest_type=ManifestType.PROTECTED,
+        manifest_version=1,
+        root_version=1,
+        include=("protected/**",),
+        path_classes={"protected/**": IntegrityClass.PROTECTED},
+    )
+    fingerprints = ("A" * 40, "B" * 40, "C" * 40)
+    policy = RootMetadata(
+        schema_version=1,
+        project="caretaker",
+        root_version=1,
+        roles={
+            "release": RolePolicy("release", fingerprints, 1),
+            "protected": RolePolicy("protected", fingerprints, 2),
+            "root": RolePolicy("root", fingerprints, 2),
+        },
+        protected_paths=("protected/**",),
+    )
+
+    assert [item.path for item in manifest.artifacts] == ["protected/module.py"]
+    assert "**/__pycache__/**" in manifest.excluded_patterns
+    assert validate_manifest_scope(policy, manifest, root) == ()
