@@ -126,9 +126,12 @@ plain-language summary plus direct navigation to Guard evidence, Behavior
 history, correlated Logs, or an Investigation; raw FunctionSlot state and the
 effective policy remain available as technical detail. **Slot role** identifies
 whether the slot holds a target implementation, validator, comparator, or another
-supported auxiliary role. **Observation** reports `normal` for lightweight
-instrumentation and explicitly labels Behavior or Repair observation as
-`escalated`. The selected-target panel also shows the adaptive lifecycle stage
+supported auxiliary role. **Adaptive observation** reports `normal` for lightweight
+instrumentation, explicitly labels Behavior or Repair observation as `escalated`,
+and says `not adaptive` for fully managed `@caretaker` targets that do not use the
+adaptive-lightweight controller. Adaptive dependency boundaries are included in
+the target projection with a `dependency` slot role, so their actual level is no
+longer lost behind an unavailable marker. The selected-target panel also shows the adaptive lifecycle stage
 and recorded escalation reason. Filters accept `role:`, `level:`, and
 `lifecycle:` selectors.
 

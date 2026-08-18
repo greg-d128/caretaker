@@ -486,7 +486,7 @@ class CaretakerConsoleApp(App):
                 table.cursor_type = "row"
                 table.add_columns(
                     "Target", "Health", "Needs attention", "Repair mode", "Repair approval",
-                    "Slot role", "Observation", "Active version", "Runtime monitoring"
+                    "Slot role", "Adaptive observation", "Active version", "Runtime monitoring"
                 )
                 yield table
                 yield Static(
@@ -1054,7 +1054,9 @@ class CaretakerConsoleApp(App):
                 str(target.get("repair_mode") or "-"),
                 str(target.get("repair_authority") or "-"),
                 self._slot_role_display(target.get("slot_role")),
-                self._observation_display(target.get("observation_level")),
+                self._observation_display(
+                    target.get("observation_level"), target.get("slot_role")
+                ),
                 str(
                     target.get("function_version")
                     if target.get("function_version") is not None
@@ -1087,16 +1089,19 @@ class CaretakerConsoleApp(App):
             "OUTPUT_COMPARATOR": "comparator",
             "SNAPSHOTTER": "snapshotter",
             "RESTORER": "restorer",
+            "DEPENDENCY_BOUNDARY": "dependency",
         }.get(role, role.casefold().replace("_", " ") if role else "-")
 
     @classmethod
-    def _observation_display(cls, value: Any) -> str:
+    def _observation_display(cls, value: Any, slot_role: Any = None) -> str:
         level = cls._enum_name(value)
         if level == "LIGHTWEIGHT":
             return "normal"
         if level in {"BEHAVIOR", "REPAIR"}:
             return f"escalated: {level.casefold()}"
-        return level.casefold() if level else "-"
+        if level:
+            return level.casefold()
+        return "not adaptive" if cls._enum_name(slot_role) else "-"
 
     def _target_attention_reason(self, target: dict[str, Any]) -> str:
         target_id = str(target.get("target_id") or "")
@@ -1784,7 +1789,7 @@ class CaretakerConsoleApp(App):
                 f"operator authority: {target_record.get('repair_authority') or '-'}; "
                 f"Guard: {'enabled' if target_record.get('guard_enabled') else 'disabled'}\n"
                 f"Slot role: {self._slot_role_display(target_record.get('slot_role'))}; "
-                f"observation: {self._observation_display(target_record.get('observation_level'))}; "
+                f"adaptive observation: {self._observation_display(target_record.get('observation_level'), target_record.get('slot_role'))}; "
                 f"lifecycle: {target_record.get('lifecycle_label') or target_record.get('lifecycle_stage') or '-'}\n"
                 f"Escalation reason: {target_record.get('escalation_reason') or 'none'}\n"
                 "Use the buttons above to inspect evidence or start an investigation."

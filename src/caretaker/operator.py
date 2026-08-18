@@ -290,6 +290,7 @@ class OperatorRuntimeRegistry:
                 }
         for guard in self.guard_engines():
             for target_id in guard.registered_target_ids():
+                adaptive = dict(get_adaptive_state(target_id) or {})
                 result.setdefault(
                     target_id,
                     {
@@ -298,15 +299,15 @@ class OperatorRuntimeRegistry:
                         "repair_mode": None,
                         "repair_authority": None,
                         "integrity_class": None,
-                        "slot_role": None,
+                        "slot_role": "DEPENDENCY_BOUNDARY" if adaptive else None,
                         "function_version": None,
                         "candidate_id": None,
                         "repair_in_progress": False,
                         "guard_enabled": True,
-                        "observation_level": None,
-                        "lifecycle_stage": None,
-                        "lifecycle_label": None,
-                        "escalation_reason": None,
+                        "observation_level": adaptive.get("level"),
+                        "lifecycle_stage": adaptive.get("stage"),
+                        "lifecycle_label": adaptive.get("stage_label"),
+                        "escalation_reason": adaptive.get("promotion_reason"),
                     },
                 )
         return [result[key] for key in sorted(result)]

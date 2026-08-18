@@ -82,6 +82,9 @@ def test_overview_presents_slot_role_and_escalation_level():
     assert CaretakerConsoleApp._slot_role_display("OUTPUT_VALIDATOR") == "validator"
     assert CaretakerConsoleApp._observation_display("LIGHTWEIGHT") == "normal"
     assert CaretakerConsoleApp._observation_display("BEHAVIOR") == "escalated: behavior"
+    assert CaretakerConsoleApp._observation_display(
+        None, "TARGET_IMPLEMENTATION"
+    ) == "not adaptive"
     app = CaretakerConsoleApp(None, Path("."))
     assert app._target_attention_reason({
         "target_id": "lab.probe",

@@ -47,6 +47,34 @@ def test_operator_runtime_reports_validation_activity():
     assert status["validating_functions"] == ["target.one"]
 
 
+def test_operator_registry_attaches_adaptive_state_to_guard_dependency(monkeypatch):
+    registry = OperatorRuntimeRegistry()
+    guard = GuardEngine()
+    registry.register_guard_engine(guard)
+
+    def dependency(value):
+        return value
+
+    guard.register_target(
+        "test.dependency", dependency, GuardBinding(enabled=True), periodic=False
+    )
+    monkeypatch.setattr(
+        "caretaker.adaptive.get_adaptive_state",
+        lambda target_id: {
+            "level": "BEHAVIOR",
+            "stage": "pre-repair-behavior",
+            "stage_label": "BEHAVIOR",
+            "promotion_reason": "exception threshold",
+        } if target_id == "test.dependency" else None,
+    )
+
+    target = registry.targets()[0]
+    assert target["slot_role"] == "DEPENDENCY_BOUNDARY"
+    assert target["observation_level"] == "BEHAVIOR"
+    assert target["lifecycle_stage"] == "pre-repair-behavior"
+    assert target["escalation_reason"] == "exception threshold"
+
+
 def test_authority_update_rolls_back_process_context_when_component_refresh_fails(monkeypatch):
     from caretaker.authority import get_authority_runtime_context
 
