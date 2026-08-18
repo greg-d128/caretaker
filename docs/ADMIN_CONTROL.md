@@ -110,10 +110,11 @@ For a first response, use this operator workflow:
 4. Treat Behavior comparisons and model assessments as evidence, not proof.
    Check coverage, generation, integrity, source, time range, and omitted data.
 5. Before changing state, verify the exact selected object and acknowledge the
-   action. Destructive Behavior operations, Repair approval/rejection, policy
-   application, signed-lease application, and lease release all fail closed
-   without their corresponding confirmation. Repair rejection and every policy
-   application also require an explicit operator reason.
+   action. Behavior generation archiving, Repair activation/rejection, policy
+   application, signed-policy-change application, and ending a temporary change
+   all fail closed without their corresponding confirmation. Behavior archiving,
+   Repair rejection, and every policy application also require an explicit
+   operator reason.
 6. Refresh to verify the resulting state, then use **Clear context** before
    starting an unrelated investigation.
 
@@ -131,7 +132,8 @@ instrumentation, explicitly labels Behavior or Repair observation as `escalated`
 and says `not adaptive` for fully managed `@caretaker` targets that do not use the
 adaptive-lightweight controller. Adaptive dependency boundaries are included in
 the target projection with a `dependency` slot role, so their actual level is no
-longer lost behind an unavailable marker. The selected-target panel also shows the adaptive lifecycle stage
+longer lost behind an unavailable marker. The selected-target panel also shows
+the adaptive lifecycle stage
 and recorded escalation reason. Filters accept `role:`, `level:`, and
 `lifecycle:` selectors.
 
@@ -189,8 +191,8 @@ reports how many such generations are hidden.
 
 Every subject has an independent comparison reference. Its newest analytical
 generation is the default **REFERENCE** and is rendered in green. Selecting an
-older generation enables **Compare with reference**, which always compares that row with the
-green reference for the same subject. **Set Reference** moves the green designation
+older generation enables **Compare with reference**, which always compares that
+row with the green reference for the same subject. **Set Reference** moves the green designation
 for only that subject; references for other subjects are unchanged. The result
 labels its sides **Reference** and **Selected**, so comparison direction remains
 explicit without A/B terminology.
@@ -198,19 +200,19 @@ explicit without A/B terminology.
 Snapshots can be filtered by subject, generation, evidence state, or integrity
 state. The table reports collected calls and artifact integrity, while detail
 reports environment/workload labels, sampling strata, resource coverage, epoch
-boundaries, and monitoring provenance. **Save current function sample** does not execute
-the target function.
+boundaries, and monitoring provenance. **Save current function sample** does not
+execute the target function.
 
 The **Repair** view lists waiting decisions first and supports target, state,
-episode, and description filtering. A pending approval is rendered as a decision
+repair-case, and description filtering. A pending approval is rendered as a decision
 summary containing the candidate identity, expected active version, artifact
 hash, authority generation, and reason approval is required. The console also
 states which assurance evidence is absent from the current approval protocol;
 operators must not interpret approval as proof of missing validation lineage.
-Approval remains disabled until the candidate and evidence gaps are explicitly
-acknowledged. The same acknowledgement gates both approval and rejection, and a
-rejection additionally requires a reason. Selected episodes link directly to triggering Logs, Guard evidence,
-and Investigation.
+**Activate replacement** remains disabled until the candidate and evidence gaps
+are explicitly acknowledged. The same acknowledgement gates activation and
+**Reject replacement**, and rejection additionally requires a reason. Selected
+repair cases link directly to triggering Logs, Guard evidence, and Investigation.
 
 The **Policy** view separates inspection from mutation. Common Repair authority
 changes can be loaded as presets; advanced paths remain available, but every
@@ -220,8 +222,8 @@ constraint override may violate a higher-authority guarantee. Any edited input
 invalidates the preview, and the operator must acknowledge the scope and
 guarantee impact before **Apply previewed lease** becomes available.
 Signed descriptors require an explicit reason and separate scope acknowledgement.
-Releasing a selected runtime lease also requires confirmation, reducing accidental
-state changes while navigating the policy table.
+Ending a selected temporary change with **End temporary change** also requires
+confirmation, reducing accidental state changes while navigating the policy table.
 
 The filter field accepts ordinary case-insensitive text and compact field
 selectors. Multiple terms are combined with AND semantics. Examples:

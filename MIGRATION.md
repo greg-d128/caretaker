@@ -38,6 +38,36 @@ Behavior statistics are accumulated online in bounded active snapshots. Code ide
 
 When runtime artifact signing is enabled, sealed behavior snapshots and behavior archives use the same runtime signing service as secure event artifacts. Ephemeral signing publishes key identities/transitions into a separately retained Signing Identity Journal; configured external signing authority is used without silent fallback to ephemeral keys.
 
+The operator list now presents one analytical row per subject/generation rather
+than one row per stored epoch. Archiving that row archives every active snapshot
+in the generation and requires an operator reason. Permanent deletion is no
+longer exposed by the console.
+
+## Operator terminology and adaptive state
+
+The console uses outcome-oriented labels such as **Activate replacement**,
+**Compare with reference**, **End temporary change**, and **Analyze with local
+AI**. Overview exposes FunctionSlot role and adaptive observation independently:
+fully managed `@caretaker` targets report `not adaptive`, while lightweight
+dependency boundaries report normal or escalated Behavior/Repair observation.
+Existing control command identifiers and Python APIs are unchanged.
+
+## Offline release signing
+
+The ordinary signing-station workflow no longer requires typing both a key slot
+and its fingerprint. `root.json` is authoritative for that mapping:
+
+```bash
+make sign-release-set KEY_SLOT=a
+```
+
+Use `make signing-status` to identify missing publication material and `make
+signing-bundle PUBLIC_KEY_DIR=<directory>` to create a minimal station directory.
+The older `sign`, `sign-all`, `manifests`, and `verify-all` Make targets remain as
+compatibility aliases or advanced interfaces; new operator documentation uses
+`sign-file`, `sign-station-bundle`, `generate-manifests`, and
+`verify-publication` to make their scope explicit.
+
 ## Validation isolation
 
 Validation policy now declares a minimum isolation capability:

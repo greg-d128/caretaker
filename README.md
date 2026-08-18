@@ -109,13 +109,13 @@ fallback evidence. **Overview**, **Guard**, **Behavior**, **Repair**, **Policy**
 related evidence without requiring operators to copy internal IDs.
 
 Consequential actions fail closed. Guard baseline acceptance, Behavior generation
-archiving, Repair approval/rejection, unsigned or signed policy application,
-and runtime-lease release require an explicit review acknowledgement. Repair
+archiving, Repair activation/rejection, unsigned or signed policy application,
+and ending a temporary policy change require an explicit review acknowledgement. Repair
 rejection, Behavior generation archiving, and policy application also require an
 operator reason. Archiving a Behavior row packages and removes every active
 snapshot in that subject/generation while retaining the reason in the archive
-manifest. Behavior and
-LLM comparisons are advisory evidence rather than correctness guarantees; the UI
+manifest. Behavior and local-AI comparisons are advisory evidence rather than
+correctness guarantees; the UI
 shows collection coverage, generation, integrity, evidence scope, and omissions.
 The Behavior list prefers cumulative epoch evidence and displays the newest three
 generations per subject by default, sorted by subject and newest generation, with
@@ -124,8 +124,8 @@ allocated across subjects before older generations, so hot or frequently changed
 functions do not crowd rare functions out of view. Exceptional evidence whose
 exclusive sample range cannot be proven is labeled `partial`.
 Each subject's newest analytical generation is its default green comparison
-reference. Operators select another generation and use **Compare with reference**, or use
-**Set Reference** to change only that subject's reference.
+reference. Operators select another generation and use **Compare with reference**,
+or use **Set Reference** to change only that subject's reference.
 
 The persistent **Save Report** button exports the active tab's visible summaries,
 table rows, inputs, and detail panels as a private plain-text file under

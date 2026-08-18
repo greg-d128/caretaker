@@ -3,7 +3,7 @@ Caretaker 0.6.0a1 development verification status
 
 Status date
 -----------
-2026-08-16
+2026-08-18
 
 Scope and interpretation
 ------------------------
@@ -15,19 +15,19 @@ installed wheel, and an extracted source distribution.
 Environment used for this review
 --------------------------------
 Python: 3.14 (review environment; declared support is CPython 3.11-3.13)
-Platform: restricted Linux sandbox
-Command: PYTHONPATH=src venv/bin/pytest -q
+Platform: Linux workspace; full run allowed normal GnuPG-agent and Unix-socket access
+Command: PYTHONPATH=src venv/bin/python -m pytest -q
 
 Observed result
 ---------------
-- 224 passed;
+- 300 passed;
 - 11 strict expected failures representing known security/assurance debt;
-- 17 environment-limited failures.
+- no unexpected failures.
 
-The 17 failures occurred because the restricted review sandbox could not start
-gpg-agent or bind Unix-domain sockets. They do not constitute a successful test
-of those facilities. Forgejo CI is configured to run the suite on ordinary Linux
-for CPython 3.11, 3.12, and 3.13.
+The complete run included GnuPG key/signature tests and Unix-domain logging and
+control-socket tests. Forgejo CI is configured to run the suite on ordinary Linux
+for CPython 3.11, 3.12, and 3.13; this local review used Python 3.14 and therefore
+supplements rather than replaces the declared-version CI matrix.
 
 Known strict expected failures
 ------------------------------
@@ -56,8 +56,11 @@ as an implemented security property.
 Additional checks performed
 ---------------------------
 - Python module and CLI imports succeeded during test collection outside the
-  environment-limited facilities.
+  isolated validation facilities.
 - Documentation and package metadata were reviewed against the implementation.
+- Relative links across root, docs, and example Markdown resolve locally.
+- Current operator guides are checked against retired Lab/Console labels and the
+  role-oriented signing commands.
 - git diff --check is required before the documentation update is committed.
 
 Historical Caretaker 0.5.0a1 verification report

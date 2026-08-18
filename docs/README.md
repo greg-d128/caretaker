@@ -16,6 +16,8 @@ Caretaker is active research software. These documents describe current design i
 - `ADMIN_CONTROL.md` — local socket authentication, operator console workflow, tab semantics, and mode control
 - `POLICY_AUTHORITY.md` — signed authority layers, constraints, overrides, and runtime leases
 - `PROFILES.md` — named/versioned profiles, policy-surface coverage, comparison, pinning, and the Profile Editor 
+- `POLICY_SEMANTICS.md` — executable policy support, reserved settings, and semantic surface review
+- `ISOLATED_EXECUTION.md` — deployment and validation-backend isolation guidance
 
 ## Shared runtime and Guard
 
@@ -46,6 +48,7 @@ Caretaker is active research software. These documents describe current design i
 ## Planning and releases
 
 - `FUTURE_WORK.md`
+- `INTERACTIVE_ISOLATION_TESTING.md` — controlled interactive isolation experiments
 - `../MIGRATION.md`
 - `../CHANGELOG.md`
 - `../VERIFICATION.txt` — current verification status followed by historical reports

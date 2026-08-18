@@ -239,8 +239,8 @@ reason:  incident INC-142 - temporary unattended recovery
 Load a common Repair-authority preset or enter the advanced path/value, then
 select **Preview change**. Review the exact scope, duration, reason, and guarantee
 impact; acknowledge **I reviewed scope and guarantee impact** before applying.
-Changing any input invalidates the preview. Releasing a selected lease requires
-the separate **Confirm release** acknowledgement.
+Changing any input invalidates the preview. Ending a selected temporary change
+with **End temporary change** requires the separate **Confirm release** acknowledgement.
 
 If the change violates an application-owner constraint, select **Allow constraint override**. The repair can
 proceed, but the application-owner guarantee becomes `VIOLATED` for that effective generation.

@@ -178,7 +178,7 @@ These demonstrate the difference between bad input and a bad implementation.
    - deviations;
    - runtime inspections;
    - Guard decisions;
-   - Behavior snapshots for the same unchanged target code hash;
+   - Behavior generations for the same unchanged target code hash;
    - Repair events where applicable.
 
 The Guard tab is the live event view. The Behavior tab contains persisted
@@ -190,7 +190,7 @@ epoch** atomically materializes the current function statistics and starts a
 non-overlapping successor; ordinary coverage is shown as `current/target`, while
 `partial` is reserved for evidence without provable exclusive sample ranges.
 The newest analytical generation for each function is green and labeled
-**REFERENCE**. Select another generation for that function and choose **Compare**;
+**REFERENCE**. Select another generation for that function and choose **Compare with reference**;
 use **Set Reference** only when the selected generation should become that
 function's new green reference.
 
@@ -260,7 +260,7 @@ not required.
 
 ## LLM-assisted investigation
 
-The Caretaker console's **Guard > LLM assist** action asks the running Guard
+The Caretaker console's **Guard > Analyze with local AI** action asks the running Guard
 engine for an advisory assessment of the selected target's evidence.
 
 This is available only when the application configured a Guard assessment
@@ -335,7 +335,7 @@ mutation and FunctionSlot injection.
 
 ### Optional Guard LLM assessment in the lab
 
-To make the console's **Guard > LLM assist** action available for this example,
+To make the console's **Guard > Analyze with local AI** action available for this example,
 start the supervised lab with a local Ollama model name:
 
 ```bash
@@ -347,4 +347,4 @@ PYTHONPATH=src:. python -m caretaker.run \
 
 The example uses Caretaker's loopback-only Ollama provider defaults. If the
 environment variable is absent, Guard LLM review remains disabled and selecting
-**LLM assist** reports that no advisory provider is configured.
+**Analyze with local AI** reports that no advisory provider is configured.

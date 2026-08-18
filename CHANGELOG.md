@@ -4,14 +4,19 @@
 
 ### Public research release assurance
 
-- Prompt attended signing workflows for missing public key slots, fingerprints,
-  and manifest versions; retain fail-fast non-interactive behavior and print
-  concrete review, transfer, repeated-signing, and final-verification next steps.
+- Prompt attended signing workflows for missing public key slots and manifest
+  versions; resolve each authorized primary fingerprint from `root.json`, retain
+  fail-fast non-interactive behavior, and print concrete next steps.
 - State the current supply-chain scope explicitly: runtime evidence, Caretaker OpenPGP manifests, dependency behavior, import routing, and temporary function repair are implemented research areas; SBOM/advisory ingestion, registry monitoring, upgrade orchestration, modern provenance ecosystems, deployment, and external incident integrations remain roadmap work.
 - Publish the validation, isolation, same-UID control, VM-attestation, policy-truthfulness, multiprocess, and Repair restart debts in the future-work ledger.
 - Add a private vulnerability-reporting policy, supported Python/Linux scope, a current development verification report, and Forgejo CI for CPython 3.11 through 3.13.
 - Correct the Guard security description of policy-enabled automatic baseline acceptance and convert its strict expected-failure regression into a passing documentation-conformance test.
-- Add a small reviewable `scripts/sign-code.sh` GnuPG wrapper and `make sign` target for producing and immediately verifying one detached signature over an already-reviewed canonical manifest.
+- Add a small reviewable `scripts/sign-code.sh` GnuPG wrapper. The ordinary station
+  workflow uses `make sign-release-set KEY_SLOT=<slot>`; advanced single-file use
+  remains available through `make sign-file`.
+- Group Make commands by coordinator/station role, add publication status reporting,
+  and create non-overwriting minimal offline signing bundles containing reviewed
+  artifacts, public certificates, station tools, instructions, and `SHA256SUMS`.
 
 ### Policy truthfulness and enforcement
 
@@ -62,20 +67,29 @@
 - Make Overview and Guard issue-first, add direct evidence/investigation links,
   and distinguish no evidence, learning, healthy, and deviation states.
 - Replace Behavior A/B operands with green subject-scoped references, a selected
-  comparison generation, and the direct **Set Reference** / **Compare** workflow;
+  comparison generation, and the direct **Set Reference** / **Compare with reference** workflow;
   clarify code generations, active unsaved observations,
   collection coverage, integrity/provenance, resource changes, and advisory limits.
 - Put waiting Repair decisions first, expose candidate source and evidence gaps,
   and link episodes to triggering Logs, Guard evidence, and Investigation.
 - Add previewable policy presets and explicit scope/impact acknowledgements;
-  require confirmations for destructive snapshots, Repair decisions, signed
-  leases, and lease release, plus reasons for rejection and policy application.
+  make Behavior removal generation-scoped and archive-only, require an archive
+  reason, and retain verification/restoration metadata in the archive manifest.
+- Require confirmations for Behavior archiving, Repair decisions, signed policy
+  changes, and ending temporary policy changes, plus reasons for rejection and
+  policy application.
 - Make Investigation scope and candidate rationale visible, and document that
   Logs correlation is identifier-based with live/persisted source semantics.
 - Add a Repair approval source viewer that renders the proposed replacement as syntax-highlighted Python with line numbers and toggles back to the full JSON approval payload.
 - Show a per-target lifecycle status in Overview. Active post-repair candidate probation is labeled `VALIDATING`, while exact FunctionSlot and candidate states remain available in target details.
 - Add compact Overview target filtering with free-text search and `target:`, `status:`, `state:`, `mode:`, `authority:`, `guard:`, and `version:` selectors.
 - Refresh the target snapshot immediately after approving or rejecting a Repair so lifecycle changes are visible without leaving the Repair workflow.
+- Add slot role and adaptive-observation state to Overview. Fully managed targets
+  report `not adaptive`; dependency boundaries report normal or explicitly
+  escalated Behavior/Repair observation, lifecycle, and escalation reason.
+- Add a private plain-text **Save Report** export for every console tab, including
+  visible summaries, filters, table rows, and detail panels for ticket handoff.
+- Make stale DataTable selection events harmless after refresh/archive operations.
 
 ### Diagnostic robustness
 
