@@ -45,6 +45,7 @@ from .logging.ipc import (
 )
 from .logging.policy import OperatorLoggingPolicy, load_operator_policy
 from .logging.segments import read_segment
+from .integrity import SignatureVerificationMode, verify_release_publication
 from .system import SystemCollectionPolicy, SystemDataCollector, SystemOutputPolicy, load_system_policy
 
 
@@ -105,9 +106,51 @@ def main(argv: list[str] | None = None) -> int:
         "--authority-stack",
         help="TOML descriptor for signed/unsigned Caretaker policy authority layers",
     )
+    parser.add_argument(
+        "--integrity-publication-directory",
+        help="verify signed root and release manifests before starting the application",
+    )
+    parser.add_argument(
+        "--integrity-artifact-root",
+        help="source/artifact tree covered by the manifests (defaults to publication directory)",
+    )
+    parser.add_argument(
+        "--integrity-trusted-fingerprint",
+        action="append",
+        default=[],
+        help="independently trusted primary fingerprint; repeat for each trusted root identity",
+    )
+    parser.add_argument(
+        "--integrity-verification-mode",
+        choices=[item.value for item in SignatureVerificationMode],
+        default=SignatureVerificationMode.FULL_PUBLICATION.value,
+    )
     parser.add_argument("module")
     parser.add_argument("module_args", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
+    release_integrity: dict[str, object] = {
+        "status": "NOT_CONFIGURED",
+        "configured": False,
+        "root_anchored": False,
+        "manifests": {},
+    }
+    if args.integrity_publication_directory:
+        if not args.integrity_trusted_fingerprint:
+            parser.error(
+                "--integrity-publication-directory requires at least one "
+                "--integrity-trusted-fingerprint obtained independently"
+            )
+        try:
+            release_integrity = verify_release_publication(
+                args.integrity_publication_directory,
+                trusted_primary_fingerprints=args.integrity_trusted_fingerprint,
+                artifact_root=args.integrity_artifact_root,
+                verification_mode=SignatureVerificationMode(args.integrity_verification_mode),
+            )
+        except Exception as exc:
+            parser.error(f"release-integrity verification could not complete: {type(exc).__name__}: {exc}")
+        if release_integrity["status"] != "TRUSTED":
+            parser.error("configured release-integrity verification failed")
     if args.policy:
         declared_policy, _ = load_operator_policy(args.policy)
     else:
@@ -251,6 +294,7 @@ def main(argv: list[str] | None = None) -> int:
                     "policy_generation": runtime.effective.generation,
                     "active_leases": list(leases),
                     "runtime_signing_identity": signing_identity,
+                    "release_integrity": release_integrity,
                     "authority_policy": {
                         "generation": effective_authority.generation,
                         "fingerprint": effective_authority.fingerprint,

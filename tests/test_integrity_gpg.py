@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from caretaker.integrity import (
     RolePolicy,
     RootMetadata,
     build_manifest,
+    verify_release_publication,
     write_manifest,
     write_root,
 )
@@ -140,6 +142,52 @@ def test_release_and_protected_thresholds(tmp_path: Path) -> None:
     )
     assert not duplicate.trusted
     assert any("Duplicate signer" in item for item in duplicate.signature_verification.errors)
+
+
+def test_runtime_publication_status_verifies_root_and_both_manifests(tmp_path: Path) -> None:
+    home, fingerprints, public = _keys(tmp_path)
+    selected = (fingerprints["a"], fingerprints["b"], fingerprints["c"])
+    root = _root(tmp_path / "root.json", 1, selected)
+    write_root(
+        tmp_path / "root.json",
+        replace(
+            root,
+            key_slots={"A": selected[0], "B": selected[1], "C": selected[2]},
+        ),
+    )
+    keys = tmp_path / "release-keys"
+    keys.mkdir()
+    for slot in "abc":
+        (keys / f"caretaker-key-{slot}.asc").write_bytes(public[slot].read_bytes())
+        sign_file(home, fingerprints[slot], tmp_path / "root.json", tmp_path / f"root.json.key-{slot}.asc")
+    (tmp_path / "ordinary.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (tmp_path / "protected.py").write_text("VALUE = 2\n", encoding="utf-8")
+    for name, manifest_type, include, classes in (
+        ("release-manifest.json", ManifestType.RELEASE, ("ordinary.py",), {}),
+        ("protected-manifest.json", ManifestType.PROTECTED, ("protected.py",), {"protected.py": IntegrityClass.PROTECTED}),
+    ):
+        write_manifest(
+            tmp_path / name,
+            build_manifest(
+                root_dir=tmp_path,
+                project="caretaker",
+                package_version="0.6.0",
+                manifest_type=manifest_type,
+                manifest_version=1,
+                root_version=1,
+                include=include,
+                path_classes=classes,
+            ),
+        )
+        for slot in "abc":
+            sign_file(home, fingerprints[slot], tmp_path / name, tmp_path / f"{name}.key-{slot}.asc")
+
+    status = verify_release_publication(tmp_path, trusted_primary_fingerprints=selected)
+
+    assert status["status"] == "TRUSTED", status
+    assert status["root_anchored"] is True
+    assert status["manifests"]["release-manifest.json"]["valid_signers"] == 3
+    assert status["manifests"]["protected-manifest.json"]["invalid_artifacts"] == 0
 
 
 def test_root_rotation_requires_old_and_new_thresholds(tmp_path: Path) -> None:

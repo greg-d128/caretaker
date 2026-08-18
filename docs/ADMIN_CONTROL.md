@@ -8,6 +8,13 @@ Peer credentials do not provide authorization independent of the operating-syste
 
 No network listener, password database, arbitrary Python, shell command, or unrestricted path execution is provided.
 
+The Overview status line reports release integrity separately from policy
+authority. `TRUSTED` means the supervisor verified the externally anchored root,
+both signed manifests, their configured signature thresholds, and all covered
+artifacts before launching the application. `NOT_CONFIGURED` means no runtime
+publication bundle and independent fingerprints were supplied; it is not a
+signature failure. Policy-layer rows do not report release-manifest status.
+
 The configured `run/control.sock` and `run/runtime.sock` names are logical paths. On systems with short `AF_UNIX` pathname limits, Caretaker transparently relocates only an overlong socket file to a private per-user runtime directory; the configured evidence/data directory is unchanged. Caretaker's control clients resolve the same mapping automatically.
 
 ## Declarative commands

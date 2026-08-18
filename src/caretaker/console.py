@@ -802,13 +802,15 @@ class CaretakerConsoleApp(App):
         authority = self._authority_snapshot
         assurance = authority.get("overall_assurance", "-") if authority else "-"
         violations = len(authority.get("violations", ())) if authority else "-"
+        release_integrity = (self._last_status or {}).get("release_integrity") or {}
+        release_status = str(release_integrity.get("status") or "NOT_CONFIGURED")
         self.query_one("#operator-status", Static).update(
             f"Status {status_label}  |  "
             f"Last alert {self._metric(runtime, 'alert_level')}  |  "
             f"Last incidents {self._metric(runtime, 'active_incident_count')}  |  "
             f"Last validating {self._metric(runtime, 'validation_count')}  |  "
             f"Last approvals {self._metric(runtime, 'pending_approval_count')}  |  "
-            f"Policy {assurance}  |  Violations {violations}"
+            f"Policy {assurance}  |  Violations {violations}  |  Release integrity {release_status}"
         )
         self._clear_repair_selection()
         details = [
@@ -887,6 +889,8 @@ class CaretakerConsoleApp(App):
         )
         degraded = runtime.get("degraded_components") or []
         authority_summary = status.get("authority_policy") or {}
+        release_integrity = status.get("release_integrity") or {}
+        release_integrity_status = str(release_integrity.get("status") or "NOT_CONFIGURED")
         assurance = authority_summary.get("overall_assurance", "UNCONFIGURED")
         runtime_policy_match = authority_summary.get("runtime_matches_supervisor")
         displayed_assurance = "RUNTIME_TAMPER" if runtime_policy_match is False else assurance
@@ -898,6 +902,7 @@ class CaretakerConsoleApp(App):
             f"Validating {runtime.get('validation_count', 0)}  |  "
             f"Approvals {runtime.get('pending_approval_count', 0)}  |  "
             f"Policy {displayed_assurance}  |  Violations {policy_violations}  |  "
+            f"Release integrity {release_integrity_status}  |  "
             f"Worker issues {len(unhealthy)}"
         )
         self.query_one("#operator-status", Static).update(line)
@@ -907,6 +912,9 @@ class CaretakerConsoleApp(App):
             f"Validating functions: {', '.join(validating) if validating else 'none'}",
             f"Validation backends: {', '.join(validation_backends) if validation_backends else 'none'}",
             f"Degraded capabilities: {', '.join(degraded) if degraded else 'none'}",
+            f"Release integrity: {release_integrity_status}",
+            "Release root externally anchored: "
+            + ("yes" if release_integrity.get("root_anchored") is True else "no / not checked"),
             "Runtime policy matches supervisor: "
             + ("yes" if runtime_policy_match is True else "NO - POLICY TAMPER DETECTED" if runtime_policy_match is False else "unknown"),
         ]
@@ -2991,10 +2999,13 @@ class CaretakerConsoleApp(App):
             else "MISMATCH - POLICY TAMPER" if runtime_match is False
             else "UNAVAILABLE"
         )
+        release_integrity = (self._last_status or {}).get("release_integrity") or {}
+        release_status = str(release_integrity.get("status") or "NOT_CONFIGURED")
         self.query_one("#policy-summary", Static).update(
             f"Overall assurance: {assurance}   Generation: {generation}   "
             f"Violations: {len(violations)}   Runtime: {runtime_match_text}\n"
-            f"Effective fingerprint: {fingerprint}"
+            f"Effective fingerprint: {fingerprint}\n"
+            f"Release integrity (separate from policy authority): {release_status}"
         )
         table = self.query_one("#policy-table", DataTable)
         table.clear()

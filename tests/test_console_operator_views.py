@@ -32,6 +32,43 @@ def test_target_runtime_state_marks_candidate_probation_as_validating():
     assert CaretakerConsoleApp._target_status(target) == "VALIDATING"
 
 
+def test_overview_displays_release_integrity_separately_from_policy(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            app.socket_path = tmp_path / "control.sock"
+
+            async def request(command: str, **payload):
+                assert command == "status"
+                return {
+                    "ok": True,
+                    "application_pid": 42,
+                    "application_running": True,
+                    "behavior_collection_id": "collection",
+                    "behavior_revision": 0,
+                    "workers": [],
+                    "runtime": {"current_status": "READY", "alert_level": "NONE"},
+                    "authority_policy": {
+                        "overall_assurance": "UNCONFIGURED",
+                        "violations": 0,
+                        "runtime_matches_supervisor": True,
+                    },
+                    "release_integrity": {"status": "TRUSTED", "root_anchored": True},
+                }
+
+            app._request = request  # type: ignore[method-assign]
+            await app.refresh_status()
+
+            status = str(app.query_one("#operator-status", Static).render())
+            details = str(app.query_one("#overview-details", Static).render())
+            assert "Policy UNCONFIGURED" in status
+            assert "Release integrity TRUSTED" in status
+            assert "Release root externally anchored: yes" in details
+
+    asyncio.run(exercise())
+
+
 def test_target_status_preserves_terminal_slot_states():
     assert CaretakerConsoleApp._target_status(
         {"slot_state": "INITIALLY_VALIDATED"}

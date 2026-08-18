@@ -11,6 +11,7 @@ PUBLICATION_DIR ?= .
 PUBLIC_KEYS ?=
 PUBLIC_KEY_DIR ?= release-keys
 SIGNING_BUNDLE_DIR ?= signing-bundle
+TRUSTED_FINGERPRINTS ?=
 TOOLS_PYTHON := $(if $(wildcard $(BIN)/python),$(BIN)/python,$(PYTHON))
 PACKAGE_VERSION ?= $(shell sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml | head -n 1)
 ROOT_VERSION ?= $(shell $(TOOLS_PYTHON) -c 'import json; print(json.load(open("$(ROOT)"))["root_version"])' 2>/dev/null)
@@ -18,7 +19,7 @@ INTEGRITY := PYTHONPATH=src $(TOOLS_PYTHON) -m caretaker.integrity.cli
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup test compile check wheel build verify-wheel root-check signing-check signing-status signing-bundle release-check release-manifest protected-manifest manifests generate-release-manifest generate-protected-manifest generate-manifests inspect-integrity sign sign-file sign-root sign-release sign-protected sign-release-set sign-all sign-station-bundle verify-signature verify-all verify-publication lab lab-console profile clean distclean
+.PHONY: help setup test compile check wheel build verify-wheel root-check signing-check signing-status signing-bundle release-check release-manifest protected-manifest manifests generate-release-manifest generate-protected-manifest generate-manifests inspect-integrity sign sign-file sign-root sign-release sign-protected sign-release-set sign-all sign-station-bundle verify-signature verify-all verify-publication lab lab-verified lab-console profile clean distclean
 
 help: ## Show commands grouped by operator role
 	@printf '%s\n' \
@@ -44,6 +45,7 @@ help: ## Show commands grouped by operator role
 	  '  sign-station-bundle      Sign root and both manifests for KEY_SLOT' '' \
 	  'Laboratory:' \
 	  '  lab                      Run the interactive Caretaker lab' \
+	  '  lab-verified             Run lab after signed release verification' \
 	  '  lab-console              Open its operator console' \
 	  '  profile                  Open the profile editor' '' \
 	  'Advanced/compatibility: sign-file, verify-signature, clean, distclean' '' \
@@ -193,6 +195,15 @@ verify-publication: verify-all ## Verify the assembled publication
 
 lab: ## Run the interactive Caretaker lab under caretaker-run
 	PYTHONPATH=src:. $(BIN)/python -m caretaker.run --data-directory ./examples/.caretaker-interactive-lab/caretaker-data examples.interactive_caretaker_lab
+
+lab-verified: ## Run lab after verifying the signed source publication
+	@test -n "$(TRUSTED_FINGERPRINTS)" || { echo 'TRUSTED_FINGERPRINTS is required; use independently confirmed full fingerprints' >&2; exit 2; }
+	@args=''; \
+	for fingerprint in $(TRUSTED_FINGERPRINTS); do args="$$args --integrity-trusted-fingerprint $$fingerprint"; done; \
+	PYTHONPATH=src:. $(BIN)/python -m caretaker.run \
+	  --integrity-publication-directory . --integrity-artifact-root . $$args \
+	  --data-directory ./examples/.caretaker-interactive-lab/caretaker-data \
+	  examples.interactive_caretaker_lab
 
 lab-console: ## Open the Caretaker console for the interactive lab
 	PYTHONPATH=src:. $(BIN)/python -m caretaker.console --data-directory ./examples/.caretaker-interactive-lab/caretaker-data

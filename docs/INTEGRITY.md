@@ -125,6 +125,37 @@ Randomized mode is intended for runtime cost reduction and population-level dete
 
 Applications requiring maximum local assurance may pass `SignatureVerificationMode.FULL_PUBLICATION`.
 
+The supervised runner can perform this check before launching the application and
+publish the distinct result to the operator console:
+
+```bash
+python -m caretaker.run \
+  --integrity-publication-directory /opt/caretaker/publication \
+  --integrity-artifact-root /opt/caretaker/source \
+  --integrity-trusted-fingerprint FULL_PRIMARY_FINGERPRINT_A \
+  --integrity-trusted-fingerprint FULL_PRIMARY_FINGERPRINT_B \
+  --integrity-trusted-fingerprint FULL_PRIMARY_FINGERPRINT_C \
+  your.application
+```
+
+The fingerprints are deliberately not inferred from `root.json`; obtain and
+configure them through independent trusted channels. Configured verification is
+fail-closed. Without these options, the console reports release integrity as
+`NOT_CONFIGURED`. This result is separate from policy-authority, log-integrity,
+and behavior-evidence signing.
+
+For the included source-tree laboratory, the Makefile provides the equivalent
+shortcut:
+
+```bash
+make lab-verified TRUSTED_FINGERPRINTS="FULL_FINGERPRINT_A FULL_FINGERPRINT_B FULL_FINGERPRINT_C"
+```
+
+This verifies the source tree described by the manifests. An installed wheel
+has a different filesystem layout and needs a publication manifest generated
+for that installed artifact tree; pointing a source-tree manifest at
+`site-packages` will correctly fail rather than imply coverage.
+
 ## External trust bootstrap
 
 Caretaker can verify continuity from a trusted root, but cannot prove the authenticity of the first local root by inspecting itself. Initial primary fingerprints must be confirmed independently through sources such as the project website, Web Key Directory, keyservers, or separately controlled release announcements.

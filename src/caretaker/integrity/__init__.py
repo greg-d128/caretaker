@@ -38,7 +38,12 @@ from .models import (
     TrustedVersionState,
     normalize_fingerprint,
 )
-from .runtime import RuntimeIntegrityMonitor, bootstrap_integrity, fingerprint_function
+from .runtime import (
+    RuntimeIntegrityMonitor,
+    bootstrap_integrity,
+    fingerprint_function,
+    verify_release_publication,
+)
 from .state import IntegrityRollbackError, IntegrityStateStore
 from .verifier import IntegrityVerificationError, IntegrityVerifier
 
@@ -70,6 +75,7 @@ __all__ = [
     "bootstrap_integrity",
     "build_manifest",
     "fingerprint_function",
+    "verify_release_publication",
     "load_manifest",
     "load_root",
     "manifest_sha256",
