@@ -14,7 +14,7 @@ SIGNING_BUNDLE_DIR ?= signing-bundle
 # Published Caretaker root identities. Override from an independently trusted
 # source when bootstrapping a checkout: make lab-verified TRUSTED_FINGERPRINTS='...'
 TRUSTED_FINGERPRINTS ?= 1AA1C739DE9A94B146BD324D335D05E357D334C9 F0F117899E20246935B304D86462FCC9E46C954A F4632C96E4D3C93AE0E894564A9B0D2FBA85B411
-FRAMEWORK_POLICY ?= framework-policy.json
+FRAMEWORK_POLICY ?= profiles/caretaker-balanced-v1.json
 FRAMEWORK_POLICY_ROLE ?= protected
 WHEEL_MANIFEST_VERSION ?= 1
 TOOLS_PYTHON := $(if $(wildcard $(BIN)/python),$(BIN)/python,$(PYTHON))
