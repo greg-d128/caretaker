@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -109,9 +111,59 @@ def test_verified_lab_has_overridable_published_fingerprint_defaults() -> None:
     assert "TRUSTED_FINGERPRINTS='...'" in makefile
 
 
-def test_lab_targets_select_the_explicit_sandbox_authority_stack() -> None:
+def test_lab_targets_select_the_explicit_sandbox_profile() -> None:
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-    assert makefile.count("--authority-stack profiles/sandbox-stack.toml") == 2
+    assert makefile.count("--profile sandbox") == 2
+
+
+def test_wheel_release_requires_signed_profiles_and_installed_manifests() -> None:
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    setup = (ROOT / "setup.py").read_text(encoding="utf-8")
+    assert "sign-framework-profiles:" in makefile
+    assert "wheel-manifests:" in makefile
+    assert "sign-wheel-set:" in makefile
+    assert '"$$tmp/venv/bin/caretaker-integrity" verify-install' in makefile
+    assert "signed wheel publication is incomplete" in setup
+
+
+def test_wheel_manifest_generator_uses_installed_paths(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    shutil.copytree(ROOT / "src", repository / "src")
+    shutil.copytree(ROOT / "profiles", repository / "profiles")
+    shutil.copy2(ROOT / "root.json", repository / "root.json")
+    for profile in (
+        "caretaker-observe-only-v1.json",
+        "caretaker-balanced-v1.json",
+        "caretaker-high-assurance-v1.json",
+    ):
+        for slot in "abc":
+            (repository / "profiles" / f"{profile}.key-{slot}.asc").write_text(
+                "test signature placeholder\n", encoding="utf-8"
+            )
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts/generate-wheel-manifests.py"),
+            "--repository",
+            str(repository),
+            "--package-version",
+            "0.6.0",
+            "--manifest-version",
+            "1",
+        ],
+        cwd=ROOT,
+        env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    release = json.loads((repository / "wheel-release-manifest.json").read_text())
+    protected = json.loads((repository / "wheel-protected-manifest.json").read_text())
+    assert release["metadata"]["artifact_layout"] == "wheel"
+    assert protected["metadata"]["artifact_layout"] == "wheel"
+    assert all(not item["path"].startswith("src/") for item in release["artifacts"])
+    assert all(not item["path"].startswith("src/") for item in protected["artifacts"])
+    assert any(item["path"] == "caretaker/profiles/caretaker-balanced-v1.json" for item in release["artifacts"])
 
 
 def test_framework_policy_check_requires_canonical_framework_layer(tmp_path: Path) -> None:

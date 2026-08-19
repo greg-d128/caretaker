@@ -46,6 +46,7 @@ from .logging.ipc import (
 from .logging.policy import OperatorLoggingPolicy, load_operator_policy
 from .logging.segments import read_segment
 from .integrity import SignatureVerificationMode, verify_release_publication
+from .builtin_profiles import builtin_profile_names, load_builtin_profile_supervisor
 from .system import SystemCollectionPolicy, SystemDataCollector, SystemOutputPolicy, load_system_policy
 
 
@@ -107,6 +108,17 @@ def main(argv: list[str] | None = None) -> int:
         help="TOML descriptor for signed/unsigned Caretaker policy authority layers",
     )
     parser.add_argument(
+        "--profile",
+        choices=builtin_profile_names(),
+        help="select a built-in framework profile before importing the application",
+    )
+    parser.add_argument(
+        "--profile-trusted-fingerprint",
+        action="append",
+        default=[],
+        help="independently trusted profile-root fingerprint; repeat for all three identities",
+    )
+    parser.add_argument(
         "--integrity-publication-directory",
         help="verify signed root and release manifests before starting the application",
     )
@@ -128,6 +140,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("module")
     parser.add_argument("module_args", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
+    if args.profile and args.authority_stack:
+        parser.error("--profile and --authority-stack are mutually exclusive")
     release_integrity: dict[str, object] = {
         "status": "NOT_CONFIGURED",
         "configured": False,
@@ -159,11 +173,22 @@ def main(argv: list[str] | None = None) -> int:
             directory=directory, application_id=args.module
         )
 
-    authority = (
-        PolicyAuthoritySupervisor.from_stack_file(args.authority_stack)
-        if args.authority_stack
-        else PolicyAuthoritySupervisor()
-    )
+    if args.profile:
+        try:
+            authority = load_builtin_profile_supervisor(
+                args.profile,
+                trusted_primary_fingerprints=(
+                    tuple(args.profile_trusted_fingerprint)
+                    if args.profile_trusted_fingerprint
+                    else None
+                ),
+            )
+        except Exception as exc:
+            parser.error(f"built-in profile could not be loaded: {type(exc).__name__}: {exc}")
+    elif args.authority_stack:
+        authority = PolicyAuthoritySupervisor.from_stack_file(args.authority_stack)
+    else:
+        authority = PolicyAuthoritySupervisor()
     policy_transform = lambda value: authority.effective.apply_dataclass(
         value, prefix="logging"
     )

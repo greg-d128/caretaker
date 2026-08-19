@@ -93,6 +93,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command")
 
+    sub.add_parser("list", help="List framework profiles shipped with Caretaker")
+
     show = sub.add_parser("show", help="Show one profile and its policy-surface coverage")
     show.add_argument("profile", type=Path)
     show.add_argument("--json", action="store_true")
@@ -144,6 +146,16 @@ def main(argv: list[str] | None = None) -> int:
         profile = getattr(args, "profile", None)
         output = getattr(args, "output", None)
         run_editor(profile_path=profile, output_path=output)
+        return 0
+
+    if args.command == "list":
+        from .builtin_profiles import builtin_profiles
+
+        for item in builtin_profiles():
+            layer = load_policy_authority_layer(item.path, require_canonical=True)
+            identity = profile_summary(layer)["profile"] or {}
+            status = "production; signature required" if item.production else "non-production; unsigned"
+            print(f"{item.name:16} {identity.get('name', item.name)} ({status})")
         return 0
 
     if args.command == "show":

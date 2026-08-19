@@ -28,7 +28,7 @@ its live Repair and Guard objects:
 
 ```bash
 PYTHONPATH=src:. python -m caretaker.run \
-  --authority-stack profiles/sandbox-stack.toml \
+  --profile sandbox \
   --data-directory ./examples/.caretaker-interactive-lab/caretaker-data \
   examples.interactive_caretaker_lab
 ```

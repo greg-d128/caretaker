@@ -86,3 +86,35 @@ def test_manifest_excludes_transient_python_bytecode(tmp_path: Path) -> None:
     assert [item.path for item in manifest.artifacts] == ["protected/module.py"]
     assert "**/__pycache__/**" in manifest.excluded_patterns
     assert validate_manifest_scope(policy, manifest, root) == ()
+
+
+def test_wheel_layout_preserves_source_root_integrity_classes(tmp_path: Path) -> None:
+    tree = tmp_path / "site-packages"
+    protected = tree / "caretaker" / "integrity"
+    protected.mkdir(parents=True)
+    (protected / "verifier.py").write_text("VALUE = 1\n", encoding="utf-8")
+    fingerprints = ("A" * 40, "B" * 40, "C" * 40)
+    root = RootMetadata(
+        schema_version=1,
+        project="caretaker",
+        root_version=1,
+        roles={
+            "release": RolePolicy("release", fingerprints, 1),
+            "protected": RolePolicy("protected", fingerprints, 2),
+            "root": RolePolicy("root", fingerprints, 2),
+        },
+        protected_paths=("src/caretaker/integrity/**",),
+    )
+    manifest = build_manifest(
+        root_dir=tree,
+        project="caretaker",
+        package_version="0.6.0",
+        manifest_type=ManifestType.PROTECTED,
+        manifest_version=1,
+        root_version=1,
+        include=("caretaker/integrity/**",),
+        path_classes={"caretaker/integrity/**": IntegrityClass.PROTECTED},
+        metadata={"artifact_layout": "wheel"},
+    )
+
+    assert validate_manifest_scope(root, manifest, tree) == ()

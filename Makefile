@@ -13,9 +13,10 @@ PUBLIC_KEY_DIR ?= release-keys
 SIGNING_BUNDLE_DIR ?= signing-bundle
 # Published Caretaker root identities. Override from an independently trusted
 # source when bootstrapping a checkout: make lab-verified TRUSTED_FINGERPRINTS='...'
-TRUSTED_FINGERPRINTS ?= 1AA1C739DE9A94B146BD324D335D05E357D334C9 0ABD39F4E11DC0E48D88D536CD9FF2A7E82753BE F4632C96E4D3C93AE0E894564A9B0D2FBA85B411
+TRUSTED_FINGERPRINTS ?= 1AA1C739DE9A94B146BD324D335D05E357D334C9 F0F117899E20246935B304D86462FCC9E46C954A F4632C96E4D3C93AE0E894564A9B0D2FBA85B411
 FRAMEWORK_POLICY ?= framework-policy.json
 FRAMEWORK_POLICY_ROLE ?= protected
+WHEEL_MANIFEST_VERSION ?= 1
 TOOLS_PYTHON := $(if $(wildcard $(BIN)/python),$(BIN)/python,$(PYTHON))
 PACKAGE_VERSION ?= $(shell sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml | head -n 1)
 ROOT_VERSION ?= $(shell $(TOOLS_PYTHON) -c 'import json; print(json.load(open("$(ROOT)"))["root_version"])' 2>/dev/null)
@@ -23,7 +24,7 @@ INTEGRITY := PYTHONPATH=src $(TOOLS_PYTHON) -m caretaker.integrity.cli
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup test compile check wheel build verify-wheel root-check signing-check signing-status signing-bundle release-check release-manifest protected-manifest manifests generate-release-manifest generate-protected-manifest generate-manifests inspect-integrity sign sign-file sign-root sign-release sign-protected sign-framework-policy sign-release-set sign-all sign-station-bundle verify-signature verify-all verify-publication lab lab-verified lab-console profile clean distclean
+.PHONY: help setup test compile check wheel build verify-wheel root-check signing-check signing-status signing-bundle release-check release-manifest protected-manifest manifests generate-release-manifest generate-protected-manifest generate-manifests wheel-manifests inspect-integrity sign sign-file sign-root sign-release sign-protected sign-framework-policy sign-framework-profiles sign-wheel-set sign-release-set sign-all sign-station-bundle verify-signature verify-all verify-publication lab lab-verified lab-console profile clean distclean
 
 help: ## Show commands grouped by operator role
 	@printf '%s\n' \
@@ -36,6 +37,7 @@ help: ## Show commands grouped by operator role
 	  'Release coordinator:' \
 	  '  release-check            Check root policy, clean source, and release inputs' \
 	  '  generate-manifests       Generate release and protected manifests' \
+	  '  wheel-manifests          Generate installed-layout manifests after profile signing' \
 	  '  inspect-integrity        Display root/manifest metadata and hashes' \
 	  '  signing-status           Show missing artifacts, keys, and signatures' \
 	  '  signing-bundle           Build the minimal offline-station directory' \
@@ -45,6 +47,8 @@ help: ## Show commands grouped by operator role
 	  '  sign-release             Sign the release manifest for KEY_SLOT' \
 	  '  sign-protected           Sign the protected manifest for KEY_SLOT' \
 	  '  sign-framework-policy    Sign a canonical framework policy for KEY_SLOT' \
+	  '  sign-framework-profiles  Sign all production profiles for KEY_SLOT' \
+	  '  sign-wheel-set           Sign both installed-layout manifests for KEY_SLOT' \
 	  '  sign-release-set         Sign both manifests for KEY_SLOT' \
 	  '  sign-root                Sign root.json for KEY_SLOT' \
 	  '  sign-station-bundle      Sign root and both manifests for KEY_SLOT' '' \
@@ -172,6 +176,20 @@ sign-framework-policy: ## Sign canonical framework policy under FRAMEWORK_POLICY
 	./scripts/sign-code.sh "$(FRAMEWORK_POLICY)" "$$key" "$(FRAMEWORK_POLICY).key-$$slot.asc"; \
 	printf '\nCreated one framework-policy signature for slot %s.\nNext steps:\n  1. Return only the .asc file to the coordinator.\n  2. Repeat independently for the remaining slots.\n  3. Configure the authority stack with role = "%s" and all collected signatures.\n' "$$slot" "$(FRAMEWORK_POLICY_ROLE)"
 
+sign-framework-profiles: ## Sign all production framework profiles for KEY_SLOT
+	@slot='$(KEY_SLOT)'; \
+	if test -z "$$slot"; then printf 'Key slot (a, b, or c): ' >/dev/tty 2>/dev/null && IFS= read -r slot </dev/tty || { echo 'KEY_SLOT is required (example: make sign-framework-profiles KEY_SLOT=a)' >&2; exit 2; }; fi; \
+	for profile in caretaker-observe-only-v1.json caretaker-balanced-v1.json caretaker-high-assurance-v1.json; do \
+	  $(MAKE) --no-print-directory sign-framework-policy FRAMEWORK_POLICY="profiles/$$profile" KEY_SLOT="$$slot" SIGNING_KEY="$(SIGNING_KEY)" || exit $$?; \
+	done
+
+wheel-manifests: ## Generate installed-layout manifests after all profiles are signed
+	PYTHONPATH=src $(TOOLS_PYTHON) scripts/generate-wheel-manifests.py \
+	  --package-version "$(PACKAGE_VERSION)" --manifest-version "$(WHEEL_MANIFEST_VERSION)" $(if $(filter 1,$(FORCE)),--force,)
+
+sign-wheel-set: ## Sign both installed-layout manifests for KEY_SLOT
+	@$(MAKE) --no-print-directory _sign-artifacts SIGN_ARTIFACTS='wheel-release-manifest.json wheel-protected-manifest.json'
+
 sign-all: ## Compatibility: sign root and both manifests for one slot
 	@$(MAKE) --no-print-directory _sign-artifacts SIGN_ARTIFACTS='$(ROOT) release-manifest.json protected-manifest.json'
 
@@ -212,7 +230,7 @@ verify-all: ## Verify conventional root, release, and protected publication file
 verify-publication: verify-all ## Verify the assembled publication
 
 lab: ## Run the interactive Caretaker lab under caretaker-run
-	PYTHONPATH=src:. $(BIN)/python -m caretaker.run --authority-stack profiles/sandbox-stack.toml --data-directory ./examples/.caretaker-interactive-lab/caretaker-data examples.interactive_caretaker_lab
+	PYTHONPATH=src:. $(BIN)/python -m caretaker.run --profile sandbox --data-directory ./examples/.caretaker-interactive-lab/caretaker-data examples.interactive_caretaker_lab
 
 lab-verified: ## Run lab after verifying the signed source publication
 	@test -n "$(TRUSTED_FINGERPRINTS)" || { echo 'TRUSTED_FINGERPRINTS is empty; supply independently confirmed full fingerprints' >&2; exit 2; }
@@ -220,7 +238,7 @@ lab-verified: ## Run lab after verifying the signed source publication
 	for fingerprint in $(TRUSTED_FINGERPRINTS); do args="$$args --integrity-trusted-fingerprint $$fingerprint"; done; \
 	PYTHONPATH=src:. $(BIN)/python -m caretaker.run \
 	  --integrity-publication-directory . --integrity-artifact-root . $$args \
-	  --authority-stack profiles/sandbox-stack.toml \
+	  --profile sandbox \
 	  --data-directory ./examples/.caretaker-interactive-lab/caretaker-data \
 	  examples.interactive_caretaker_lab
 
@@ -243,6 +261,7 @@ verify-wheel: wheel ## Install and test the wheel in a temporary virtual environ
 	cp -a tests "$$tmp/tests"; \
 	cd "$$tmp"; \
 	"$$tmp/venv/bin/python" -c 'import caretaker; print("Version:", caretaker.__version__); print("Loaded from:", caretaker.__file__)'; \
+	"$$tmp/venv/bin/caretaker-integrity" verify-install; \
 	"$$tmp/venv/bin/python" -m pytest -q -m "not repository" tests
 
 clean: ## Remove generated build and test files

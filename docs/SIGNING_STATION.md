@@ -54,6 +54,25 @@ non-canonical JSON, a non-framework layer, an unknown role, an unauthorized
 slot, an unavailable secret signing subkey, and an existing output file. It
 does not create or decide the contents of the framework policy.
 
+For the three reviewed profiles shipped in the wheel, one station can sign its
+entire profile set with a single slot selection:
+
+```bash
+make sign-framework-profiles KEY_SLOT=a
+```
+
+After A, B, and C profile signatures return to the coordinator, the coordinator
+runs `make wheel-manifests`. Each station then signs the two installed-layout
+manifests:
+
+```bash
+make sign-wheel-set KEY_SLOT=a
+```
+
+The wheel build refuses to proceed until the root, production profiles, and both
+wheel manifests have all expected signatures. Sandbox remains deliberately
+unsigned and is not part of `sign-framework-profiles`.
+
 The advanced `sign-file` command signs one explicitly selected file and does not
 provide the slot-oriented publication workflow:
 

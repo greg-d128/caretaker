@@ -76,19 +76,51 @@ A second optional maintenance control, `caretaker.profile.require_current_careta
 
 ## Official Caretaker profiles and signing
 
-Official profiles should use a dedicated delegated signing role:
+Caretaker 0.6 signs its first official profiles with the existing high-value
+`protected` role:
 
 ```text
-profile-signing
+protected
 ```
 
-This role is intentionally separate from the three high-value Caretaker core/release identities. Core signing material exists to establish Caretaker code and trust-root continuity. Profiles are expected to change more frequently as functionality and recommended operating postures evolve.
+A future root may delegate a narrower `profile-signing` role because profiles are
+expected to change more frequently than core code. That delegation does not exist
+in the current root and must not be claimed or selected before a valid root
+transition authorizes it.
 
 The profile signer is authorized through the existing Caretaker trust-root/role machinery. Caretaker does not contain a private-key interface and the Profile Editor does not sign files. Official and organizational profile signing remains an external/offline operation over the canonical JSON bytes.
 
 A profile may record the signer role it expects in `caretaker.profile.signer_role`. If present, the authority-stack role used to verify the profile must match that declaration.
 
 Organizations remain free to create their own profile lineages, signing roles, roots, and framework policies. Official Caretaker profiles are a convenience and provenance option, not an exclusive certificate authority for policy.
+
+## Profiles shipped with Caretaker
+
+List the installed profiles:
+
+```bash
+caretaker-profile list
+```
+
+The production choices are `observe-only`, `balanced`, and `high-assurance`.
+Selection verifies all three packaged signatures under the root's `protected`
+role before importing the application. `sandbox` is deliberately unsigned and
+is identified as non-production.
+
+Select a profile explicitly at supervised startup:
+
+```bash
+caretaker-run --profile balanced my_application
+```
+
+The convenient form anchors the packaged root to its embedded fingerprint set.
+For initial trust, repeat `--profile-trusted-fingerprint` with all three values
+obtained independently. A mismatch fails before the application is imported.
+
+`--profile` and `--authority-stack` are mutually exclusive. Use an authority
+stack when application or deployment layers and exact parent pins are required.
+Built-in selection supplies only the framework layer; it does not invent lower
+authority policy.
 
 ## Pinning a profile selection
 

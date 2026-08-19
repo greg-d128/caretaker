@@ -130,6 +130,95 @@ def verify_release_publication(
     }
 
 
+def verify_installed_publication(
+    *,
+    trusted_primary_fingerprints: Sequence[str] | None = None,
+    package_root: str | Path | None = None,
+    publication_directory: str | Path | None = None,
+    verification_mode: SignatureVerificationMode = SignatureVerificationMode.FULL_PUBLICATION,
+) -> dict[str, object]:
+    """Verify the signed manifests shipped with an installed Caretaker wheel.
+
+    Repository-local fingerprints are a convenience default, not an independent
+    initial trust channel. High-assurance callers should supply fingerprints
+    obtained outside the installed distribution.
+    """
+
+    if package_root is None:
+        import caretaker
+
+        package = Path(caretaker.__file__).resolve().parent
+    else:
+        package = Path(package_root).resolve()
+    publication = (
+        Path(publication_directory).resolve()
+        if publication_directory is not None
+        else package / "_publication"
+    )
+    root = load_root(publication / "root.json")
+    trusted = tuple(trusted_primary_fingerprints or root.key_slots.values())
+    if not trusted:
+        raise ValueError("Installed verification requires trusted primary fingerprints")
+    slots = tuple(sorted(root.key_slots))
+    keys = [publication / "release-keys" / f"caretaker-key-{slot.lower()}.asc" for slot in slots]
+    verifier = IntegrityVerifier(gpg=GPGVerifier())
+    root_result = verifier.verify_initial_root(
+        root_path=publication / "root.json",
+        signature_paths=[publication / f"root.json.key-{slot.lower()}.asc" for slot in slots],
+        public_key_paths=keys,
+        trusted_primary_fingerprints=trusted,
+        threshold=root.roles["root"].threshold,
+    )
+    manifests: dict[str, object] = {}
+    all_trusted = root_result.satisfied
+    for filename in ("wheel-release-manifest.json", "wheel-protected-manifest.json"):
+        manifest = load_manifest(publication / filename)
+        version_errors: list[str] = []
+        try:
+            import caretaker
+
+            installed_version = caretaker.__version__
+        except (ImportError, AttributeError):
+            installed_version = None
+        if installed_version and manifest.package_version != installed_version:
+            version_errors.append(
+                f"Manifest package version {manifest.package_version!r} does not match "
+                f"installed Caretaker {installed_version!r}"
+            )
+        result = verifier.verify_manifest(
+            root_path=publication / "root.json",
+            manifest_path=publication / filename,
+            signature_paths=[publication / f"{filename}.key-{slot.lower()}.asc" for slot in slots],
+            public_key_paths=keys,
+            artifact_root=package.parent,
+            root_trusted=root_result.satisfied,
+            verification_mode=verification_mode,
+        )
+        manifest_trusted = result.trusted and not version_errors
+        manifests[filename] = {
+            "trusted": manifest_trusted,
+            "manifest_sha256": result.manifest_sha256,
+            "valid_signers": len(result.signature_verification.valid_primary_fingerprints),
+            "required_signers": result.signature_verification.required_threshold,
+            "invalid_artifacts": sum(not item.valid for item in result.artifact_results),
+            "errors": [*result.errors, *version_errors],
+            "warnings": list(result.warnings),
+        }
+        all_trusted &= manifest_trusted
+    return {
+        "status": "TRUSTED" if all_trusted else "FAILED",
+        "configured": True,
+        "root_anchored": root_result.satisfied,
+        "root_errors": list(root_result.errors),
+        "root_version": root.root_version,
+        "verification_mode": verification_mode.value,
+        "publication_directory": str(publication),
+        "artifact_root": str(package.parent),
+        "used_embedded_fingerprint_defaults": trusted_primary_fingerprints is None,
+        "manifests": manifests,
+    }
+
+
 def bootstrap_integrity(
     *,
     verifier: IntegrityVerifier,

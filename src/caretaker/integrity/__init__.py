@@ -43,6 +43,7 @@ from .runtime import (
     bootstrap_integrity,
     fingerprint_function,
     verify_release_publication,
+    verify_installed_publication,
 )
 from .state import IntegrityRollbackError, IntegrityStateStore
 from .verifier import IntegrityVerificationError, IntegrityVerifier
@@ -76,6 +77,7 @@ __all__ = [
     "build_manifest",
     "fingerprint_function",
     "verify_release_publication",
+    "verify_installed_publication",
     "load_manifest",
     "load_root",
     "manifest_sha256",

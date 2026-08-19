@@ -166,10 +166,46 @@ fails startup. Defaults stored in the same repository provide convenience and
 consistency after a trusted checkout; they cannot independently authenticate a
 checkout that may already have been replaced.
 
-This verifies the source tree described by the manifests. An installed wheel
-has a different filesystem layout and needs a publication manifest generated
-for that installed artifact tree; pointing a source-tree manifest at
-`site-packages` will correctly fail rather than imply coverage.
+This verifies the source tree described by the manifests. Installed wheels use
+separate signed release and protected manifests shipped under
+`caretaker/_publication`:
+
+```bash
+caretaker-integrity verify-install
+```
+
+This checks the embedded root signature threshold, all published manifest
+signatures, protected and sealed classifications, and installed artifact hashes. The convenient form uses
+the root fingerprints embedded in the distribution and prints an initial-trust
+warning. For independent bootstrap, override them with fingerprints obtained
+through a separate channel:
+
+```bash
+caretaker-integrity verify-install \
+  --trusted-fingerprint FULL_FINGERPRINT_A \
+  --trusted-fingerprint FULL_FINGERPRINT_B \
+  --trusted-fingerprint FULL_FINGERPRINT_C
+```
+
+Wheel manifests declare an authenticated `wheel` layout, mapping root paths such
+as `src/caretaker/integrity/**` to installed `caretaker/integrity/**` paths without
+weakening their classification. Wheel container metadata, dependencies, generated
+bytecode, and the installation tool remain outside these manifests.
+
+Profiles must be signed before generating wheel manifests because their detached
+signatures are themselves shipped and covered:
+
+```bash
+make sign-framework-profiles KEY_SLOT=a  # repeat on B and C
+make wheel-manifests WHEEL_MANIFEST_VERSION=1
+make sign-wheel-set KEY_SLOT=a           # repeat on B and C
+make wheel
+make verify-wheel
+```
+
+The wheel build fails when required root, profile, or wheel-manifest signatures
+are missing. `verify-wheel` installs the artifact in a temporary environment and
+runs installed verification before its installed-package tests.
 
 ## External trust bootstrap
 

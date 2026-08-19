@@ -46,6 +46,13 @@ from .authority import (
     load_policy_authority_layer,
     write_policy_authority_layer,
 )
+from .builtin_profiles import (
+    BuiltinProfile,
+    builtin_profile,
+    builtin_profile_names,
+    builtin_profiles,
+    load_builtin_profile_supervisor,
+)
 from .auxiliary import AuxiliaryFunctionManager, AuxiliaryRegistry
 from .decorators import (
     InvalidOutputError,
@@ -241,6 +248,7 @@ __all__ = [
     "AuthorityPolicyError",
     "AuthorityRuntimeLease",
     "AuthorityStackConfig",
+    "BuiltinProfile",
     "ConstraintOperator",
     "EffectiveAuthorityPolicy",
     "GuaranteeState",
@@ -253,6 +261,10 @@ __all__ = [
     "load_authority_stack_config",
     "load_policy_authority_layer",
     "write_policy_authority_layer",
+    "builtin_profile",
+    "builtin_profile_names",
+    "builtin_profiles",
+    "load_builtin_profile_supervisor",
     "ApplicationLoggingBaseline",
     "AttachmentPolicy",
     "AttachmentReference",

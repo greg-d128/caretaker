@@ -44,6 +44,24 @@ The console-script equivalent is:
 caretaker-run --policy /etc/caretaker/invoice-service.toml invoice_service
 ```
 
+Caretaker wheels ship the project profiles and signed installed-layout
+publication metadata:
+
+```bash
+caretaker-profile list
+caretaker-run --profile balanced invoice_service
+caretaker-integrity verify-install
+```
+
+For initial trust, pass independently obtained fingerprints using repeated
+`--trusted-fingerprint` options. Embedded defaults provide convenience and
+internal consistency, not independent authentication of a previously untrusted
+wheel.
+
+Built-in production profile selection performs the same root-signature bootstrap.
+Use repeated `--profile-trusted-fingerprint` options when the initial profile root
+must be anchored to independently obtained values.
+
 ## Adaptive instrumentation and behavior snapshots
 
 Caretaker can start selected application functions and dependency boundaries with low-cost instrumentation and escalate observation when policy detects repeated exceptions or soft-timing breaches:

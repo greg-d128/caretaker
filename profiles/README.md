@@ -26,3 +26,8 @@ make sign-framework-policy FRAMEWORK_POLICY=profiles/caretaker-balanced-v1.json 
 ```
 
 Repeat for slots B and C. Any edit or reformatting after signing invalidates the detached signatures.
+
+Installed users can run `caretaker-profile list` and select one before application
+import with `caretaker-run --profile PROFILE MODULE`. Production selection fails
+closed unless A, B, and C signatures verify under the packaged root's `protected`
+role. Sandbox is the sole unsigned built-in profile.

@@ -19,6 +19,7 @@ from .manifest import (
 from .models import IntegrityClass, ManifestType, SignatureVerificationMode
 from .state import IntegrityStateStore
 from .verifier import IntegrityVerifier
+from .runtime import verify_installed_publication
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -88,6 +89,19 @@ def build_parser() -> argparse.ArgumentParser:
     inspect = subparsers.add_parser("inspect", help="Summarize root or manifest metadata")
     inspect.add_argument("path")
 
+    installed = subparsers.add_parser(
+        "verify-install", help="Verify the signed manifests shipped in the installed wheel"
+    )
+    installed.add_argument("--trusted-fingerprint", action="append")
+    installed.add_argument("--package-root")
+    installed.add_argument("--publication-directory")
+    installed.add_argument("--json", action="store_true", dest="json_output")
+    installed.add_argument(
+        "--verification-mode",
+        choices=[item.value for item in SignatureVerificationMode],
+        default=SignatureVerificationMode.FULL_PUBLICATION.value,
+    )
+
     return parser
 
 
@@ -135,6 +149,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "inspect":
             return _inspect(args)
+        if args.command == "verify-install":
+            return _verify_install(args)
     except (ValueError, OSError, GPGUnavailableError) as exc:
         parser.exit(2, f"caretaker-integrity: {exc}\n")
     parser.error("unhandled command")
@@ -314,6 +330,37 @@ def _inspect(args: argparse.Namespace) -> int:
         print(f"Artifacts: {len(manifest.artifacts)}")
         print(f"SHA-256: {manifest_sha256(path)}")
     return 0
+
+
+def _verify_install(args: argparse.Namespace) -> int:
+    result = verify_installed_publication(
+        trusted_primary_fingerprints=args.trusted_fingerprint,
+        package_root=args.package_root,
+        publication_directory=args.publication_directory,
+        verification_mode=SignatureVerificationMode(args.verification_mode),
+    )
+    if args.json_output:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print("Caretaker installed-wheel verification")
+        print("=======================================")
+        print(f"Result:             {result['status']}")
+        print(f"Root anchored:      {'yes' if result['root_anchored'] else 'no'}")
+        print(f"Verification mode:  {result['verification_mode']}")
+        print(f"Publication:        {result['publication_directory']}")
+        print(f"Installed root:     {result['artifact_root']}")
+        if result["used_embedded_fingerprint_defaults"]:
+            print("Trust input:        embedded convenience defaults")
+            print("WARNING: confirm fingerprints independently for initial trust bootstrap")
+        for name, manifest in result["manifests"].items():
+            print(
+                f"{name}: {'TRUSTED' if manifest['trusted'] else 'UNTRUSTED'}; "
+                f"signers {manifest['valid_signers']}/{manifest['required_signers']}; "
+                f"invalid artifacts {manifest['invalid_artifacts']}"
+            )
+            for error in manifest["errors"]:
+                print(f"  ERROR: {error}")
+    return 0 if result["status"] == "TRUSTED" else 1
 
 
 def _print_verification(result: object) -> None:

@@ -496,6 +496,35 @@ Adaptive instrumentation escalation is no longer listed as future work; its init
 - Fleet aggregation for probabilistic verification.
 - Public transparency logs for releases, roots, baselines, and runtime identity anchors.
 
+### General downstream application publication
+
+**Status: Explicitly deferred beyond 0.6.0.**
+
+Generalize the installed-wheel verification work into a supported publication
+workflow for applications that package Caretaker. The current low-level manifest,
+OpenPGP, rollback-state, authority-layer, and bootstrap APIs are reusable, but the
+root schema and convenience publication verifier intentionally retain Caretaker's
+three-identity A/B/C topology.
+
+Future downstream tooling should provide:
+
+- application-owned roots with configurable signer counts, role separation,
+  thresholds, rotation, and revocation rather than Caretaker's fixed topology;
+- installed-layout manifest generation for an application's own wheel/package;
+- a conventional application publication bundle and offline signing workflow;
+- a startup API that verifies both the Caretaker distribution and application
+  distribution before importing application code;
+- package-resource selection for application, deployment, and framework authority
+  layers without requiring operators to discover internal filesystem paths;
+- separate console assurance for Caretaker code, application code, policy authority,
+  and runtime evidence; and
+- integration guidance for independently anchored fingerprints, PyPI/Sigstore
+  provenance, immutable deployment configuration, and rollback state.
+
+Embedding a root and its fingerprints inside the same application artifact may
+provide internal consistency but must never be described as independent initial
+authentication of that artifact.
+
 ## Software supply-chain management roadmap
 
 **Status: General future work.**

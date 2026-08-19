@@ -8,6 +8,11 @@ import pytest
 
 import caretaker
 import caretaker.profiles as profiles_module
+from caretaker.builtin_profiles import (
+    builtin_profile,
+    builtin_profile_names,
+    load_builtin_profile_supervisor,
+)
 from caretaker.authority import (
     AuthorityKind,
     AuthorityPolicyError,
@@ -84,6 +89,19 @@ def test_repository_sandbox_profile_and_stack_are_explicitly_nonproduction() -> 
         Path(__file__).parents[1] / "profiles/sandbox-stack.toml"
     )
     assert supervisor.effective.overall_assurance == "PARTIAL_OR_UNSIGNED"
+
+
+def test_builtin_profile_catalog_marks_only_sandbox_nonproduction() -> None:
+    assert builtin_profile_names() == (
+        "observe-only",
+        "balanced",
+        "high-assurance",
+        "sandbox",
+    )
+    assert builtin_profile("balanced").production is True
+    assert builtin_profile("sandbox").production is False
+    sandbox = load_builtin_profile_supervisor("sandbox")
+    assert sandbox.effective.overall_assurance == "PARTIAL_OR_UNSIGNED"
 
 
 def test_continuation_binds_exact_predecessor_fingerprint() -> None:

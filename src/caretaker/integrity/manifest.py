@@ -303,11 +303,18 @@ def sha256sum_lines(manifest: IntegrityManifest) -> str:
     return "".join(f"{artifact.sha256}  {artifact.path}\n" for artifact in manifest.artifacts)
 
 
-def expected_integrity_class(root: RootMetadata, relative_path: str) -> IntegrityClass:
+def expected_integrity_class(
+    root: RootMetadata,
+    relative_path: str,
+    *,
+    artifact_layout: str | None = None,
+) -> IntegrityClass:
     selected = IntegrityClass.ORDINARY
-    if any(fnmatch.fnmatch(relative_path, pattern) for pattern in root.protected_paths):
+    protected = _root_patterns_for_layout(root.protected_paths, artifact_layout)
+    sealed = _root_patterns_for_layout(root.sealed_paths, artifact_layout)
+    if any(fnmatch.fnmatch(relative_path, pattern) for pattern in protected):
         selected = IntegrityClass.PROTECTED
-    if any(fnmatch.fnmatch(relative_path, pattern) for pattern in root.sealed_paths):
+    if any(fnmatch.fnmatch(relative_path, pattern) for pattern in sealed):
         selected = IntegrityClass.SEALED
     return selected
 
@@ -320,9 +327,14 @@ def validate_manifest_scope(
     """Enforce root-authorized protected/sealed classification and coverage."""
 
     errors: list[str] = []
+    artifact_layout = manifest.metadata.get("artifact_layout")
+    if artifact_layout not in {None, "source", "wheel"}:
+        errors.append(f"Manifest declares unsupported artifact layout {artifact_layout!r}")
     observed_paths = {artifact.path for artifact in manifest.artifacts}
     for artifact in manifest.artifacts:
-        expected = expected_integrity_class(root, artifact.path)
+        expected = expected_integrity_class(
+            root, artifact.path, artifact_layout=artifact_layout
+        )
         if artifact.integrity_class is not expected:
             errors.append(
                 f"Artifact {artifact.path!r} is classified {artifact.integrity_class.value!r}; "
@@ -359,7 +371,11 @@ def validate_manifest_scope(
 
     if manifest.manifest_type is ManifestType.PROTECTED:
         required: set[str] = set()
-        for pattern in (*root.protected_paths, *root.sealed_paths):
+        protected_patterns = _root_patterns_for_layout(
+            root.protected_paths, artifact_layout
+        )
+        sealed_patterns = _root_patterns_for_layout(root.sealed_paths, artifact_layout)
+        for pattern in (*protected_patterns, *sealed_patterns):
             for path in _glob_paths(root_dir, pattern):
                 if path.is_file():
                     resolved = path.resolve()
@@ -379,6 +395,17 @@ def validate_manifest_scope(
                 "Protected manifest omits root-protected artifacts: " + ", ".join(missing)
             )
     return tuple(errors)
+
+
+def _root_patterns_for_layout(
+    patterns: Sequence[str], artifact_layout: str | None
+) -> tuple[str, ...]:
+    if artifact_layout != "wheel":
+        return tuple(patterns)
+    return tuple(
+        pattern.removeprefix("src/") if pattern.startswith("src/caretaker/") else pattern
+        for pattern in patterns
+    )
 
 
 def _selected_files(root: Path, include: Sequence[str], exclude: Sequence[str]) -> Iterable[Path]:

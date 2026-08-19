@@ -189,6 +189,10 @@ class AuthorityLayerVerification:
     errors: tuple[str, ...] = ()
     source_path: str | None = None
 
+    @property
+    def verified(self) -> bool:
+        return self.signature_state is SignatureState.VERIFIED
+
 
 @dataclass(frozen=True, slots=True)
 class ConstraintViolation:
