@@ -126,6 +126,11 @@ def test_wheel_release_requires_signed_profiles_and_installed_manifests() -> Non
     assert "signed wheel publication is incomplete" in setup
 
 
+def test_package_manifest_excludes_generated_interactive_lab_state() -> None:
+    manifest = (ROOT / "MANIFEST.in").read_text(encoding="utf-8")
+    assert "prune examples/.caretaker-interactive-lab" in manifest
+
+
 def test_wheel_manifest_generator_uses_installed_paths(tmp_path: Path) -> None:
     repository = tmp_path / "repository"
     shutil.copytree(ROOT / "src", repository / "src")
