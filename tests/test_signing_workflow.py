@@ -126,6 +126,11 @@ def test_wheel_release_requires_signed_profiles_and_installed_manifests() -> Non
     assert "signed wheel publication is incomplete" in setup
 
 
+def test_single_framework_signing_defaults_to_balanced_profile_directory() -> None:
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    assert "FRAMEWORK_POLICY ?= profiles/caretaker-balanced-v1.json" in makefile
+
+
 def test_package_manifest_excludes_generated_interactive_lab_state() -> None:
     manifest = (ROOT / "MANIFEST.in").read_text(encoding="utf-8")
     assert "prune examples/.caretaker-interactive-lab" in manifest

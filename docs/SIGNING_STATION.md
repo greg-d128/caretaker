@@ -42,12 +42,13 @@ station signs the exact same file:
 
 ```bash
 make sign-framework-policy \
-  FRAMEWORK_POLICY=framework-policy.json \
+  FRAMEWORK_POLICY=profiles/caretaker-balanced-v1.json \
   KEY_SLOT=a
 ```
 
 Repeat for B and C. The outputs are
-`framework-policy.json.key-a.asc`, `key-b.asc`, and `key-c.asc`. Configure the
+The detached signatures are written beside the selected profile as `.key-a.asc`,
+`.key-b.asc`, and `.key-c.asc`. Configure the
 authority stack with `role = "protected"`, `verification_mode =
 "full-publication"`, and all three signature paths. The command rejects
 non-canonical JSON, a non-framework layer, an unknown role, an unauthorized
