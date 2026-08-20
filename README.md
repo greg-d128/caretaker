@@ -367,7 +367,7 @@ python -m pip install 'Caretaker[signing]'
 ```
 
 Release manifests remain an offline OpenPGP workflow. The ordinary station command
-is `make sign-release-set KEY_SLOT=a`; the authorized primary fingerprint is read
+is `make sign-all KEY_SLOT=a`; the authorized primary fingerprint is read
 from `root.json`, checked against the station's usable secret signing subkey, and
 passed to the small reviewable GnuPG wrapper. `make signing-bundle` creates a
 minimal non-overwriting station directory, while `make signing-status` reports

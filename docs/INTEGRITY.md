@@ -196,9 +196,9 @@ Profiles must be signed before generating wheel manifests because their detached
 signatures are themselves shipped and covered:
 
 ```bash
-make sign-framework-profiles KEY_SLOT=a  # repeat on B and C
+make sign-all KEY_SLOT=a                 # signs root, manifests, and profiles
 make wheel-manifests WHEEL_MANIFEST_VERSION=1
-make sign-wheel-set KEY_SLOT=a           # repeat on B and C
+make sign-all KEY_SLOT=a                 # now signs generated wheel manifests
 make wheel
 make verify-wheel
 ```

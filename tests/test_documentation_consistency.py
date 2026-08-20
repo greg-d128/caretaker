@@ -65,9 +65,9 @@ def test_signing_guide_uses_role_oriented_workflow() -> None:
     for expected in (
         "make generate-manifests",
         "make signing-bundle",
-        "make sign-release-set KEY_SLOT=a",
+        "make sign-all KEY_SLOT=a",
         "make verify-publication",
     ):
         assert expected in guide
-    assert "make sign-all" not in guide
+    assert "make sign-check" in guide
     assert "make verify-all" not in guide

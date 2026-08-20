@@ -65,12 +65,10 @@ def main() -> int:
         print("Next action: collect the missing public certificate(s): " + ", ".join(missing_keys))
     elif missing_signatures:
         artifact, slot = missing_signatures[0]
-        target = {
-            "root.json": "sign-root",
-            "release-manifest.json": "sign-release",
-            "protected-manifest.json": "sign-protected",
-        }[artifact]
-        print(f"Next action: obtain slot {slot} signature for {artifact} (make {target} KEY_SLOT={slot.lower()}).")
+        print(
+            f"Next action: obtain slot {slot} signature for {artifact} "
+            f"(make sign-all KEY_SLOT={slot.lower()})."
+        )
     else:
         print("Next action: run make verify-publication PUBLICATION_DIR=. before publishing.")
     print("Presence is not cryptographic verification; verify-publication performs that check.")

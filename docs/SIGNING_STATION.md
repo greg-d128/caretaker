@@ -1,6 +1,6 @@
 # Separate offline signing station
 
-Release-signing authority and private-key handling remain outside the Caretaker runtime. The repository includes a small `scripts/sign-code.sh` convenience wrapper that delegates one detached signature to GnuPG; it contains no key import, passphrase, private-key storage, or cryptographic implementation.
+Release-signing authority and private-key handling remain outside the Caretaker runtime. The inventory-driven `scripts/sign-artifacts.py` helper delegates detached signatures to GnuPG; it contains no key import, passphrase, private-key storage, or cryptographic implementation.
 
 ## Short, ordinary workflow
 
@@ -20,7 +20,8 @@ Transfer `station-input` to one signing station. After comparing its
 cd station-input
 make status
 make check KEY_SLOT=a
-make sign-release-set KEY_SLOT=a
+make sign-check
+make sign-all KEY_SLOT=a
 ```
 
 Repeat in the independent B and C environments. The key fingerprint does not need
@@ -29,11 +30,9 @@ the check fails unless the station has a usable secret signing subkey for that
 identity. Make never asks for a private key or OpenPGP passphrase; GnuPG owns any
 passphrase interaction.
 
-Root signatures are a separate authorization artifact. Use `make sign-root
-KEY_SLOT=a` when establishing or rotating `root.json`; an ordinary release with
-an unchanged, already-authorized root normally uses the existing root signatures.
-Use `make sign-station-bundle KEY_SLOT=a` only when the coordinator explicitly
-requests root plus both manifests.
+Root signatures are separate authorization artifacts, but no separate command
+is needed. `sign-all` keeps a valid root signature and signs it only when the
+selected slot is missing or no longer matches the current `root.json`.
 
 Framework policy is another separately signed artifact. The current Caretaker
 root authorizes it through the existing `protected` role, so no root change is
@@ -41,25 +40,22 @@ needed. After creating and reviewing a canonical framework authority layer, each
 station signs the exact same file:
 
 ```bash
-make sign-framework-policy \
-  FRAMEWORK_POLICY=profiles/caretaker-balanced-v1.json \
-  KEY_SLOT=a
+make sign-all KEY_SLOT=a
 ```
 
-Repeat for B and C. The outputs are
-The detached signatures are written beside the selected profile as `.key-a.asc`,
+Repeat for B and C. Detached signatures are written beside each profile as `.key-a.asc`,
 `.key-b.asc`, and `.key-c.asc`. Configure the
 authority stack with `role = "protected"`, `verification_mode =
 "full-publication"`, and all three signature paths. The command rejects
 non-canonical JSON, a non-framework layer, an unknown role, an unauthorized
-slot, an unavailable secret signing subkey, and an existing output file. It
+slot and an unavailable secret signing subkey. It
 does not create or decide the contents of the framework policy.
 
 For the three reviewed profiles shipped in the wheel, one station can sign its
 entire profile set with a single slot selection:
 
 ```bash
-make sign-framework-profiles KEY_SLOT=a
+make sign-all KEY_SLOT=a
 ```
 
 After A, B, and C profile signatures return to the coordinator, the coordinator
@@ -67,31 +63,23 @@ runs `make wheel-manifests`. Each station then signs the two installed-layout
 manifests:
 
 ```bash
-make sign-wheel-set KEY_SLOT=a
+make sign-all KEY_SLOT=a
 ```
 
 The wheel build refuses to proceed until the root, production profiles, and both
 wheel manifests have all expected signatures. Sandbox remains deliberately
-unsigned and is not part of `sign-framework-profiles`.
-
-The advanced `sign-file` command signs one explicitly selected file and does not
-provide the slot-oriented publication workflow:
-
-```bash
-make sign-file \
-  MANIFEST=release-manifest.json \
-  SIGNING_KEY=FULL_PRIMARY_FINGERPRINT_A \
-  SIGNATURE=release-manifest.json.key-a.asc
-```
+unsigned and is not part of `sign-all`.
 
 `MANIFEST.in` is Python packaging metadata and is not the canonical integrity
 manifest. Do not sign it as a substitute for `release-manifest.json`.
 
-Every signing target displays the artifact SHA-256, asks the configured GnuPG
-environment to create an armored detached signature, and immediately runs
-`gpg --verify`. It refuses to overwrite an existing signature. The script does
-not generate a manifest, import private material, or decide that reviewed bytes
-are suitable for release.
+`sign-check` verifies every conventional slot signature over root, both source
+manifests, the three production profiles, and both wheel manifests. It reports
+`VALID`, `MISSING`, or `STALE/INVALID`; `KEY MISMATCH` identifies a public
+certificate that disagrees with `root.json`, and wheel manifests are `PENDING`
+until generated. `sign-all` keeps valid signatures and atomically replaces a stale
+signature only after the new signature verifies. It displays the artifact
+SHA-256 before signing.
 
 Run the target separately for keys A, B, and C, preferably in independent signing environments as described below. The Make target is convenience, not a replacement for manifest review or threshold independence.
 
@@ -136,13 +124,14 @@ On signing station A, after independently comparing the document hashes:
 
 ```bash
 make signing-check KEY_SLOT=a
-make sign-release-set KEY_SLOT=a
+make sign-check
+make sign-all KEY_SLOT=a
 ```
 
 Or allow the attended command to request the public identifiers once:
 
 ```text
-$ make sign-release-set
+$ make sign-all
 Key slot (a, b, or c): a
 ```
 
@@ -174,35 +163,23 @@ The quality-of-life targets finish with an explicit **Next steps** block:
 
 - manifest generation directs the coordinator to inspect the canonical JSON,
   record its hash, and transfer the reviewed files to signing stations;
-- `signing-check` identifies the corresponding `sign-release-set` invocation;
+- `signing-check` identifies the corresponding `sign-all` invocation;
 - signing directs the station operator to export only `.asc` files, return them
   with the reviewed hashes, and repeat independently for the remaining slots;
 - after A, B, and C signatures are collected, run `make verify-publication
   PUBLICATION_DIR=.` on the complete public directory.
 
-Example single-artifact station workflow:
-
-```bash
-# Inputs may instead be entered at the prompts.
-make signing-check KEY_SLOT=b
-make sign-release KEY_SLOT=b
-
-# Return this public file to the coordinator:
-# release-manifest.json.key-b.asc
-```
-
 Example complete station workflow:
 
 ```bash
-make sign-release-set KEY_SLOT=c
-# Return release-manifest.json.key-c.asc and
-# protected-manifest.json.key-c.asc.
+make sign-check
+make sign-all KEY_SLOT=c
+# Return every .key-c.asc file reported as created or replaced.
 ```
 
 Do not run `FORCE=1` merely because a manifest or signature already exists.
-First determine whether it is the already-reviewed artifact. Signature targets
-refuse overwrites; retain or deliberately remove an obsolete signature only
-after confirming its exact path and provenance.
+First determine whether it is the already-reviewed artifact. `sign-all` replaces
+only signatures that fail to match their current artifact.
 
 A dedicated Raspberry Pi can be used as a medium-assurance research signing environment when it is narrowly configured and normally offline.
 

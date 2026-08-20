@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -91,7 +92,7 @@ def test_make_help_groups_signing_commands_by_role() -> None:
     )
     assert "Release coordinator:" in result.stdout
     assert "Signing station:" in result.stdout
-    assert "make sign-release-set KEY_SLOT=a" in result.stdout
+    assert "make sign-all KEY_SLOT=a" in result.stdout
 
 
 def test_verify_wheel_selects_current_package_version() -> None:
@@ -119,16 +120,20 @@ def test_lab_targets_select_the_explicit_sandbox_profile() -> None:
 def test_wheel_release_requires_signed_profiles_and_installed_manifests() -> None:
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     setup = (ROOT / "setup.py").read_text(encoding="utf-8")
-    assert "sign-framework-profiles:" in makefile
+    assert "sign-check:" in makefile
+    assert "sign-all:" in makefile
     assert "wheel-manifests:" in makefile
-    assert "sign-wheel-set:" in makefile
+    assert "sign-wheel-set:" not in makefile
     assert '"$$tmp/venv/bin/caretaker-integrity" verify-install' in makefile
     assert "signed wheel publication is incomplete" in setup
 
 
-def test_single_framework_signing_defaults_to_balanced_profile_directory() -> None:
-    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-    assert "FRAMEWORK_POLICY ?= profiles/caretaker-balanced-v1.json" in makefile
+def test_signing_inventory_contains_all_production_profiles_but_not_sandbox() -> None:
+    script = (ROOT / "scripts/sign-artifacts.py").read_text(encoding="utf-8")
+    assert "profiles/caretaker-observe-only-v1.json" in script
+    assert "profiles/caretaker-balanced-v1.json" in script
+    assert "profiles/caretaker-high-assurance-v1.json" in script
+    assert "caretaker-sandbox" not in script
 
 
 def test_package_manifest_excludes_generated_interactive_lab_state() -> None:
@@ -235,13 +240,17 @@ def test_signing_bundle_contains_only_reviewable_station_material(tmp_path: Path
         "--public-key-dir", str(keys),
     ], check=True)
 
-    assert {path.name for path in output.iterdir()} == {
+    assert {str(path.relative_to(output)) for path in output.rglob("*") if path.is_file()} == {
         "Makefile", "README.txt", "SHA256SUMS", "root.json",
         "release-manifest.json", "protected-manifest.json",
-        "caretaker-key-a.asc", "caretaker-key-b.asc", "caretaker-key-c.asc",
-        "sign-code.sh", "check-signing-key.py", "signing-status.py",
+        "release-keys/caretaker-key-a.asc", "release-keys/caretaker-key-b.asc",
+        "release-keys/caretaker-key-c.asc", "sign-artifacts.py",
+        "check-signing-key.py", "signing-status.py",
+        "profiles/caretaker-observe-only-v1.json",
+        "profiles/caretaker-balanced-v1.json",
+        "profiles/caretaker-high-assurance-v1.json",
     }
-    assert "make sign-release-set KEY_SLOT=a" in (output / "README.txt").read_text()
+    assert "make sign-all KEY_SLOT=a" in (output / "README.txt").read_text()
     assert "release-manifest.json" in (output / "SHA256SUMS").read_text()
 
     repeated = subprocess.run([
@@ -255,3 +264,32 @@ def test_signing_bundle_contains_only_reviewable_station_material(tmp_path: Path
     ], text=True, capture_output=True)
     assert repeated.returncode == 2
     assert "output already exists" in repeated.stderr
+
+
+def test_sign_artifact_inventory_detects_missing_and_stale_signatures(tmp_path: Path) -> None:
+    spec = importlib.util.spec_from_file_location(
+        "sign_artifacts", ROOT / "scripts/sign-artifacts.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    for item in module.ARTIFACTS:
+        if not item.generated_later:
+            artifact = tmp_path / item.path
+            artifact.parent.mkdir(parents=True, exist_ok=True)
+            artifact.write_text("artifact\n", encoding="utf-8")
+    valid = tmp_path / "root.json.key-a.asc"
+    valid.write_text("valid\n", encoding="utf-8")
+    stale = tmp_path / "release-manifest.json.key-a.asc"
+    stale.write_text("stale\n", encoding="utf-8")
+    module.signature_valid = lambda home, artifact, signature, fingerprint: signature == valid
+
+    result = module.states(
+        tmp_path, {"a": "A" * 40, "b": "B" * 40, "c": "C" * 40}, "unused"
+    )
+
+    assert result["root.json"]["a"] == "VALID"
+    assert result["release-manifest.json"]["a"] == "STALE/INVALID"
+    assert result["protected-manifest.json"]["a"] == "MISSING"
+    assert result["wheel-release-manifest.json"]["a"] == "PENDING"
