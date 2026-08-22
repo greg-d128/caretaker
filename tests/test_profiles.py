@@ -72,7 +72,7 @@ def test_profile_identity_separates_lineage_name_and_version() -> None:
     assert identity.version == 1
     assert identity.policy_surface_version == CURRENT_POLICY_SURFACE_VERSION
 
-
+@pytest.mark.repository
 def test_repository_sandbox_profile_and_stack_are_explicitly_nonproduction() -> None:
     profile = load_policy_authority_layer(
         Path(__file__).parents[1] / "profiles/caretaker-sandbox-v1.json"
