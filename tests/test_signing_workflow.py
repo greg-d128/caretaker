@@ -240,16 +240,36 @@ def test_signing_bundle_contains_only_reviewable_station_material(tmp_path: Path
         "--public-key-dir", str(keys),
     ], check=True)
 
-    assert {str(path.relative_to(output)) for path in output.rglob("*") if path.is_file()} == {
-        "Makefile", "README.txt", "SHA256SUMS", "root.json",
-        "release-manifest.json", "protected-manifest.json",
-        "release-keys/caretaker-key-a.asc", "release-keys/caretaker-key-b.asc",
-        "release-keys/caretaker-key-c.asc", "sign-artifacts.py",
-        "check-signing-key.py", "signing-status.py",
+    signed_artifacts = {
+        "root.json",
+        "release-manifest.json",
+        "protected-manifest.json",
+        "wheel-release-manifest.json",
+        "wheel-protected-manifest.json",
         "profiles/caretaker-observe-only-v1.json",
         "profiles/caretaker-balanced-v1.json",
         "profiles/caretaker-high-assurance-v1.json",
     }
+    required_files = signed_artifacts | {
+        "Makefile", "README.txt", "SHA256SUMS",
+        "release-keys/caretaker-key-a.asc", "release-keys/caretaker-key-b.asc",
+        "release-keys/caretaker-key-c.asc", "sign-artifacts.py",
+        "check-signing-key.py", "signing-status.py",
+    }
+    allowed_signatures = {
+        f"{artifact}.key-{slot}.asc"
+        for artifact in signed_artifacts
+        for slot in "abc"
+    }
+    allowed_files = required_files | allowed_signatures
+    actual = {
+        str(path.relative_to(output))
+        for path in output.rglob("*")
+        if path.is_file()
+    }
+
+    assert required_files <= actual
+    assert actual <= allowed_files
     assert "make sign-all KEY_SLOT=a" in (output / "README.txt").read_text()
     assert "release-manifest.json" in (output / "SHA256SUMS").read_text()
 

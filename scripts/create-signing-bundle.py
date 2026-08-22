@@ -73,10 +73,10 @@ def main() -> int:
     )
     readme.chmod(0o600)
 
+    inventory_paths = [args.output / name for name in inputs]
+    inventory_paths.append(readme)
     inventory = []
-    for path in sorted(args.output.rglob("*"), key=lambda item: str(item.relative_to(args.output))):
-        if not path.is_file() or path.name == "SHA256SUMS":
-            continue
+    for path in sorted(inventory_paths, key=lambda item: str(item.relative_to(args.output))):
         relative = path.relative_to(args.output)
         inventory.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {relative}")
     sums = args.output / "SHA256SUMS"
