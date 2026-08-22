@@ -15,10 +15,14 @@ TOOLS_PYTHON := $(if $(wildcard $(BIN)/python),$(BIN)/python,$(PYTHON))
 PACKAGE_VERSION ?= $(shell sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml | head -n 1)
 ROOT_VERSION ?= $(shell $(TOOLS_PYTHON) -c 'import json; print(json.load(open("$(ROOT)"))["root_version"])' 2>/dev/null)
 INTEGRITY := PYTHONPATH=src $(TOOLS_PYTHON) -m caretaker.integrity.cli
+TWINE := $(TOOLS_PYTHON) -m twine
+PACKAGE_FILES := dist/caretaker-$(PACKAGE_VERSION).tar.gz dist/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl
+PYPI_UPLOAD_URL ?= https://upload.pypi.org/legacy/
+TEST_PYPI_UPLOAD_URL ?= https://test.pypi.org/legacy/
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup test compile check wheel build verify-wheel root-check signing-check signing-status signing-bundle release-check release-manifest protected-manifest manifests generate-release-manifest generate-protected-manifest generate-manifests wheel-manifests inspect-integrity sign-check sign-all verify-signature verify-all verify-publication lab lab-verified lab-console profile clean distclean
+.PHONY: help setup test compile check wheel build package-check verify-wheel publish-testpypi publish-pypi publish-test publish root-check signing-check signing-status signing-bundle release-check release-manifest protected-manifest manifests generate-release-manifest generate-protected-manifest generate-manifests wheel-manifests inspect-integrity sign-check sign-all verify-signature verify-all verify-publication lab lab-verified lab-console profile clean distclean
 
 help: ## Show commands grouped by operator role
 	@printf '%s\n' \
@@ -27,6 +31,7 @@ help: ## Show commands grouped by operator role
 	  '  setup                    Create the development environment' \
 	  '  check                    Run tests and compilation checks' \
 	  '  build                    Build wheel and source distribution' \
+	  '  package-check            Validate current-version distributions with Twine' \
 	  '  verify-wheel             Install and test the built wheel' '' \
 	  'Release coordinator:' \
 	  '  release-check            Check root policy, clean source, and release inputs' \
@@ -35,7 +40,9 @@ help: ## Show commands grouped by operator role
 	  '  inspect-integrity        Display root/manifest metadata and hashes' \
 	  '  signing-status           Show missing artifacts, keys, and signatures' \
 	  '  signing-bundle           Build the minimal offline-station directory' \
-	  '  verify-publication       Verify the assembled three-key publication' '' \
+	  '  verify-publication       Verify the assembled three-key publication' \
+	  '  publish-testpypi        Upload checked distributions to TestPyPI (CONFIRM=1)' \
+	  '  publish-pypi            Upload checked distributions to PyPI (CONFIRM=1)' '' \
 	  'Signing station:' \
 	  '  signing-check            Verify this station owns KEY_SLOT' \
 	  '  sign-check               Check every artifact/signature and identify changes' \
@@ -51,7 +58,7 @@ help: ## Show commands grouped by operator role
 
 setup: ## Create the development virtual environment
 	$(PYTHON) -m venv $(VENV)
-	$(BIN)/python -m pip install --upgrade pip build pytest cryptography 'textual>=0.80'
+	$(BIN)/python -m pip install --upgrade pip build twine pytest cryptography 'textual>=0.80'
 
 test: ## Run tests against the source tree
 	PYTHONPATH=src $(BIN)/python -m pytest -q
@@ -66,6 +73,26 @@ wheel: ## Build the wheel in dist/
 
 build: ## Build the wheel and source distribution in dist/
 	$(BIN)/python -m build
+
+package-check: build ## Validate exactly the current-version wheel and source distribution
+	@test -f "dist/caretaker-$(PACKAGE_VERSION).tar.gz" || { echo "Missing source distribution for version $(PACKAGE_VERSION)" >&2; exit 2; }
+	@test -f "dist/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl" || { echo "Missing wheel for version $(PACKAGE_VERSION)" >&2; exit 2; }
+	$(TWINE) check $(PACKAGE_FILES)
+	@echo "Validated distributions for Caretaker $(PACKAGE_VERSION): $(PACKAGE_FILES)"
+
+publish-testpypi: release-check package-check verify-wheel ## Upload the checked package to TestPyPI
+	@test "$(CONFIRM)" = 1 || { echo "Refusing TestPyPI upload; rerun with CONFIRM=1" >&2; exit 2; }
+	$(TWINE) upload --repository-url "$(TEST_PYPI_UPLOAD_URL)" $(PACKAGE_FILES)
+	@echo "Uploaded Caretaker $(PACKAGE_VERSION) to TestPyPI. Next: install it from TestPyPI and smoke-test it before publishing to PyPI."
+
+publish-pypi: release-check package-check verify-wheel ## Upload the checked package to PyPI
+	@test "$(CONFIRM)" = 1 || { echo "Refusing PyPI upload; rerun with CONFIRM=1" >&2; exit 2; }
+	$(TWINE) upload --repository-url "$(PYPI_UPLOAD_URL)" $(PACKAGE_FILES)
+	@echo "Uploaded Caretaker $(PACKAGE_VERSION) to PyPI."
+
+publish-test: publish-testpypi ## Short alias for TestPyPI publication
+
+publish: publish-pypi ## Short alias for PyPI publication
 
 root-check: ## Validate root policy and optional PUBLIC_KEYS
 	$(INTEGRITY) inspect "$(ROOT)"

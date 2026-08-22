@@ -383,6 +383,37 @@ python -m pip install -e '.[dev,signing]'
 pytest
 ```
 
+## Building and publishing distributions
+
+The Makefile provides guarded upload targets for both package indexes. Set up
+the environment once so the build and upload tools are installed:
+
+```bash
+make setup
+```
+
+Before an upload, the release targets require a clean worktree, build the
+current version from `pyproject.toml`, validate both distributions with Twine,
+and run the isolated wheel verification. Twine obtains credentials from its
+normal configuration or environment; no token is stored in the repository.
+
+Upload to TestPyPI first:
+
+```bash
+make publish-testpypi CONFIRM=1
+```
+
+Install and smoke-test that package from TestPyPI. When it is ready for the
+public index, upload the exact same version to PyPI:
+
+```bash
+make publish-pypi CONFIRM=1
+```
+
+`CONFIRM=1` is required to prevent an accidental upload. PyPI does not permit
+reusing a released version, so increment the project version before retrying a
+publication that has already been accepted.
+
 ## Important boundaries
 
 Caretaker is alpha research software, not an operating-system security boundary. No specific behavior is guaranteed; the properties described here are implementation targets supported to varying degrees by current code and tests.
