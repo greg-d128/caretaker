@@ -144,6 +144,7 @@ def test_package_manifest_excludes_generated_interactive_lab_state() -> None:
 def test_package_manifest_excludes_source_only_tests() -> None:
     manifest = (ROOT / "MANIFEST.in").read_text(encoding="utf-8")
     assert "recursive-include tests" not in manifest
+    assert "prune tests" in manifest
 
 
 def test_sdist_build_hook_stages_reviewed_package_resources() -> None:
