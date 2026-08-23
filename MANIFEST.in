@@ -9,7 +9,6 @@ recursive-include docs *.md
 recursive-include examples *.py *.json *.toml *.md
 prune examples/.caretaker-interactive-lab
 recursive-include scripts *.py *.sh
-recursive-include tests *.py
 recursive-include profiles *.json *.toml *.md *.asc
 recursive-include release-keys *.asc
 include root.json root.json.key-*.asc

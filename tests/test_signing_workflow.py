@@ -141,6 +141,20 @@ def test_package_manifest_excludes_generated_interactive_lab_state() -> None:
     assert "prune examples/.caretaker-interactive-lab" in manifest
 
 
+def test_package_manifest_excludes_source_only_tests() -> None:
+    manifest = (ROOT / "MANIFEST.in").read_text(encoding="utf-8")
+    assert "recursive-include tests" not in manifest
+
+
+def test_sdist_build_hook_stages_reviewed_package_resources() -> None:
+    setup = (ROOT / "setup.py").read_text(encoding="utf-8")
+    assert 'shutil.copytree(ROOT / "profiles", profiles' in setup
+    assert 'publication = package / "_publication"' in setup
+    assert 'ROOT / "root.json"' in setup
+    assert 'ROOT / "release-keys"' in setup
+    assert '"wheel-release-manifest.json", "wheel-protected-manifest.json"' in setup
+
+
 def test_wheel_manifest_generator_uses_installed_paths(tmp_path: Path) -> None:
     repository = tmp_path / "repository"
     shutil.copytree(ROOT / "src", repository / "src")
