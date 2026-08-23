@@ -1,9 +1,9 @@
-Caretaker 0.6.0 development verification status
+Caretaker 0.6.1 development verification status
 =================================================
 
 Status date
 -----------
-2026-08-18
+2026-08-23
 
 Scope and interpretation
 ------------------------
@@ -14,20 +14,20 @@ installed wheel, and an extracted source distribution.
 
 Environment used for this review
 --------------------------------
-Python: 3.14 (review environment; declared support is CPython 3.11-3.13)
+Python: 3.14 (review environment; declared support is CPython 3.11-3.14)
 Platform: Linux workspace; full run allowed normal GnuPG-agent and Unix-socket access
 Command: PYTHONPATH=src venv/bin/python -m pytest -q
 
 Observed result
 ---------------
-- 300 passed;
+- 319 passed;
 - 11 strict expected failures representing known security/assurance debt;
 - no unexpected failures.
 
 The complete run included GnuPG key/signature tests and Unix-domain logging and
 control-socket tests. Forgejo CI is configured to run the suite on ordinary Linux
-for CPython 3.11, 3.12, and 3.13; this local review used Python 3.14 and therefore
-supplements rather than replaces the declared-version CI matrix.
+for CPython 3.11, 3.12, and 3.13; this local review used the additionally
+supported Python 3.14 and supplements rather than replaces the CI matrix.
 
 Known strict expected failures
 ------------------------------
@@ -69,7 +69,7 @@ Historical Caretaker 0.5.0a1 verification report
 Historical notice
 -----------------
 This report records verification performed for 0.5.0a1. It is retained as release
-history and is not a verification report for the current 0.6.0 research tree.
+history and is not a verification report for the current 0.6.1 research tree.
 Current features, test counts, security debt, and isolation backends differ. Do
 not use the results below as evidence that the current checkout has been verified.
 

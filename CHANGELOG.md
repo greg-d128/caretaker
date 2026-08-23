@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.1
+
+### Authority verification
+
+- Bind every signed authority-layer kind to its permitted signing role before
+  signature verification, preventing a valid signature for one role from being
+  substituted for another authority kind.
+- Require runtime authority layers and signed runtime leases to use the
+  designated `runtime-policy` role, including when a signer is authorized for
+  multiple roles.
+
 ## 0.6.0
 
 ### Public research release assurance

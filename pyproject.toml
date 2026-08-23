@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "Caretaker"
-version = "0.6.0"
+version = "0.6.1"
 description = "Policy-driven runtime observation, analysis, repair, and integrity framework for Python applications"
 readme = "README.md"
 requires-python = ">=3.11"

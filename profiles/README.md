@@ -1,6 +1,6 @@
 # Caretaker framework policy profiles
 
-These canonical JSON files are unsigned review candidates for Caretaker 0.6.0. They are not trusted publication artifacts until their settings have been reviewed and the exact bytes have been signed by the identities authorized for the `protected` role in `root.json`.
+These canonical JSON files are unsigned review candidates for Caretaker 0.6.1. They are not trusted publication artifacts until their settings have been reviewed and the exact bytes have been signed by the identities authorized for the `protected` role in `root.json`.
 
 - `caretaker-observe-only-v1.json` is the conservative adoption profile. Repair may analyze incidents but cannot propose or activate replacements.
 - `caretaker-balanced-v1.json` is the recommended general-purpose starting point. Repair may prepare work, but activation requires operator approval.
