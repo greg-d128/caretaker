@@ -124,7 +124,7 @@ def test_wheel_release_requires_signed_profiles_and_installed_manifests() -> Non
     assert "sign-all:" in makefile
     assert "wheel-manifests:" in makefile
     assert "sign-wheel-set:" not in makefile
-    assert '"$$tmp/venv/bin/caretaker-integrity" verify-install' in makefile
+    assert '"$$tmp/venv/bin/caretaker-integrity" verify-install || exit $$?' in makefile
     assert "signed wheel publication is incomplete" in setup
 
 

@@ -144,6 +144,22 @@ The official Caretaker root already authorizes framework policy through its
 named in the stack must actually exist in that root; a valid signature from an
 identity not authorized for the selected role is rejected.
 
+Authority-layer kinds are also bound to their permitted signing roles:
+
+| Authority-layer kind | Permitted signing role(s) |
+| --- | --- |
+| `framework` | `protected`, `policy-framework` |
+| `application` | `policy-application` |
+| `deployment` | `policy-deployment` |
+| `runtime` | `policy-runtime` |
+
+Caretaker validates this binding before OpenPGP signature verification. A valid
+signature cannot authorize a layer through a role belonging to another kind,
+even when the same primary signer is authorized for both roles. Missing and
+unknown roles are rejected for signed layers. In particular, a signed runtime
+lease cannot use `release`, `protected`, `root`, `policy-application`, or
+`policy-deployment` authority.
+
 The application section may be omitted completely.
 
 If a layer has no signatures and signing is not required, its state is `UNSIGNED`. If signatures

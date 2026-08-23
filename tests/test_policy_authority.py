@@ -354,6 +354,163 @@ def test_signed_layer_uses_external_gpg_and_root_authority(tmp_path: Path) -> No
     assert result.valid_primary_fingerprints == (fingerprint,)
 
 
+def test_authority_layer_kinds_accept_only_their_designated_signing_roles(
+    tmp_path: Path,
+) -> None:
+    from caretaker.authority import AuthorityLayerSource, verify_authority_layer
+    from caretaker.integrity import RolePolicy, RootMetadata, write_root
+    from .integrity_helpers import export_public_key, generate_test_key, make_gpg_home, sign_file
+
+    home = make_gpg_home(tmp_path / "signer")
+    primary = generate_test_key(home, "Multi-role Policy Signer <policy@example.invalid>")
+    second = generate_test_key(home, "Authority Two <two@example.invalid>")
+    third = generate_test_key(home, "Authority Three <three@example.invalid>")
+    public_key = tmp_path / "policy.asc"
+    second_public_key = tmp_path / "policy-two.asc"
+    export_public_key(home, primary, public_key)
+    export_public_key(home, second, second_public_key)
+    root_path = tmp_path / "authority-root.json"
+    write_root(
+        root_path,
+        RootMetadata(
+            schema_version=1,
+            project="demo-application",
+            root_version=1,
+            roles={
+                "release": RolePolicy("release", (primary, second, third), 1),
+                "protected": RolePolicy("protected", (primary, second, third), 2),
+                "root": RolePolicy("root", (primary, second, third), 2),
+                "policy-framework": RolePolicy("policy-framework", (primary,), 1),
+                "policy-application": RolePolicy("policy-application", (primary,), 1),
+                "policy-deployment": RolePolicy("policy-deployment", (primary,), 1),
+                "policy-runtime": RolePolicy("policy-runtime", (primary,), 1),
+                "policy-unknown": RolePolicy("policy-unknown", (primary,), 1),
+            },
+            created_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+
+    signed: dict[AuthorityKind, tuple[PolicyAuthorityLayer, Path, Path]] = {}
+    for kind in AuthorityKind:
+        layer = _layer(f"{kind.value}-authority", kind)
+        layer_path = tmp_path / f"{kind.value}-policy.json"
+        signature = tmp_path / f"{kind.value}-policy.asc"
+        write_policy_authority_layer(layer_path, layer)
+        sign_file(home, primary, layer_path, signature)
+        signed[kind] = (layer, layer_path, signature)
+
+    correct_roles = {
+        AuthorityKind.FRAMEWORK: "policy-framework",
+        AuthorityKind.APPLICATION: "policy-application",
+        AuthorityKind.DEPLOYMENT: "policy-deployment",
+        AuthorityKind.RUNTIME: "policy-runtime",
+    }
+    for kind, role in correct_roles.items():
+        layer, layer_path, signature = signed[kind]
+        result = verify_authority_layer(
+            layer,
+            AuthorityLayerSource(
+                kind=kind,
+                path=layer_path,
+                role=role,
+                signatures=(signature,),
+                root=root_path,
+                public_keys=(public_key,),
+                require_signature=True,
+            ),
+            default_root=None,
+            default_public_keys=(),
+        )
+        assert result.signature_state is SignatureState.VERIFIED
+        assert result.valid_primary_fingerprints == (primary,)
+
+    framework, framework_path, framework_signature = signed[AuthorityKind.FRAMEWORK]
+    second_framework_signature = tmp_path / "framework-policy-two.asc"
+    sign_file(home, second, framework_path, second_framework_signature)
+    protected_result = verify_authority_layer(
+        framework,
+        AuthorityLayerSource(
+            kind=AuthorityKind.FRAMEWORK,
+            path=framework_path,
+            role="protected",
+            signatures=(framework_signature, second_framework_signature),
+            root=root_path,
+            public_keys=(public_key, second_public_key),
+            require_signature=True,
+        ),
+        default_root=None,
+        default_public_keys=(),
+    )
+    assert protected_result.signature_state is SignatureState.VERIFIED
+    assert set(protected_result.valid_primary_fingerprints) == {primary, second}
+
+    wrong_role_by_kind = {
+        AuthorityKind.FRAMEWORK: "policy-application",
+        AuthorityKind.APPLICATION: "policy-deployment",
+        AuthorityKind.DEPLOYMENT: "policy-runtime",
+    }
+    for kind, wrong_role in wrong_role_by_kind.items():
+        layer, layer_path, signature = signed[kind]
+        result = verify_authority_layer(
+            layer,
+            AuthorityLayerSource(
+                kind=kind,
+                path=layer_path,
+                role=wrong_role,
+                signatures=(signature,),
+                root=root_path,
+                public_keys=(public_key,),
+                require_signature=True,
+            ),
+            default_root=None,
+            default_public_keys=(),
+        )
+        assert result.signature_state is SignatureState.INVALID
+        assert "cannot use signing role" in result.errors[0]
+
+    runtime, runtime_path, runtime_signature = signed[AuthorityKind.RUNTIME]
+    for wrong_role in (
+        "release",
+        "protected",
+        "root",
+        "policy-application",
+        "policy-deployment",
+        "policy-unknown",
+    ):
+        result = verify_authority_layer(
+            runtime,
+            AuthorityLayerSource(
+                kind=AuthorityKind.RUNTIME,
+                path=runtime_path,
+                role=wrong_role,
+                signatures=(runtime_signature,),
+                root=root_path,
+                public_keys=(public_key,),
+                require_signature=True,
+            ),
+            default_root=None,
+            default_public_keys=(),
+        )
+        assert result.signature_state is SignatureState.INVALID
+        assert "cannot use signing role" in result.errors[0]
+
+    missing_role = verify_authority_layer(
+        runtime,
+        AuthorityLayerSource(
+            kind=AuthorityKind.RUNTIME,
+            path=runtime_path,
+            signatures=(runtime_signature,),
+            root=root_path,
+            public_keys=(public_key,),
+            require_signature=True,
+        ),
+        default_root=None,
+        default_public_keys=(),
+    )
+    assert missing_role.signature_state is SignatureState.INVALID
+    assert "requires one of these signing roles" in missing_role.errors[0]
+
+
 def test_unsigned_runtime_lease_reduces_verified_chain_assurance() -> None:
     framework = _layer("caretaker-project", AuthorityKind.FRAMEWORK)
     verification = AuthorityLayerVerification(
@@ -567,3 +724,17 @@ def test_signed_runtime_lease_stack_descriptor(tmp_path: Path) -> None:
     assert supervisor.effective.apply_dataclass(
         RepairPolicy(), prefix="repair", target_id="demo.target"
     ).enabled is False
+
+    wrong_role_descriptor = tmp_path / "runtime-lease-wrong-role.toml"
+    wrong_role_descriptor.write_text(
+        descriptor.read_text(encoding="utf-8").replace(
+            'role = "policy-runtime"', 'role = "release"'
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(AuthorityPolicyError, match="cannot use signing role 'release'"):
+        PolicyAuthoritySupervisor().load_signed_runtime_lease_from_stack_file(
+            wrong_role_descriptor,
+            requested_by="uid:1000",
+            reason="incident",
+        )

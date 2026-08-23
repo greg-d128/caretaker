@@ -39,6 +39,14 @@ _AUTHORITY_ORDER = {
 }
 
 
+_AUTHORITY_SIGNING_ROLES = {
+    AuthorityKind.FRAMEWORK: frozenset({"protected", "policy-framework"}),
+    AuthorityKind.APPLICATION: frozenset({"policy-application"}),
+    AuthorityKind.DEPLOYMENT: frozenset({"policy-deployment"}),
+    AuthorityKind.RUNTIME: frozenset({"policy-runtime"}),
+}
+
+
 SUPPORTED_POLICY_PREFIXES = frozenset({"authority", "repair", "guard", "logging", "system", "lightweight"})
 RUNTIME_RESTART_BOUND_PREFIXES = (
     "system.",
@@ -971,6 +979,28 @@ def verify_authority_layer(
     default_root: Path | None,
     default_public_keys: Sequence[Path],
 ) -> AuthorityLayerVerification:
+    def invalid_role(error: str) -> AuthorityLayerVerification:
+        return AuthorityLayerVerification(
+            authority_id=layer.authority_id,
+            kind=layer.kind,
+            fingerprint=layer.fingerprint,
+            signature_state=SignatureState.INVALID,
+            role_name=source.role,
+            errors=(error,),
+            source_path=str(source.path),
+        )
+
+    if source.kind is not layer.kind:
+        return invalid_role(
+            f"Authority source kind {source.kind.value!r} does not match "
+            f"layer kind {layer.kind.value!r}"
+        )
+    permitted_roles = _AUTHORITY_SIGNING_ROLES[layer.kind]
+    if source.role is not None and source.role not in permitted_roles:
+        return invalid_role(
+            f"Authority layer kind {layer.kind.value!r} cannot use signing role "
+            f"{source.role!r}; permitted role(s): {', '.join(sorted(permitted_roles))}"
+        )
     if not source.signatures:
         return AuthorityLayerVerification(
             authority_id=layer.authority_id,
@@ -982,7 +1012,12 @@ def verify_authority_layer(
         )
     root_path = source.root or default_root
     public_keys = source.public_keys or tuple(default_public_keys)
-    if root_path is None or source.role is None or not public_keys:
+    if source.role is None:
+        return invalid_role(
+            f"Signed authority layer kind {layer.kind.value!r} requires one of these "
+            f"signing roles: {', '.join(sorted(permitted_roles))}"
+        )
+    if root_path is None or not public_keys:
         return AuthorityLayerVerification(
             authority_id=layer.authority_id,
             kind=layer.kind,

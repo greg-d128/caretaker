@@ -222,7 +222,7 @@ verify-wheel: wheel ## Install and test the wheel in a temporary virtual environ
 	cp -a tests "$$tmp/tests"; \
 	cd "$$tmp"; \
 	"$$tmp/venv/bin/python" -c 'import caretaker; print("Version:", caretaker.__version__); print("Loaded from:", caretaker.__file__)'; \
-	"$$tmp/venv/bin/caretaker-integrity" verify-install; \
+	"$$tmp/venv/bin/caretaker-integrity" verify-install || exit $$?; \
 	"$$tmp/venv/bin/python" -m pytest -q -m "not repository" tests
 
 clean: ## Remove generated build and test files
