@@ -2,7 +2,22 @@
 
 This document records intentionally incomplete, deferred, or proposed Caretaker capabilities. An item listed here is not an implicit security guarantee and must not be treated as implemented until it has code, policy semantics, tests, and documentation.
 
-Last reviewed: 2026-08-17
+Last reviewed: 2026-08-23
+
+## Long-term roadmap and multi-scope research
+
+The detailed long-term roadmap is maintained in
+[`LONG_TERM_ROADMAP.md`](LONG_TERM_ROADMAP.md). It records proposed work for
+testing infrastructure and failure corpora, bounded post-mortem Incident
+Capsules, safe inspection and isolated replay, evidence-efficient performance,
+resource budgets, adversarial invariants, compatibility/upgrade testing, and a
+future Application/Host/Infrastructure Caretaker research model.
+
+The roadmap is explicitly deferred design work. Application Caretaker remains
+the current scope; Host and Infrastructure Caretakers must remain independently
+installable, independently governed, and independently trusted. Cross-Caretaker
+requests are evidence rather than authorization, and broader authority is gated
+on demonstrated Application Caretaker maturity.
 
 ## Status vocabulary
 
