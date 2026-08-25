@@ -2,7 +2,7 @@
 
 This document records intentionally incomplete, deferred, or proposed Caretaker capabilities. An item listed here is not an implicit security guarantee and must not be treated as implemented until it has code, policy semantics, tests, and documentation.
 
-Last reviewed: 2026-08-23
+Last reviewed: 2026-08-25
 
 ## Long-term roadmap and multi-scope research
 
@@ -353,6 +353,74 @@ a committed seed for reproducibility, cryptographically unpredictable to reduce
 workload gaming, or selectable by policy; and whether regime clustering belongs in
 the application process, supervisor, offline analysis, or a combination of those
 layers.
+
+## Operator-directed and coverage-complete behavior collection
+
+**Status: Proposal pending decision.**
+
+Caretaker should let an operator deliberately promote an eligible lightweight
+slot into Behavior collection from the console. This supports investigation of a
+suspicious function, collection requested by an external audit, and deliberate
+completion or refresh of a behavioral snapshot. The request should identify the
+subject and generation, reason, requested evidence target or duration, requesting
+operator, governing policy/authority generation, and eventual outcome. Promotion
+is an evidence-collection request, not acceptance of the resulting behavior as a
+trusted Guard baseline.
+
+Behavior collection must have an application-wide resource budget. A scheduler
+should limit active high-cost collection using measured overhead as well as a
+simple concurrency ceiling. It should account for call rate, observed collection
+cost, sampling density, queue pressure, and application resource pressure. A rare
+function that is armed and waiting for calls should not consume the same budget as
+a hot function actively collecting evidence, and must not indefinitely block
+other subjects that can make useful progress. Operator priority, audit deadlines,
+fairness, cancellation, and backpressure should be explicit and visible in the
+console.
+
+Every eligible function generation that has never produced a useful behavioral
+snapshot should enter a bounded coverage backlog. Caretaker should gradually work
+through this backlog instead of promoting all functions at startup. Scheduling
+should favor missing, stale, suspicious, repair-relevant, or operator-requested
+coverage while respecting the collection budget. The console should distinguish
+queued, armed/waiting, actively collecting, sufficiently covered, deferred, and
+failed collection states and explain why a subject is in that state.
+
+Sealed behavioral snapshots should inform later lightweight anomaly triggers.
+Candidate signals include expected duration ranges, failure/return categories,
+resource-event rates, and novelty thresholds, provided they are compatible with
+the same subject generation and monitoring configuration. Snapshot-derived
+thresholds remain evidence, not authority, and must retain provenance and
+confidence/sample-size information.
+
+The lightweight path may need a very small amount of initial statistical context
+before a full snapshot exists, especially an expected runtime estimate. Whether
+it should collect return categories, timing sketches, or other initial statistics
+is an open performance decision. Any such collection must be fixed-cost, bounded,
+sampled where appropriate, and measured against the goal that lightweight slots
+remain extremely inexpensive. If useful signals cannot meet that budget, they
+belong only in promoted Behavior collection.
+
+### Return-type and return-shape learning review
+
+Review the current implementation and document exactly how Caretaker learns and
+persists expected function returns and how it detects unusual returns. The review
+should distinguish declared annotations and validators from observed runtime
+types, structural shapes, bounded categorical summaries, and exact values. It
+should also determine:
+
+- what is currently collected in LIGHTWEIGHT and BEHAVIOR modes;
+- how `None`, unions, subclasses, iterators/generators, containers, large values,
+  and application-defined objects are represented safely;
+- how novelty is evaluated without treating a rare legitimate return as proof of
+  failure;
+- which generation, sample-size, freshness, and provenance constraints apply;
+- how sensitive values are redacted and untrusted representations are bounded;
+- how annotations, application validators, and learned observations disagree;
+  and
+- which return signals can be collected within the lightweight overhead budget.
+
+The result should be an explicit tested return-behavior contract before unusual
+return detection is described as an implemented guarantee.
 
 ## Supervisor-owned multiprocess adaptive aggregation
 
