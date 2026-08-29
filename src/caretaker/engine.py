@@ -61,7 +61,7 @@ from .policy import OutputValidationTrigger, RepairPolicy, TimeoutTrigger
 from .postmortem import PostMortemRecorder
 from .provider import CandidateBatch, CandidateProposal, RepairProvider, RepairRequest
 from .registry import RepairTarget, TargetRegistry, build_target
-from .regression import RegressionCorpus
+from .regression import RegressionCorpus, RegressionFixtureStore
 from .runtime import current_episode_id, repair_depth, set_runtime_context
 from .selection import CandidateScorer, CandidateSelector, EvaluatedCandidate
 from .slot import FunctionVersion, RepairAlreadyInProgressError, SlotConflictError
@@ -131,6 +131,7 @@ class RepairEngine:
         log_handler: CorrelatedLogHandler | None = None,
         auxiliary_registry: AuxiliaryRegistry | None = None,
         capsule_store: IncidentCapsuleStore | None = None,
+        regression_fixture_store: RegressionFixtureStore | None = None,
         guard: "GuardFacade | None" = None,
         run_id: UUID | None = None,
     ) -> None:
@@ -152,14 +153,21 @@ class RepairEngine:
         self.auxiliary_registry = auxiliary_registry or AuxiliaryRegistry()
         self.capsule_store = capsule_store
         self._capsule_store_explicit = capsule_store is not None
-        if self.capsule_store is None and os.environ.get("CARETAKER_SUPERVISED"):
+        self.regression_fixture_store = regression_fixture_store
+        if os.environ.get("CARETAKER_SUPERVISED"):
             logging_runtime = get_logging_runtime()
             active_policy = logging_runtime.active_policy if logging_runtime is not None else None
             capsule_policy = getattr(active_policy, "capsules", None)
-            if capsule_policy is not None and capsule_policy.enabled:
+            if self.capsule_store is None and capsule_policy is not None and capsule_policy.enabled:
                 self.capsule_store = IncidentCapsuleStore(
                     active_policy.directory,
                     policy=capsule_policy,
+                )
+            regression_policy = getattr(active_policy, "regression", None)
+            if self.regression_fixture_store is None and regression_policy is not None and regression_policy.enabled:
+                self.regression_fixture_store = RegressionFixtureStore(
+                    active_policy.directory,
+                    policy=regression_policy,
                 )
         self.guard = guard
         self.run_id = run_id or uuid4()
@@ -167,7 +175,7 @@ class RepairEngine:
         self.scorer = CandidateScorer()
         self.selector = CandidateSelector()
         self.observation = ObservationManager(self.store)
-        self.regression = RegressionCorpus()
+        self.regression = RegressionCorpus(fixture_store=self.regression_fixture_store)
         self._repair_history: dict[tuple[str, str], list[datetime]] = {}
         self._attempt_cache: dict[UUID, RepairAttempt] = {}
         self._pending_guard_deviations: dict[str, tuple[Any, ...]] = {}
@@ -1474,6 +1482,9 @@ class RepairEngine:
                 expected=output,
                 incident_id=incident.incident_id,
                 candidate_id=selected.candidate.candidate_id,
+                source_function_version=activated.number,
+                source_function_hash=activated.source_hash,
+                replay_safety=target.policy.retry.safety.name,
             )
             if regression_case is not None:
                 self.store.append_event(
@@ -1486,6 +1497,12 @@ class RepairEngine:
                         details={
                             "case_id": str(regression_case.case_id),
                             "name": regression_case.name,
+                            "persistent_fixture_id": self.regression.last_persistent_fixture_id,
+                            "persistent_fixture_status": (
+                                "PERSISTED_DATA_ONLY"
+                                if self.regression.last_persistent_fixture_id
+                                else "NOT_PERSISTED"
+                            ),
                         },
                     )
                 )

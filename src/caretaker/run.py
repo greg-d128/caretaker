@@ -48,6 +48,7 @@ from .logging.ipc import (
 )
 from .logging.policy import OperatorLoggingPolicy, load_operator_policy
 from .logging.segments import read_segment
+from .regression import RegressionFixtureStore
 from .integrity import SignatureVerificationMode, verify_release_publication
 from .builtin_profiles import builtin_profile_names, load_builtin_profile_supervisor
 from .system import SystemCollectionPolicy, SystemDataCollector, SystemOutputPolicy, load_system_policy
@@ -215,6 +216,11 @@ def main(argv: list[str] | None = None) -> int:
         policy.directory,
         policy=policy.capsules,
         artifact_signer=runtime.writer.signing_service,
+    )
+    regression_fixture_store = (
+        RegressionFixtureStore(policy.directory, policy=policy.regression)
+        if policy.regression.enabled
+        else None
     )
     behavior_statistics = BehaviorStatisticsRepository(policy.directory)
     behavior_revision = {"value": 0}
@@ -406,6 +412,31 @@ def main(argv: list[str] | None = None) -> int:
                     incident_id=incident_id,
                     limit=limit,
                 ),
+            }
+        if command == "regression-fixture-list":
+            target_id = str(request.get("target_id") or "").strip() or None
+            limit = max(1, min(int(request.get("limit", 100)), 500))
+            if regression_fixture_store is None:
+                return {"ok": True, "enabled": False, "fixtures": []}
+            return {
+                "ok": True,
+                "enabled": True,
+                "fixtures": regression_fixture_store.list_summaries(
+                    target_id=target_id,
+                    limit=limit,
+                ),
+            }
+        if command == "regression-fixture-get":
+            fixture_id = str(request.get("fixture_id") or "").strip()
+            if not fixture_id:
+                raise ValueError("regression-fixture-get requires fixture_id")
+            if regression_fixture_store is None:
+                raise PermissionError("logging.regression.enabled=False")
+            return {
+                "ok": True,
+                "envelope": regression_fixture_store.load(fixture_id),
+                "integrity_verified": True,
+                "replay_status": "DATA_ONLY_NOT_EXECUTABLE",
             }
         if command == "incident-capsule-get":
             raw_capsule_id = str(request.get("capsule_id") or "").strip()

@@ -44,7 +44,18 @@ Differential execution can run both implementations. `PURE_FUNCTION` therefore r
 
 When a repaired replay succeeds and the function is declared pure or idempotent, Caretaker records a bounded regression case. Future candidates must pass these cases in the validation worker.
 
-The current corpus is in-memory and bounded. A future version should persist safe replay fixtures and associate them with source versions and historical failure fingerprints.
+The executable corpus remains in-memory and bounded. Deployments may opt in to a
+separate persistent fixture store with `[logging.regression] enabled = true`.
+Persistent fixtures are bounded JSON evidence: values are redacted and truncated,
+source incident/candidate and function-version metadata is retained, and each
+record has an integrity hash. They are marked `DATA_ONLY_NOT_EXECUTABLE` and are
+never loaded into the validation corpus or executed. Storage is limited per target
+and failures to persist do not change repair success or authority decisions.
+
+Fixtures can be inspected read-only with `caretaker-regression-fixtures` or the
+supervisor control commands `regression-fixture-list` and
+`regression-fixture-get`. Isolated replay execution, including any value
+rehydration and stronger sandbox contract, remains a separate future task.
 
 ## Flapping prevention
 

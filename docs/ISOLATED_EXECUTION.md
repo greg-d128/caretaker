@@ -127,7 +127,9 @@ The environment described here does not change these `0.6.1` properties:
 - generated Repair cannot modify `caretaker.*`;
 - general replacement of already imported third-party modules uses quarantine plus supervised restart;
 - reliable remote `LogSink` delivery remains future work;
-- accepted regression cases are bounded and currently in memory;
+- accepted executable regression cases are bounded and remain in memory; an
+  opt-in persistent store now retains only integrity-checked, bounded,
+  data-only fixture evidence marked `DATA_ONLY_NOT_EXECUTABLE`;
 - a self-recorded runtime signing identity does not prevent complete local corpus replacement;
 - system collection inside Docker observes the container namespace;
 - system collection inside Multipass observes the guest VM.

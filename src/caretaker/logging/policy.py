@@ -242,6 +242,19 @@ class LoggingBinding:
     capture_arguments: bool = False
     capture_results: bool = False
 
+
+@dataclass(frozen=True, slots=True)
+class RegressionFixturePolicy:
+    """Opt-in limits for persistent, inspection-only regression fixtures."""
+
+    enabled: bool = False
+    maximum_cases_per_target: int = 100
+    maximum_fixture_bytes: int = 128 * 1024
+    maximum_depth: int = 6
+    maximum_collection_items: int = 32
+    maximum_text_characters: int = 2048
+
+
 @dataclass(frozen=True, slots=True)
 class OperatorLoggingPolicy:
     enabled: bool = True
@@ -266,6 +279,7 @@ class OperatorLoggingPolicy:
     attachments: AttachmentPolicy = field(default_factory=AttachmentPolicy)
     capsules: IncidentCapsulePolicy = field(default_factory=IncidentCapsulePolicy)
     communications: IncidentCommunicationPolicy = field(default_factory=IncidentCommunicationPolicy)
+    regression: RegressionFixturePolicy = field(default_factory=RegressionFixturePolicy)
     signing: RuntimeSigningPolicy = field(default_factory=RuntimeSigningPolicy)
     reload: PolicyReloadPolicy = field(default_factory=PolicyReloadPolicy)
     worker_restart: WorkerRestartPolicy = field(default_factory=WorkerRestartPolicy)
@@ -333,6 +347,15 @@ def validate_operator_logging_policy(policy: OperatorLoggingPolicy) -> None:
         validate_incident_communication_policy(policy.communications)
     except ValueError as exc:
         errors.append(str(exc))
+    for name in (
+        "maximum_cases_per_target",
+        "maximum_fixture_bytes",
+        "maximum_depth",
+        "maximum_collection_items",
+        "maximum_text_characters",
+    ):
+        if getattr(policy.regression, name) <= 0:
+            errors.append(f"logging.regression.{name} must be greater than zero")
     if not policy.reload.require_valid_complete_document:
         errors.append("reload.require_valid_complete_document=False is unsupported; reloads always require a complete valid document")
     if not policy.reload.retain_previous_on_failure:
@@ -521,6 +544,7 @@ def load_operator_policy(path: str | Path) -> tuple[OperatorLoggingPolicy, Loggi
     attachment_data = dict(log.get("attachments", {}))
     capsule_data = dict(log.get("capsules", {}))
     communication_data = dict(log.get("communications", {}))
+    regression_data = dict(log.get("regression", {}))
     signing_data = dict(log.get("signing", {}))
     reload_data = dict(log.get("reload", {}))
     worker_restart_data = dict(log.get("worker_restart", {}))
@@ -593,6 +617,7 @@ def load_operator_policy(path: str | Path) -> tuple[OperatorLoggingPolicy, Loggi
             **communication_data,
             **({"audiences": _communication_audiences(audience_data)} if audience_data is not None else {}),
         ),
+        regression=RegressionFixturePolicy(**regression_data),
         signing=RuntimeSigningPolicy(**{
             **signing_data,
             **_enum_if_present(RuntimeRecordIntegrityMode, signing_data, "mode"),

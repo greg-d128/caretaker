@@ -77,3 +77,25 @@ data/redaction path, preserves capsule and policy fingerprints, and marks
 unrecorded fields as unknown. Drafts are reviewable exports only;
 `delivery_authorized` is always false and no external adapter is configured by
 this policy.
+
+## Persistent regression fixtures
+
+Successful pure or idempotent repair retries continue to create executable
+regression cases only in the process-local corpus. Persistent copies are
+opt-in because they retain bounded representations of call arguments and
+expected output:
+
+```toml
+[logging.regression]
+enabled = true
+maximum_cases_per_target = 100
+maximum_fixture_bytes = 131072
+maximum_depth = 6
+maximum_collection_items = 32
+maximum_text_characters = 2048
+```
+
+The resulting JSON records are inspection evidence, not replay authority. They
+are integrity checked, redacted, resource bounded, and explicitly marked
+`DATA_ONLY_NOT_EXECUTABLE`. Caretaker does not yet rehydrate or execute them;
+isolated replay must be implemented as a separately authorized capability.

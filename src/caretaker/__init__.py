@@ -185,6 +185,12 @@ from .policy import (
 )
 from .postmortem import ExceptionHookManager, PostMortemRecorder
 from .provider import CandidateProposal, OllamaRepairProvider, StaticRepairProvider
+from .regression import (
+    DATA_ONLY_NOT_EXECUTABLE,
+    RegressionCorpus,
+    RegressionFixtureIntegrityError,
+    RegressionFixtureStore,
+)
 from .store import InMemoryRepairStore, SQLiteRepairStore
 from .telemetry import CorrelatedLogHandler
 from .logging import (
@@ -221,6 +227,7 @@ from .logging import (
     RepairAuthority,
     RequiredCapabilityFailureAction,
     RemoteLoggingRuntime,
+    RegressionFixturePolicy,
     RuntimeRecordIntegrityMode,
     RuntimeSigningPolicy,
     SegmentWriter,
@@ -428,6 +435,11 @@ __all__ = [
     "RepairPolicy",
     "caretaker",
     "RepairResolution",
+    "RegressionCorpus",
+    "RegressionFixtureIntegrityError",
+    "RegressionFixtureStore",
+    "RegressionFixturePolicy",
+    "DATA_ONLY_NOT_EXECUTABLE",
     "ReplaySafety",
     "SnapshotStrategy",
     "TimeoutMode",

@@ -179,11 +179,14 @@ def bounded_safe_data(
         items = sorted(value.items(), key=lambda item: str(item[0]))
         result: dict[str, Any] = {}
         for key, item in items[: policy.maximum_collection_items]:
-            key_text = _bounded_text(str(key), policy.maximum_text_characters)
+            original_key = str(key)
+            key_text = _bounded_text(original_key, policy.maximum_text_characters)
             result[key_text] = bounded_safe_data(
                 item,
                 policy=policy,
-                name=key_text,
+                # Use the original field name for redaction. A short display key
+                # must not make a sensitive field look non-sensitive.
+                name=original_key,
                 depth=depth + 1,
             )
         if len(items) > policy.maximum_collection_items:
