@@ -163,6 +163,8 @@ def test_multipass_availability_verifies_guest_and_network_marker(monkeypatch) -
             return completed(command, stdout="snapshot")
         if "stat" in command:
             return completed(command, stdout="0 644\n")
+        if "ip" in command:
+            return completed(command, stdout="")
         return completed(command, stdout="22001\n")
 
     monkeypatch.setattr(backend, "_host_command", fake_host)

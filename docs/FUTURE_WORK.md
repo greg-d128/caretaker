@@ -232,8 +232,6 @@ resource exhaustion.
 An "implemented" label in this document means that a usable research path exists; it does not mean that every assurance property around that path is complete. Strict expected-failure regression tests preserve the following known debts:
 
 - an operator approval can override missing policy-requested isolation and activate the candidate;
-- Multipass network isolation relies on a root-owned provisioning marker rather than live network-policy attestation;
-- a persistent Multipass guest can advertise an ephemeral workspace without a configured restore or disposable-clone boundary;
 - same-UID Unix peer credentials do not distinguish application code from an independent operator.
 
 These debts are also executable documentation in `tests/test_validation_trust_boundary.py` and `tests/test_security_assurance_regressions.py`. They should remain strict expected failures until the corresponding boundary is implemented and the test passes normally.
@@ -262,7 +260,11 @@ Policy should distinguish a hard, non-overridable minimum from a preferred tier 
 
 ### VM capability attestation
 
-The VM backend should derive capability claims from verified configuration and current guest state: reset/clone boundary, image identity, mounts, subject UID, routes, firewall/egress rules, and relevant profile hashes. A marker file can remain operator-supplied evidence but must not be the sole basis for claiming network isolation.
+The VM backend derives its reset-boundary and network claims from configured
+restore/clone behavior and live guest route checks in addition to the
+root-owned network-isolation marker. Remaining VM assurance work includes
+firewall/egress attestation and relevant profile hashes; the marker must not be
+treated as the sole basis for claiming network isolation.
 
 ## Deployment-authorized behavior snapshot signing
 

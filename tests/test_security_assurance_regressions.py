@@ -249,13 +249,6 @@ def test_restore_for_validation_has_a_runtime_enforcement_consumer() -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known VM-attestation gap: a root-owned marker file is treated as sufficient "
-        "evidence of network isolation without verifying the guest network state."
-    ),
-)
 def test_multipass_network_isolation_is_verified_not_only_marked() -> None:
     class MarkerOnlyBackend(MultipassValidationBackend):
         def _guest_command(self, instance, command, *, timeout=None):
@@ -283,13 +276,6 @@ def test_multipass_network_isolation_is_verified_not_only_marked() -> None:
     assert ready is False
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known capability-reporting gap: a persistent VM with no restore/clone boundary "
-        "still advertises an ephemeral validation workspace."
-    ),
-)
 def test_multipass_does_not_claim_ephemeral_workspace_without_reset_boundary() -> None:
     backend = MultipassValidationBackend(
         instance_name="local-test-validator",

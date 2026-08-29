@@ -726,6 +726,13 @@ class MultipassValidationBackend(SubprocessValidationBackend):
             "network_policy_marker": (
                 self.network_policy_marker if self.require_network_isolation else None
             ),
+            "reset_boundary": (
+                "disposable_clone"
+                if self.disposable_clone
+                else "clean_snapshot"
+                if self.clean_snapshot and self.restore_before_validation
+                else None
+            ),
             **self._availability_details,
         }
         return ValidationBackendCapabilities(
@@ -735,7 +742,10 @@ class MultipassValidationBackend(SubprocessValidationBackend):
             rootless=None,
             network_control=self.require_network_isolation,
             resource_control=True,
-            ephemeral_workspace=True,
+            ephemeral_workspace=(
+                self.disposable_clone
+                or (self.clean_snapshot is not None and self.restore_before_validation)
+            ),
             details=details,
         )
 
@@ -825,6 +835,21 @@ class MultipassValidationBackend(SubprocessValidationBackend):
                 return False, "Multipass network-isolation marker has invalid permissions"
             if permissions & 0o022:
                 return False, "Multipass network-isolation marker must not be group/world writable"
+            for route_command in (
+                ["ip", "-4", "route", "show", "default"],
+                ["ip", "-6", "route", "show", "default"],
+            ):
+                routes = self._guest_command(instance, route_command)
+                if routes.returncode != 0:
+                    return False, (
+                        "Multipass validation could not verify guest default routes: "
+                        + " ".join(route_command)
+                    )
+                if routes.stdout.strip():
+                    return False, (
+                        "Multipass guest retains a default route despite the required "
+                        "network-isolation policy"
+                    )
         return True, None
 
     def _restore_clean_instance(self, instance: str) -> tuple[bool, str | None]:
