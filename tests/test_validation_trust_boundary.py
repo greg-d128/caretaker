@@ -165,18 +165,22 @@ def test_worker_result_must_prove_all_mandatory_validation_checks() -> None:
     assert report.eligible is False
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known defense-in-depth gap: dynamic access to a dunder name through getattr is "
-        "not currently recognized by the static candidate gate."
-    ),
-)
 def test_static_gate_rejects_dynamic_dunder_attribute_access() -> None:
     assessment = assess_candidate_source(
         """\
 def boundary_target(total: float, count: int) -> float:
     return getattr(total, "__class__")(0.0)
+"""
+    )
+
+    assert assessment.hard_disqualifications
+
+
+def test_static_gate_rejects_computed_dunder_attribute_access() -> None:
+    assessment = assess_candidate_source(
+        """\
+def boundary_target(total: float, count: int) -> float:
+    return getattr(total, "__" + "class__")(0.0)
 """
     )
 

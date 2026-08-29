@@ -1340,6 +1340,7 @@ _DANGEROUS_CALLS = {
     "check_output",
 }
 _CONCURRENCY_PARTS = {"threading", "multiprocessing", "concurrent", "asyncio", "Thread", "Process"}
+_DYNAMIC_ATTRIBUTE_CALLS = {"getattr", "setattr", "delattr"}
 
 
 def assess_candidate_source(source: str) -> StaticAssessment:
@@ -1363,6 +1364,16 @@ def assess_candidate_source(source: str) -> StaticAssessment:
             if any(part in _CONCURRENCY_PARTS for part in name.split(".")):
                 review.append(f"candidate introduces concurrency through {name}")
                 risks.append(f"candidate introduces concurrency through {name}")
+            if leaf in _DYNAMIC_ATTRIBUTE_CALLS and len(node.args) >= 2:
+                attribute_name = _static_string_value(node.args[1])
+                if attribute_name is None:
+                    hard.append(
+                        f"candidate uses a dynamically constructed attribute name through {name}"
+                    )
+                elif attribute_name.startswith("__"):
+                    hard.append(
+                        f"candidate accesses prohibited dunder attribute {attribute_name}"
+                    )
         elif isinstance(node, (ast.Global, ast.Nonlocal)):
             hard.append("candidate declares global or nonlocal state")
         elif isinstance(node, ast.Attribute) and node.attr.startswith("__"):
@@ -1431,6 +1442,25 @@ def _is_safe_literal(node: ast.AST) -> bool:
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
         return _is_safe_literal(node.operand)
     return False
+
+
+def _static_string_value(node: ast.AST) -> str | None:
+    """Return a string that can be proven from syntax alone, if any."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _static_string_value(node.left)
+        right = _static_string_value(node.right)
+        if left is not None and right is not None:
+            return left + right
+    if isinstance(node, ast.JoinedStr):
+        parts: list[str] = []
+        for value in node.values:
+            if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
+                return None
+            parts.append(value.value)
+        return "".join(parts)
+    return None
 
 
 def _is_safe_annotation(node: ast.AST) -> bool:

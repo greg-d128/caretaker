@@ -235,7 +235,6 @@ An "implemented" label in this document means that a usable research path exists
 - an operator approval can override missing policy-requested isolation and activate the candidate;
 - Multipass network isolation relies on a root-owned provisioning marker rather than live network-policy attestation;
 - a persistent Multipass guest can advertise an ephemeral workspace without a configured restore or disposable-clone boundary;
-- static candidate inspection does not comprehensively detect dynamically constructed prohibited attribute names;
 - same-UID Unix peer credentials do not distinguish application code from an independent operator.
 
 These debts are also executable documentation in `tests/test_validation_trust_boundary.py` and `tests/test_security_assurance_regressions.py`. They should remain strict expected failures until the corresponding boundary is implemented and the test passes normally.
