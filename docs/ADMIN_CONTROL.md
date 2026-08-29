@@ -21,6 +21,14 @@ The configured `run/control.sock` and `run/runtime.sock` names are logical paths
 
 The initial protocol supports status, health, effective-policy inspection, and mode lease acquisition/release. Logging CLI commands also provide offline record, baseline, and interrogation operations.
 
+The Incident Explorer also exposes read-only capsule inspection and advisory
+assistance through the supervisor control plane. `incident-capsule-assist`
+requires an explicit local model and query; its output is ephemeral and cannot
+modify a capsule or authorize any Caretaker action. The
+`caretaker-capsule-explorer` command provides the same operation without the
+interactive console and can submit a query independently to all historical
+capsules.
+
 Every high-impact action should include a reason and is recorded with peer credentials and policy generations.
 
 ## Runtime escalation

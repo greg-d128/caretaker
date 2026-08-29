@@ -18,6 +18,7 @@ from .authority import (
     PolicySetting,
 )
 from .capsule import IncidentCapsuleStore
+from .capsule_assistance import assist_capsules
 from .behavior import (
     BehaviorSnapshotStore,
     BehaviorStatisticsRepository,
@@ -435,6 +436,56 @@ def main(argv: list[str] | None = None) -> int:
                 "incident_id": raw_incident_id,
                 "records": capsule_timeline(UUID(raw_incident_id), limit=limit),
                 "evidence_status": "PERSISTED_LOG_WINDOW",
+            }
+        if command == "incident-capsule-assist":
+            query = str(request.get("query") or "").strip()
+            model = str(request.get("model") or "").strip()
+            if not query:
+                raise ValueError("incident-capsule-assist requires query")
+            if not model:
+                raise ValueError("incident-capsule-assist requires model")
+            scope = str(request.get("scope") or "all").strip().lower()
+            limit = max(1, min(int(request.get("limit", 50)), 50))
+            if scope == "selected":
+                raw_capsule_id = str(request.get("capsule_id") or "").strip()
+                if not raw_capsule_id:
+                    raise ValueError("selected Incident Capsule assistance requires capsule_id")
+                summaries = [
+                    item
+                    for item in capsule_store.list_summaries(limit=200)
+                    if str(item.get("capsule_id") or "") == raw_capsule_id
+                ]
+            elif scope == "incident":
+                raw_incident_id = str(request.get("incident_id") or "").strip()
+                if not raw_incident_id:
+                    raise ValueError("incident-scoped assistance requires incident_id")
+                summaries = capsule_store.list_summaries(
+                    incident_id=UUID(raw_incident_id),
+                    limit=limit,
+                )
+            elif scope == "all":
+                summaries = capsule_store.list_summaries(limit=limit)
+            else:
+                raise ValueError("incident-capsule-assist scope must be selected, incident, or all")
+            result = assist_capsules(
+                capsule_store,
+                summaries,
+                query=query,
+                model=model,
+                endpoint=str(
+                    request.get("endpoint")
+                    or "http://127.0.0.1:11434/api/generate"
+                ),
+                timeline_provider=lambda incident_id: capsule_timeline(
+                    incident_id,
+                    limit=200,
+                ),
+            )
+            return {
+                "ok": True,
+                "scope": scope,
+                "non_interactive": True,
+                **result,
             }
         if command == "incident-capsule-attach-view":
             raw_incident_id = str(request.get("incident_id") or "").strip()

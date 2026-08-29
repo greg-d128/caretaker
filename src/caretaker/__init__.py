@@ -66,6 +66,7 @@ from .capsule import (
     bounded_safe_data,
     validate_incident_capsule_policy,
 )
+from .capsule_assistance import IncidentCapsuleAssistant, assist_capsules
 from .decorators import (
     InvalidOutputError,
     caretaker,
@@ -377,6 +378,8 @@ __all__ = [
     "IncidentCapsuleLevel",
     "IncidentCapsulePolicy",
     "IncidentCapsuleStore",
+    "IncidentCapsuleAssistant",
+    "assist_capsules",
     "bounded_safe_data",
     "validate_incident_capsule_policy",
     "CandidateProposal",

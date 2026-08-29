@@ -71,6 +71,24 @@ The future communication projection must use the capsule's canonical incident
 state and preserve provenance, uncertainty, redaction, freshness, and policy
 bindings.
 
+## Advisory LLM assistance
+
+The Explorer can send an explicit question and local Ollama model name to the
+advisory Incident Capsule assistant. Assistance receives one bounded capsule
+context at a time, plus its correlated timeline and side artifacts. The result
+contains provider/model, prompt-version, evidence, and response hashes and is
+shown as untrusted advisory output. It is not written to the capsule, cannot
+create a revision, and cannot approve Repair, satisfy validation, or change
+policy.
+
+The non-interactive `caretaker-capsule-explorer` command supports `--scope
+all`, `--scope incident`, and `--scope selected`. An all-scope query is
+submitted independently for each historical capsule, so one invalid capsule or
+LLM failure does not turn the remaining results into a single unsupported
+aggregate conclusion. When a supervisor is available, the command includes the
+bounded persisted timeline; direct offline mode analyzes capsule data without
+claiming that absent log records did not occur.
+
 ## Remaining work
 
 Incident Capsules do not yet provide isolated replay, policy-specific capture
