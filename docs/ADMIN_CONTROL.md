@@ -29,6 +29,16 @@ modify a capsule or authorize any Caretaker action. The
 interactive console and can submit a query independently to all historical
 capsules.
 
+The `incident-communication-draft` command creates a bounded, policy-governed
+draft for one verified capsule. The console exposes the same operation as
+**Create review draft**, and `caretaker-incident-draft` can write a new
+mode-0600 JSON export. Audience profiles and disclosure sections come from
+`[logging.communications]`; missing required facts are marked unknown rather
+than invented. By default only draft metadata and its content hash are added
+to the capsule communication history, with idempotent recording. Drafting
+cannot authorize delivery, change policy, approve Repair, or satisfy
+validation; external delivery is not implemented.
+
 Every high-impact action should include a reason and is recorded with peer credentials and policy generations.
 
 ## Runtime escalation

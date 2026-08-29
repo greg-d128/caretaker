@@ -145,6 +145,13 @@ class CaretakerConsoleApp(App):
     }
     #incident-capsule-assist-actions Input { width: 1fr; min-width: 18; }
     #incident-capsule-assist-actions Button { width: auto; min-width: 14; margin-left: 1; }
+    #incident-communication-actions {
+        height: 5;
+        padding: 0 1;
+        align-vertical: middle;
+    }
+    #incident-communication-actions Input { width: 1fr; min-width: 18; }
+    #incident-communication-actions Button { width: auto; min-width: 16; margin-left: 1; }
     #incident-artifact-title {
         height: 3;
         padding: 1 2;
@@ -563,6 +570,16 @@ class CaretakerConsoleApp(App):
                             yield Input(placeholder="Local Ollama model", id="incident-capsule-model")
                             yield Button("Ask selected", id="incident-capsule-assist-selected", disabled=True)
                             yield Button("Ask all historical", id="incident-capsule-assist-all", variant="primary")
+                        with Horizontal(id="incident-communication-actions"):
+                            yield Input(
+                                placeholder="Audience profile (operators-v1)",
+                                id="incident-communication-audience",
+                            )
+                            yield Button(
+                                "Create review draft",
+                                id="incident-communication-draft",
+                                disabled=True,
+                            )
                         yield RichLog(id="incident-capsule-output", wrap=False, markup=True)
                         yield Static("Side artifacts", id="incident-artifact-title")
                         table = DataTable(id="incident-artifact-table")
@@ -862,6 +879,7 @@ class CaretakerConsoleApp(App):
             "behavior-assess",
             "behavior-assess-history",
             "incident-capsule-assist",
+            "incident-communication-draft",
         } else 30.0 if command == "behavior-list" else 5.0
         response = await asyncio.to_thread(
             control_request, self.socket_path, request, timeout=timeout
@@ -2853,6 +2871,7 @@ class CaretakerConsoleApp(App):
             self.query_one("#incident-capsule-revision", Input).value = ""
             self.query_one("#incident-capsule-load", Button).disabled = True
             self.query_one("#incident-capsule-assist-selected", Button).disabled = True
+            self.query_one("#incident-communication-draft", Button).disabled = True
             self.query_one("#incident-capsule-status", Static).update(
                 f"Incident Capsules unavailable: {type(exc).__name__}: {exc}"
             )
@@ -2875,6 +2894,7 @@ class CaretakerConsoleApp(App):
         self.query_one("#incident-capsule-revision", Input).value = ""
         self.query_one("#incident-capsule-load", Button).disabled = True
         self.query_one("#incident-capsule-assist-selected", Button).disabled = True
+        self.query_one("#incident-communication-draft", Button).disabled = True
         self.query_one("#incident-capsule-detail-title", Static).update(
             "Select an Incident Capsule"
         )
@@ -2905,6 +2925,7 @@ class CaretakerConsoleApp(App):
             self.query_one("#incident-capsule-revision", Input).value = ""
         self.query_one("#incident-capsule-load", Button).disabled = True
         self.query_one("#incident-capsule-assist-selected", Button).disabled = True
+        self.query_one("#incident-communication-draft", Button).disabled = True
         if str(record.get("integrity_status") or "").upper() == "INVALID":
             self.query_one("#incident-capsule-detail-title", Static).update(
                 f"Invalid Incident Capsule | {capsule_id}"
@@ -2920,6 +2941,7 @@ class CaretakerConsoleApp(App):
             payload = envelope.get("capsule") or {}
             self.query_one("#incident-capsule-load", Button).disabled = False
             self.query_one("#incident-capsule-assist-selected", Button).disabled = False
+            self.query_one("#incident-communication-draft", Button).disabled = False
             self.query_one("#incident-capsule-detail-title", Static).update(
                 f"Verified Incident Capsule | revision {payload.get('revision', '-')}"
             )
@@ -3566,6 +3588,26 @@ class CaretakerConsoleApp(App):
                 )
                 self._write_json("#incident-capsule-output", response)
                 return
+            if button == "incident-communication-draft":
+                if self._selected_capsule is None:
+                    raise ValueError("Select an Incident Capsule first")
+                audience_profile = self.query_one(
+                    "#incident-communication-audience", Input
+                ).value.strip()
+                if not audience_profile:
+                    raise ValueError("Enter a policy-approved audience profile first")
+                response = await self._request(
+                    "incident-communication-draft",
+                    capsule_id=self._selected_capsule.get("capsule_id"),
+                    audience_profile_id=audience_profile,
+                    record=True,
+                )
+                recording = response.get("recording") or {}
+                self.query_one("#incident-capsule-detail-title", Static).update(
+                    f"Communication draft | {recording.get('status', 'UNRECORDED')}"
+                )
+                self._write_json("#incident-capsule-output", response)
+                return
             if button == "context-clear":
                 self._set_operator_context()
                 return
@@ -4050,6 +4092,8 @@ class CaretakerConsoleApp(App):
             elif button == "investigate-run":
                 output = "#investigate-output"
             elif button.startswith("incident-capsule-"):
+                output = "#incident-capsule-output"
+            elif button == "incident-communication-draft":
                 output = "#incident-capsule-output"
             elif button.startswith("logs-"):
                 output = "#logs-output"

@@ -59,17 +59,46 @@ validation, change policy, close an incident, or broaden authority. The local
 peer identity is recorded as evidence and is not treated as independent human
 authentication.
 
-## Communication history
+## Policy-governed communication drafts
 
-Communication delivery is not implemented. The capsule schema nevertheless
-reserves immutable `CommunicationRecord` entries for future drafts, approvals,
-exports, deliveries, failures, corrections, and retractions. Records contain
-channel/audience/status and content hashes or references rather than granting a
-delivery adapter authority.
+The logging policy's `[logging.communications]` section defines named audience
+profiles and their section allowlists, text/item limits, and review requirement.
+The built-in `operators-v1`, `engineers-v1`, `leadership-v1`, and `security-v1`
+profiles are local defaults; deployments may replace them explicitly in policy.
 
-The future communication projection must use the capsule's canonical incident
-state and preserve provenance, uncertainty, redaction, freshness, and policy
-bindings.
+`incident-communication-draft` projects one verified capsule into a bounded,
+data-only draft. It distinguishes confirmed observations, supported
+inferences, hypotheses, recorded operational fields, and unknowns. Each draft
+includes a deterministic communication ID, source capsule revision/content
+hash, policy fingerprints, field provenance, redaction, and truncation state.
+Required fields that are absent remain explicitly `UNKNOWN`; the generator does
+not invent impact, mitigation, ownership, recovery, or ETA.
+
+Draft generation records only draft metadata and its content hash in the
+capsule's immutable `CommunicationRecord` history. Repeating the same draft is
+idempotent. `--no-record` can be used for a purely review-only export. Records
+contain channel/audience/status and hashes rather than granting a delivery
+adapter authority.
+
+The console's **Create review draft** action and the non-interactive
+`caretaker-incident-draft` command produce JSON suitable for local review or a
+mode-0600 new file:
+
+```bash
+caretaker-incident-draft \
+  --data-directory ./caretaker-data \
+  --incident-id INCIDENT_UUID \
+  --audience-profile operators-v1 \
+  --output incident-draft.json
+```
+
+External delivery, automatic triggers, approvals, corrections, retractions,
+and ticket/chat/email/status-page adapters are not implemented. Draft output
+always reports `delivery_authorized: false`.
+
+Future delivery and audience workflow must continue to use the capsule's
+canonical incident state and preserve provenance, uncertainty, redaction,
+freshness, and policy bindings.
 
 ## Advisory LLM assistance
 
@@ -92,6 +121,6 @@ claiming that absent log records did not occur.
 ## Remaining work
 
 Incident Capsules do not yet provide isolated replay, policy-specific capture
-levels for every application state source, or automatic communication drafting
-and delivery. Those remain future work and must be implemented with isolated
-replay, explicit authority, and adversarial tests.
+levels for every application state source, LLM-assisted language tailoring, or
+communication approval and delivery. Those remain future work and must be
+implemented with isolated replay, explicit authority, and adversarial tests.

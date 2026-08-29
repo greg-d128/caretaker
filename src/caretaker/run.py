@@ -19,6 +19,7 @@ from .authority import (
 )
 from .capsule import IncidentCapsuleStore
 from .capsule_assistance import assist_capsules
+from .communications import generate_communication_draft
 from .behavior import (
     BehaviorSnapshotStore,
     BehaviorStatisticsRepository,
@@ -485,6 +486,57 @@ def main(argv: list[str] | None = None) -> int:
                 "ok": True,
                 "scope": scope,
                 "non_interactive": True,
+                **result,
+            }
+        if command == "incident-communication-draft":
+            profile_id = str(request.get("audience_profile_id") or "").strip()
+            if not profile_id:
+                raise ValueError("incident-communication-draft requires audience_profile_id")
+            raw_capsule_id = str(request.get("capsule_id") or "").strip()
+            raw_incident_id = str(request.get("incident_id") or "").strip()
+            if bool(raw_capsule_id) == bool(raw_incident_id):
+                raise ValueError(
+                    "incident-communication-draft requires exactly one of capsule_id or incident_id"
+                )
+            envelope = (
+                capsule_store.load(raw_capsule_id)
+                if raw_capsule_id
+                else capsule_store.latest_for_incident(UUID(raw_incident_id))
+            )
+            if envelope is None:
+                raise KeyError(f"No Incident Capsule found for incident {raw_incident_id}")
+            raw_record = request.get("record", True)
+            if not isinstance(raw_record, bool):
+                raise ValueError("incident-communication-draft record must be boolean")
+            result = generate_communication_draft(
+                capsule_store,
+                envelope,
+                audience_profile_id=profile_id,
+                policy=runtime.active_policy.communications,
+                capsule_policy=runtime.active_policy.capsules,
+                effective_policy_fingerprint=runtime.snapshot.content_hash,
+                record=raw_record,
+                run_id=runtime.run_id,
+            )
+            draft = result.get("draft") or {}
+            recording = result.get("recording") or {}
+            runtime.event(
+                logger_name="caretaker.communication",
+                severity=20,
+                channel=LogChannel.AUDIT,
+                message="Incident communication draft generated",
+                fields={
+                    "draft_id": draft.get("draft_id"),
+                    "audience_profile_id": draft.get("audience_profile_id"),
+                    "source_capsule_id": draft.get("source_capsule_id"),
+                    "recording_status": recording.get("status"),
+                    "delivery_authorized": False,
+                },
+            )
+            return {
+                "ok": True,
+                "reviewable": True,
+                "delivery_authorized": False,
                 **result,
             }
         if command == "incident-capsule-attach-view":

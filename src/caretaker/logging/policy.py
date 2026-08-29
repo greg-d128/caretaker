@@ -14,6 +14,11 @@ from typing import Any, Mapping
 from uuid import UUID, uuid4
 
 from ..capsule import IncidentCapsuleLevel, IncidentCapsulePolicy, validate_incident_capsule_policy
+from ..communications import (
+    CommunicationAudiencePolicy,
+    IncidentCommunicationPolicy,
+    validate_incident_communication_policy,
+)
 from .models import (
     AnchorFailureAction,
     AttachmentOverloadAction,
@@ -260,6 +265,7 @@ class OperatorLoggingPolicy:
     storage_emergency: StorageEmergencyPolicy = field(default_factory=StorageEmergencyPolicy)
     attachments: AttachmentPolicy = field(default_factory=AttachmentPolicy)
     capsules: IncidentCapsulePolicy = field(default_factory=IncidentCapsulePolicy)
+    communications: IncidentCommunicationPolicy = field(default_factory=IncidentCommunicationPolicy)
     signing: RuntimeSigningPolicy = field(default_factory=RuntimeSigningPolicy)
     reload: PolicyReloadPolicy = field(default_factory=PolicyReloadPolicy)
     worker_restart: WorkerRestartPolicy = field(default_factory=WorkerRestartPolicy)
@@ -321,6 +327,10 @@ def validate_operator_logging_policy(policy: OperatorLoggingPolicy) -> None:
         errors.append("logging.metrics provider correlation is reserved; no metrics provider adapter is implemented")
     try:
         validate_incident_capsule_policy(policy.capsules)
+    except ValueError as exc:
+        errors.append(str(exc))
+    try:
+        validate_incident_communication_policy(policy.communications)
     except ValueError as exc:
         errors.append(str(exc))
     if not policy.reload.require_valid_complete_document:
@@ -463,6 +473,25 @@ def _priority_set(values: list[str] | tuple[str, ...] | None) -> frozenset[Evide
     return frozenset(_enum(EvidencePriority, item) for item in values)
 
 
+def _communication_audiences(values: Any) -> tuple[CommunicationAudiencePolicy, ...]:
+    if not isinstance(values, (list, tuple)):
+        raise ValueError("logging.communications.audiences must be an array of tables")
+    result: list[CommunicationAudiencePolicy] = []
+    for index, item in enumerate(values):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"logging.communications.audiences[{index}] must be a table")
+        fields = dict(item)
+        if "allowed_sections" in fields:
+            sections = fields["allowed_sections"]
+            if not isinstance(sections, (list, tuple)):
+                raise ValueError(
+                    f"logging.communications.audiences[{index}].allowed_sections must be an array"
+                )
+            fields["allowed_sections"] = tuple(sections)
+        result.append(CommunicationAudiencePolicy(**fields))
+    return tuple(result)
+
+
 def load_operator_policy(path: str | Path) -> tuple[OperatorLoggingPolicy, LoggingPolicySnapshot]:
     """Load the unsigned operator policy from TOML.
 
@@ -491,9 +520,12 @@ def load_operator_policy(path: str | Path) -> tuple[OperatorLoggingPolicy, Loggi
     emergency_data = dict(log.get("storage_emergency", {}))
     attachment_data = dict(log.get("attachments", {}))
     capsule_data = dict(log.get("capsules", {}))
+    communication_data = dict(log.get("communications", {}))
     signing_data = dict(log.get("signing", {}))
     reload_data = dict(log.get("reload", {}))
     worker_restart_data = dict(log.get("worker_restart", {}))
+
+    audience_data = communication_data.pop("audiences", None)
 
     attachment_compression_data = dict(attachment_data.pop("compression", {}))
     attachment_rotation_data = dict(attachment_data.pop("rotation", {}))
@@ -557,6 +589,10 @@ def load_operator_policy(path: str | Path) -> tuple[OperatorLoggingPolicy, Loggi
             **capsule_data,
             **_enum_if_present(IncidentCapsuleLevel, capsule_data, "level"),
         }),
+        communications=IncidentCommunicationPolicy(
+            **communication_data,
+            **({"audiences": _communication_audiences(audience_data)} if audience_data is not None else {}),
+        ),
         signing=RuntimeSigningPolicy(**{
             **signing_data,
             **_enum_if_present(RuntimeRecordIntegrityMode, signing_data, "mode"),

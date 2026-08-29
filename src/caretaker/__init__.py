@@ -67,6 +67,15 @@ from .capsule import (
     validate_incident_capsule_policy,
 )
 from .capsule_assistance import IncidentCapsuleAssistant, assist_capsules
+from .communications import (
+    CommunicationAudiencePolicy,
+    CommunicationPolicyError,
+    IncidentCommunicationPolicy,
+    build_communication_draft,
+    communication_policy_fingerprint,
+    generate_communication_draft,
+    validate_incident_communication_policy,
+)
 from .decorators import (
     InvalidOutputError,
     caretaker,

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from caretaker.console import CaretakerConsoleApp
 from rich.text import Text
-from textual.widgets import Button, Checkbox, DataTable, Static
+from textual.widgets import Button, Checkbox, DataTable, Input, Static
 
 
 def test_target_runtime_state_marks_candidate_probation_as_validating():
@@ -800,6 +800,72 @@ def test_console_incident_explorer_loads_verified_capsule_and_side_artifact(tmp_
                 ("incident-capsule-artifact", {"artifact_id": artifact_id}),
             ]
             assert app._context_incident == incident_id
+
+    asyncio.run(exercise())
+
+
+def test_console_creates_policy_governed_reviewable_communication_draft(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+    incident_id = "00000000-0000-0000-0000-000000000001"
+    capsule_id = "00000000-0000-0000-0000-000000000011"
+
+    async def exercise() -> None:
+        async with app.run_test(size=(140, 60)):
+            requests = []
+
+            async def request(command: str, **payload):
+                requests.append((command, payload))
+                if command == "incident-capsule-list":
+                    return {"ok": True, "capsules": [{
+                        "capsule_id": capsule_id,
+                        "incident_id": incident_id,
+                        "revision": 1,
+                        "created_at": "2026-08-29T12:00:00+00:00",
+                        "artifact_count": 0,
+                        "communication_count": 0,
+                        "integrity_status": "VERIFIED",
+                    }]}
+                if command == "incident-capsule-get":
+                    return {"ok": True, "integrity_verified": True, "envelope": {
+                        "capsule": {
+                            "capsule_id": capsule_id,
+                            "incident_id": incident_id,
+                            "revision": 1,
+                            "created_at": "2026-08-29T12:00:00+00:00",
+                            "incident_state": {"trigger": "exception"},
+                            "artifacts": [],
+                            "communications": [],
+                        },
+                        "integrity": {"content_sha256": "b" * 64},
+                    }}
+                if command == "incident-capsule-timeline":
+                    return {"ok": True, "records": []}
+                if command == "incident-communication-draft":
+                    return {
+                        "ok": True,
+                        "reviewable": True,
+                        "delivery_authorized": False,
+                        "recording": {"status": "RECORDED"},
+                        "draft": {"audience_profile_id": "operators-v1"},
+                    }
+                raise AssertionError(command)
+
+            app._request = request  # type: ignore[method-assign]
+            await app.refresh_incident_capsules()
+            await app._select_incident_capsule(app._capsule_records[0])
+            app.query_one("#incident-communication-audience", Input).value = "operators-v1"
+            button = app.query_one("#incident-communication-draft", Button)
+            assert button.disabled is False
+            await app.on_button_pressed(Button.Pressed(button))
+
+            assert requests[-1] == (
+                "incident-communication-draft",
+                {
+                    "capsule_id": capsule_id,
+                    "audience_profile_id": "operators-v1",
+                    "record": True,
+                },
+            )
 
     asyncio.run(exercise())
 

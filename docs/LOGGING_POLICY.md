@@ -48,3 +48,32 @@ Ordinary application logging now fails by stopping Caretaker logging rather than
 ## Storage paths
 
 Logging and system-collection output directories are normalized to absolute paths when policies are constructed. Relative paths loaded from a TOML policy are resolved relative to the policy file rather than the process working directory. This prevents a working-directory change from silently redirecting evidence storage.
+
+## Incident communication drafts
+
+Communication drafting is controlled by `[logging.communications]`. Each
+audience is an explicit named profile with an allowed section list, bounded
+text/item limits, and a review requirement. For example:
+
+```toml
+[logging.communications]
+enabled = true
+maximum_draft_bytes = 131072
+
+[[logging.communications.audiences]]
+profile_id = "public-v1"
+display_name = "Public status readers"
+allowed_sections = [
+  "identity", "confirmed_observations", "impact", "scope",
+  "mitigation", "next_update", "ownership", "unknowns", "provenance",
+]
+maximum_text_characters = 2000
+maximum_items = 16
+require_review = true
+```
+
+The generator filters by this allowlist before rendering, applies the bounded
+data/redaction path, preserves capsule and policy fingerprints, and marks
+unrecorded fields as unknown. Drafts are reviewable exports only;
+`delivery_authorized` is always false and no external adapter is configured by
+this policy.

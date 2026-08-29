@@ -41,7 +41,7 @@ current incident-focused view as a redacted `operator-view` side artifact.
 The initial Explorer provides read-only capsule, revision, integrity,
 side-artifact, and correlated persisted-timeline inspection. Isolated replay,
 full policy-specific capture of every application state source, communication
-drafting, and delivery remain future work. Capsule viewing remains read-only
+approval, and delivery remain future work. Capsule viewing remains read-only
 evidence inspection;
 operator artifacts cannot authorize Repair, satisfy validation, modify policy,
 close incidents, or expand Caretaker authority. See
@@ -49,23 +49,24 @@ close incidents, or expand Caretaker authority. See
 
 ## Policy-governed incident communications
 
-**Status: Proposal pending decision.**
+**Status: Implemented in development tree for reviewable draft generation; approval and delivery remain future work.**
 
 During an incident, Caretaker already has or may accumulate useful context:
 observed symptoms, evidence, affected targets, hypotheses, policy and integrity
 state, attempted interventions, validation results, rollback outcomes, and
-remaining uncertainty. A future communication facility could turn that context
-into audience-specific drafts so operators spend less time repeatedly
-reconstructing the same incident for different stakeholders.
+remaining uncertainty. The current communication facility turns that context
+into bounded, audience-specific reviewable drafts so operators spend less time
+reconstructing the same incident for different stakeholders. It does not
+contact an external audience.
 
-This should be a projection of one canonical incident state, not a collection of
-independently generated stories. Every audience view must preserve the same
+The implementation is a projection of one canonical incident state, not a
+collection of independently generated stories. Every audience view preserves the same
 underlying facts, timestamps, incident identity, evidence provenance, and
 uncertainty while varying terminology, detail, emphasis, and permitted content.
 
 ### Audience policy
 
-Communication policy should define named audience profiles. Deployments may
+Communication policy defines named audience profiles. Deployments may
 create their own profiles; possible built-in examples include:
 
 - on-call operators and incident command;
@@ -93,6 +94,8 @@ An audience profile may control:
 - required reviewer role and approval threshold;
 - permitted export or delivery adapters.
 
+The current implementation enforces audience section allowlists, bounded
+output, redaction, explicit unknowns, provenance, and review-required state.
 Audience policy constrains disclosure; it does not grant incident, Repair,
 policy, or delivery authority. A communication request from another Caretaker,
 application component, LLM, or external system is input, not authorization.
@@ -140,8 +143,8 @@ Draft generation and message delivery must be separate actions.
 - Adapter failure must retain the approved draft and report uncertain delivery;
   retries must not create duplicate or contradictory updates.
 
-Initial implementation should prefer reviewable exports or console drafts over
-automatic delivery. Ticket, chat, email, paging, status-page, or regulatory
+The initial implementation provides reviewable exports and console drafts.
+Ticket, chat, email, paging, status-page, or regulatory
 adapters can be added separately after their authentication, confidentiality,
 idempotency, and failure semantics are defined.
 
