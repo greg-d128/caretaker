@@ -82,8 +82,7 @@ podman-image: wheel ## Build the Caretaker rootless replay worker image
 	@test -n "$(PODMAN_BASE_IMAGE)" || { echo 'PODMAN_BASE_IMAGE must not be empty' >&2; exit 2; }
 	case "$(PODMAN_BASE_IMAGE)" in *REVIEWED_DIGEST*) echo 'Replace REVIEWED_DIGEST with a real digest or omit PODMAN_BASE_IMAGE for the local quick-start default' >&2; exit 2;; esac
 	case "$(PODMAN_BASE_IMAGE)" in *@sha256:*) ;; *) echo 'Warning: PODMAN_BASE_IMAGE is tag-based; pin it by digest for reviewed or production use.' >&2;; esac
-	$(PODMAN) build \
-	  --cgroup-manager="$(PODMAN_CGROUP_MANAGER)" \
+	$(PODMAN) --cgroup-manager="$(PODMAN_CGROUP_MANAGER)" build \
 	  --file isolated/podman/Containerfile \
 	  --ignorefile isolated/podman/.containerignore \
 	  --build-arg "PYTHON_BASE_IMAGE=$(PODMAN_BASE_IMAGE)" \
