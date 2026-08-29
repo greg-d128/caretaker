@@ -60,6 +60,13 @@ def test_process_backend_advertises_process_isolation() -> None:
     assert ProcessValidationBackend is SubprocessValidationBackend
 
 
+def test_default_validation_policy_uses_least_friction_process_isolation() -> None:
+    policy = ValidationPolicy()
+
+    assert policy.minimum_isolation is ValidationIsolationLevel.PROCESS
+    assert policy.isolate_validation is True
+
+
 def test_required_vm_never_silently_downgrades_to_process() -> None:
     engine = RepairEngine(provider=StaticRepairProvider([_candidate()]))
     wrapped = repair(policy=_policy(ValidationBackendUnavailableAction.FAIL_REPAIR), engine=engine)(broken_divide)

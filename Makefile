@@ -21,7 +21,7 @@ PYPI_UPLOAD_URL ?= https://upload.pypi.org/legacy/
 TEST_PYPI_UPLOAD_URL ?= https://test.pypi.org/legacy/
 PODMAN ?= podman
 PODMAN_IMAGE ?= localhost/caretaker-replay-base:$(PACKAGE_VERSION)
-PODMAN_BASE_IMAGE ?=
+PODMAN_BASE_IMAGE ?= python:3.13-slim
 
 .DEFAULT_GOAL := help
 
@@ -78,8 +78,9 @@ wheel: ## Build the wheel in dist/
 	$(BIN)/python -m build --wheel
 
 podman-image: wheel ## Build the Caretaker rootless replay worker image
-	@test -n "$(PODMAN_BASE_IMAGE)" || { echo 'PODMAN_BASE_IMAGE is required and must be pinned by digest' >&2; exit 2; }
-	case "$(PODMAN_BASE_IMAGE)" in *@sha256:*) ;; *) echo 'PODMAN_BASE_IMAGE must include an explicit @sha256: digest' >&2; exit 2;; esac
+	@test -n "$(PODMAN_BASE_IMAGE)" || { echo 'PODMAN_BASE_IMAGE must not be empty' >&2; exit 2; }
+	case "$(PODMAN_BASE_IMAGE)" in *REVIEWED_DIGEST*) echo 'Replace REVIEWED_DIGEST with a real digest or omit PODMAN_BASE_IMAGE for the local quick-start default' >&2; exit 2;; esac
+	case "$(PODMAN_BASE_IMAGE)" in *@sha256:*) ;; *) echo 'Warning: PODMAN_BASE_IMAGE is tag-based; pin it by digest for reviewed or production use.' >&2;; esac
 	$(PODMAN) build \
 	  --file isolated/podman/Containerfile \
 	  --ignorefile isolated/podman/.containerignore \

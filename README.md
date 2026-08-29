@@ -87,7 +87,7 @@ When secure runtime signing is configured, snapshots and behavior archives use t
 
 ## Validation isolation backends
 
-Repair validation is capability-based. `ValidationPolicy.minimum_isolation` can require PROCESS, CONTAINER, VM, or EXTERNAL isolation. The current development tree provides PROCESS, rootless Podman CONTAINER, and Multipass VM backends:
+Repair validation is capability-based. `ValidationPolicy.minimum_isolation` can require PROCESS, CONTAINER, VM, or EXTERNAL isolation. The default is PROCESS, so a basic Caretaker integration needs no Podman, VM, or additional image setup. The current development tree also provides optional rootless Podman CONTAINER and Multipass VM backends:
 
 ```python
 from caretaker import RepairEngine, ValidationIsolationLevel, ValidationPolicy

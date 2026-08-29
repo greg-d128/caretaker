@@ -34,18 +34,34 @@ The last command is only a rootless runtime smoke test. Caretaker images
 should be provisioned from reviewed inputs; the Caretaker replay backend never
 pulls an image.
 
-## Build a reviewed image
+## Build a local image
 
-Build the wheel first, then supply a Python base image pinned to a reviewed
-digest. The base image is a security input and therefore has no floating
-default in the Makefile:
+The ordinary Caretaker path does not require Podman. Use the process-level
+validation default to get started, and add this image only when policy requires
+container isolation or when an operator explicitly enables container replay.
+
+For a quick local smoke test, build with the Makefile default:
 
 ```sh
-make wheel
+make podman-image
+```
+
+That default follows the `python:3.13-slim` tag and is convenient for local
+development. For a reviewed or production image, resolve and review the base
+image digest first:
+
+```sh
+podman pull python:3.13-slim
+BASE_IMAGE="$(podman image inspect python:3.13-slim \
+  --format '{{index .RepoDigests 0}}')"
+printf '%s\n' "$BASE_IMAGE"
 make podman-image \
-  PODMAN_BASE_IMAGE='python:3.13-slim@sha256:REVIEWED_DIGEST' \
+  PODMAN_BASE_IMAGE="$BASE_IMAGE" \
   PODMAN_IMAGE='localhost/caretaker-replay-base:0.6.1'
 ```
+
+The Make target rejects the documentation placeholder `REVIEWED_DIGEST` and
+warns when a tag rather than an explicit `@sha256:` digest is supplied.
 
 Review the resulting image identity before using it:
 
@@ -61,9 +77,9 @@ sh isolated/podman/verify-rootless.sh \
   localhost/caretaker-replay-base:0.6.1
 ```
 
-Configure replay explicitly; the default minimum isolation remains VM, so a
-deployment must consciously select container isolation when it is sufficient
-for its threat model:
+Configure replay explicitly. Replay is disabled by default and has a
+VM-level minimum by default; a deployment must consciously select container
+isolation when it is sufficient for its threat model:
 
 ```toml
 [logging.regression]

@@ -46,6 +46,14 @@ These environments reduce risk during development, research, adversarial testing
 
 ## Built-in candidate-validation backends
 
+The least-friction default is PROCESS validation. A normal `RepairEngine`
+configuration uses the local subprocess backend and does not require Podman or
+Multipass. Isolation is increased by policy: set
+`ValidationPolicy.minimum_isolation` to `CONTAINER` or `VM`, and configure the
+corresponding backend. Caretaker selects the lowest available configured
+backend that satisfies that policy; it does not silently upgrade or downgrade
+the requested boundary.
+
 The repair engine accepts a validation backend implementing the common capability contract. Policy chooses a minimum isolation level rather than a product name:
 
 ```python
@@ -143,7 +151,7 @@ integrity, replay safety, source identity, and backend capability before
 dispatch. A deployment must provide the rehydration/execution backend; absent
 that backend, replay fails closed.
 
-`RootlessPodmanReplayBackend` is the first concrete backend. It supports only
+`RootlessPodmanReplayBackend` is an advanced, opt-in backend. It supports only
 fixtures marked `JSON_EXACT`, runs the Caretaker worker installed in a
 provisioned image, and does not mount either the live Caretaker checkout or the
 application workspace. Its minimum practical policy is
