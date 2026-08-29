@@ -6,7 +6,7 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from rich.syntax import Syntax
 from rich.text import Text
@@ -173,6 +173,12 @@ class CaretakerConsoleApp(App):
         border-top: solid $surface-lighten-2;
     }
     #incident-timeline-table { height: 10; }
+    #incident-capsule-facts, #incident-capsule-communications {
+        height: 5;
+        padding: 0 2;
+        color: $text-muted;
+        border-top: solid $surface-lighten-2;
+    }
     #incident-capsule-detail-title {
         height: 3;
         padding: 1 2;
@@ -592,6 +598,8 @@ class CaretakerConsoleApp(App):
                             yield Input(placeholder="Review reason", id="incident-communication-review-reason")
                             yield Button("Approve", id="incident-communication-approve", disabled=True)
                             yield Button("Reject", id="incident-communication-reject", disabled=True)
+                        yield Static("Incident facts unavailable", id="incident-capsule-facts")
+                        yield Static("Communication history unavailable", id="incident-capsule-communications")
                         yield RichLog(id="incident-capsule-output", wrap=False, markup=True)
                         yield Static("Side artifacts", id="incident-artifact-title")
                         table = DataTable(id="incident-artifact-table")
@@ -2866,6 +2874,48 @@ class CaretakerConsoleApp(App):
             "Verified rows passed hash and revision-chain checks"
         )
 
+    def _update_incident_capsule_structured_details(self, payload: Mapping[str, Any]) -> None:
+        state = payload.get("incident_state")
+        facts = ["Incident facts"]
+        if isinstance(state, Mapping):
+            for key in (
+                "occurred_at",
+                "trigger",
+                "target",
+                "failure",
+                "fingerprint",
+                "capture_reason",
+            ):
+                if key in state:
+                    value = json.dumps(state[key], sort_keys=True, default=str)
+                    facts.append(f"{key}: {self._compact_log_text(value, limit=100)}")
+        if len(facts) == 1:
+            facts.append("No standard incident facts were captured at this capsule level.")
+        self.query_one("#incident-capsule-facts", Static).update("\n".join(facts))
+
+        communications = ["Communication history"]
+        records = payload.get("communications")
+        if isinstance(records, (list, tuple)):
+            for record in records[:8]:
+                if not isinstance(record, Mapping):
+                    continue
+                metadata = record.get("metadata")
+                metadata = metadata if isinstance(metadata, Mapping) else {}
+                review = str(metadata.get("review_decision") or "")
+                status = str(record.get("status") or "-")
+                if review:
+                    status += f"/{review}"
+                communications.append(
+                    f"{status} | {record.get('channel') or '-'} | "
+                    f"{record.get('audience_profile_id') or '-'} | "
+                    f"{self._compact_log_text(record.get('content_sha256'), limit=12) or '-'}"
+                )
+        if len(communications) == 1:
+            communications.append("No communication records are present.")
+        elif isinstance(records, (list, tuple)) and len(records) > 8:
+            communications.append(f"+{len(records) - 8} additional record(s) not shown")
+        self.query_one("#incident-capsule-communications", Static).update("\n".join(communications))
+
     async def refresh_incident_capsules(self) -> None:
         try:
             response = await self._request("incident-capsule-list", limit=200)
@@ -2894,6 +2944,10 @@ class CaretakerConsoleApp(App):
             self.query_one("#incident-capsule-detail-title", Static).update(
                 "Select an Incident Capsule"
             )
+            self.query_one("#incident-capsule-facts", Static).update("Incident facts unavailable")
+            self.query_one("#incident-capsule-communications", Static).update(
+                "Communication history unavailable"
+            )
             self._write_json("#incident-capsule-output", {"error": str(exc)})
             return
         self._capsule_records = [
@@ -2917,6 +2971,10 @@ class CaretakerConsoleApp(App):
         self.query_one("#incident-communication-review-reason", Input).value = ""
         self.query_one("#incident-capsule-detail-title", Static).update(
             "Select an Incident Capsule"
+        )
+        self.query_one("#incident-capsule-facts", Static).update("Incident facts unavailable")
+        self.query_one("#incident-capsule-communications", Static).update(
+            "Communication history unavailable"
         )
         self._write_json(
             "#incident-capsule-output",
@@ -2954,6 +3012,10 @@ class CaretakerConsoleApp(App):
             self.query_one("#incident-capsule-detail-title", Static).update(
                 f"Invalid Incident Capsule | {capsule_id}"
             )
+            self.query_one("#incident-capsule-facts", Static).update("Invalid capsule evidence")
+            self.query_one("#incident-capsule-communications", Static).update(
+                "Communication history unavailable for invalid evidence"
+            )
             self._write_json("#incident-capsule-output", record)
             return
         try:
@@ -2966,6 +3028,7 @@ class CaretakerConsoleApp(App):
             self.query_one("#incident-capsule-load", Button).disabled = False
             self.query_one("#incident-capsule-assist-selected", Button).disabled = False
             self.query_one("#incident-communication-draft", Button).disabled = False
+            self._update_incident_capsule_structured_details(payload)
             self.query_one("#incident-capsule-detail-title", Static).update(
                 f"Verified Incident Capsule | revision {payload.get('revision', '-')}"
             )
@@ -3015,6 +3078,10 @@ class CaretakerConsoleApp(App):
                     f"Correlated persisted timeline unavailable: {type(exc).__name__}"
                 )
         except Exception as exc:
+            self.query_one("#incident-capsule-facts", Static).update("Incident facts unavailable")
+            self.query_one("#incident-capsule-communications", Static).update(
+                "Communication history unavailable"
+            )
             self.query_one("#incident-capsule-detail-title", Static).update(
                 f"Unable to load Incident Capsule | {capsule_id}"
             )

@@ -48,6 +48,12 @@ an artifact loads and verifies its content and its reference from the capsule.
 Invalid hash or revision-chain data is displayed as invalid evidence rather than
 being presented as a valid capsule.
 
+The Explorer also renders bounded read-only summaries for standard incident
+facts and communication-history records alongside the raw envelope. The
+communication summary shows status, channel, audience, and content hash; it
+does not render a message body as if it were delivered. Missing sections and
+invalid capsules remain explicitly unavailable.
+
 For a selected incident, the Explorer also shows a bounded timeline of matching
 persisted log records. Each record is labeled as persisted-log evidence and
 includes its record identifier and derived content hash. This timeline is a

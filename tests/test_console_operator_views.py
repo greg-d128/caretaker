@@ -863,6 +863,10 @@ def test_console_creates_policy_governed_reviewable_communication_draft(tmp_path
             app._request = request  # type: ignore[method-assign]
             await app.refresh_incident_capsules()
             await app._select_incident_capsule(app._capsule_records[0])
+            assert "trigger" in str(app.query_one("#incident-capsule-facts", Static).render())
+            assert "No communication records" in str(
+                app.query_one("#incident-capsule-communications", Static).render()
+            )
             app.query_one("#incident-communication-audience", Input).value = "operators-v1"
             button = app.query_one("#incident-communication-draft", Button)
             assert button.disabled is False
