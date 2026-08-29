@@ -48,6 +48,12 @@ an artifact loads and verifies its content and its reference from the capsule.
 Invalid hash or revision-chain data is displayed as invalid evidence rather than
 being presented as a valid capsule.
 
+For a selected incident, the Explorer also shows a bounded timeline of matching
+persisted log records. Each record is labeled as persisted-log evidence and
+includes its record identifier and derived content hash. This timeline is a
+correlated evidence window, not an extension of the capsule seal; absence from
+the window does not prove that an event did not occur.
+
 This action is evidence collection only. It cannot approve Repair, satisfy
 validation, change policy, close an incident, or broaden authority. The local
 peer identity is recorded as evidence and is not treated as independent human

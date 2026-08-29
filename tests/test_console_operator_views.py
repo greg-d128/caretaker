@@ -773,6 +773,16 @@ def test_console_incident_explorer_loads_verified_capsule_and_side_artifact(tmp_
                         "artifact": {"artifact_id": artifact_id, "content": {"view": "saved"}},
                         "integrity": {"content_sha256": "a" * 64},
                     }}
+                if command == "incident-capsule-timeline":
+                    return {"ok": True, "evidence_status": "PERSISTED_LOG_WINDOW", "records": [{
+                        "record_id": "record-1",
+                        "occurred_at": "2026-08-29T12:02:00+00:00",
+                        "severity": 40,
+                        "channel": "REPAIR",
+                        "target_id": "lab.probe",
+                        "message": "Incident created",
+                        "evidence_status": "PERSISTED_LOG_RECORD",
+                    }]}
                 raise AssertionError(command)
 
             app._request = request  # type: ignore[method-assign]
@@ -780,10 +790,13 @@ def test_console_incident_explorer_loads_verified_capsule_and_side_artifact(tmp_
             assert app.query_one("#incident-capsule-table", DataTable).row_count == 1
             await app._select_incident_capsule(app._capsule_records[0])
             assert app.query_one("#incident-artifact-table", DataTable).row_count == 1
+            assert app.query_one("#incident-timeline-table", DataTable).row_count == 1
+            await app._select_incident_timeline(app._incident_timeline_records[0])
             await app._select_incident_artifact(app._incident_artifact_records[0])
             assert requests == [
                 ("incident-capsule-list", {"limit": 200}),
                 ("incident-capsule-get", {"capsule_id": capsule_id}),
+                ("incident-capsule-timeline", {"incident_id": incident_id, "limit": 200}),
                 ("incident-capsule-artifact", {"artifact_id": artifact_id}),
             ]
             assert app._context_incident == incident_id

@@ -290,7 +290,7 @@ def main(argv: list[str] | None = None) -> int:
 
     def capsule_evidence_references(incident_id: UUID, *, limit: int = 100) -> list[dict[str, object]]:
         references = []
-        for record in recent_log_records(limit):
+        for record in recent_log_records(max(1000, limit)):
             if record.incident_id != incident_id:
                 continue
             references.append({
@@ -311,6 +311,40 @@ def main(argv: list[str] | None = None) -> int:
                 ).hexdigest(),
             })
         return references
+
+    def capsule_timeline(incident_id: UUID, *, limit: int = 100) -> list[dict[str, object]]:
+        timeline = []
+        for record in recent_log_records(max(1000, limit)):
+            if record.incident_id != incident_id:
+                continue
+            message = record.formatted_message or record.message_template
+            timeline.append({
+                "record_id": str(record.record_id),
+                "sequence_number": record.sequence_number,
+                "occurred_at": record.occurred_at.isoformat(),
+                "severity": record.severity,
+                "channel": record.channel.name,
+                "logger": record.logger_name,
+                "message": message,
+                "target_id": str(record.target_id) if record.target_id else None,
+                "call_id": str(record.call_id) if record.call_id else None,
+                "incident_id": str(record.incident_id) if record.incident_id else None,
+                "fields": dict(record.fields),
+                "content_sha256": hashlib.sha256(
+                    json.dumps(
+                        {
+                            "record_id": str(record.record_id),
+                            "sequence_number": record.sequence_number,
+                            "message": message,
+                            "fields": dict(record.fields),
+                        },
+                        sort_keys=True,
+                        default=str,
+                    ).encode("utf-8")
+                ).hexdigest(),
+                "evidence_status": "PERSISTED_LOG_RECORD",
+            })
+        return timeline[-max(1, limit):]
 
     def runtime_authority_match() -> tuple[bool | None, dict[str, object] | None]:
         if not unix_socket_exists(runtime_control_socket):
@@ -390,6 +424,17 @@ def main(argv: list[str] | None = None) -> int:
                 "ok": True,
                 "envelope": capsule_store.load_artifact(raw_artifact_id),
                 "integrity_verified": True,
+            }
+        if command == "incident-capsule-timeline":
+            raw_incident_id = str(request.get("incident_id") or "").strip()
+            if not raw_incident_id:
+                raise ValueError("incident-capsule-timeline requires incident_id")
+            limit = max(1, min(int(request.get("limit", 100)), 200))
+            return {
+                "ok": True,
+                "incident_id": raw_incident_id,
+                "records": capsule_timeline(UUID(raw_incident_id), limit=limit),
+                "evidence_status": "PERSISTED_LOG_WINDOW",
             }
         if command == "incident-capsule-attach-view":
             raw_incident_id = str(request.get("incident_id") or "").strip()

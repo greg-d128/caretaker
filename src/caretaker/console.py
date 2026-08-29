@@ -145,6 +145,13 @@ class CaretakerConsoleApp(App):
         border-top: solid $surface-lighten-2;
     }
     #incident-artifact-table { height: 10; }
+    #incident-timeline-title {
+        height: 3;
+        padding: 1 2;
+        text-style: bold;
+        border-top: solid $surface-lighten-2;
+    }
+    #incident-timeline-table { height: 10; }
     #incident-capsule-detail-title {
         height: 3;
         padding: 1 2;
@@ -475,6 +482,7 @@ class CaretakerConsoleApp(App):
         self._capsule_records: list[dict[str, Any]] = []
         self._selected_capsule: dict[str, Any] | None = None
         self._incident_artifact_records: list[dict[str, Any]] = []
+        self._incident_timeline_records: list[dict[str, Any]] = []
         self._selected_target: str | None = None
         self._attention_records: list[dict[str, Any]] = []
         self._selected_attention_record: dict[str, Any] | None = None
@@ -548,6 +556,11 @@ class CaretakerConsoleApp(App):
                         table = DataTable(id="incident-artifact-table")
                         table.cursor_type = "row"
                         table.add_columns("#", "Kind", "Created", "Source", "Content hash")
+                        yield table
+                        yield Static("Correlated persisted timeline", id="incident-timeline-title")
+                        table = DataTable(id="incident-timeline-table")
+                        table.cursor_type = "row"
+                        table.add_columns("#", "Time", "Level", "Channel", "Target", "Message")
                         yield table
             with TabPane("Overview", id="overview"):
                 yield Static(
@@ -1619,6 +1632,16 @@ class CaretakerConsoleApp(App):
             except (TypeError, ValueError, IndexError):
                 return
             await self._select_incident_artifact(record)
+            return
+
+        if event.data_table.id == "incident-timeline-table":
+            if not row:
+                return
+            try:
+                record = self._incident_timeline_records[int(row[0]) - 1]
+            except (TypeError, ValueError, IndexError):
+                return
+            await self._select_incident_timeline(record)
             return
 
         if event.data_table.id == "attention-table":
@@ -2807,8 +2830,13 @@ class CaretakerConsoleApp(App):
             self._capsule_records = []
             self._selected_capsule = None
             self._incident_artifact_records = []
+            self._incident_timeline_records = []
             self.query_one("#incident-capsule-table", DataTable).clear()
             self.query_one("#incident-artifact-table", DataTable).clear()
+            self.query_one("#incident-timeline-table", DataTable).clear()
+            self.query_one("#incident-timeline-title", Static).update(
+                "Correlated persisted timeline"
+            )
             self.query_one("#incident-capsule-revision", Input).value = ""
             self.query_one("#incident-capsule-load", Button).disabled = True
             self.query_one("#incident-capsule-status", Static).update(
@@ -2824,7 +2852,12 @@ class CaretakerConsoleApp(App):
         ]
         self._selected_capsule = None
         self._incident_artifact_records = []
+        self._incident_timeline_records = []
         self.query_one("#incident-artifact-table", DataTable).clear()
+        self.query_one("#incident-timeline-table", DataTable).clear()
+        self.query_one("#incident-timeline-title", Static).update(
+            "Correlated persisted timeline"
+        )
         self.query_one("#incident-capsule-revision", Input).value = ""
         self.query_one("#incident-capsule-load", Button).disabled = True
         self.query_one("#incident-capsule-detail-title", Static).update(
@@ -2846,7 +2879,12 @@ class CaretakerConsoleApp(App):
         incident_id = str(record.get("incident_id") or "") or None
         self._set_operator_context(incident=incident_id)
         self._incident_artifact_records = []
+        self._incident_timeline_records = []
         self.query_one("#incident-artifact-table", DataTable).clear()
+        self.query_one("#incident-timeline-table", DataTable).clear()
+        self.query_one("#incident-timeline-title", Static).update(
+            "Correlated persisted timeline"
+        )
         capsule_id = str(record.get("capsule_id") or "")
         if revision is None:
             self.query_one("#incident-capsule-revision", Input).value = ""
@@ -2882,6 +2920,37 @@ class CaretakerConsoleApp(App):
                     self._compact_log_text(artifact.get("source"), limit=20) or "-",
                     self._compact_log_text(artifact.get("content_sha256"), limit=12) or "-",
                 )
+            timeline_table = self.query_one("#incident-timeline-table", DataTable)
+            try:
+                timeline_response = await self._request(
+                    "incident-capsule-timeline",
+                    incident_id=incident_id or "",
+                    limit=200,
+                )
+                self._incident_timeline_records = [
+                    dict(item)
+                    for item in timeline_response.get("records", ())
+                    if isinstance(item, dict)
+                ]
+                for index, timeline in enumerate(self._incident_timeline_records, start=1):
+                    occurred = str(timeline.get("occurred_at") or "")
+                    timeline_table.add_row(
+                        index,
+                        occurred[:19].replace("T", " ") if occurred else "-",
+                        str(timeline.get("severity") or "-"),
+                        self._compact_log_text(timeline.get("channel"), limit=14) or "-",
+                        self._compact_log_text(timeline.get("target_id"), limit=18) or "-",
+                        self._compact_log_text(timeline.get("message"), limit=48) or "-",
+                    )
+                self.query_one("#incident-timeline-title", Static).update(
+                    f"Correlated persisted timeline ({len(self._incident_timeline_records)} records)"
+                )
+            except Exception as exc:
+                self._incident_timeline_records = []
+                timeline_table.clear()
+                self.query_one("#incident-timeline-title", Static).update(
+                    f"Correlated persisted timeline unavailable: {type(exc).__name__}"
+                )
         except Exception as exc:
             self.query_one("#incident-capsule-detail-title", Static).update(
                 f"Unable to load Incident Capsule | {capsule_id}"
@@ -2890,6 +2959,12 @@ class CaretakerConsoleApp(App):
                 "#incident-capsule-output",
                 {"error": f"{type(exc).__name__}: {exc}", "capsule_id": capsule_id},
             )
+
+    async def _select_incident_timeline(self, record: dict[str, Any]) -> None:
+        self.query_one("#incident-capsule-detail-title", Static).update(
+            f"Persisted evidence record | {record.get('record_id') or '-'}"
+        )
+        self._write_json("#incident-capsule-output", record)
 
     async def _select_incident_artifact(self, record: dict[str, Any]) -> None:
         artifact_id = str(record.get("artifact_id") or "")
