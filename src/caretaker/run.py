@@ -17,6 +17,7 @@ from .authority import (
     PolicyAuthoritySupervisor,
     PolicySetting,
 )
+from .capsule import IncidentCapsuleStore
 from .behavior import (
     BehaviorSnapshotStore,
     BehaviorStatisticsRepository,
@@ -208,6 +209,11 @@ def main(argv: list[str] | None = None) -> int:
     behavior_store = BehaviorSnapshotStore(
         policy.directory, artifact_signer=runtime.writer.signing_service
     )
+    capsule_store = IncidentCapsuleStore(
+        policy.directory,
+        policy=policy.capsules,
+        artifact_signer=runtime.writer.signing_service,
+    )
     behavior_statistics = BehaviorStatisticsRepository(policy.directory)
     behavior_revision = {"value": 0}
     behavior_collection_id = str(uuid4())
@@ -282,6 +288,30 @@ def main(argv: list[str] | None = None) -> int:
                 continue
         return records[-max(1, limit):]
 
+    def capsule_evidence_references(incident_id: UUID, *, limit: int = 100) -> list[dict[str, object]]:
+        references = []
+        for record in recent_log_records(limit):
+            if record.incident_id != incident_id:
+                continue
+            references.append({
+                "record_id": str(record.record_id),
+                "occurred_at": record.occurred_at.isoformat(),
+                "channel": record.channel.name,
+                "content_sha256": hashlib.sha256(
+                    json.dumps(
+                        {
+                            "record_id": str(record.record_id),
+                            "sequence_number": record.sequence_number,
+                            "message": record.formatted_message or record.message_template,
+                            "fields": dict(record.fields),
+                        },
+                        sort_keys=True,
+                        default=str,
+                    ).encode("utf-8")
+                ).hexdigest(),
+            })
+        return references
+
     def runtime_authority_match() -> tuple[bool | None, dict[str, object] | None]:
         if not unix_socket_exists(runtime_control_socket):
             return None, None
@@ -330,6 +360,63 @@ def main(argv: list[str] | None = None) -> int:
                     },
                     "workers": [asdict(item) for item in supervisor.workers.all()] if supervisor else [],
                     "runtime": application_runtime}
+        if command == "incident-capsule-attach-view":
+            raw_incident_id = str(request.get("incident_id") or "").strip()
+            if not raw_incident_id:
+                raise ValueError("incident-capsule-attach-view requires incident_id")
+            incident_id = UUID(raw_incident_id)
+            operator_view = request.get("operator_view")
+            if not isinstance(operator_view, str) or not operator_view.strip():
+                raise ValueError("incident-capsule-attach-view requires a non-empty operator_view")
+            tab_id = str(request.get("tab_id") or "unknown").strip() or "unknown"
+            target_id = str(request.get("target_id") or "").strip() or None
+            call_id = str(request.get("call_id") or "").strip() or None
+            result = capsule_store.attach_artifact(
+                incident_id,
+                kind="operator-view",
+                content={
+                    "captured_at": datetime.now(timezone.utc).isoformat(),
+                    "tab_id": tab_id,
+                    "target_id": target_id,
+                    "incident_id": raw_incident_id,
+                    "call_id": call_id,
+                    "view": operator_view,
+                },
+                source="caretaker-console",
+                operator_identity=f"uid:{credentials[1]}",
+                metadata={"peer_pid": credentials[0], "peer_gid": credentials[2]},
+                policy=runtime.active_policy.capsules,
+                run_id=runtime.run_id,
+                incident_state={
+                    "incident_id": raw_incident_id,
+                    "target_id": target_id,
+                    "call_id": call_id,
+                    "source_evidence": capsule_evidence_references(incident_id),
+                    "capture_reason": "operator-view",
+                },
+            )
+            capsule_payload = result["capsule"].get("capsule") or {}
+            runtime.event(
+                logger_name="caretaker.capsule",
+                severity=20,
+                channel=LogChannel.AUDIT,
+                message="Operator view attached to Incident Capsule",
+                fields={
+                    "incident_id": raw_incident_id,
+                    "capsule_id": capsule_payload.get("capsule_id"),
+                    "capsule_revision": capsule_payload.get("revision"),
+                    "artifact_id": (result["artifact"].get("artifact") or {}).get("artifact_id"),
+                    "artifact_content_sha256": (result["artifact"].get("integrity") or {}).get("content_sha256"),
+                    "tab_id": tab_id,
+                },
+                origin="caretaker",
+            )
+            return {
+                "ok": True,
+                "capsule": capsule_payload,
+                "artifact": result["artifact"].get("artifact"),
+                "artifact_path": result["artifact_path"],
+            }
         if command == "behavior-list":
             # Generation summaries are compact. Use the full bounded allowance so
             # the console can retain three generations across many subjects.

@@ -36,6 +36,7 @@ Caretaker is active research software. These documents describe current design i
 - `POLICIES.md`
 - `VALIDATION_AND_SECURITY.md`
 - `OBSERVATION_AND_REGRESSION.md`
+- `INCIDENT_CAPSULES.md` — bounded incident records, operator-view artifacts, and communication-history contract
 
 ## Integrity
 

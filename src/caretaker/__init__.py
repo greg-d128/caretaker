@@ -54,6 +54,18 @@ from .builtin_profiles import (
     load_builtin_profile_supervisor,
 )
 from .auxiliary import AuxiliaryFunctionManager, AuxiliaryRegistry
+from .capsule import (
+    CapsuleArtifact,
+    CommunicationRecord,
+    IncidentCapsule,
+    IncidentCapsuleError,
+    IncidentCapsuleIntegrityError,
+    IncidentCapsuleLevel,
+    IncidentCapsulePolicy,
+    IncidentCapsuleStore,
+    bounded_safe_data,
+    validate_incident_capsule_policy,
+)
 from .decorators import (
     InvalidOutputError,
     caretaker,
@@ -357,6 +369,16 @@ __all__ = [
     "ActivationPolicy",
     "AuxiliaryFunctionManager",
     "AuxiliaryRegistry",
+    "CapsuleArtifact",
+    "CommunicationRecord",
+    "IncidentCapsule",
+    "IncidentCapsuleError",
+    "IncidentCapsuleIntegrityError",
+    "IncidentCapsuleLevel",
+    "IncidentCapsulePolicy",
+    "IncidentCapsuleStore",
+    "bounded_safe_data",
+    "validate_incident_capsule_policy",
     "CandidateProposal",
     "ComparisonResult",
     "CandidateSelectionMode",

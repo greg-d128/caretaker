@@ -694,6 +694,41 @@ def test_save_report_exports_active_tab_as_private_text(tmp_path):
     asyncio.run(exercise())
 
 
+def test_console_saves_current_operator_view_to_selected_incident_capsule(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(120, 55)):
+            requests = []
+
+            async def request(command: str, **payload):
+                requests.append((command, payload))
+                return {
+                    "ok": True,
+                    "artifact": {"artifact_id": "artifact-1"},
+                }
+
+            app._request = request  # type: ignore[method-assign]
+            app._set_operator_context(
+                target="lab.probe",
+                incident="00000000-0000-0000-0000-000000000001",
+                call="00000000-0000-0000-0000-000000000002",
+            )
+            button = app.query_one("#save-capsule-view", Button)
+            assert button.disabled is False
+            await app.on_button_pressed(Button.Pressed(button))
+
+            assert len(requests) == 1
+            command, payload = requests[0]
+            assert command == "incident-capsule-attach-view"
+            assert payload["incident_id"] == "00000000-0000-0000-0000-000000000001"
+            assert payload["target_id"] == "lab.probe"
+            assert payload["call_id"] == "00000000-0000-0000-0000-000000000002"
+            assert payload["operator_view"].startswith("Caretaker Console Report")
+
+    asyncio.run(exercise())
+
+
 def test_consequential_console_actions_fail_closed(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 

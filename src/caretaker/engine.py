@@ -4,6 +4,7 @@ import ast
 import hashlib
 import inspect
 import logging
+import os
 import re
 import textwrap
 import time
@@ -16,6 +17,7 @@ from uuid import UUID, uuid4
 
 from .auxiliary import AuxiliaryRegistry
 from .authority import get_authority_runtime_context
+from .capsule import IncidentCapsuleStore
 from .contracts import normalize_validation_result
 from .domain import (
     ActivationResult,
@@ -128,6 +130,7 @@ class RepairEngine:
         validation_backends: tuple[ValidationBackend, ...] | None = None,
         log_handler: CorrelatedLogHandler | None = None,
         auxiliary_registry: AuxiliaryRegistry | None = None,
+        capsule_store: IncidentCapsuleStore | None = None,
         guard: "GuardFacade | None" = None,
         run_id: UUID | None = None,
     ) -> None:
@@ -147,6 +150,17 @@ class RepairEngine:
         self.validation_backend = configured_backends[0]
         self.log_handler = log_handler or CorrelatedLogHandler()
         self.auxiliary_registry = auxiliary_registry or AuxiliaryRegistry()
+        self.capsule_store = capsule_store
+        self._capsule_store_explicit = capsule_store is not None
+        if self.capsule_store is None and os.environ.get("CARETAKER_SUPERVISED"):
+            logging_runtime = get_logging_runtime()
+            active_policy = logging_runtime.active_policy if logging_runtime is not None else None
+            capsule_policy = getattr(active_policy, "capsules", None)
+            if capsule_policy is not None and capsule_policy.enabled:
+                self.capsule_store = IncidentCapsuleStore(
+                    active_policy.directory,
+                    policy=capsule_policy,
+                )
         self.guard = guard
         self.run_id = run_id or uuid4()
         self.state_capture = StateCapture()
@@ -643,6 +657,39 @@ class RepairEngine:
             authority_policy_fingerprint=authority_policy.fingerprint,
         )
         self.store.record_incident(incident)
+        capsule_details: dict[str, Any] = {}
+        if self.capsule_store is not None:
+            logging_runtime = get_logging_runtime()
+            active_policy = logging_runtime.active_policy if logging_runtime is not None else None
+            capsule_policy = (
+                self.capsule_store.policy
+                if self._capsule_store_explicit
+                else getattr(active_policy, "capsules", self.capsule_store.policy)
+            )
+            if capsule_policy.enabled:
+                try:
+                    capsule = self.capsule_store.create_for_incident(
+                        incident,
+                        policy=capsule_policy,
+                        authority_policy_generation=authority_policy.generation,
+                        authority_policy_fingerprint=authority_policy.fingerprint,
+                    )
+                    capsule_payload = capsule.get("capsule") or {}
+                    capsule_details = {
+                        "capsule_id": capsule_payload.get("capsule_id"),
+                        "capsule_revision": capsule_payload.get("revision"),
+                        "capsule_content_sha256": (capsule.get("integrity") or {}).get("content_sha256"),
+                    }
+                except Exception as exc:
+                    capsule_details = {
+                        "capsule_capture_failed": True,
+                        "capsule_capture_error": f"{type(exc).__name__}: {exc}",
+                    }
+                    logger.warning(
+                        "Incident Capsule capture failed for %s: %s",
+                        incident.incident_id,
+                        capsule_details["capsule_capture_error"],
+                    )
         self.store.append_event(
             RepairEvent.create(
                 "incident.created",
@@ -652,6 +699,7 @@ class RepairEngine:
                     "trigger": trigger.name,
                     "function_version": version.number,
                     "policy": snapshot.human_readable_policy,
+                    **capsule_details,
                 },
             )
         )
@@ -2036,4 +2084,3 @@ class RepairEngine:
 if TYPE_CHECKING:
     from .guard.facade import GuardFacade
     from .guard.models import BehaviorDeviation
-

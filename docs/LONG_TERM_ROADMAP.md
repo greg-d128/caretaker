@@ -55,8 +55,8 @@ case, including historical and adversarial incidents.
 
 ### Incident Capsules and post-mortem capture
 
-Introduce a bounded, immutable **Incident Capsule** for sufficiently serious
-incidents. A capsule may contain incident/application/policy metadata, execution
+Extend the initial bounded, immutable **Incident Capsule** implementation for
+sufficiently serious incidents. A capsule may contain incident/application/policy metadata, execution
 and exception state, decorated call history, relevant source and hashes,
 bounded selected arguments/locals/globals, package and environment metadata,
 Caretaker observations/hypotheses/repair attempts/validation results, and

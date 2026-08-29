@@ -13,6 +13,7 @@ from threading import RLock
 from typing import Any, Mapping
 from uuid import UUID, uuid4
 
+from ..capsule import IncidentCapsuleLevel, IncidentCapsulePolicy, validate_incident_capsule_policy
 from .models import (
     AnchorFailureAction,
     AttachmentOverloadAction,
@@ -258,6 +259,7 @@ class OperatorLoggingPolicy:
     metrics: MetricsBinding = field(default_factory=MetricsBinding)
     storage_emergency: StorageEmergencyPolicy = field(default_factory=StorageEmergencyPolicy)
     attachments: AttachmentPolicy = field(default_factory=AttachmentPolicy)
+    capsules: IncidentCapsulePolicy = field(default_factory=IncidentCapsulePolicy)
     signing: RuntimeSigningPolicy = field(default_factory=RuntimeSigningPolicy)
     reload: PolicyReloadPolicy = field(default_factory=PolicyReloadPolicy)
     worker_restart: WorkerRestartPolicy = field(default_factory=WorkerRestartPolicy)
@@ -317,6 +319,10 @@ def validate_operator_logging_policy(policy: OperatorLoggingPolicy) -> None:
         errors.append("logging.baseline automatic baseline policy is reserved; Guard behavior snapshots are the implemented baseline mechanism")
     if policy.metrics.enabled:
         errors.append("logging.metrics provider correlation is reserved; no metrics provider adapter is implemented")
+    try:
+        validate_incident_capsule_policy(policy.capsules)
+    except ValueError as exc:
+        errors.append(str(exc))
     if not policy.reload.require_valid_complete_document:
         errors.append("reload.require_valid_complete_document=False is unsupported; reloads always require a complete valid document")
     if not policy.reload.retain_previous_on_failure:
@@ -484,6 +490,7 @@ def load_operator_policy(path: str | Path) -> tuple[OperatorLoggingPolicy, Loggi
     metrics_data = dict(log.get("metrics", {}))
     emergency_data = dict(log.get("storage_emergency", {}))
     attachment_data = dict(log.get("attachments", {}))
+    capsule_data = dict(log.get("capsules", {}))
     signing_data = dict(log.get("signing", {}))
     reload_data = dict(log.get("reload", {}))
     worker_restart_data = dict(log.get("worker_restart", {}))
@@ -545,6 +552,10 @@ def load_operator_policy(path: str | Path) -> tuple[OperatorLoggingPolicy, Loggi
             "retention": RetentionPolicy(**attachment_retention_data) if attachment_retention_data else AttachmentPolicy().retention,
             "always_preserve_priorities": _priority_set(attachment_priorities),
             **_enum_if_present(AttachmentOverloadAction, attachment_data, "overload_action"),
+        }),
+        capsules=IncidentCapsulePolicy(**{
+            **capsule_data,
+            **_enum_if_present(IncidentCapsuleLevel, capsule_data, "level"),
         }),
         signing=RuntimeSigningPolicy(**{
             **signing_data,

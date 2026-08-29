@@ -89,7 +89,7 @@ class CaretakerConsoleApp(App):
     }
     #operator-context { layout: horizontal; }
     #operator-context-label { width: 1fr; }
-    #context-clear, #save-report { width: auto; min-width: 14; margin-left: 1; }
+    #context-clear, #save-report, #save-capsule-view { width: auto; min-width: 14; margin-left: 1; }
     #attention-split {
         height: 1fr;
         min-height: 0;
@@ -446,6 +446,7 @@ class CaretakerConsoleApp(App):
             )
             yield Button("Clear context", id="context-clear", disabled=True)
             yield Button("Save Report", id="save-report", variant="primary")
+            yield Button("Save view to capsule", id="save-capsule-view", disabled=True)
         with TabbedContent(initial="attention"):
             with TabPane("Attention", id="attention"):
                 yield Static(
@@ -1404,6 +1405,7 @@ class CaretakerConsoleApp(App):
             "Context: " + (" | ".join(parts) if parts else "all targets and incidents")
         )
         self.query_one("#context-clear", Button).disabled = not parts
+        self.query_one("#save-capsule-view", Button).disabled = not self._context_incident
 
     @staticmethod
     def _attention_priority(value: Any) -> tuple[int, str]:
@@ -3059,7 +3061,7 @@ class CaretakerConsoleApp(App):
         plain = getattr(value, "plain", None)
         return str(plain if plain is not None else value).strip()
 
-    def _save_active_report(self) -> Path:
+    def _build_active_report(self) -> tuple[str, str]:
         tabs = self.query_one(TabbedContent)
         tab_id = str(tabs.active or "console")
         pane = self.query_one(f"#{tab_id}", TabPane)
@@ -3116,14 +3118,18 @@ class CaretakerConsoleApp(App):
             lines = [line.text.rstrip() for line in log.lines]
             sections.extend(lines or ["(no details)"])
 
+        return tab_id, "\n".join(sections).rstrip() + "\n"
+
+    def _save_active_report(self) -> Path:
+        tab_id, report_text = self._build_active_report()
         reports_directory = self.data_directory / "reports"
         reports_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         reports_directory.chmod(0o700)
-        timestamp = generated.strftime("%Y%m%dT%H%M%S.%fZ")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
         path = reports_directory / f"caretaker-{tab_id}-{timestamp}.txt"
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as report:
-            report.write("\n".join(sections).rstrip() + "\n")
+            report.write(report_text)
         return path
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -3132,6 +3138,25 @@ class CaretakerConsoleApp(App):
             if button == "save-report":
                 path = self._save_active_report()
                 self.notify(f"Saved report: {path}", title="Report saved", timeout=10)
+                return
+            if button == "save-capsule-view":
+                if not self._context_incident:
+                    raise ValueError("Select or focus an incident before saving the operator view")
+                tab_id, report_text = self._build_active_report()
+                response = await self._request(
+                    "incident-capsule-attach-view",
+                    incident_id=self._context_incident,
+                    target_id=self._context_target,
+                    call_id=self._context_call,
+                    tab_id=tab_id,
+                    operator_view=report_text,
+                )
+                artifact = response.get("artifact") or {}
+                self.notify(
+                    f"Saved operator view artifact {artifact.get('artifact_id', '-')}",
+                    title="Incident Capsule updated",
+                    timeout=10,
+                )
                 return
             if button == "context-clear":
                 self._set_operator_context()

@@ -27,6 +27,24 @@ on demonstrated Application Caretaker maturity.
 - **Explicitly deferred**: intentionally omitted from the current test/research scope.
 - **General future work**: desirable work that has not yet been scheduled or designed in detail.
 
+## Incident Capsules and operator side artifacts
+
+**Status: Implemented in development tree for the initial bounded capture slice.**
+
+Supervised runs can now create immutable, content-hashed, data-only Incident
+Capsule revisions under the run data directory. The logging policy controls
+capture level and resource limits. Capsules retain policy/authority references,
+bounded incident state, side-artifact references, and a communication-history
+list reserved for future communication records. The console can save its
+current incident-focused view as a redacted `operator-view` side artifact.
+
+This initial slice does not implement the Incident Explorer, isolated replay,
+full policy-specific capture of every application state source, communication
+drafting, or delivery. Capsule viewing remains read-only evidence inspection;
+operator artifacts cannot authorize Repair, satisfy validation, modify policy,
+close incidents, or expand Caretaker authority. See
+[`INCIDENT_CAPSULES.md`](INCIDENT_CAPSULES.md) for the current contract.
+
 ## Policy-governed incident communications
 
 **Status: Proposal pending decision.**

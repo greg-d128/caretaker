@@ -11,6 +11,7 @@ from caretaker.logging import (
     LoggingMode,
     RuntimeRecordIntegrityMode,
 )
+from caretaker.capsule import IncidentCapsuleLevel
 from caretaker.logging.policy import load_operator_policy
 from caretaker.system import load_system_policy
 
@@ -51,6 +52,11 @@ maximum_rate_per_minute = 10
 overload_action = "probabilistic_sample"
 always_preserve_priorities = ["important", "critical"]
 
+[logging.capsules]
+level = "standard"
+maximum_artifacts = 12
+allow_operator_artifacts = true
+
 [logging.attachments.compression]
 enabled = true
 algorithm = "gzip"
@@ -77,6 +83,8 @@ exhaustion_action = "stop_application"
     assert policy.compression.algorithm is CompressionAlgorithm.GZIP
     assert policy.attachments.overload_action is AttachmentOverloadAction.PROBABILISTIC_SAMPLE
     assert policy.attachments.always_preserve_priorities == frozenset({EvidencePriority.IMPORTANT, EvidencePriority.CRITICAL})
+    assert policy.capsules.level is IncidentCapsuleLevel.STANDARD
+    assert policy.capsules.maximum_artifacts == 12
     assert policy.signing.mode is RuntimeRecordIntegrityMode.EPHEMERAL_SIGNED
     assert policy.signing.key_epoch_maximum_seconds == 86_400
     assert policy.worker_restart.maximum_restarts == 3
