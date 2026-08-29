@@ -148,13 +148,6 @@ def test_validation_request_transport_rejects_arbitrary_python_objects(
         )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known security debt: an incomplete worker result can currently assert eligible=True "
-        "without proving the mandatory validation checks."
-    ),
-)
 def test_worker_result_must_prove_all_mandatory_validation_checks() -> None:
     class IncompleteResultBackend(SubprocessValidationBackend):
         def _run_worker(self, payload, *, timeout_seconds):

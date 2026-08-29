@@ -232,10 +232,8 @@ resource exhaustion.
 An "implemented" label in this document means that a usable research path exists; it does not mean that every assurance property around that path is complete. Strict expected-failure regression tests preserve the following known debts:
 
 - a validation result is not structurally or cryptographically bound to the candidate hash, base source hash, target, policy/authority fingerprints, backend identity, and unique validation transaction;
-- the parent does not require proof that every mandatory validation check was returned and passed;
-- non-finite numeric validation measurements are not rejected fail-closed;
-- persisted `RepairAttempt` evidence does not retain the backend name, isolation tier, and capability/validator identity that produced it;
 - validation requests use Python `pickle` and can carry arbitrary pickle-serializable application objects rather than a data-only versioned protocol;
+- persisted `RepairAttempt` evidence does not retain the backend name, isolation tier, and capability/validator identity that produced it;
 - `StatePolicy.restore_for_validation` is accepted but has no runtime enforcement consumer;
 - an operator approval can override missing policy-requested isolation and activate the candidate;
 - Multipass network isolation relies on a root-owned provisioning marker rather than live network-policy attestation;
@@ -247,7 +245,13 @@ These debts are also executable documentation in `tests/test_validation_trust_bo
 
 ### Validation transaction and protocol hardening
 
-Future validation requests and results should use a canonical, versioned, data-only schema. A supervisor-generated transaction ID should bind the candidate artifact hash, base code hash, target and callable contract, policy and authority fingerprints, requested isolation, backend identity, mandatory check set, and result. The parent should reject missing, duplicate, unknown, malformed, non-finite, or mismatched evidence. External validators should authenticate the result envelope.
+The parent now rejects missing, duplicate, unknown, malformed, and non-finite
+function-validation evidence before a candidate can be eligible. Remaining work
+is to use a canonical, versioned, data-only request/result schema. A
+supervisor-generated transaction ID should bind the candidate artifact hash,
+base code hash, target and callable contract, policy and authority fingerprints,
+requested isolation, backend identity, mandatory check set, and result.
+External validators should authenticate the result envelope.
 
 Registered cases that require domain types need explicit trusted codecs or fixture references; arbitrary object deserialization should not be part of the validator protocol.
 

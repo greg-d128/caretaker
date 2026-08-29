@@ -3,6 +3,7 @@ from __future__ import annotations
 from .adaptive import lightweight_dependency
 import ast
 import json
+import math
 import os
 import pickle
 import shutil
@@ -110,6 +111,19 @@ class ValidationBackendRegistry:
 
     def capabilities(self) -> tuple[ValidationBackendCapabilities, ...]:
         return tuple(item.capabilities() for item in self.backends)
+
+
+_FUNCTION_VALIDATION_CHECKS = frozenset({
+    ValidationCheckKind.RESPONSE_STRUCTURE,
+    ValidationCheckKind.AST_PARSE,
+    ValidationCheckKind.FUNCTION_NAME,
+    ValidationCheckKind.SIGNATURE,
+    ValidationCheckKind.CALLABLE_KIND,
+    ValidationCheckKind.COMPILE,
+    ValidationCheckKind.REGISTERED_TESTS,
+    ValidationCheckKind.GENERATED_TESTS,
+    ValidationCheckKind.PERFORMANCE,
+})
 
 
 class SubprocessValidationBackend:
@@ -261,7 +275,36 @@ class SubprocessValidationBackend:
             "run_generated_tests": target.policy.validation.run_generated_tests,
         }
         result = self._run_worker(payload, timeout_seconds=timeout_seconds)
-        checks = tuple(_check_from_dict(item) for item in result.get("checks", []))
+        protocol_findings: list[str] = []
+        raw_checks = result.get("checks", [])
+        checks_list: list[ValidationCheckResult] = []
+        if not isinstance(raw_checks, (list, tuple)):
+            protocol_findings.append("validation worker checks must be a list")
+            raw_checks = []
+        for item in raw_checks:
+            if not isinstance(item, dict):
+                protocol_findings.append("validation worker returned a malformed check")
+                continue
+            try:
+                checks_list.append(_check_from_dict(item))
+            except (KeyError, TypeError, ValueError):
+                protocol_findings.append("validation worker returned an unknown or malformed check")
+        checks = tuple(checks_list)
+        check_kinds = [check.kind for check in checks]
+        duplicate_kinds = sorted(
+            {kind.name for kind in check_kinds if check_kinds.count(kind) > 1}
+        )
+        if duplicate_kinds:
+            protocol_findings.append(
+                "validation worker returned duplicate checks: " + ", ".join(duplicate_kinds)
+            )
+        missing_kinds = sorted(
+            (kind.name for kind in _FUNCTION_VALIDATION_CHECKS if kind not in check_kinds),
+        )
+        if missing_kinds:
+            protocol_findings.append(
+                "validation worker omitted mandatory checks: " + ", ".join(missing_kinds)
+            )
         mandatory_failures = [
             check
             for check in checks
@@ -283,15 +326,33 @@ class SubprocessValidationBackend:
                 + tuple(result.get("review_required_findings", ()))
             )
         )
+        raw_measurements = result.get("measurements", {})
+        measurements: dict[str, float] = {}
+        if not isinstance(raw_measurements, dict):
+            protocol_findings.append("validation worker measurements must be an object")
+        else:
+            for key, value in raw_measurements.items():
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    protocol_findings.append(
+                        f"validation worker measurement {key!r} is not a finite number"
+                    )
+                    continue
+                number = float(value)
+                if not math.isfinite(number):
+                    protocol_findings.append(
+                        f"validation worker measurement {key!r} is not a finite number"
+                    )
+                    continue
+                measurements[str(key)] = number
+        if protocol_findings:
+            protocol_summary = "; ".join(dict.fromkeys(protocol_findings))
+            hard = tuple(dict.fromkeys(hard + (protocol_summary,)))
         eligible = bool(result.get("eligible", False)) and not mandatory_failures and not hard and not review
         return ValidationReport(
             candidate_id=candidate.candidate_id,
             eligible=eligible,
             checks=checks,
-            measurements={
-                str(key): float(value)
-                for key, value in result.get("measurements", {}).items()
-            },
+            measurements=measurements,
             risk_findings=tuple(
                 dict.fromkeys(
                     assessment.risk_findings

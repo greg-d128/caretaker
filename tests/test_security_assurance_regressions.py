@@ -161,13 +161,6 @@ def test_validation_result_rejects_candidate_identity_mismatch() -> None:
     assert report.eligible is False
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known validation-protocol gap: non-finite numeric measurements from the worker "
-        "are accepted into validation evidence instead of being rejected fail-closed."
-    ),
-)
 def test_validation_protocol_rejects_non_finite_numeric_evidence() -> None:
     class NonFiniteResultBackend(SubprocessValidationBackend):
         def _run_worker(self, payload, *, timeout_seconds):
