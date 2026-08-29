@@ -19,6 +19,7 @@ from ..communications import (
     IncidentCommunicationPolicy,
     validate_incident_communication_policy,
 )
+from ..domain import ValidationIsolationLevel
 from .models import (
     AnchorFailureAction,
     AttachmentOverloadAction,
@@ -253,6 +254,10 @@ class RegressionFixturePolicy:
     maximum_depth: int = 6
     maximum_collection_items: int = 32
     maximum_text_characters: int = 2048
+    replay_enabled: bool = False
+    replay_minimum_isolation: ValidationIsolationLevel = ValidationIsolationLevel.VM
+    replay_require_source_match: bool = True
+    maximum_source_bytes: int = 256 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -353,9 +358,16 @@ def validate_operator_logging_policy(policy: OperatorLoggingPolicy) -> None:
         "maximum_depth",
         "maximum_collection_items",
         "maximum_text_characters",
+        "maximum_source_bytes",
     ):
         if getattr(policy.regression, name) <= 0:
             errors.append(f"logging.regression.{name} must be greater than zero")
+    if policy.regression.replay_enabled and not policy.regression.enabled:
+        errors.append("logging.regression.replay_enabled requires logging.regression.enabled=True")
+    try:
+        ValidationIsolationLevel(policy.regression.replay_minimum_isolation)
+    except (TypeError, ValueError):
+        errors.append("logging.regression.replay_minimum_isolation is invalid")
     if not policy.reload.require_valid_complete_document:
         errors.append("reload.require_valid_complete_document=False is unsupported; reloads always require a complete valid document")
     if not policy.reload.retain_previous_on_failure:
@@ -545,6 +557,11 @@ def load_operator_policy(path: str | Path) -> tuple[OperatorLoggingPolicy, Loggi
     capsule_data = dict(log.get("capsules", {}))
     communication_data = dict(log.get("communications", {}))
     regression_data = dict(log.get("regression", {}))
+    if "replay_minimum_isolation" in regression_data:
+        regression_data["replay_minimum_isolation"] = _enum(
+            ValidationIsolationLevel,
+            regression_data["replay_minimum_isolation"],
+        )
     signing_data = dict(log.get("signing", {}))
     reload_data = dict(log.get("reload", {}))
     worker_restart_data = dict(log.get("worker_restart", {}))

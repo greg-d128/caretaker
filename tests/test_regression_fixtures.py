@@ -12,6 +12,7 @@ from caretaker import (
     RegressionFixtureIntegrityError,
     RegressionFixturePolicy,
     RegressionFixtureStore,
+    ValidationIsolationLevel,
 )
 from caretaker.logging.policy import load_operator_policy
 
@@ -128,6 +129,9 @@ directory = "./data"
 
 [logging.regression]
 enabled = true
+replay_enabled = true
+replay_minimum_isolation = "CONTAINER"
+replay_require_source_match = false
 maximum_cases_per_target = 7
 maximum_fixture_bytes = 4096
 maximum_depth = 4
@@ -138,6 +142,9 @@ maximum_text_characters = 99
     policy, _ = load_operator_policy(path)
     assert policy.regression == RegressionFixturePolicy(
         enabled=True,
+        replay_enabled=True,
+        replay_minimum_isolation=ValidationIsolationLevel.CONTAINER,
+        replay_require_source_match=False,
         maximum_cases_per_target=7,
         maximum_fixture_bytes=4096,
         maximum_depth=4,

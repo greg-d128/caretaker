@@ -93,9 +93,17 @@ maximum_fixture_bytes = 131072
 maximum_depth = 6
 maximum_collection_items = 32
 maximum_text_characters = 2048
+replay_enabled = false
+replay_minimum_isolation = "VM"
+replay_require_source_match = true
+maximum_source_bytes = 262144
 ```
 
 The resulting JSON records are inspection evidence, not replay authority. They
 are integrity checked, redacted, resource bounded, and explicitly marked
 `DATA_ONLY_NOT_EXECUTABLE`. Caretaker does not yet rehydrate or execute them;
 isolated replay must be implemented as a separately authorized capability.
+When replay is enabled, `replay_require_source_match = true` restricts a
+fixture to the exact source hash recorded when it was captured. Operators may
+set it to false for an explicitly configured cross-version comparison; the
+request still carries both the historical and subject source hashes.

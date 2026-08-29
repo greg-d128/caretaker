@@ -130,9 +130,18 @@ The environment described here does not change these `0.6.1` properties:
 - accepted executable regression cases are bounded and remain in memory; an
   opt-in persistent store now retains only integrity-checked, bounded,
   data-only fixture evidence marked `DATA_ONLY_NOT_EXECUTABLE`;
+- historical fixture replay requires explicit policy opt-in and an isolated
+  backend meeting the configured minimum (VM by default); the backend receives
+  JSON-only evidence and owns rehydration inside its boundary;
 - a self-recorded runtime signing identity does not prevent complete local corpus replacement;
 - system collection inside Docker observes the container namespace;
 - system collection inside Multipass observes the guest VM.
+
+Historical replay is intentionally not implemented by reusing the PROCESS
+candidate-validation backend. `IsolatedReplayCoordinator` verifies fixture
+integrity, replay safety, source identity, and backend capability before
+dispatch. A deployment must provide the rehydration/execution backend; absent
+that backend, replay fails closed.
 
 ## 5. Recommended repository layout
 

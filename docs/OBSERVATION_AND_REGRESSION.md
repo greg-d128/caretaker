@@ -57,6 +57,13 @@ supervisor control commands `regression-fixture-list` and
 `regression-fixture-get`. Isolated replay execution, including any value
 rehydration and stronger sandbox contract, remains a separate future task.
 
+The first replay contract is now explicit in the API. `IsolatedReplayCoordinator`
+requires policy opt-in, a PURE or IDEMPOTENT fixture, a verified subject source,
+and a configured backend meeting the policy's minimum isolation (VM by
+default). The backend receives only the JSON envelope and owns any rehydration
+inside its boundary. There is no process-level fallback, and replay results do
+not modify the Incident Capsule or repair state.
+
 ## Flapping prevention
 
 Caretaker records rolled-back source hashes, rejects their automatic reactivation, rejects candidates identical to the active implementation, and detects a basic A-B-A source transition. More advanced structural analysis across many incidents remains planned.

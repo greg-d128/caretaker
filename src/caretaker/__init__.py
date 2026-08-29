@@ -191,6 +191,13 @@ from .regression import (
     RegressionFixtureIntegrityError,
     RegressionFixtureStore,
 )
+from .replay import (
+    IsolatedReplayCoordinator,
+    ReplayExecutionBackend,
+    ReplayExecutionError,
+    ReplayExecutionRequest,
+    ReplayExecutionResult,
+)
 from .store import InMemoryRepairStore, SQLiteRepairStore
 from .telemetry import CorrelatedLogHandler
 from .logging import (
@@ -440,6 +447,11 @@ __all__ = [
     "RegressionFixtureStore",
     "RegressionFixturePolicy",
     "DATA_ONLY_NOT_EXECUTABLE",
+    "IsolatedReplayCoordinator",
+    "ReplayExecutionBackend",
+    "ReplayExecutionError",
+    "ReplayExecutionRequest",
+    "ReplayExecutionResult",
     "ReplaySafety",
     "SnapshotStrategy",
     "TimeoutMode",
