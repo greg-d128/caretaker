@@ -925,6 +925,14 @@ class RepairEngine:
                 incident=incident,
                 policy_snapshot=policy_snapshot,
                 attempt_number=len(attempt_ids) + 1,
+                validation_state_restore_errors=tuple(
+                    self.state_capture.restore_for_validation(
+                        function,
+                        args,
+                        call_state.runtime_snapshot,
+                        target.policy.state,
+                    )
+                ),
             )
             evaluated.append(evaluated_item)
             attempt_ids.append(attempt.attempt_id)
@@ -982,6 +990,14 @@ class RepairEngine:
                         incident=incident,
                         policy_snapshot=policy_snapshot,
                         attempt_number=len(attempt_ids) + 1,
+                        validation_state_restore_errors=tuple(
+                            self.state_capture.restore_for_validation(
+                                function,
+                                args,
+                                call_state.runtime_snapshot,
+                                target.policy.state,
+                            )
+                        ),
                     )
                     if (
                         synthesis.require_score_improvement
@@ -1661,6 +1677,7 @@ class RepairEngine:
         incident: Incident,
         policy_snapshot: Any,
         attempt_number: int,
+        validation_state_restore_errors: tuple[str, ...] = (),
     ) -> tuple[EvaluatedCandidate, RepairAttempt]:
         attempt = RepairAttempt(
             attempt_id=uuid4(),
@@ -1708,6 +1725,26 @@ class RepairEngine:
                 timeout_seconds=target.policy.validation.validation_timeout_seconds,
                 regression_cases=self.regression.registered_cases_for_target(target.target_id),
             )
+            if validation_state_restore_errors:
+                now = utcnow()
+                restore_summary = (
+                    "Validation state restoration failed: "
+                    + "; ".join(validation_state_restore_errors)
+                )
+                report = replace(
+                    report,
+                    eligible=False,
+                    checks=report.checks + (
+                        ValidationCheckResult(
+                            kind=ValidationCheckKind.STATIC_POLICY,
+                            outcome=CheckOutcome.FAILED,
+                            started_at=now,
+                            finished_at=now,
+                            summary=restore_summary,
+                        ),
+                    ),
+                    hard_disqualifications=report.hard_disqualifications + (restore_summary,),
+                )
             can_activate, activation_reason = target.slot.can_activate_source(
                 candidate.artifact.artifact_hash,
                 prevent_failed_reactivation=target.policy.stability.prevent_reactivation_of_failed_version,

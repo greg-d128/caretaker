@@ -57,7 +57,11 @@ Defaults for these features are intentionally inactive/unset. Their presence in 
 
 `previous_incidents` currently defaults to zero and values above zero are rejected because durable incident-history retrieval is not yet implemented.
 
-`StatePolicy.restore_for_validation` is a known exception to the policy-truthfulness rule in this development release: it is accepted with an active default but has no runtime enforcement consumer. Until that debt is resolved, it must not be treated as evidence that pre-validation application state was restored.
+`StatePolicy.restore_for_validation` is enforced before candidate validation by
+restoring captured in-process instance and global state. This covers only
+state captured under the active `StatePolicy`; external side effects require a
+separate isolation or application-managed boundary and are not implied by
+this setting.
 
 ## Guard semantics
 

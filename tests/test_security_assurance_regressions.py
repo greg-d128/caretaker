@@ -234,13 +234,6 @@ def test_persisted_repair_attempt_records_validation_backend_identity() -> None:
     assert attempt.validation_backend_details["validator_identity"] == "local-test-vm"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known policy-truthfulness gap: StatePolicy.restore_for_validation is mandatory, "
-        "but no runtime component outside policy validation currently consumes it."
-    ),
-)
 def test_restore_for_validation_has_a_runtime_enforcement_consumer() -> None:
     package_root = Path(caretaker.__file__).resolve().parent
     consumers = []

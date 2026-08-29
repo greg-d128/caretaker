@@ -186,6 +186,37 @@ class StateCapture:
                 errors.append(f"global {name!r} restore failed: {type(exc).__name__}: {exc}")
         return errors
 
+    def restore_for_validation(
+        self,
+        function: Any,
+        args: tuple[Any, ...],
+        snapshot: RuntimeStateSnapshot,
+        policy: StatePolicy,
+    ) -> list[str]:
+        """Restore captured in-process state before candidate validation.
+
+        Validation itself runs in the selected isolated backend, but the
+        application process may have been mutated by the failed call.  This
+        boundary restores the captured instance/global state before the
+        supervisor accepts validation evidence or activates a candidate.
+        Uncaptured external side effects remain outside this guarantee.
+        """
+        if not policy.restore_for_validation:
+            return ["state restoration for validation is disabled by policy"]
+        errors = list(snapshot.errors)
+        if snapshot.instance_state is not None and args and hasattr(args[0], "__dict__"):
+            try:
+                vars(args[0]).clear()
+                vars(args[0]).update(_bounded_deepcopy(snapshot.instance_state, policy.max_snapshot_bytes))
+            except Exception as exc:
+                errors.append(f"instance restore for validation failed: {type(exc).__name__}: {exc}")
+        for name, value in snapshot.globals_state.items():
+            try:
+                function.__globals__[name] = _bounded_deepcopy(value, policy.max_snapshot_bytes)
+            except Exception as exc:
+                errors.append(f"global {name!r} restore for validation failed: {type(exc).__name__}: {exc}")
+        return errors
+
 
 _MISSING = object()
 

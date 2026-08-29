@@ -231,7 +231,6 @@ resource exhaustion.
 
 An "implemented" label in this document means that a usable research path exists; it does not mean that every assurance property around that path is complete. Strict expected-failure regression tests preserve the following known debts:
 
-- `StatePolicy.restore_for_validation` is accepted but has no runtime enforcement consumer;
 - an operator approval can override missing policy-requested isolation and activate the candidate;
 - Multipass network isolation relies on a root-owned provisioning marker rather than live network-policy attestation;
 - a persistent Multipass guest can advertise an ephemeral workspace without a configured restore or disposable-clone boundary;
