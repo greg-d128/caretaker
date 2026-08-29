@@ -60,12 +60,14 @@ rehydration and stronger sandbox contract, remains a separate future task.
 The first replay contract is now explicit in the API. `IsolatedReplayCoordinator`
 requires policy opt-in, a PURE or IDEMPOTENT fixture, a verified subject source,
 and a configured backend meeting the policy's minimum isolation (VM by
-default). `RootlessPodmanReplayBackend` provides an optional container
-implementation for exact-JSON fixtures; a VM backend remains future work. The
-backend receives only the JSON envelope and owns rehydration inside its
-boundary. There is no process-level fallback, and replay results do not modify
-the Incident Capsule or repair state. Ordinary repair validation remains
-PROCESS by default and does not require Podman.
+default). Deployments can register one or more backends with the coordinator;
+it selects the lowest available backend that satisfies policy. If no backend is
+configured or available, replay fails closed. `RootlessPodmanReplayBackend`
+provides an optional container implementation for exact-JSON fixtures; a VM
+backend remains future work. The backend receives only the JSON envelope and
+owns rehydration inside its boundary. There is no process-level fallback, and
+replay results do not modify the Incident Capsule or repair state. Ordinary
+repair validation remains PROCESS by default and does not require Podman.
 
 ## Flapping prevention
 

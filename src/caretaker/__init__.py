@@ -195,6 +195,7 @@ from .regression import (
 from .replay import (
     IsolatedReplayCoordinator,
     ReplayExecutionBackend,
+    ReplayExecutionBackendRegistry,
     ReplayExecutionError,
     ReplayExecutionRequest,
     ReplayExecutionResult,
@@ -452,6 +453,7 @@ __all__ = [
     "JSON_EXACT_REHYDRATION",
     "IsolatedReplayCoordinator",
     "ReplayExecutionBackend",
+    "ReplayExecutionBackendRegistry",
     "ReplayExecutionError",
     "ReplayExecutionRequest",
     "ReplayExecutionResult",

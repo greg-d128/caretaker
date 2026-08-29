@@ -148,8 +148,9 @@ The environment described here does not change these `0.6.1` properties:
 Historical replay is intentionally not implemented by reusing the PROCESS
 candidate-validation backend. `IsolatedReplayCoordinator` verifies fixture
 integrity, replay safety, source identity, and backend capability before
-dispatch. A deployment must provide the rehydration/execution backend; absent
-that backend, replay fails closed.
+dispatch. A deployment can configure one or more replay backends once; the
+coordinator selects the lowest available backend satisfying policy. If no
+backend is configured or available, replay fails closed.
 
 `RootlessPodmanReplayBackend` is an advanced, opt-in backend. It supports only
 fixtures marked `JSON_EXACT`, runs the Caretaker worker installed in a
@@ -168,13 +169,21 @@ from caretaker import (
 backend = RootlessPodmanReplayBackend("caretaker-replay:trusted")
 # Set logging.regression.replay_minimum_isolation = "CONTAINER" only when
 # container isolation is sufficient for the deployment's threat model.
-result = IsolatedReplayCoordinator(store, policy=policy).execute(
+coordinator = IsolatedReplayCoordinator(
+    store,
+    policy=policy,
+    backends=(backend,),
+)
+result = coordinator.execute(
     fixture_id,
     entrypoint="charge",
     source=trusted_subject_source,
-    backend=backend,
 )
 ```
+
+Passing `backend=...` directly to `execute` remains supported for one-off
+dispatch and compatibility. Supplying `backends=(...)` to the coordinator is
+the policy-driven path when a deployment has both container and VM options.
 
 The container image must be provisioned and verified by the operator; Caretaker
 does not pull it. A VM backend with guest attestation and disposable-state

@@ -67,6 +67,26 @@ class FakeVMReplayBackend:
         )
 
 
+class FakeContainerReplayBackend(FakeVMReplayBackend):
+    def capabilities(self):
+        return ValidationBackendCapabilities(
+            name="fake-container",
+            isolation_level=ValidationIsolationLevel.CONTAINER,
+            ephemeral_workspace=True,
+        )
+
+    def execute(self, request):
+        self.requests.append(request)
+        return ReplayExecutionResult(
+            fixture_id=request.fixture_id,
+            target_id=request.target_id,
+            outcome="PASSED",
+            backend_name="fake-container",
+            isolation_level=ValidationIsolationLevel.CONTAINER,
+            output=2,
+        )
+
+
 def test_replay_requires_explicit_policy_and_matching_source(tmp_path: Path) -> None:
     store, fixture_id = _store(tmp_path)
     disabled = IsolatedReplayCoordinator(
@@ -118,6 +138,56 @@ def test_replay_rejects_process_backend_and_dispatches_only_to_isolated_backend(
     assert backend.requests[0].fixture["args"] == [1]
     assert backend.requests[0].historical_source_hash != ""
     assert backend.requests[0].subject_source_hash == hashlib.sha256(SOURCE.encode()).hexdigest()
+
+
+def test_replay_registry_selects_backend_that_meets_policy(tmp_path: Path) -> None:
+    store, fixture_id = _store(tmp_path)
+    policy = RegressionFixturePolicy(
+        enabled=True,
+        replay_enabled=True,
+        replay_minimum_isolation=ValidationIsolationLevel.CONTAINER,
+    )
+    container = FakeContainerReplayBackend()
+    vm = FakeVMReplayBackend()
+    coordinator = IsolatedReplayCoordinator(
+        store,
+        policy=policy,
+        backends=(vm, container),
+    )
+
+    result = coordinator.execute(
+        fixture_id,
+        entrypoint="charge",
+        source=SOURCE,
+    )
+
+    assert result.backend_name == "fake-container"
+    assert len(container.requests) == 1
+    assert not vm.requests
+
+
+def test_replay_without_configured_backend_fails_closed(tmp_path: Path) -> None:
+    store, fixture_id = _store(tmp_path)
+    coordinator = IsolatedReplayCoordinator(
+        store,
+        policy=RegressionFixturePolicy(enabled=True, replay_enabled=True),
+    )
+
+    with pytest.raises(ReplayExecutionError, match="no replay execution backend"):
+        coordinator.execute(fixture_id, entrypoint="charge", source=SOURCE)
+
+
+def test_replay_backend_registry_rejects_conflicting_configuration(tmp_path: Path) -> None:
+    store, _fixture_id = _store(tmp_path)
+    backend = FakeVMReplayBackend()
+
+    with pytest.raises(ValueError, match="backend or backends"):
+        IsolatedReplayCoordinator(
+            store,
+            policy=RegressionFixturePolicy(enabled=True, replay_enabled=True),
+            backend=backend,
+            backends=(backend,),
+        )
 
 
 def test_replay_rejects_backend_result_identity_mismatch(tmp_path: Path) -> None:

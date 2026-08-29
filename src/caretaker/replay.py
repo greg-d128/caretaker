@@ -66,12 +66,51 @@ class ReplayExecutionBackend(Protocol):
     def execute(self, request: ReplayExecutionRequest) -> ReplayExecutionResult: ...
 
 
+class ReplayExecutionBackendRegistry:
+    """Select the lowest available replay backend allowed by policy."""
+
+    def __init__(self, backends: tuple[ReplayExecutionBackend, ...] = ()) -> None:
+        self.backends = tuple(backends)
+
+    def select(self, minimum: ValidationIsolationLevel) -> ReplayExecutionBackend:
+        if not self.backends:
+            raise ReplayExecutionError("no replay execution backend is configured")
+        ordered = sorted(
+            self.backends,
+            key=lambda item: int(item.capabilities().isolation_level),
+        )
+        sufficient = [
+            item for item in ordered
+            if item.capabilities().isolation_level >= minimum
+        ]
+        for item in sufficient:
+            available, _reason = item.available()
+            if available:
+                return item
+        if sufficient:
+            return sufficient[0]
+        return ordered[-1]
+
+
 class IsolatedReplayCoordinator:
     """Authorize and dispatch one historical fixture to an isolated backend."""
 
-    def __init__(self, store: RegressionFixtureStore, *, policy: Any) -> None:
+    def __init__(
+        self,
+        store: RegressionFixtureStore,
+        *,
+        policy: Any,
+        backend: ReplayExecutionBackend | None = None,
+        backends: tuple[ReplayExecutionBackend, ...] | None = None,
+    ) -> None:
+        if backend is not None and backends is not None:
+            raise ValueError("specify backend or backends, not both")
         self.store = store
         self.policy = policy
+        configured = backends if backends is not None else (
+            (backend,) if backend is not None else ()
+        )
+        self.backend_registry = ReplayExecutionBackendRegistry(tuple(configured))
 
     def prepare(
         self,
@@ -127,13 +166,14 @@ class IsolatedReplayCoordinator:
         *,
         entrypoint: str,
         source: str,
-        backend: ReplayExecutionBackend,
+        backend: ReplayExecutionBackend | None = None,
     ) -> ReplayExecutionResult:
         request = self.prepare(fixture_id, entrypoint=entrypoint, source=source)
-        capabilities = backend.capabilities()
         minimum = ValidationIsolationLevel(
             int(getattr(self.policy, "replay_minimum_isolation", ValidationIsolationLevel.VM))
         )
+        backend = backend if backend is not None else self.backend_registry.select(minimum)
+        capabilities = backend.capabilities()
         actual = ValidationIsolationLevel(int(capabilities.isolation_level))
         if actual < minimum:
             raise ReplayExecutionError(
