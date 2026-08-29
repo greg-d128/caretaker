@@ -17,6 +17,7 @@ from .domain import RegisteredCase, RegressionCase
 
 REGRESSION_FIXTURE_SCHEMA_VERSION = 1
 DATA_ONLY_NOT_EXECUTABLE = "DATA_ONLY_NOT_EXECUTABLE"
+JSON_EXACT_REHYDRATION = "JSON_EXACT"
 
 
 class RegressionFixtureIntegrityError(ValueError):
@@ -67,6 +68,52 @@ class RegressionFixtureStore:
     @staticmethod
     def _payload_hash(payload: dict[str, Any]) -> str:
         return hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
+
+    @staticmethod
+    def _json_exact(
+        value: Any,
+        *,
+        depth: int = 0,
+        maximum_depth: int = 6,
+        maximum_collection_items: int = 32,
+        maximum_text_characters: int = 2048,
+    ) -> bool:
+        if depth >= maximum_depth:
+            return False
+        if value is None or isinstance(value, (bool, int, str)):
+            return not isinstance(value, str) or len(value) <= maximum_text_characters
+        if isinstance(value, float):
+            return value == value and value not in {float("inf"), float("-inf")}
+        if isinstance(value, list):
+            if len(value) > maximum_collection_items:
+                return False
+            return all(
+                RegressionFixtureStore._json_exact(
+                    item,
+                    depth=depth + 1,
+                    maximum_depth=maximum_depth,
+                    maximum_collection_items=maximum_collection_items,
+                    maximum_text_characters=maximum_text_characters,
+                )
+                for item in value
+            )
+        if isinstance(value, dict):
+            if len(value) > maximum_collection_items:
+                return False
+            if any(key in {"redacted", "truncated", "representation", "<truncated_items>"} for key in value):
+                return False
+            return all(
+                isinstance(key, str)
+                and RegressionFixtureStore._json_exact(
+                    item,
+                    depth=depth + 1,
+                    maximum_depth=maximum_depth,
+                    maximum_collection_items=maximum_collection_items,
+                    maximum_text_characters=maximum_text_characters,
+                )
+                for key, item in value.items()
+            )
+        return False
 
     @classmethod
     def _verify_envelope(cls, envelope: Any) -> dict[str, Any]:
@@ -120,6 +167,19 @@ class RegressionFixtureStore:
                 "source_function_hash": source_function_hash,
                 "replay_safety": replay_safety,
                 "replay_status": DATA_ONLY_NOT_EXECUTABLE,
+                "rehydration_status": (
+                    JSON_EXACT_REHYDRATION
+                    if all(
+                        self._json_exact(
+                            value,
+                            maximum_depth=safe_policy.maximum_depth,
+                            maximum_collection_items=safe_policy.maximum_collection_items,
+                            maximum_text_characters=safe_policy.maximum_text_characters,
+                        )
+                        for value in (list(args), kwargs, expected)
+                    )
+                    else "INSPECTION_ONLY"
+                ),
                 "args": bounded_safe_data(list(args), policy=safe_policy, name="args"),
                 "kwargs": bounded_safe_data(kwargs, policy=safe_policy, name="kwargs"),
                 "expected": bounded_safe_data(expected, policy=safe_policy, name="expected"),
@@ -169,6 +229,7 @@ class RegressionFixtureStore:
                     "source_function_version": envelope.get("source_function_version"),
                     "replay_safety": envelope.get("replay_safety"),
                     "replay_status": envelope.get("replay_status"),
+                    "rehydration_status": envelope.get("rehydration_status"),
                     "content_sha256": envelope.get("content_sha256"),
                     "integrity_verified": True,
                 })

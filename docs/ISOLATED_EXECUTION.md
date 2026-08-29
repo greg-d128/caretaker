@@ -143,6 +143,34 @@ integrity, replay safety, source identity, and backend capability before
 dispatch. A deployment must provide the rehydration/execution backend; absent
 that backend, replay fails closed.
 
+`RootlessPodmanReplayBackend` is the first concrete backend. It supports only
+fixtures marked `JSON_EXACT`, mounts the Caretaker worker source read-only, and
+does not mount the application workspace. Its minimum practical policy is
+`CONTAINER`; the default `VM` requirement deliberately rejects it when a VM
+backend is required:
+
+```python
+from caretaker import (
+    IsolatedReplayCoordinator,
+    RootlessPodmanReplayBackend,
+    ValidationIsolationLevel,
+)
+
+backend = RootlessPodmanReplayBackend("caretaker-replay:trusted")
+# Set logging.regression.replay_minimum_isolation = "CONTAINER" only when
+# container isolation is sufficient for the deployment's threat model.
+result = IsolatedReplayCoordinator(store, policy=policy).execute(
+    fixture_id,
+    entrypoint="charge",
+    source=trusted_subject_source,
+    backend=backend,
+)
+```
+
+The container image must be provisioned and verified by the operator; Caretaker
+does not pull it. A VM backend with guest attestation and disposable-state
+semantics remains future work.
+
 ## 5. Recommended repository layout
 
 ```text

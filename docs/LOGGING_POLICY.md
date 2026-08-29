@@ -101,8 +101,10 @@ maximum_source_bytes = 262144
 
 The resulting JSON records are inspection evidence, not replay authority. They
 are integrity checked, redacted, resource bounded, and explicitly marked
-`DATA_ONLY_NOT_EXECUTABLE`. Caretaker does not yet rehydrate or execute them;
-isolated replay must be implemented as a separately authorized capability.
+`DATA_ONLY_NOT_EXECUTABLE`. Replay is separately authorized and disabled by
+default. The rootless Podman backend can execute only `JSON_EXACT` fixtures in a
+container; it does not provide a process-level fallback. VM replay and richer
+type-preserving rehydration remain future work.
 When replay is enabled, `replay_require_source_match = true` restricts a
 fixture to the exact source hash recorded when it was captured. Operators may
 set it to false for an explicitly configured cross-version comparison; the

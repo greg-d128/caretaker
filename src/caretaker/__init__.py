@@ -187,6 +187,7 @@ from .postmortem import ExceptionHookManager, PostMortemRecorder
 from .provider import CandidateProposal, OllamaRepairProvider, StaticRepairProvider
 from .regression import (
     DATA_ONLY_NOT_EXECUTABLE,
+    JSON_EXACT_REHYDRATION,
     RegressionCorpus,
     RegressionFixtureIntegrityError,
     RegressionFixtureStore,
@@ -197,6 +198,7 @@ from .replay import (
     ReplayExecutionError,
     ReplayExecutionRequest,
     ReplayExecutionResult,
+    RootlessPodmanReplayBackend,
 )
 from .store import InMemoryRepairStore, SQLiteRepairStore
 from .telemetry import CorrelatedLogHandler
@@ -447,11 +449,13 @@ __all__ = [
     "RegressionFixtureStore",
     "RegressionFixturePolicy",
     "DATA_ONLY_NOT_EXECUTABLE",
+    "JSON_EXACT_REHYDRATION",
     "IsolatedReplayCoordinator",
     "ReplayExecutionBackend",
     "ReplayExecutionError",
     "ReplayExecutionRequest",
     "ReplayExecutionResult",
+    "RootlessPodmanReplayBackend",
     "ReplaySafety",
     "SnapshotStrategy",
     "TimeoutMode",

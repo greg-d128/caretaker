@@ -856,8 +856,9 @@ Future recovery semantics must define how to:
 - reconstruct or deliberately stale pending approvals;
 - verify candidate source and policy/authority bindings again after restart;
 - recover probation and long-term observation state without double counting;
-- provide a production isolated replay backend and safe rehydration for the
-  already implemented data-only persistent regression fixtures;
+- provide a VM-backed replay backend with guest attestation and disposable-state
+  semantics, plus richer type-preserving rehydration for the existing data-only
+  persistent regression fixtures;
 - coordinate the same target across multiple application workers;
 - decide whether an accepted runtime replacement may be reactivated at all.
 

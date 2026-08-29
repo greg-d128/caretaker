@@ -11,9 +11,11 @@ from caretaker import (
     RegressionFixtureStore,
     ReplayExecutionError,
     ReplayExecutionResult,
+    RootlessPodmanReplayBackend,
     ValidationIsolationLevel,
 )
 from caretaker.validation import ValidationBackendCapabilities
+from caretaker.replay_worker import run_payload
 
 
 SOURCE = "def charge(value):\n    return value + 1\n"
@@ -139,3 +141,48 @@ def test_replay_rejects_backend_result_identity_mismatch(tmp_path: Path) -> None
             source=SOURCE,
             backend=backend,
         )
+
+
+def test_replay_worker_executes_only_exact_json_values() -> None:
+    result = run_payload({
+        "source": SOURCE,
+        "entrypoint": "charge",
+        "args": [1],
+        "kwargs": {},
+        "expected": 2,
+    })
+    assert result == {"outcome": "PASSED", "output": 2, "expected": 2}
+
+    rejected = run_payload({
+        "source": SOURCE,
+        "entrypoint": "charge",
+        "args": [{"type": "builtins.str", "value": "<redacted>", "redacted": True}],
+        "kwargs": {},
+        "expected": 2,
+    })
+    assert rejected["outcome"] == "ERROR"
+
+
+def test_rootless_podman_replay_command_has_no_host_workspace_or_network(monkeypatch, tmp_path: Path) -> None:
+    backend = RootlessPodmanReplayBackend("caretaker-replay:test", workspace=tmp_path)
+    captured = {}
+
+    def fake_run(command, *, output_path, timeout_seconds, cwd, env):
+        captured["command"] = command
+        return {"outcome": "PASSED", "output": 2}
+
+    monkeypatch.setattr("caretaker.replay._run_worker_command", fake_run)
+    request = type("Request", (), {
+        "fixture_id": "fixture",
+        "target_id": "app:charge",
+        "entrypoint": "charge",
+        "source": SOURCE,
+        "fixture": {"args": [1], "kwargs": {}, "expected": 2},
+    })()
+    result = backend.execute(request)
+    assert result.outcome == "PASSED"
+    command = captured["command"]
+    assert "--network=none" in command
+    assert "--read-only" in command
+    assert all("/workspace" not in item for item in command)
+    assert "caretaker.replay_worker" in command

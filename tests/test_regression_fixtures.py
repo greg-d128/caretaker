@@ -120,6 +120,28 @@ def test_persistent_fixture_does_not_become_executable_corpus_case(tmp_path: Pat
     assert store.list_summaries()[0]["replay_status"] == DATA_ONLY_NOT_EXECUTABLE
 
 
+def test_fixture_is_not_marked_exact_when_bounding_would_change_values(tmp_path: Path) -> None:
+    policy = RegressionFixturePolicy(
+        maximum_collection_items=1,
+        maximum_text_characters=4,
+    )
+    store = RegressionFixtureStore(tmp_path, policy=policy)
+    envelope = store.record(
+        target_id="app:target",
+        name="case",
+        args=("too-long",),
+        kwargs={},
+        expected=[1, 2],
+        incident_id=None,
+        candidate_id=None,
+        source_function_version=1,
+        source_function_hash="c" * 64,
+        replay_safety="PURE",
+    )
+    assert envelope is not None
+    assert envelope["rehydration_status"] == "INSPECTION_ONLY"
+
+
 def test_logging_policy_parses_regression_fixture_limits(tmp_path: Path) -> None:
     path = tmp_path / "logging.toml"
     path.write_text(
