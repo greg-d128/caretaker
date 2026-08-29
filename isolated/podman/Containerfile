@@ -19,9 +19,9 @@ RUN groupadd --gid 10001 caretaker \
     && chown -R root:root /opt/caretaker \
     && chmod -R go-w /opt/caretaker
 
-COPY ${CARETAKER_WHEEL} /tmp/caretaker.whl
-RUN /opt/caretaker/venv/bin/pip install --no-cache-dir /tmp/caretaker.whl \
-    && rm -f /tmp/caretaker.whl \
+COPY ${CARETAKER_WHEEL} /tmp/
+RUN /opt/caretaker/venv/bin/pip install --no-cache-dir "/tmp/${CARETAKER_WHEEL}" \
+    && rm -f "/tmp/${CARETAKER_WHEEL}" \
     && chown -R root:root /opt/caretaker \
     && chmod -R go-w /opt/caretaker
 
