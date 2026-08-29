@@ -487,6 +487,165 @@ This omission is deliberate:
 
 Future work may export a signed review bundle containing a unified diff, original/replacement hashes, incident/evidence references, policy and authority fingerprints, validation results, and short/long-term acceptance evidence. Applying that bundle to a repository remains a separate authorized workflow.
 
+## Policy-controlled Repair rollout, mirroring, and shadow execution
+
+**Status: Proposed future functionality pending detailed design.**
+
+Caretaker currently supports candidate probation and a narrow
+`PURE_FUNCTION` differential-execution mode. For explicitly confirmed pure
+functions, that mode may run the previous and candidate implementations against
+deep-copied arguments, compare their results, and select an appropriate return or
+open another Repair episode. It is not a general traffic rollout, canary,
+mirroring, or shadow-deployment system.
+
+Future Repair should provide more operator and policy control over how a validated
+candidate is introduced. Potential execution strategies include:
+
+1. **Percentage canary routing**: execute either the deployed version or the
+   candidate for a policy-selected share of eligible calls. The selected version
+   supplies the authoritative result for that call.
+2. **Sampled differential verification**: for a policy-selected share of calls,
+   execute both versions in an isolation model appropriate to the function,
+   compare results and permitted state effects, and return the result selected by
+   explicit policy.
+3. **Original-authoritative shadow mode**: continue returning only the deployed
+   version's result while executing the candidate as non-authoritative shadow
+   work. Candidate output, exceptions, timing, resource use, and Guard behavior
+   become evidence but cannot affect the application result.
+4. **Candidate-authoritative mirrored verification**: return the candidate result
+   only after policy permits candidate authority, while running the previous
+   version on selected calls as a comparison oracle and immediate fallback when
+   its execution remains safe.
+5. **Staged ramp**: progress through operator-defined percentages or observation
+   stages, such as shadow, small canary, larger canary, full candidate traffic,
+   initial acceptance, and long-term acceptance. Advancement may be manual or
+   policy-driven; rollback remains independently governed.
+
+### Proposed policy controls
+
+A future rollout policy should be immutable, fingerprinted, authority-aware, and
+recorded with every routing and comparison decision. It may include:
+
+- execution strategy and which implementation is authoritative;
+- candidate traffic percentage and dual-execution percentage;
+- staged percentage schedule and whether advancement is manual or automatic;
+- stable routing key, randomization method, committed seed, and eligibility
+  rules;
+- minimum calls and elapsed observation time at each stage;
+- permitted failure, mismatch, latency, resource, and Guard-deviation budgets;
+- comparator identity and version, equivalence semantics, and handling of
+  inconclusive comparisons;
+- return selection when one version fails, both fail, or both succeed but differ;
+- maximum additional latency, CPU, memory, provider work, concurrency, and queued
+  shadow executions;
+- synchronous versus asynchronous shadow execution;
+- timeout, cancellation, overload, and unavailable-isolation behavior;
+- state-copy, transaction, sandbox, or application-provided isolation adapter;
+- masking, retention, sampling, and signing requirements for comparative
+  evidence;
+- automatic pause, rollback, escalation, and operator-notification thresholds;
+- whether a stage or percentage change requires signed authority or explicit
+  operator acknowledgement.
+
+Percentages must be bounded from 0 through 100 and have precise semantics. A
+configured percentage should identify its population and time/window scope and
+should not be described as exact across multiple processes unless a
+supervisor-owned coordinator actually provides atomic application-wide routing.
+Stable request, tenant, user, session, or workload routing may be necessary to
+avoid exposing one unit of work to inconsistent versions. Routing keys may be
+sensitive and must follow evidence masking policy.
+
+### Safety and authority requirements
+
+Running both implementations can duplicate database writes, messages, payments,
+filesystem changes, network calls, locks, cache mutations, or other side effects.
+Therefore:
+
+- pure-function dual execution may remain the safest default;
+- idempotent classification alone is not sufficient when two executions are
+  concurrent or externally visible;
+- side-effecting functions require an explicit application-provided transaction,
+  state-copy, mock, sandbox, or shadow adapter that prevents candidate effects
+  from escaping;
+- asynchronous shadow work must not outlive its bounded incident/application
+  context or gain access to stale mutable inputs without explicit policy;
+- candidate execution must remain subject to the same Integrity, capability,
+  validation, Guard, resource, policy-generation, and authority restrictions as
+  ordinary Repair;
+- shadow or canary status cannot grant activation authority, satisfy validation
+  requirements retroactively, or permit a candidate to modify its governing
+  policy;
+- a comparison match is evidence of equivalence for the tested inputs and
+  comparator, not proof of general correctness;
+- the previous implementation is not automatically a correctness oracle and may
+  itself be the failing version;
+- failure to execute or observe the comparison path must be reported as missing
+  evidence rather than counted as agreement.
+
+The authoritative return must be selected before execution according to policy
+and recorded in evidence. Caretaker must not silently switch which implementation
+is authoritative after seeing a preferred output unless that exact fallback rule
+is explicit, validated, and permitted by policy.
+
+### Rollout evidence and operator control
+
+Every rollout should bind evidence to:
+
+- target and function generation;
+- deployed and candidate source/code hashes;
+- candidate, incident, attempt, validation, and rollout identities;
+- effective policy and authority fingerprints/generations;
+- execution strategy, stage, configured percentages, routing decision, and
+  authoritative implementation;
+- input/call identity using masked or stable-token form where required;
+- comparator and isolation-adapter identities;
+- output equivalence, exception, state-effect, timing, resource, and Guard
+  observations for both versions;
+- missing, late, cancelled, truncated, or degraded shadow evidence;
+- stage advancement, pause, rollback, completion, and operator decisions.
+
+The operator console should show current stage, actual observed routing counts,
+coverage, confidence limitations, comparison mismatches, resource cost, Guard
+findings, and the authority required for the next transition. Operators should be
+able to pause, resume, change an authorized percentage, advance, roll back, or
+terminate a rollout without granting arbitrary execution or policy-editing
+capability.
+
+### Persistence and multiprocess coordination
+
+The design must define behavior across restart, worker loss, stale workers, and
+policy changes. Until durable reconstruction exists, restart should fail safe to
+deployed code rather than silently resume a candidate rollout.
+
+Application-wide percentage guarantees require supervisor-owned coordination of
+the target generation, routing counters, active stage, candidate identity,
+policy generation, worker acknowledgements, comparison coverage, and rollback
+state. A process-local implementation must label its percentages and results as
+process-local and must not imply atomic fleet or application-wide rollout.
+
+### Required tests before implementation is claimed
+
+- deterministic boundary tests for 0%, 100%, and intermediate routing;
+- stable-routing tests across repeated calls and declared routing scopes;
+- statistical tolerance tests for randomized routing with recorded seeds;
+- dual-execution return, exception, comparator, and state-effect matrices;
+- proof that shadow results never become authoritative in
+  original-authoritative mode;
+- proof that candidate-authoritative mode cannot begin without required
+  validation and authority;
+- side-effect escape and duplicate-operation tests;
+- overload, timeout, cancellation, and missing-shadow-evidence tests;
+- stage advancement, pause, rollback, and flapping tests;
+- policy/authority change and stale-candidate races at every rollout stage;
+- worker loss, supervisor loss, restart, and multiprocess routing tests;
+- Guard/Integrity precedence and candidate capability-expansion tests;
+- evidence masking, retention, signature, and identity-binding tests;
+- adversarial tests for routing manipulation, comparator manipulation, selective
+  shadow evasion, and attempts to count unavailable comparisons as matches.
+
+This functionality should remain application-scoped. It does not imply host,
+infrastructure, source-control, package-publication, or deployment authority.
+
 ## Repair workflow restart and crash recovery
 
 **Status: Explicitly deferred.**
