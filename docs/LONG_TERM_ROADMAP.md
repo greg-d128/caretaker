@@ -87,6 +87,28 @@ isolated environment, allowing historical incidents to become permanent
 regression cases and releases to answer: “How would this version have handled
 each significant incident previously observed?”
 
+### Audience-aware incident communications
+
+Add policy-governed communication drafts derived from the same canonical
+incident state used for operator inspection. Audience profiles may tailor detail,
+terminology, permitted evidence, redaction, cadence, and required fields for
+operators, engineers, security teams, leadership, support, customers, public
+status readers, or regulated reviewers without changing the underlying facts.
+
+Drafts should distinguish confirmed observation, supported inference,
+hypothesis, and unknown; link statements to evidence; disclose freshness,
+omissions, validation gaps, and attempted/rolled-back interventions; and never
+invent root cause, impact, recovery, or ETA. Draft generation must remain
+separate from delivery authority. External communication should require explicit
+authorized review by default, while narrowly scoped internal automation may be
+enabled by policy.
+
+Start with console or file exports. Add authenticated ticket, chat, email,
+paging, status-page, or regulatory adapters only after redaction, idempotency,
+retry, receipt, correction, and failure semantics are defined. Communication
+must not modify policy, authorize Repair, satisfy validation, close an incident,
+or expand Caretaker authority.
+
 ## Performance and operational maturity
 
 Reduce observation overhead through event fingerprints, representative samples,

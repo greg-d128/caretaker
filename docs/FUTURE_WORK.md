@@ -2,7 +2,7 @@
 
 This document records intentionally incomplete, deferred, or proposed Caretaker capabilities. An item listed here is not an implicit security guarantee and must not be treated as implemented until it has code, policy semantics, tests, and documentation.
 
-Last reviewed: 2026-08-25
+Last reviewed: 2026-08-29
 
 ## Long-term roadmap and multi-scope research
 
@@ -26,6 +26,180 @@ on demonstrated Application Caretaker maturity.
 - **Proposal pending decision**: alternatives are documented, but an implementation choice has not been approved.
 - **Explicitly deferred**: intentionally omitted from the current test/research scope.
 - **General future work**: desirable work that has not yet been scheduled or designed in detail.
+
+## Policy-governed incident communications
+
+**Status: Proposal pending decision.**
+
+During an incident, Caretaker already has or may accumulate useful context:
+observed symptoms, evidence, affected targets, hypotheses, policy and integrity
+state, attempted interventions, validation results, rollback outcomes, and
+remaining uncertainty. A future communication facility could turn that context
+into audience-specific drafts so operators spend less time repeatedly
+reconstructing the same incident for different stakeholders.
+
+This should be a projection of one canonical incident state, not a collection of
+independently generated stories. Every audience view must preserve the same
+underlying facts, timestamps, incident identity, evidence provenance, and
+uncertainty while varying terminology, detail, emphasis, and permitted content.
+
+### Audience policy
+
+Communication policy should define named audience profiles. Deployments may
+create their own profiles; possible built-in examples include:
+
+- on-call operators and incident command;
+- application and platform engineers;
+- security and assurance teams;
+- service owners and business leadership;
+- customer support and account teams;
+- internal users or affected customers;
+- public status-page readers;
+- legal, compliance, or regulatory reviewers.
+
+An audience profile may control:
+
+- permitted incident/evidence classifications and fields;
+- required redaction and masking rules;
+- technical depth, terminology, and maximum length;
+- whether source, stack, host, dependency, customer, repair-candidate, or policy
+  details may be included;
+- whether hypotheses, rejected hypotheses, attempted repairs, validation gaps,
+  or security indicators may be disclosed;
+- required impact, scope, mitigation, next-update, ownership, and contact fields;
+- draft triggers and minimum/maximum update cadence;
+- whether distribution is internal, restricted, customer-facing, public, or
+  regulated;
+- required reviewer role and approval threshold;
+- permitted export or delivery adapters.
+
+Audience policy constrains disclosure; it does not grant incident, Repair,
+policy, or delivery authority. A communication request from another Caretaker,
+application component, LLM, or external system is input, not authorization.
+
+### Canonical incident communication model
+
+A communication snapshot should be a bounded, versioned, data-only object bound
+to at least:
+
+- incident and communication IDs;
+- audience profile ID/version/fingerprint;
+- incident-state revision and evidence cutoff time;
+- source evidence IDs/hashes and Incident Capsule reference when one exists;
+- effective policy and authority generation/fingerprint;
+- current impact and affected-scope assessment;
+- confirmed observations, supported inferences, hypotheses, and unknowns kept as
+  distinct categories;
+- interventions proposed, attempted, rejected, activated, rolled back, or under
+  observation;
+- validation performed, validation omitted or unavailable, and residual risk;
+- freshness, omissions, redactions, truncation, and degraded-evidence state;
+- drafter/model identity and deterministic template/schema version;
+- reviewer, approval, export, correction, and retraction history.
+
+The model must not invent root cause, impact, recovery, safety, or ETA. If the
+evidence does not establish a claim, the draft should say that it is unknown,
+under investigation, inferred, or awaiting validation. A later correction must
+link to the superseded communication rather than silently rewriting history.
+
+### Drafting and delivery authority
+
+Draft generation and message delivery must be separate actions.
+
+- Drafting may be automatic when policy permits because it does not contact an
+  external audience.
+- External, customer, public, legal, or regulatory communication should require
+  explicit authorized review by default.
+- Policy may permit narrowly scoped automatic internal updates for named
+  audiences and deterministic triggers.
+- An LLM may tailor language but cannot select a broader audience, remove required
+  caveats, weaken redaction, authorize delivery, or declare an incident resolved.
+- Delivery adapters must be explicitly configured, narrowly scoped, authenticated,
+  rate-limited, idempotent, and auditable. No generic webhook or messaging token
+  should automatically become authority to publish every communication class.
+- Adapter failure must retain the approved draft and report uncertain delivery;
+  retries must not create duplicate or contradictory updates.
+
+Initial implementation should prefer reviewable exports or console drafts over
+automatic delivery. Ticket, chat, email, paging, status-page, or regulatory
+adapters can be added separately after their authentication, confidentiality,
+idempotency, and failure semantics are defined.
+
+### Security, privacy, and operational constraints
+
+- Apply capture and redaction policy before LLM or template processing, not only
+  before final rendering.
+- Treat logs, exception text, customer data, proposed fixes, external replies,
+  and prior communications as untrusted evidence and possible prompt-injection
+  carriers.
+- Prevent cross-audience leakage: an executive or public summary must not inherit
+  fields allowed only in an operator or security view.
+- Never expose secrets, private keys, credentials, raw sensitive values, or
+  unapproved customer identifiers.
+- Do not publish generated Repair source merely because a repair was attempted;
+  communicate bounded status and evidence appropriate to the audience.
+- Bind drafts to an evidence cutoff and show when the underlying incident has
+  advanced since the draft was produced.
+- Bound input context, output size, draft frequency, retained versions, provider
+  calls, and delivery retries so communication cannot become a new incident.
+- Preserve operator-authored changes and distinguish them from Caretaker-
+  generated text.
+- If evidence integrity, policy, authority, or redaction is degraded, fail closed
+  for external delivery and state the degradation in internal drafts.
+
+### Suggested lifecycle
+
+```text
+incident state changes
+        |
+        v
+canonical communication snapshot
+        |
+        +--> operator/engineering projection
+        +--> security projection
+        +--> leadership/support projection
+        `--> customer/public projection
+                    |
+                    v
+             policy review gate
+                    |
+                    v
+          export or delivery adapter
+                    |
+                    v
+       receipt / failure / correction record
+```
+
+Useful triggers may include incident opened, impact changed, evidence materially
+changed, mitigation attempted, Repair activated, validation failed, rollback
+completed, service restored, long-term acceptance reached, and incident closed.
+Time-based reminders may request an update without manufacturing new content.
+
+### Validation and adversarial testing
+
+Before this capability is described as implemented, tests should demonstrate:
+
+- deterministic projection from one canonical incident state to multiple
+  audience policies without factual contradiction;
+- redaction and field-allowlist enforcement before and after language tailoring;
+- explicit separation of confirmed fact, inference, hypothesis, and unknown;
+- refusal to invent root cause, impact, resolution, or ETA;
+- prompt-injection resistance across incident evidence and prior messages;
+- stale-draft detection after incident-state or policy changes;
+- reviewer/approval enforcement and prevention of unauthorized delivery;
+- correction, supersession, retraction, idempotency, and duplicate suppression;
+- bounded behavior during event storms, provider outage, adapter failure, and
+  repeated delivery failure;
+- no communication path can modify policy, approve Repair, satisfy validation,
+  accept a baseline, close an incident, or expand Caretaker authority;
+- exact provenance from rendered statements back to supporting evidence or an
+  explicit operator-authored assertion.
+
+Caretaker Validation should cover audience projection, schema, redaction,
+approval, and adapter contracts. Caretaker Crucible should challenge cross-
+audience leakage, prompt injection, forged evidence, stale drafts, unauthorized
+dispatch, contradictory summaries, delivery replay, and pressure-induced
+resource exhaustion.
 
 ## Known assurance debt in implemented features
 
