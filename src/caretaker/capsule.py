@@ -156,6 +156,8 @@ def bounded_safe_data(
     if isinstance(value, float):
         return value if math.isfinite(value) else {"type": "float", "value": repr(value)}
     if isinstance(value, str):
+        if _integrity_text_name(name) and re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", value):
+            return value
         return _redact_text(value, policy)
     if isinstance(value, (UUID, Path)):
         return str(value)
@@ -356,6 +358,99 @@ class IncidentCapsuleStore:
             previous_digest = str(envelope["integrity"]["content_sha256"])
         return envelope
 
+    def list_summaries(
+        self,
+        *,
+        incident_id: UUID | str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Return bounded read-only summaries, including invalid capsules."""
+
+        parsed_incident = UUID(str(incident_id)) if incident_id else None
+        capsule_ids: set[UUID] = set()
+        for path in self.directory.glob("*.r*.json"):
+            match = re.fullmatch(r"([0-9a-fA-F-]{36})\.r\d+\.json", path.name)
+            if match is None:
+                continue
+            try:
+                capsule_ids.add(UUID(match.group(1)))
+            except ValueError:
+                continue
+
+        summaries: list[dict[str, Any]] = []
+        for capsule_id in capsule_ids:
+            try:
+                envelope = self.load(capsule_id)
+                payload = envelope["capsule"]
+                current_incident = str(payload.get("incident_id") or "")
+                if parsed_incident is not None and current_incident != str(parsed_incident):
+                    continue
+                integrity = envelope.get("integrity") or {}
+                summaries.append({
+                    "capsule_id": str(capsule_id),
+                    "incident_id": current_incident or None,
+                    "run_id": payload.get("run_id"),
+                    "revision": int(payload.get("revision") or 0),
+                    "created_at": payload.get("created_at"),
+                    "artifact_count": len(payload.get("artifacts") or ()),
+                    "communication_count": len(payload.get("communications") or ()),
+                    "policy_fingerprint": payload.get("policy_fingerprint"),
+                    "authority_policy_generation": payload.get("authority_policy_generation"),
+                    "content_sha256": integrity.get("content_sha256"),
+                    "signature_state": integrity.get("signature_state") or "UNSIGNED",
+                    "integrity_status": "VERIFIED",
+                    "incident_state": _summary_state(payload.get("incident_state")),
+                })
+            except Exception as exc:
+                summaries.append({
+                    "capsule_id": str(capsule_id),
+                    "incident_id": None,
+                    "revision": None,
+                    "created_at": None,
+                    "artifact_count": None,
+                    "communication_count": None,
+                    "integrity_status": "INVALID",
+                    "integrity_error": f"{type(exc).__name__}: {exc}",
+                })
+        summaries.sort(
+            key=lambda item: (
+                str(item.get("created_at") or ""),
+                str(item.get("capsule_id") or ""),
+            ),
+            reverse=True,
+        )
+        return summaries[: max(1, int(limit))]
+
+    def load_artifact(self, artifact_id: UUID | str) -> dict[str, Any]:
+        """Load and verify a side artifact referenced by a capsule."""
+
+        parsed = UUID(str(artifact_id))
+        path = self.artifact_directory / f"{parsed}.json"
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+        artifact = envelope.get("artifact")
+        integrity = envelope.get("integrity")
+        if not isinstance(artifact, Mapping) or not isinstance(integrity, Mapping):
+            raise IncidentCapsuleIntegrityError("artifact envelope is missing artifact/integrity objects")
+        expected = str(integrity.get("content_sha256") or "")
+        if not expected or content_hash(artifact) != expected:
+            raise IncidentCapsuleIntegrityError(f"artifact content hash is invalid at {path}")
+        if str(artifact.get("artifact_id")) != str(parsed):
+            raise IncidentCapsuleIntegrityError(f"artifact identity is invalid at {path}")
+        capsule_id = UUID(str(artifact.get("capsule_id")))
+        capsule = self.load(capsule_id)
+        references = capsule["capsule"].get("artifacts") or ()
+        reference = next(
+            (
+                item
+                for item in references
+                if isinstance(item, Mapping) and str(item.get("artifact_id")) == str(parsed)
+            ),
+            None,
+        )
+        if not isinstance(reference, Mapping) or reference.get("content_sha256") != expected:
+            raise IncidentCapsuleIntegrityError("artifact is not referenced by the verified capsule revision")
+        return envelope
+
     def attach_artifact(
         self,
         incident_id: UUID | str,
@@ -490,6 +585,10 @@ class IncidentCapsuleStore:
         communications: tuple[Mapping[str, Any], ...],
         policy: IncidentCapsulePolicy,
     ) -> dict[str, Any]:
+        if len(artifacts) > policy.maximum_artifacts:
+            raise IncidentCapsuleError("Incident Capsule artifact limit has been reached")
+        if len(communications) > policy.maximum_communications:
+            raise IncidentCapsuleError("Incident Capsule communication limit has been reached")
         old_payload = dict(previous["capsule"])
         return self._create_revision(
             capsule_id=UUID(str(old_payload["capsule_id"])),
@@ -534,8 +633,8 @@ class IncidentCapsuleStore:
             "authority_policy_generation": authority_policy_generation,
             "authority_policy_fingerprint": authority_policy_fingerprint,
             "incident_state": bounded_safe_data(incident_state, policy=policy),
-            "artifacts": bounded_safe_data(artifacts, policy=policy),
-            "communications": bounded_safe_data(communications, policy=policy),
+            "artifacts": _bounded_artifact_references(artifacts, policy),
+            "communications": _bounded_communication_records(communications, policy),
         }
         digest = content_hash(payload)
         signature: Any | None = None
@@ -638,6 +737,74 @@ def _incident_state(incident: Any, policy: IncidentCapsulePolicy) -> Mapping[str
     return dict(raw)
 
 
+def _summary_state(value: Any) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        return {"value": value}
+    keys = (
+        "trigger",
+        "target",
+        "failure",
+        "fingerprint",
+        "capture_reason",
+    )
+    return {key: value[key] for key in keys if key in value}
+
+
+def _bounded_artifact_references(
+    values: tuple[Mapping[str, Any], ...],
+    policy: IncidentCapsulePolicy,
+) -> list[Any]:
+    fields = (
+        "artifact_id",
+        "kind",
+        "created_at",
+        "content_sha256",
+        "relative_path",
+        "source",
+        "operator_identity",
+        "metadata",
+    )
+    result = []
+    for value in values:
+        if not isinstance(value, Mapping):
+            result.append(bounded_safe_data(value, policy=policy))
+            continue
+        result.append({
+            key: bounded_safe_data(value[key], policy=policy, name=key)
+            for key in fields
+            if key in value
+        })
+    return result
+
+
+def _bounded_communication_records(
+    values: tuple[Mapping[str, Any], ...],
+    policy: IncidentCapsulePolicy,
+) -> list[Any]:
+    fields = (
+        "communication_id",
+        "recorded_at",
+        "direction",
+        "channel",
+        "audience_profile_id",
+        "status",
+        "content_sha256",
+        "source",
+        "metadata",
+    )
+    result = []
+    for value in values:
+        if not isinstance(value, Mapping):
+            result.append(bounded_safe_data(value, policy=policy))
+            continue
+        result.append({
+            key: bounded_safe_data(value[key], policy=policy, name=key)
+            for key in fields
+            if key in value
+        })
+    return result
+
+
 def _bounded_artifact_content(value: Any, policy: IncidentCapsulePolicy) -> Any:
     if isinstance(value, str):
         return _redact_text(value, policy)
@@ -668,6 +835,16 @@ def _sensitive_name(name: str | None) -> bool:
     if not name:
         return False
     return any(token in name.lower() for token in ("password", "passwd", "token", "secret", "authorization", "api_key", "apikey"))
+
+
+def _integrity_text_name(name: str | None) -> bool:
+    if not name:
+        return False
+    normalized = name.casefold().replace("-", "_")
+    return normalized.endswith(("_sha256", "_fingerprint")) or normalized in {
+        "sha256",
+        "fingerprint",
+    }
 
 
 def _bounded_text(value: str, limit: int) -> str:

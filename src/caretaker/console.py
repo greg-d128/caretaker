@@ -105,6 +105,52 @@ class CaretakerConsoleApp(App):
     }
     #attention-actions { height: 4; padding: 0 1; align-vertical: middle; }
     #attention-actions Button { width: auto; min-width: 16; margin-left: 1; }
+    #incident-capsule-help, #incident-capsule-status {
+        height: auto;
+        padding: 0 2;
+        color: $text-muted;
+    }
+    #incident-capsule-toolbar {
+        height: 4;
+        padding: 0 1;
+        align-vertical: middle;
+    }
+    #incident-capsule-filter { width: 1fr; }
+    #incident-capsule-toolbar Button { width: auto; min-width: 12; margin-left: 1; }
+    #incident-capsule-split {
+        height: 1fr;
+        min-height: 0;
+        grid-size: 2 1;
+        grid-columns: 3fr 2fr;
+        grid-rows: 1fr;
+        grid-gutter: 1;
+    }
+    .incident-capsule-pane {
+        height: 1fr;
+        min-height: 0;
+        border: solid $surface-lighten-2;
+    }
+    #incident-capsule-output { height: 1fr; }
+    #incident-capsule-revision-actions {
+        height: 4;
+        padding: 0 1;
+        align-vertical: middle;
+    }
+    #incident-capsule-revision-actions Input { width: 1fr; }
+    #incident-capsule-revision-actions Button { width: auto; min-width: 14; margin-left: 1; }
+    #incident-artifact-title {
+        height: 3;
+        padding: 1 2;
+        text-style: bold;
+        border-top: solid $surface-lighten-2;
+    }
+    #incident-artifact-table { height: 10; }
+    #incident-capsule-detail-title {
+        height: 3;
+        padding: 1 2;
+        text-style: bold;
+        border-bottom: solid $surface-lighten-2;
+    }
     #overview-details {
         height: 6;
         padding: 1 2;
@@ -426,6 +472,9 @@ class CaretakerConsoleApp(App):
         self._investigation_records: list[dict[str, Any]] = []
         self._selected_investigation_record: dict[str, Any] | None = None
         self._selected_log_record: dict[str, Any] | None = None
+        self._capsule_records: list[dict[str, Any]] = []
+        self._selected_capsule: dict[str, Any] | None = None
+        self._incident_artifact_records: list[dict[str, Any]] = []
         self._selected_target: str | None = None
         self._attention_records: list[dict[str, Any]] = []
         self._selected_attention_record: dict[str, Any] | None = None
@@ -467,6 +516,39 @@ class CaretakerConsoleApp(App):
                         with Horizontal(id="attention-actions"):
                             yield Button("Open related view", id="attention-open", disabled=True, variant="primary")
                             yield Button("Investigate evidence", id="attention-investigate", disabled=True)
+            with TabPane("Incident Explorer", id="incidents"):
+                yield Static(
+                    "Browse immutable Incident Capsule revisions and their verified side artifacts. "
+                    "Selection and inspection are read-only; integrity failures remain visible and are never treated as valid evidence.",
+                    id="incident-capsule-help",
+                )
+                with Horizontal(id="incident-capsule-toolbar"):
+                    yield Input(
+                        placeholder="Filter capsules: incident UUID, target, trigger, integrity:invalid",
+                        id="incident-capsule-filter",
+                    )
+                    yield Button("Refresh", id="incident-capsule-refresh", variant="primary")
+                yield Static("Incident Capsules not loaded", id="incident-capsule-status")
+                with Grid(id="incident-capsule-split"):
+                    with Vertical(classes="incident-capsule-pane"):
+                        yield Static("Incident Capsules", classes="context-pane-title")
+                        table = DataTable(id="incident-capsule-table")
+                        table.cursor_type = "row"
+                        table.add_columns(
+                            "#", "Incident", "Revision", "Created", "Artifacts", "Comms", "Integrity"
+                        )
+                        yield table
+                    with Vertical(classes="incident-capsule-pane"):
+                        yield Static("Select an Incident Capsule", id="incident-capsule-detail-title")
+                        with Horizontal(id="incident-capsule-revision-actions"):
+                            yield Input(placeholder="Revision (blank = latest)", id="incident-capsule-revision")
+                            yield Button("Load revision", id="incident-capsule-load", disabled=True)
+                        yield RichLog(id="incident-capsule-output", wrap=False, markup=True)
+                        yield Static("Side artifacts", id="incident-artifact-title")
+                        table = DataTable(id="incident-artifact-table")
+                        table.cursor_type = "row"
+                        table.add_columns("#", "Kind", "Created", "Source", "Content hash")
+                        yield table
             with TabPane("Overview", id="overview"):
                 yield Static(
                     "Registered functions and their operational state. Problem states are listed first; "
@@ -1513,6 +1595,32 @@ class CaretakerConsoleApp(App):
             # selection event for one of its former rows.
             return
 
+        if event.data_table.id == "incident-capsule-table":
+            if not row:
+                return
+            try:
+                record = [
+                    item for item in self._capsule_records
+                    if self._capsule_matches_filter(
+                        item,
+                        self.query_one("#incident-capsule-filter", Input).value,
+                    )
+                ][int(row[0]) - 1]
+            except (TypeError, ValueError, IndexError):
+                return
+            await self._select_incident_capsule(record)
+            return
+
+        if event.data_table.id == "incident-artifact-table":
+            if not row:
+                return
+            try:
+                record = self._incident_artifact_records[int(row[0]) - 1]
+            except (TypeError, ValueError, IndexError):
+                return
+            await self._select_incident_artifact(record)
+            return
+
         if event.data_table.id == "attention-table":
             if not row:
                 return
@@ -2392,6 +2500,13 @@ class CaretakerConsoleApp(App):
                 {"error": f"Unable to refresh behavior snapshots: {type(exc).__name__}: {exc}"},
             )
         await self.refresh_logs()
+        try:
+            await self.refresh_incident_capsules()
+        except Exception as exc:
+            self._write_json(
+                "#incident-capsule-output",
+                {"error": f"Unable to refresh Incident Capsules: {type(exc).__name__}: {exc}"},
+            )
         self._refresh_attention()
         self._update_data_status()
 
@@ -2409,6 +2524,8 @@ class CaretakerConsoleApp(App):
             self._apply_behavior_filter()
         elif event.input.id == "repair-filter":
             self._apply_repair_filter()
+        elif event.input.id == "incident-capsule-filter":
+            self._apply_incident_capsule_filter()
         elif event.input.id in {"policy-target", "policy-path", "policy-value", "policy-duration", "policy-reason"}:
             self._policy_preview = None
             self.query_one("#policy-confirm", Checkbox).value = False
@@ -2632,6 +2749,164 @@ class CaretakerConsoleApp(App):
             detail.write("No log records match the current filter.")
         else:
             detail.write("No log records were returned.")
+
+    @staticmethod
+    def _capsule_matches_filter(record: dict[str, Any], expression: str) -> bool:
+        tokens = expression.casefold().split()
+        if not tokens:
+            return True
+        searchable = json.dumps(record, default=str).casefold()
+        for token in tokens:
+            if token == "integrity:invalid":
+                if str(record.get("integrity_status") or "").casefold() != "invalid":
+                    return False
+            elif ":" not in token and token not in searchable:
+                return False
+            elif ":" in token:
+                field, value = token.split(":", 1)
+                if field == "integrity":
+                    if value not in str(record.get("integrity_status") or "").casefold():
+                        return False
+                else:
+                    aliases = {"incident": "incident_id", "target": "incident_state"}
+                    field_value = str(record.get(aliases.get(field, field)) or "").casefold()
+                    if value not in field_value and value not in searchable:
+                        return False
+        return True
+
+    def _apply_incident_capsule_filter(self) -> None:
+        expression = self.query_one("#incident-capsule-filter", Input).value
+        displayed = [
+            record for record in self._capsule_records
+            if self._capsule_matches_filter(record, expression)
+        ]
+        table = self.query_one("#incident-capsule-table", DataTable)
+        table.clear()
+        for index, record in enumerate(displayed, start=1):
+            created = str(record.get("created_at") or "")
+            integrity = str(record.get("integrity_status") or "-")
+            incident = self._compact_log_text(record.get("incident_id"), limit=12) or "-"
+            table.add_row(
+                index,
+                incident,
+                str(record.get("revision") or "-") if integrity != "INVALID" else "-",
+                created[:19].replace("T", " ") if created else "-",
+                str(record.get("artifact_count") if record.get("artifact_count") is not None else "-"),
+                str(record.get("communication_count") if record.get("communication_count") is not None else "-"),
+                integrity,
+            )
+        self.query_one("#incident-capsule-status", Static).update(
+            f"Showing {len(displayed)}/{len(self._capsule_records)} capsules | "
+            "Verified rows passed hash and revision-chain checks"
+        )
+
+    async def refresh_incident_capsules(self) -> None:
+        try:
+            response = await self._request("incident-capsule-list", limit=200)
+        except Exception as exc:
+            self._capsule_records = []
+            self._selected_capsule = None
+            self._incident_artifact_records = []
+            self.query_one("#incident-capsule-table", DataTable).clear()
+            self.query_one("#incident-artifact-table", DataTable).clear()
+            self.query_one("#incident-capsule-revision", Input).value = ""
+            self.query_one("#incident-capsule-load", Button).disabled = True
+            self.query_one("#incident-capsule-status", Static).update(
+                f"Incident Capsules unavailable: {type(exc).__name__}: {exc}"
+            )
+            self.query_one("#incident-capsule-detail-title", Static).update(
+                "Select an Incident Capsule"
+            )
+            self._write_json("#incident-capsule-output", {"error": str(exc)})
+            return
+        self._capsule_records = [
+            dict(item) for item in response.get("capsules", ()) if isinstance(item, dict)
+        ]
+        self._selected_capsule = None
+        self._incident_artifact_records = []
+        self.query_one("#incident-artifact-table", DataTable).clear()
+        self.query_one("#incident-capsule-revision", Input).value = ""
+        self.query_one("#incident-capsule-load", Button).disabled = True
+        self.query_one("#incident-capsule-detail-title", Static).update(
+            "Select an Incident Capsule"
+        )
+        self._write_json(
+            "#incident-capsule-output",
+            {"message": "Select an Incident Capsule to inspect its verified envelope."},
+        )
+        self._apply_incident_capsule_filter()
+
+    async def _select_incident_capsule(
+        self,
+        record: dict[str, Any],
+        *,
+        revision: int | None = None,
+    ) -> None:
+        self._selected_capsule = record
+        incident_id = str(record.get("incident_id") or "") or None
+        self._set_operator_context(incident=incident_id)
+        self._incident_artifact_records = []
+        self.query_one("#incident-artifact-table", DataTable).clear()
+        capsule_id = str(record.get("capsule_id") or "")
+        if revision is None:
+            self.query_one("#incident-capsule-revision", Input).value = ""
+        self.query_one("#incident-capsule-load", Button).disabled = True
+        if str(record.get("integrity_status") or "").upper() == "INVALID":
+            self.query_one("#incident-capsule-detail-title", Static).update(
+                f"Invalid Incident Capsule | {capsule_id}"
+            )
+            self._write_json("#incident-capsule-output", record)
+            return
+        try:
+            request: dict[str, Any] = {"capsule_id": capsule_id}
+            if revision is not None:
+                request["revision"] = revision
+            response = await self._request("incident-capsule-get", **request)
+            envelope = response.get("envelope") or {}
+            payload = envelope.get("capsule") or {}
+            self.query_one("#incident-capsule-load", Button).disabled = False
+            self.query_one("#incident-capsule-detail-title", Static).update(
+                f"Verified Incident Capsule | revision {payload.get('revision', '-')}"
+            )
+            self._write_json("#incident-capsule-output", envelope)
+            self._incident_artifact_records = [
+                dict(item) for item in payload.get("artifacts", ()) if isinstance(item, dict)
+            ]
+            artifact_table = self.query_one("#incident-artifact-table", DataTable)
+            for index, artifact in enumerate(self._incident_artifact_records, start=1):
+                created = str(artifact.get("created_at") or "")
+                artifact_table.add_row(
+                    index,
+                    str(artifact.get("kind") or "-"),
+                    created[:19].replace("T", " ") if created else "-",
+                    self._compact_log_text(artifact.get("source"), limit=20) or "-",
+                    self._compact_log_text(artifact.get("content_sha256"), limit=12) or "-",
+                )
+        except Exception as exc:
+            self.query_one("#incident-capsule-detail-title", Static).update(
+                f"Unable to load Incident Capsule | {capsule_id}"
+            )
+            self._write_json(
+                "#incident-capsule-output",
+                {"error": f"{type(exc).__name__}: {exc}", "capsule_id": capsule_id},
+            )
+
+    async def _select_incident_artifact(self, record: dict[str, Any]) -> None:
+        artifact_id = str(record.get("artifact_id") or "")
+        try:
+            response = await self._request(
+                "incident-capsule-artifact",
+                artifact_id=artifact_id,
+            )
+            self.query_one("#incident-capsule-detail-title", Static).update(
+                f"Verified side artifact | {record.get('kind') or artifact_id}"
+            )
+            self._write_json("#incident-capsule-output", response.get("envelope") or response)
+        except Exception as exc:
+            self._write_json(
+                "#incident-capsule-output",
+                {"error": f"{type(exc).__name__}: {exc}", "artifact_id": artifact_id},
+            )
 
     async def refresh_logs(self) -> None:
         records: list[dict[str, Any]]
@@ -3156,6 +3431,21 @@ class CaretakerConsoleApp(App):
                     f"Saved operator view artifact {artifact.get('artifact_id', '-')}",
                     title="Incident Capsule updated",
                     timeout=10,
+                )
+                return
+            if button == "incident-capsule-refresh":
+                await self.refresh_incident_capsules()
+                return
+            if button == "incident-capsule-load":
+                if self._selected_capsule is None:
+                    raise ValueError("Select an Incident Capsule first")
+                raw_revision = self.query_one("#incident-capsule-revision", Input).value.strip()
+                revision = int(raw_revision) if raw_revision else None
+                if revision is not None and revision <= 0:
+                    raise ValueError("Revision must be a positive integer")
+                await self._select_incident_capsule(
+                    self._selected_capsule,
+                    revision=revision,
                 )
                 return
             if button == "context-clear":

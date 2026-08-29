@@ -42,6 +42,12 @@ the report text. If no runtime-created capsule is available, the supervisor
 creates a placeholder capsule containing the incident context and references to
 matching persisted log records.
 
+The **Incident Explorer** lists capsule revisions and displays their verified
+envelopes. Selecting a capsule exposes its side-artifact references; selecting
+an artifact loads and verifies its content and its reference from the capsule.
+Invalid hash or revision-chain data is displayed as invalid evidence rather than
+being presented as a valid capsule.
+
 This action is evidence collection only. It cannot approve Repair, satisfy
 validation, change policy, close an incident, or broaden authority. The local
 peer identity is recorded as evidence and is not treated as independent human
@@ -61,8 +67,7 @@ bindings.
 
 ## Remaining work
 
-Incident Capsules do not yet provide the complete Incident Explorer, replay
-workflow, policy-specific capture levels for every application state source, or
-automatic communication drafting and delivery. Those remain future work and
-must be implemented with isolated replay, explicit authority, and adversarial
-tests.
+Incident Capsules do not yet provide isolated replay, policy-specific capture
+levels for every application state source, or automatic communication drafting
+and delivery. Those remain future work and must be implemented with isolated
+replay, explicit authority, and adversarial tests.

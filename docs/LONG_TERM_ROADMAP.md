@@ -76,11 +76,11 @@ captured application or capsule code.
 
 ### Incident Explorer and replay
 
-Provide a separate explorer with incident, timeline, failure, call-tree,
-function-state, variables, threads, source, evidence, repair, validation,
-system-state, and integrity views. It must distinguish complete, partial,
-interrupted, corrupt, redacted, truncated, and missing data and display capsule
-integrity, source-hash, policy, and redaction status.
+Extend the initial read-only explorer with incident, timeline, failure,
+call-tree, function-state, variables, threads, source, evidence, repair,
+validation, system-state, and integrity views. It must distinguish complete,
+partial, interrupted, corrupt, redacted, truncated, and missing data and display
+capsule integrity, source-hash, policy, and redaction status.
 
 Reconstruction and inspection remain separate. Replay must occur only in an
 isolated environment, allowing historical incidents to become permanent

@@ -360,6 +360,37 @@ def main(argv: list[str] | None = None) -> int:
                     },
                     "workers": [asdict(item) for item in supervisor.workers.all()] if supervisor else [],
                     "runtime": application_runtime}
+        if command == "incident-capsule-list":
+            raw_incident_id = str(request.get("incident_id") or "").strip() or None
+            incident_id = UUID(raw_incident_id) if raw_incident_id else None
+            limit = max(1, min(int(request.get("limit", 100)), 200))
+            return {
+                "ok": True,
+                "capsules": capsule_store.list_summaries(
+                    incident_id=incident_id,
+                    limit=limit,
+                ),
+            }
+        if command == "incident-capsule-get":
+            raw_capsule_id = str(request.get("capsule_id") or "").strip()
+            if not raw_capsule_id:
+                raise ValueError("incident-capsule-get requires capsule_id")
+            revision_value = request.get("revision")
+            revision = int(revision_value) if revision_value is not None else None
+            return {
+                "ok": True,
+                "envelope": capsule_store.load(raw_capsule_id, revision=revision),
+                "integrity_verified": True,
+            }
+        if command == "incident-capsule-artifact":
+            raw_artifact_id = str(request.get("artifact_id") or "").strip()
+            if not raw_artifact_id:
+                raise ValueError("incident-capsule-artifact requires artifact_id")
+            return {
+                "ok": True,
+                "envelope": capsule_store.load_artifact(raw_artifact_id),
+                "integrity_verified": True,
+            }
         if command == "incident-capsule-attach-view":
             raw_incident_id = str(request.get("incident_id") or "").strip()
             if not raw_incident_id:

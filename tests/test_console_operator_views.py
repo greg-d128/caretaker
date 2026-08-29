@@ -729,6 +729,68 @@ def test_console_saves_current_operator_view_to_selected_incident_capsule(tmp_pa
     asyncio.run(exercise())
 
 
+def test_console_incident_explorer_loads_verified_capsule_and_side_artifact(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+    incident_id = "00000000-0000-0000-0000-000000000001"
+    capsule_id = "00000000-0000-0000-0000-000000000011"
+    artifact_id = "00000000-0000-0000-0000-000000000021"
+
+    async def exercise() -> None:
+        async with app.run_test(size=(120, 55)):
+            requests = []
+
+            async def request(command: str, **payload):
+                requests.append((command, payload))
+                if command == "incident-capsule-list":
+                    return {"ok": True, "capsules": [{
+                        "capsule_id": capsule_id,
+                        "incident_id": incident_id,
+                        "revision": 2,
+                        "created_at": "2026-08-29T12:00:00+00:00",
+                        "artifact_count": 1,
+                        "communication_count": 0,
+                        "integrity_status": "VERIFIED",
+                    }]}
+                if command == "incident-capsule-get":
+                    return {"ok": True, "integrity_verified": True, "envelope": {
+                        "capsule": {
+                            "capsule_id": capsule_id,
+                            "incident_id": incident_id,
+                            "revision": 2,
+                            "artifacts": [{
+                                "artifact_id": artifact_id,
+                                "kind": "operator-view",
+                                "created_at": "2026-08-29T12:01:00+00:00",
+                                "source": "caretaker-console",
+                                "content_sha256": "a" * 64,
+                            }],
+                            "communications": [],
+                        },
+                        "integrity": {"content_sha256": "b" * 64},
+                    }}
+                if command == "incident-capsule-artifact":
+                    return {"ok": True, "integrity_verified": True, "envelope": {
+                        "artifact": {"artifact_id": artifact_id, "content": {"view": "saved"}},
+                        "integrity": {"content_sha256": "a" * 64},
+                    }}
+                raise AssertionError(command)
+
+            app._request = request  # type: ignore[method-assign]
+            await app.refresh_incident_capsules()
+            assert app.query_one("#incident-capsule-table", DataTable).row_count == 1
+            await app._select_incident_capsule(app._capsule_records[0])
+            assert app.query_one("#incident-artifact-table", DataTable).row_count == 1
+            await app._select_incident_artifact(app._incident_artifact_records[0])
+            assert requests == [
+                ("incident-capsule-list", {"limit": 200}),
+                ("incident-capsule-get", {"capsule_id": capsule_id}),
+                ("incident-capsule-artifact", {"artifact_id": artifact_id}),
+            ]
+            assert app._context_incident == incident_id
+
+    asyncio.run(exercise())
+
+
 def test_consequential_console_actions_fail_closed(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 

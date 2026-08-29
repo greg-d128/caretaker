@@ -38,9 +38,10 @@ bounded incident state, side-artifact references, and a communication-history
 list reserved for future communication records. The console can save its
 current incident-focused view as a redacted `operator-view` side artifact.
 
-This initial slice does not implement the Incident Explorer, isolated replay,
-full policy-specific capture of every application state source, communication
-drafting, or delivery. Capsule viewing remains read-only evidence inspection;
+The initial Explorer provides read-only capsule, revision, integrity, and
+side-artifact inspection. Isolated replay, full policy-specific capture of
+every application state source, communication drafting, and delivery remain
+future work. Capsule viewing remains read-only evidence inspection;
 operator artifacts cannot authorize Repair, satisfy validation, modify policy,
 close incidents, or expand Caretaker authority. See
 [`INCIDENT_CAPSULES.md`](INCIDENT_CAPSULES.md) for the current contract.

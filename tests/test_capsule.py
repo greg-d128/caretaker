@@ -71,6 +71,12 @@ def test_capsule_is_bounded_data_only_and_communications_are_revisioned(tmp_path
     assert artifact["artifact"]["content"]["view"] == "token=<redacted>"
     assert artifact["artifact"]["content"]["long"].endswith("…")
     assert store.verify(second) == (True, None)
+    summaries = store.list_summaries()
+    assert summaries[0]["integrity_status"] == "VERIFIED"
+    assert summaries[0]["revision"] == 3
+    assert store.load(second["capsule"]["capsule_id"], revision=1)["capsule"]["revision"] == 1
+    loaded_artifact = store.load_artifact(artifact_result["artifact"]["artifact"]["artifact_id"])
+    assert loaded_artifact["artifact"]["artifact_id"] == artifact_result["artifact"]["artifact"]["artifact_id"]
 
 
 def test_capsule_tampering_is_detected_and_disabled_policy_fails_closed(tmp_path: Path) -> None:
@@ -84,6 +90,7 @@ def test_capsule_tampering_is_detected_and_disabled_policy_fails_closed(tmp_path
 
     with pytest.raises(IncidentCapsuleIntegrityError, match="content hash is invalid"):
         store.load(envelope["capsule"]["capsule_id"])
+    assert store.list_summaries()[0]["integrity_status"] == "INVALID"
 
     disabled = IncidentCapsuleStore(
         tmp_path / "disabled",
