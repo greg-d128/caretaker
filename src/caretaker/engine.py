@@ -1780,6 +1780,9 @@ class RepairEngine:
                 attempt,
                 stage=RepairAttemptStage.SCORING,
                 validation_results=report.checks,
+                validation_backend_name=report.backend_name,
+                validation_isolation_level=report.isolation_level,
+                validation_backend_details=dict(report.backend_details or {}),
                 score_card=score,
                 outcome=(
                     RepairAttemptOutcome.PENDING

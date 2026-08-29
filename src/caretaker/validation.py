@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Protocol
@@ -51,6 +51,7 @@ class ValidationReport:
     backend_name: str = "process"
     isolation_level: ValidationIsolationLevel = ValidationIsolationLevel.PROCESS
     backend_available: bool = True
+    backend_details: dict[str, Any] = field(default_factory=dict)
     requires_operator_approval: bool = False
     proposal_only: bool = False
 
@@ -125,6 +126,30 @@ _FUNCTION_VALIDATION_CHECKS = frozenset({
     ValidationCheckKind.PERFORMANCE,
 })
 
+# The supervisor owns these values.  The worker may echo them, but it must not
+# choose or reinterpret them.  Keeping the binding fields explicit makes the
+# process/container/VM worker protocol auditable and lets the parent fail
+# closed when a result belongs to a different validation transaction.
+VALIDATION_PROTOCOL_VERSION = 1
+_VALIDATION_BINDING_FIELDS = (
+    "protocol_version",
+    "validation_transaction_id",
+    "candidate_artifact_hash",
+    "base_source_hash",
+    "target_id",
+    "entrypoint",
+    "module_name",
+    "qualified_name",
+    "signature_text",
+    "callable_kind",
+    "policy_fingerprint",
+    "authority_policy_generation",
+    "authority_policy_fingerprint",
+    "requested_isolation",
+    "backend_name",
+    "mandatory_checks",
+)
+
 
 class SubprocessValidationBackend:
     def __init__(self, python_executable: str | None = None) -> None:
@@ -197,6 +222,7 @@ class SubprocessValidationBackend:
             backend_name=capabilities.name,
             isolation_level=capabilities.isolation_level,
             backend_available=False,
+            backend_details=dict(capabilities.details or {}),
             requires_operator_approval=requires_approval,
             proposal_only=proposal_only,
         )
@@ -227,6 +253,7 @@ class SubprocessValidationBackend:
                 hard_disqualifications=(check.summary,),
                 backend_name=self.capabilities().name,
                 isolation_level=self.capabilities().isolation_level,
+                backend_details=dict(self.capabilities().details or {}),
             )
 
         source = candidate.artifact.files[0].content
@@ -257,6 +284,25 @@ class SubprocessValidationBackend:
             if target.policy.validation.run_generated_tests
             else ()
         )
+        policy_fingerprint = target.policy.snapshot().fingerprint
+        validation_binding = {
+            "protocol_version": VALIDATION_PROTOCOL_VERSION,
+            "validation_transaction_id": str(uuid4()),
+            "candidate_artifact_hash": candidate.artifact.artifact_hash,
+            "base_source_hash": candidate.base_source_hash,
+            "target_id": target.target_id,
+            "entrypoint": candidate.artifact.entrypoint,
+            "module_name": target.source.module_name,
+            "qualified_name": target.source.qualified_name,
+            "signature_text": target.contract.signature_text,
+            "callable_kind": target.contract.kind.name,
+            "policy_fingerprint": policy_fingerprint,
+            "authority_policy_generation": candidate.authority_policy_generation,
+            "authority_policy_fingerprint": candidate.authority_policy_fingerprint,
+            "requested_isolation": target.policy.validation.minimum_isolation.name,
+            "backend_name": capabilities.name,
+            "mandatory_checks": sorted(kind.name for kind in _FUNCTION_VALIDATION_CHECKS),
+        }
         payload = {
             "mode": "function",
             "source": source,
@@ -273,9 +319,19 @@ class SubprocessValidationBackend:
             "generated_tests": generated_tests,
             "run_registered_tests": target.policy.validation.run_registered_tests,
             "run_generated_tests": target.policy.validation.run_generated_tests,
+            **validation_binding,
         }
         result = self._run_worker(payload, timeout_seconds=timeout_seconds)
         protocol_findings: list[str] = []
+        for field in _VALIDATION_BINDING_FIELDS:
+            if field not in result:
+                protocol_findings.append(
+                    f"validation worker omitted binding field {field!r}"
+                )
+            elif result[field] != validation_binding[field]:
+                protocol_findings.append(
+                    f"validation worker binding mismatch for {field!r}"
+                )
         raw_checks = result.get("checks", [])
         checks_list: list[ValidationCheckResult] = []
         if not isinstance(raw_checks, (list, tuple)):
@@ -366,6 +422,7 @@ class SubprocessValidationBackend:
             backend_name=capabilities.name,
             isolation_level=capabilities.isolation_level,
             backend_available=True,
+            backend_details=dict(capabilities.details or {}),
         )
 
     def validate_auxiliary(

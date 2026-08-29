@@ -615,6 +615,9 @@ class RepairAttempt:
     error_message: str | None = None
     authority_policy_generation: int = 0
     authority_policy_fingerprint: str = "unconfigured"
+    validation_backend_name: str | None = None
+    validation_isolation_level: ValidationIsolationLevel | None = None
+    validation_backend_details: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

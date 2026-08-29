@@ -132,13 +132,6 @@ def _successful_worker_result(**extra):
     return result
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known validation-evidence gap: worker results are not cryptographically or "
-        "structurally bound to the candidate/base/policy transaction being ruled on."
-    ),
-)
 def test_validation_result_rejects_candidate_identity_mismatch() -> None:
     class MismatchedResultBackend(SubprocessValidationBackend):
         def _run_worker(self, payload, *, timeout_seconds):
@@ -182,13 +175,6 @@ def test_validation_protocol_rejects_non_finite_numeric_evidence() -> None:
     assert all(math.isfinite(value) for value in report.measurements.values())
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known evidence-lineage gap: persisted RepairAttempt records retain validation checks "
-        "but not the backend/isolation identity that produced those checks."
-    ),
-)
 def test_persisted_repair_attempt_records_validation_backend_identity() -> None:
     class LocalFakeVMBackend(SubprocessValidationBackend):
         def capabilities(self):
@@ -203,7 +189,31 @@ def test_persisted_repair_attempt_records_validation_backend_identity() -> None:
             )
 
         def _run_worker(self, payload, *, timeout_seconds):
-            return _successful_worker_result()
+            result = _successful_worker_result()
+            result.update(
+                {
+                    field: payload[field]
+                    for field in (
+                        "protocol_version",
+                        "validation_transaction_id",
+                        "candidate_artifact_hash",
+                        "base_source_hash",
+                        "target_id",
+                        "entrypoint",
+                        "module_name",
+                        "qualified_name",
+                        "signature_text",
+                        "callable_kind",
+                        "policy_fingerprint",
+                        "authority_policy_generation",
+                        "authority_policy_fingerprint",
+                        "requested_isolation",
+                        "backend_name",
+                        "mandatory_checks",
+                    )
+                }
+            )
+            return result
 
     engine = RepairEngine(
         provider=StaticRepairProvider([_proposal()]),

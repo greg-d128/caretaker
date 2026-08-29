@@ -15,7 +15,12 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
 
-from .validation import assess_candidate_source, sanitized_function_tree
+from .validation import (
+    VALIDATION_PROTOCOL_VERSION,
+    _VALIDATION_BINDING_FIELDS,
+    assess_candidate_source,
+    sanitized_function_tree,
+)
 
 
 def _install_validation_audit_hook(payload: dict[str, Any], output_path: Path) -> None:
@@ -625,6 +630,13 @@ def main() -> int:
             "hard_disqualifications": [],
             "review_required_findings": [],
         }
+    # Binding values are supervisor-owned.  Echoing the request envelope lets
+    # the parent verify that this result belongs to the transaction it sent;
+    # the worker never gets authority to invent those values.
+    if payload.get("protocol_version") == VALIDATION_PROTOCOL_VERSION:
+        for field in _VALIDATION_BINDING_FIELDS:
+            if field in payload:
+                result[field] = payload[field]
     result["captured_stdout"] = stdout.getvalue()[-20_000:]
     result["captured_stderr"] = stderr.getvalue()[-20_000:]
     output_path.write_text(json.dumps(result, sort_keys=True), encoding="utf-8")
