@@ -8,6 +8,8 @@ from caretaker.domain import ValidationIsolationLevel
 from caretaker.validation import (
     MultipassValidationBackend,
     RootlessPodmanValidationBackend,
+    VALIDATION_PROTOCOL_VERSION,
+    _encode_validation_data,
 )
 
 
@@ -229,12 +231,17 @@ def test_multipass_worker_transfers_artifacts_without_host_mount(monkeypatch) ->
             Path(command[-1]).write_text(
                 json.dumps(
                     {
-                        "eligible": True,
-                        "checks": [],
-                        "measurements": {},
-                        "risk_findings": [],
-                        "hard_disqualifications": [],
-                        "review_required_findings": [],
+                        "protocol_version": VALIDATION_PROTOCOL_VERSION,
+                        "result": _encode_validation_data(
+                            {
+                                "eligible": True,
+                                "checks": [],
+                                "measurements": {},
+                                "risk_findings": [],
+                                "hard_disqualifications": [],
+                                "review_required_findings": [],
+                            }
+                        ),
                     }
                 ),
                 encoding="utf-8",

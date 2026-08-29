@@ -86,7 +86,14 @@ ValidationPolicy(minimum_isolation=ValidationIsolationLevel.VM)
 
 If only PROCESS or CONTAINER validation is available, `backend_unavailable_action` determines whether the candidate fails, remains proposal-only, or enters explicit operator approval. In the current implementation, approving the latter can activate the candidate without the requested isolation. The record preserves the missing-isolation finding, but approval is an override and must not be reported as validation at the required tier. Select `FAIL_REPAIR` when missing isolation must prevent activation.
 
-Validation requests currently use Python `pickle`, and the parent trusts a backend's result to include the checks it claims to have performed. The transport is intended only between trusted Caretaker components; it is not an authenticated, independently attested protocol for mutually untrusted validators.
+Validation worker IPC uses a versioned JSON envelope and an explicit data-only
+codec. Registered cases support bounded JSON-compatible primitives, tuples,
+mappings with string keys, and the `RegisteredCase` record; arbitrary
+application objects are rejected before the worker starts. The parent also
+checks the worker result's transaction binding and mandatory evidence. The
+transport is still not an authenticated, independently attested protocol for
+mutually untrusted validators; external result authentication remains future
+work.
 
 `RootlessPodmanValidationBackend` requires a locally present image and verified rootless Podman. It does not pull images automatically. The validation container uses no network, a read-only root filesystem, dropped Linux capabilities, `no-new-privileges`, bounded PID/CPU/memory settings, a private writable request/result directory, and read-only source inputs.
 

@@ -5,12 +5,12 @@ import ast
 import json
 import math
 import os
-import pickle
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -21,6 +21,7 @@ from .domain import (
     CheckOutcome,
     RepairArtifactKind,
     RepairCandidate,
+    RegisteredCase,
     ValidationCheckKind,
     ValidationCheckResult,
     ValidationBackendUnavailableAction,
@@ -641,7 +642,7 @@ class RootlessPodmanValidationBackend(SubprocessValidationBackend):
                 "python",
                 "-m",
                 "caretaker.validation_worker",
-                "/work/request.pickle",
+                "/work/request.json",
                 "/work/result.json",
             )
         )
@@ -893,9 +894,9 @@ class MultipassValidationBackend(SubprocessValidationBackend):
     ) -> dict[str, Any]:
         token = uuid4().hex
         guest_directory = f"/var/lib/caretaker/validation/{token}"
-        guest_input = f"{guest_directory}/request.pickle"
+        guest_input = f"{guest_directory}/request.json"
         guest_output = f"{guest_directory}/result.json"
-        guest_transfer = f"/tmp/caretaker-validation-{token}.pickle"
+        guest_transfer = f"/tmp/caretaker-validation-{token}.json"
         with tempfile.TemporaryDirectory(prefix="caretaker-multipass-validation-") as temporary:
             temp = Path(temporary)
             input_path, output_path = _write_worker_request(temp, payload)
@@ -1015,11 +1016,120 @@ class MultipassValidationBackend(SubprocessValidationBackend):
 
 
 def _write_worker_request(temp: Path, payload: dict[str, Any]) -> tuple[Path, Path]:
-    input_path = temp / "request.pickle"
+    input_path = temp / "request.json"
     output_path = temp / "result.json"
-    with input_path.open("wb") as handle:
-        pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    envelope = {
+        "protocol_version": VALIDATION_PROTOCOL_VERSION,
+        "payload": _encode_validation_data(payload),
+    }
+    input_path.write_text(
+        json.dumps(envelope, sort_keys=True, separators=(",", ":"), allow_nan=False),
+        encoding="utf-8",
+    )
     return input_path, output_path
+
+
+_VALIDATION_DATA_TAG = "__caretaker_validation_data__"
+
+
+def _encode_validation_data(value: Any) -> Any:
+    """Encode the small, explicit data vocabulary used by worker IPC.
+
+    This is deliberately separate from the repository's general JSON helpers:
+    validation inputs are executable-test inputs and must never silently turn
+    arbitrary application objects into reprs or importable type names.
+    """
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("validation protocol does not accept non-finite floats")
+        return value
+    if isinstance(value, RegisteredCase):
+        return {
+            _VALIDATION_DATA_TAG: "registered_case",
+            "name": _encode_validation_data(value.name),
+            "args": _encode_validation_data(value.args),
+            "kwargs": _encode_validation_data(dict(value.kwargs)),
+            "expected": _encode_validation_data(value.expected),
+            "expected_exception": _encode_validation_data(value.expected_exception),
+            "repeat": _encode_validation_data(value.repeat),
+        }
+    if isinstance(value, tuple):
+        return {
+            _VALIDATION_DATA_TAG: "tuple",
+            "items": [_encode_validation_data(item) for item in value],
+        }
+    if isinstance(value, list):
+        return [_encode_validation_data(item) for item in value]
+    if isinstance(value, Mapping):
+        items: list[list[Any]] = []
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError("validation protocol mappings require string keys")
+            items.append([key, _encode_validation_data(item)])
+        return {
+            _VALIDATION_DATA_TAG: "mapping",
+            "items": items,
+        }
+    raise TypeError(
+        "validation protocol rejects unsupported application object: "
+        f"{type(value).__module__}.{type(value).__qualname__}"
+    )
+
+
+def _decode_validation_data(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("validation protocol contains a non-finite float")
+        return value
+    if isinstance(value, list):
+        return [_decode_validation_data(item) for item in value]
+    if not isinstance(value, dict):
+        raise ValueError("validation protocol contains an unsupported JSON value")
+    tag = value.get(_VALIDATION_DATA_TAG)
+    if tag == "tuple":
+        if set(value) != {_VALIDATION_DATA_TAG, "items"} or not isinstance(value["items"], list):
+            raise ValueError("malformed validation tuple")
+        return tuple(_decode_validation_data(item) for item in value["items"])
+    if tag == "mapping":
+        if set(value) != {_VALIDATION_DATA_TAG, "items"} or not isinstance(value["items"], list):
+            raise ValueError("malformed validation mapping")
+        result: dict[str, Any] = {}
+        for item in value["items"]:
+            if not isinstance(item, list) or len(item) != 2 or not isinstance(item[0], str):
+                raise ValueError("malformed validation mapping item")
+            if item[0] in result:
+                raise ValueError("duplicate validation mapping key")
+            result[item[0]] = _decode_validation_data(item[1])
+        return result
+    if tag == "registered_case":
+        required = {
+            _VALIDATION_DATA_TAG,
+            "name",
+            "args",
+            "kwargs",
+            "expected",
+            "expected_exception",
+            "repeat",
+        }
+        if set(value) != required:
+            raise ValueError("malformed registered validation case")
+        args = _decode_validation_data(value["args"])
+        kwargs = _decode_validation_data(value["kwargs"])
+        if not isinstance(args, tuple) or not isinstance(kwargs, dict):
+            raise ValueError("registered validation case has invalid arguments")
+        return RegisteredCase(
+            name=_decode_validation_data(value["name"]),
+            args=args,
+            kwargs=kwargs,
+            expected=_decode_validation_data(value["expected"]),
+            expected_exception=_decode_validation_data(value["expected_exception"]),
+            repeat=_decode_validation_data(value["repeat"]),
+        )
+    raise ValueError("validation protocol contains an unknown data tag")
 
 
 def _worker_timeout_result(timeout_seconds: float, exc: subprocess.TimeoutExpired) -> dict[str, Any]:
@@ -1115,8 +1225,13 @@ def _load_worker_result(
     if not output_path.exists():
         return _worker_protocol_error(completed)
     try:
-        result = json.loads(output_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        envelope = json.loads(output_path.read_text(encoding="utf-8"))
+        if not isinstance(envelope, dict) or envelope.get("protocol_version") != VALIDATION_PROTOCOL_VERSION:
+            raise ValueError("validation worker returned an unsupported protocol version")
+        result = _decode_validation_data(envelope["result"])
+        if not isinstance(result, dict):
+            raise ValueError("validation worker result must be an object")
+    except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
         result = _worker_protocol_error(
             completed,
             summary=f"Validation worker produced an invalid result: {exc}",

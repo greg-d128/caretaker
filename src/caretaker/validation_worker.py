@@ -7,7 +7,6 @@ import inspect
 import io
 import json
 import os
-import pickle
 import statistics
 import sys
 import time
@@ -18,6 +17,8 @@ from typing import Any
 from .validation import (
     VALIDATION_PROTOCOL_VERSION,
     _VALIDATION_BINDING_FIELDS,
+    _decode_validation_data,
+    _encode_validation_data,
     assess_candidate_source,
     sanitized_function_tree,
 )
@@ -601,8 +602,15 @@ def _result(
 def main() -> int:
     input_path = Path(sys.argv[1])
     output_path = Path(sys.argv[2])
-    with input_path.open("rb") as handle:
-        payload = pickle.load(handle)
+    envelope = json.loads(input_path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(envelope, dict)
+        or envelope.get("protocol_version") != VALIDATION_PROTOCOL_VERSION
+    ):
+        raise ValueError("unsupported validation request protocol version")
+    payload = _decode_validation_data(envelope["payload"])
+    if not isinstance(payload, dict):
+        raise ValueError("validation request payload must be an object")
     _install_validation_audit_hook(payload, output_path)
     stdout = io.StringIO()
     stderr = io.StringIO()
@@ -639,7 +647,18 @@ def main() -> int:
                 result[field] = payload[field]
     result["captured_stdout"] = stdout.getvalue()[-20_000:]
     result["captured_stderr"] = stderr.getvalue()[-20_000:]
-    output_path.write_text(json.dumps(result, sort_keys=True), encoding="utf-8")
+    output_path.write_text(
+        json.dumps(
+            {
+                "protocol_version": VALIDATION_PROTOCOL_VERSION,
+                "result": _encode_validation_data(result),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ),
+        encoding="utf-8",
+    )
     return 0
 
 

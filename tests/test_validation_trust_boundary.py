@@ -128,13 +128,6 @@ def test_operator_approval_cannot_substitute_for_required_validation() -> None:
     assert wrapped.__caretaker_target__.slot.load().number == 0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known security debt: the worker request protocol still accepts arbitrary "
-        "pickle-serializable Python objects."
-    ),
-)
 def test_validation_request_transport_rejects_arbitrary_python_objects(
     tmp_path: Path,
 ) -> None:

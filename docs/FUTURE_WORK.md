@@ -231,7 +231,6 @@ resource exhaustion.
 
 An "implemented" label in this document means that a usable research path exists; it does not mean that every assurance property around that path is complete. Strict expected-failure regression tests preserve the following known debts:
 
-- validation requests use Python `pickle` and can carry arbitrary pickle-serializable application objects rather than a data-only versioned protocol;
 - `StatePolicy.restore_for_validation` is accepted but has no runtime enforcement consumer;
 - an operator approval can override missing policy-requested isolation and activate the candidate;
 - Multipass network isolation relies on a root-owned provisioning marker rather than live network-policy attestation;
@@ -250,9 +249,8 @@ supervisor-generated transaction ID bound to the candidate artifact hash, base
 code hash, target and callable contract, policy and authority fingerprints,
 requested isolation, backend identity, and mandatory check set. Persisted repair
 attempts retain the selected backend, isolation tier, and capability details.
-Remaining work is to replace the pickle transport with a canonical, versioned,
-data-only request/result schema and have external validators authenticate the
-result envelope.
+Remaining work is to have external validators authenticate the result
+envelope.
 
 Registered cases that require domain types need explicit trusted codecs or fixture references; arbitrary object deserialization should not be part of the validator protocol.
 

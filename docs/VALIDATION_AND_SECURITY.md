@@ -10,7 +10,12 @@ The PROCESS worker may still inherit access available to the operating-system ac
 
 Validation reports are trusted backend input. The parent currently rejects reported mandatory failures, but it does not prove that a backend returned every mandatory successful check. A custom, defective, or compromised backend can therefore overstate completion. Backend results must not be treated as independently attested evidence.
 
-Validation requests currently use Python `pickle` so registered cases can contain Python values. Only trusted Caretaker components should create, transport, or deserialize these requests. Do not treat the request/result channel as safe for mutually untrusted peers.
+Validation requests use a versioned JSON envelope and an explicit data-only
+codec. Registered cases may contain bounded JSON-compatible primitives,
+tuples, and string-keyed mappings; unsupported application objects are
+rejected. Only trusted Caretaker components should create, transport, or
+deserialize these requests, and the request/result channel is not an
+authenticated protocol for mutually untrusted peers.
 
 When the requested isolation backend is unavailable, `REQUIRE_OPERATOR_APPROVAL` can currently authorize activation without that isolation. This is an explicit policy override, not evidence that validation at the requested level passed. Use `FAIL_REPAIR` when the isolation requirement must remain a hard activation condition.
 
