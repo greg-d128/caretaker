@@ -182,6 +182,7 @@ def test_rootless_podman_replay_command_has_no_host_workspace_or_network(monkeyp
     result = backend.execute(request)
     assert result.outcome == "PASSED"
     command = captured["command"]
+    assert command[:3] == ["podman", "--cgroup-manager=cgroupfs", "run"]
     assert "--network=none" in command
     assert "--read-only" in command
     assert all("/workspace" not in item and "/opt/caretaker-src" not in item for item in command)

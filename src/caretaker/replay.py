@@ -190,6 +190,7 @@ class RootlessPodmanReplayBackend(RootlessPodmanValidationBackend):
     def _build_replay_command(self, host_workdir: Path) -> list[str]:
         command = [
             self.podman_executable,
+            f"--cgroup-manager={self.cgroup_manager}",
             "run",
             "--rm",
             "--network=none",

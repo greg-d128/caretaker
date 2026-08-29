@@ -371,6 +371,7 @@ class RootlessPodmanValidationBackend(SubprocessValidationBackend):
         image: str,
         *,
         podman_executable: str = "podman",
+        cgroup_manager: str = "cgroupfs",
         workspace: str | Path | None = None,
         additional_read_only_paths: tuple[str | Path, ...] = (),
         memory: str = "512m",
@@ -385,8 +386,11 @@ class RootlessPodmanValidationBackend(SubprocessValidationBackend):
             raise ValueError("cpus must be > 0")
         if pids_limit < 1:
             raise ValueError("pids_limit must be >= 1")
+        if cgroup_manager not in {"cgroupfs", "systemd"}:
+            raise ValueError("cgroup_manager must be 'cgroupfs' or 'systemd'")
         self.image = image
         self.podman_executable = podman_executable
+        self.cgroup_manager = cgroup_manager
         self.workspace = Path(workspace or os.getcwd()).resolve()
         self.additional_read_only_paths = tuple(
             Path(item).resolve() for item in additional_read_only_paths
@@ -401,6 +405,7 @@ class RootlessPodmanValidationBackend(SubprocessValidationBackend):
         details = {
             "image": self.image,
             "workspace": str(self.workspace),
+            "cgroup_manager": self.cgroup_manager,
             "network": "none",
             "read_only_root": True,
             "capabilities_dropped": "ALL",
@@ -488,6 +493,7 @@ class RootlessPodmanValidationBackend(SubprocessValidationBackend):
 
         command = [
             self.podman_executable,
+            f"--cgroup-manager={self.cgroup_manager}",
             "run",
             "--rm",
             "--network=none",

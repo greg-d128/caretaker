@@ -2,12 +2,17 @@
 set -eu
 
 podman_command=${PODMAN:-podman}
+cgroup_manager=${PODMAN_CGROUP_MANAGER:-cgroupfs}
 image=${1:-}
 
 if [ -z "$image" ]; then
     echo "usage: sh isolated/podman/verify-rootless.sh IMAGE" >&2
     exit 2
 fi
+case "$cgroup_manager" in
+    cgroupfs|systemd) ;;
+    *) echo "PODMAN_CGROUP_MANAGER must be cgroupfs or systemd" >&2; exit 2;;
+esac
 
 info=$($podman_command info --format json)
 printf '%s\n' "$info" | python3 -c '
@@ -21,7 +26,7 @@ if rootless is not True:
 '
 
 $podman_command image exists "$image"
-$podman_command run --rm \
+$podman_command --cgroup-manager="$cgroup_manager" run --rm \
     --network=none \
     --read-only \
     --cap-drop=ALL \

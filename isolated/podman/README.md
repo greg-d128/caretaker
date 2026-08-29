@@ -63,6 +63,14 @@ make podman-image \
 The Make target rejects the documentation placeholder `REVIEWED_DIGEST` and
 warns when a tag rather than an explicit `@sha256:` digest is supplied.
 
+The build and replay commands default to `--cgroup-manager=cgroupfs`. This
+avoids requiring a systemd user session for short-lived rootless workers. If
+the host intentionally provides a working systemd user session, use
+`PODMAN_CGROUP_MANAGER=systemd make podman-image` for the build,
+`PODMAN_CGROUP_MANAGER=systemd sh isolated/podman/verify-rootless.sh IMAGE`
+for verification, and `cgroup_manager="systemd"` when constructing the Python
+replay backend.
+
 Review the resulting image identity before using it:
 
 ```sh

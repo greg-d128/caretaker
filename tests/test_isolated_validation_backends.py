@@ -72,7 +72,7 @@ def test_rootless_podman_command_has_strict_container_boundary(tmp_path: Path) -
     command = backend._build_command(request)
     text = " ".join(command)
 
-    assert command[:2] == ["podman", "run"]
+    assert command[:3] == ["podman", "--cgroup-manager=cgroupfs", "run"]
     assert "--network=none" in command
     assert "--read-only" in command
     assert "--cap-drop=ALL" in command
