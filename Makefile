@@ -19,10 +19,13 @@ TWINE := $(TOOLS_PYTHON) -m twine
 PACKAGE_FILES := dist/caretaker-$(PACKAGE_VERSION).tar.gz dist/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl
 PYPI_UPLOAD_URL ?= https://upload.pypi.org/legacy/
 TEST_PYPI_UPLOAD_URL ?= https://test.pypi.org/legacy/
+PODMAN ?= podman
+PODMAN_IMAGE ?= localhost/caretaker-replay-base:$(PACKAGE_VERSION)
+PODMAN_BASE_IMAGE ?=
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup test compile check wheel build package-check verify-wheel publish-testpypi publish-pypi publish-test publish root-check signing-check signing-status signing-bundle release-check release-manifest protected-manifest manifests generate-release-manifest generate-protected-manifest generate-manifests wheel-manifests inspect-integrity sign-check sign-all verify-signature verify-all verify-publication lab lab-verified lab-console profile clean distclean
+.PHONY: help setup test compile check wheel podman-image podman-verify build package-check verify-wheel publish-testpypi publish-pypi publish-test publish root-check signing-check signing-status signing-bundle release-check release-manifest protected-manifest manifests generate-release-manifest generate-protected-manifest generate-manifests wheel-manifests inspect-integrity sign-check sign-all verify-signature verify-all verify-publication lab lab-verified lab-console profile clean distclean
 
 help: ## Show commands grouped by operator role
 	@printf '%s\n' \
@@ -33,6 +36,9 @@ help: ## Show commands grouped by operator role
 	  '  build                    Build wheel and source distribution' \
 	  '  package-check            Validate current-version distributions with Twine' \
 	  '  verify-wheel             Install and test the built wheel' '' \
+	  'Isolation:' \
+	  '  podman-image             Build the Caretaker rootless replay worker image' \
+	  '  podman-verify            Verify rootless Podman and the worker image' '' \
 	  'Release coordinator:' \
 	  '  release-check            Check root policy, clean source, and release inputs' \
 	  '  generate-manifests       Generate release and protected manifests' \
@@ -70,6 +76,20 @@ check: test compile ## Run source tests and compilation checks
 
 wheel: ## Build the wheel in dist/
 	$(BIN)/python -m build --wheel
+
+podman-image: wheel ## Build the Caretaker rootless replay worker image
+	@test -n "$(PODMAN_BASE_IMAGE)" || { echo 'PODMAN_BASE_IMAGE is required and must be pinned by digest' >&2; exit 2; }
+	case "$(PODMAN_BASE_IMAGE)" in *@sha256:*) ;; *) echo 'PODMAN_BASE_IMAGE must include an explicit @sha256: digest' >&2; exit 2;; esac
+	$(PODMAN) build \
+	  --file isolated/podman/Containerfile \
+	  --ignorefile isolated/podman/.containerignore \
+	  --build-arg "PYTHON_BASE_IMAGE=$(PODMAN_BASE_IMAGE)" \
+	  --build-arg "CARETAKER_WHEEL=dist/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl" \
+	  --tag "$(PODMAN_IMAGE)" \
+	  .
+
+podman-verify: ## Verify rootless Podman and a previously built worker image
+	sh isolated/podman/verify-rootless.sh "$(PODMAN_IMAGE)"
 
 build: ## Build the wheel and source distribution in dist/
 	$(BIN)/python -m build

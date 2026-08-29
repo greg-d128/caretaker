@@ -184,5 +184,8 @@ def test_rootless_podman_replay_command_has_no_host_workspace_or_network(monkeyp
     command = captured["command"]
     assert "--network=none" in command
     assert "--read-only" in command
-    assert all("/workspace" not in item for item in command)
+    assert all("/workspace" not in item and "/opt/caretaker-src" not in item for item in command)
+    assert all(item != "PYTHONPATH=/opt/caretaker-src" for item in command)
     assert "caretaker.replay_worker" in command
+    assert backend.capabilities().details["caretaker_code_source"] == "installed-image-wheel"
+    assert backend.capabilities().details["application_workspace_mount"] == "none"

@@ -1,0 +1,4 @@
+# The build context is the repository root. Only the reviewed wheel is needed.
+*
+!dist/
+!dist/caretaker-*.whl

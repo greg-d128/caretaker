@@ -169,9 +169,12 @@ class RootlessPodmanReplayBackend(RootlessPodmanValidationBackend):
     def capabilities(self) -> ValidationBackendCapabilities:
         base = super().capabilities()
         details = dict(base.details or {})
+        details.pop("workspace", None)
         details.update({
             "replay_worker": "caretaker.replay_worker",
             "fixture_inputs": "exact-json-only",
+            "application_workspace_mount": "none",
+            "caretaker_code_source": "installed-image-wheel",
         })
         return ValidationBackendCapabilities(
             name="podman-rootless-replay",
@@ -185,7 +188,6 @@ class RootlessPodmanReplayBackend(RootlessPodmanValidationBackend):
         )
 
     def _build_replay_command(self, host_workdir: Path) -> list[str]:
-        source_root = Path(__file__).resolve().parents[1]
         command = [
             self.podman_executable,
             "run",
@@ -201,11 +203,7 @@ class RootlessPodmanReplayBackend(RootlessPodmanValidationBackend):
             f"--tmpfs=/tmp:rw,nosuid,nodev,noexec,size={self.tmpfs_size}",
             "--mount",
             f"type=bind,src={host_workdir},dst=/work,rw=true",
-            "--mount",
-            f"type=bind,src={source_root},dst=/opt/caretaker-src,ro=true",
             "--workdir=/work",
-            "--env",
-            "PYTHONPATH=/opt/caretaker-src",
             "--env",
             "PYTHONIOENCODING=utf-8",
             "--env",

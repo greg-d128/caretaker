@@ -1,0 +1,30 @@
+# Caretaker replay/validation worker image.
+# Both build arguments are intentionally required so callers choose and review
+# the Python base image and the exact Caretaker wheel being installed.
+ARG PYTHON_BASE_IMAGE
+FROM ${PYTHON_BASE_IMAGE}
+
+ARG CARETAKER_WHEEL
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH=/opt/caretaker/venv/bin:$PATH
+
+RUN groupadd --gid 10001 caretaker \
+    && useradd --uid 10001 --gid 10001 \
+       --home-dir /nonexistent --no-create-home \
+       --shell /usr/sbin/nologin caretaker \
+    && python -m venv /opt/caretaker/venv \
+    && mkdir -p /opt/caretaker/work \
+    && chown -R root:root /opt/caretaker \
+    && chmod -R go-w /opt/caretaker
+
+COPY ${CARETAKER_WHEEL} /tmp/caretaker.whl
+RUN /opt/caretaker/venv/bin/pip install --no-cache-dir /tmp/caretaker.whl \
+    && rm -f /tmp/caretaker.whl \
+    && chown -R root:root /opt/caretaker \
+    && chmod -R go-w /opt/caretaker
+
+USER 10001:10001
+WORKDIR /opt/caretaker/work
+CMD ["python", "--version"]

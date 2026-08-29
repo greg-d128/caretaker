@@ -144,8 +144,9 @@ dispatch. A deployment must provide the rehydration/execution backend; absent
 that backend, replay fails closed.
 
 `RootlessPodmanReplayBackend` is the first concrete backend. It supports only
-fixtures marked `JSON_EXACT`, mounts the Caretaker worker source read-only, and
-does not mount the application workspace. Its minimum practical policy is
+fixtures marked `JSON_EXACT`, runs the Caretaker worker installed in a
+provisioned image, and does not mount either the live Caretaker checkout or the
+application workspace. Its minimum practical policy is
 `CONTAINER`; the default `VM` requirement deliberately rejects it when a VM
 backend is required:
 
@@ -182,6 +183,10 @@ isolated/
         Dockerfile
         compose.yaml
         README.md
+    podman/
+        Containerfile
+        README.md
+        verify-rootless.sh
     multipass/
         cloud-init.yaml
         README.md
