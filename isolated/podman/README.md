@@ -63,6 +63,22 @@ make podman-image \
 The Make target rejects the documentation placeholder `REVIEWED_DIGEST` and
 warns when a tag rather than an explicit `@sha256:` digest is supplied.
 
+The build context is deliberately `dist/`, not the repository root. If you
+invoke Podman directly, use the wheel basename and finish the command with
+`dist`:
+
+Using the `BASE_IMAGE` variable from the preceding example:
+
+```sh
+podman --cgroup-manager=cgroupfs build \
+  --file isolated/podman/Containerfile \
+  --ignorefile isolated/podman/.containerignore \
+  --build-arg "PYTHON_BASE_IMAGE=$BASE_IMAGE" \
+  --build-arg "CARETAKER_WHEEL=caretaker-0.6.1-py3-none-any.whl" \
+  --tag localhost/caretaker-replay-base:0.6.1 \
+  dist
+```
+
 The build and replay commands default to `--cgroup-manager=cgroupfs`. This
 avoids requiring a systemd user session for short-lived rootless workers. If
 the host intentionally provides a working systemd user session, use

@@ -86,9 +86,9 @@ podman-image: wheel ## Build the Caretaker rootless replay worker image
 	  --file isolated/podman/Containerfile \
 	  --ignorefile isolated/podman/.containerignore \
 	  --build-arg "PYTHON_BASE_IMAGE=$(PODMAN_BASE_IMAGE)" \
-	  --build-arg "CARETAKER_WHEEL=dist/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl" \
+	  --build-arg "CARETAKER_WHEEL=caretaker-$(PACKAGE_VERSION)-py3-none-any.whl" \
 	  --tag "$(PODMAN_IMAGE)" \
-	  .
+	  dist
 
 podman-verify: ## Verify rootless Podman and a previously built worker image
 	sh isolated/podman/verify-rootless.sh "$(PODMAN_IMAGE)"
