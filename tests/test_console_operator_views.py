@@ -846,7 +846,17 @@ def test_console_creates_policy_governed_reviewable_communication_draft(tmp_path
                         "reviewable": True,
                         "delivery_authorized": False,
                         "recording": {"status": "RECORDED"},
-                        "draft": {"audience_profile_id": "operators-v1"},
+                        "draft": {
+                            "draft_id": "00000000-0000-0000-0000-000000000031",
+                            "audience_profile_id": "operators-v1",
+                        },
+                    }
+                if command == "incident-communication-review":
+                    return {
+                        "ok": True,
+                        "reviewable": True,
+                        "delivery_authorized": False,
+                        "status": "RECORDED",
                     }
                 raise AssertionError(command)
 
@@ -864,6 +874,18 @@ def test_console_creates_policy_governed_reviewable_communication_draft(tmp_path
                     "capsule_id": capsule_id,
                     "audience_profile_id": "operators-v1",
                     "record": True,
+                },
+            )
+            app.query_one("#incident-communication-review-reason", Input).value = "Reviewed facts"
+            approve = app.query_one("#incident-communication-approve", Button)
+            await app.on_button_pressed(Button.Pressed(approve))
+            assert requests[-1] == (
+                "incident-communication-review",
+                {
+                    "capsule_id": capsule_id,
+                    "draft_id": "00000000-0000-0000-0000-000000000031",
+                    "decision": "approved",
+                    "reason": "Reviewed facts",
                 },
             )
 

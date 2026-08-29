@@ -92,9 +92,19 @@ caretaker-incident-draft \
   --output incident-draft.json
 ```
 
-External delivery, automatic triggers, approvals, corrections, retractions,
-and ticket/chat/email/status-page adapters are not implemented. Draft output
+External delivery, automatic triggers, correction/retraction workflows, and
+ticket/chat/email/status-page adapters are not implemented. Draft output
 always reports `delivery_authorized: false`.
+
+## Communication review records
+
+An operator may record an explicit `approved` or `rejected` review for a
+recorded draft with `incident-communication-review` or
+`caretaker-incident-review`. A reason, reviewer identity evidence, draft ID,
+and source capsule revision are retained as a new immutable communication
+record. Review is idempotent and later decisions cannot rewrite an existing
+review record. Approval is only a local review result: it never authorizes
+external delivery, Repair, policy changes, validation, or incident closure.
 
 Future delivery and audience workflow must continue to use the capsule's
 canonical incident state and preserve provenance, uncertainty, redaction,

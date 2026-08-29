@@ -428,3 +428,100 @@ def generate_communication_draft(
                     "error": f"{type(exc).__name__}: {exc}",
                 })
     return {**draft_envelope, "recording": recording}
+
+
+def review_communication_draft(
+    store: IncidentCapsuleStore,
+    envelope: Mapping[str, Any],
+    *,
+    draft_id: str,
+    decision: str,
+    reason: str,
+    capsule_policy: IncidentCapsulePolicy,
+    reviewer_identity: str,
+    run_id: UUID | str | None = None,
+) -> dict[str, Any]:
+    """Record an explicit local review without authorizing external delivery."""
+
+    normalized_decision = str(decision).strip().lower()
+    if normalized_decision not in {"approved", "rejected"}:
+        raise CommunicationPolicyError("communication review decision must be approved or rejected")
+    normalized_reason = str(reason).strip()
+    if not normalized_reason:
+        raise CommunicationPolicyError("communication review requires a reason")
+    if not str(reviewer_identity).strip():
+        raise CommunicationPolicyError("communication review requires reviewer identity evidence")
+    capsule = envelope.get("capsule")
+    integrity = envelope.get("integrity")
+    if not isinstance(capsule, Mapping) or not isinstance(integrity, Mapping):
+        raise CommunicationPolicyError("verified Incident Capsule envelope is required")
+    source_hash = str(integrity.get("content_sha256") or "")
+    if not source_hash or content_hash(capsule) != source_hash:
+        raise CommunicationPolicyError("Incident Capsule content hash is invalid")
+    draft_record = next(
+        (
+            item
+            for item in capsule.get("communications", ())
+            if isinstance(item, Mapping)
+            and str((item.get("metadata") or {}).get("draft_id") or "") == str(draft_id)
+            and str((item.get("metadata") or {}).get("review_of_draft_id") or "") == ""
+        ),
+        None,
+    )
+    if draft_record is None:
+        raise CommunicationPolicyError(
+            f"draft {draft_id!r} is not recorded in the selected Incident Capsule"
+        )
+    prior_review = next(
+        (
+            item
+            for item in capsule.get("communications", ())
+            if isinstance(item, Mapping)
+            and str((item.get("metadata") or {}).get("review_of_draft_id") or "") == str(draft_id)
+        ),
+        None,
+    )
+    if prior_review is not None:
+        return {
+            "status": "ALREADY_REVIEWED",
+            "review": dict(prior_review),
+            "delivery_authorized": False,
+            "capsule_mutated": False,
+        }
+    metadata = {
+        "review_of_draft_id": str(draft_id),
+        "review_decision": normalized_decision,
+        "review_reason": normalized_reason,
+        "reviewer_identity": str(reviewer_identity),
+        "source_capsule_revision": capsule.get("revision"),
+        "draft_content_sha256": (draft_record.get("metadata") or {}).get("draft_content_sha256"),
+        "delivery_authorized": False,
+    }
+    updated = store.record_communication(
+        str(capsule["incident_id"]),
+        direction="internal",
+        channel="review",
+        audience_profile_id=draft_record.get("audience_profile_id"),
+        status=normalized_decision,
+        content_sha256=(draft_record.get("content_sha256") or ""),
+        source="caretaker-communication-reviewer",
+        metadata=metadata,
+        policy=capsule_policy,
+        run_id=run_id,
+    )
+    review = next(
+        (
+            item
+            for item in (updated.get("capsule") or {}).get("communications", ())
+            if isinstance(item, Mapping)
+            and str((item.get("metadata") or {}).get("review_of_draft_id") or "") == str(draft_id)
+        ),
+        None,
+    )
+    return {
+        "status": "RECORDED",
+        "review": review,
+        "capsule_revision": (updated.get("capsule") or {}).get("revision"),
+        "delivery_authorized": False,
+        "capsule_mutated": True,
+    }

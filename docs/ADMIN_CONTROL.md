@@ -37,7 +37,10 @@ mode-0600 JSON export. Audience profiles and disclosure sections come from
 than invented. By default only draft metadata and its content hash are added
 to the capsule communication history, with idempotent recording. Drafting
 cannot authorize delivery, change policy, approve Repair, or satisfy
-validation; external delivery is not implemented.
+validation; external delivery is not implemented. The
+`incident-communication-review` command and `caretaker-incident-review` CLI
+record an explicit approved/rejected decision and reason for a recorded draft.
+This review remains evidence only and never authorizes delivery.
 
 Every high-impact action should include a reason and is recorded with peer credentials and policy generations.
 

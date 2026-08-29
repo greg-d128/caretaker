@@ -152,6 +152,13 @@ class CaretakerConsoleApp(App):
     }
     #incident-communication-actions Input { width: 1fr; min-width: 18; }
     #incident-communication-actions Button { width: auto; min-width: 16; margin-left: 1; }
+    #incident-communication-review-actions {
+        height: 5;
+        padding: 0 1;
+        align-vertical: middle;
+    }
+    #incident-communication-review-actions Input { width: 1fr; min-width: 18; }
+    #incident-communication-review-actions Button { width: auto; min-width: 12; margin-left: 1; }
     #incident-artifact-title {
         height: 3;
         padding: 1 2;
@@ -580,6 +587,11 @@ class CaretakerConsoleApp(App):
                                 id="incident-communication-draft",
                                 disabled=True,
                             )
+                        with Horizontal(id="incident-communication-review-actions"):
+                            yield Input(placeholder="Draft ID", id="incident-communication-draft-id")
+                            yield Input(placeholder="Review reason", id="incident-communication-review-reason")
+                            yield Button("Approve", id="incident-communication-approve", disabled=True)
+                            yield Button("Reject", id="incident-communication-reject", disabled=True)
                         yield RichLog(id="incident-capsule-output", wrap=False, markup=True)
                         yield Static("Side artifacts", id="incident-artifact-title")
                         table = DataTable(id="incident-artifact-table")
@@ -2872,6 +2884,10 @@ class CaretakerConsoleApp(App):
             self.query_one("#incident-capsule-load", Button).disabled = True
             self.query_one("#incident-capsule-assist-selected", Button).disabled = True
             self.query_one("#incident-communication-draft", Button).disabled = True
+            self.query_one("#incident-communication-approve", Button).disabled = True
+            self.query_one("#incident-communication-reject", Button).disabled = True
+            self.query_one("#incident-communication-draft-id", Input).value = ""
+            self.query_one("#incident-communication-review-reason", Input).value = ""
             self.query_one("#incident-capsule-status", Static).update(
                 f"Incident Capsules unavailable: {type(exc).__name__}: {exc}"
             )
@@ -2895,6 +2911,10 @@ class CaretakerConsoleApp(App):
         self.query_one("#incident-capsule-load", Button).disabled = True
         self.query_one("#incident-capsule-assist-selected", Button).disabled = True
         self.query_one("#incident-communication-draft", Button).disabled = True
+        self.query_one("#incident-communication-approve", Button).disabled = True
+        self.query_one("#incident-communication-reject", Button).disabled = True
+        self.query_one("#incident-communication-draft-id", Input).value = ""
+        self.query_one("#incident-communication-review-reason", Input).value = ""
         self.query_one("#incident-capsule-detail-title", Static).update(
             "Select an Incident Capsule"
         )
@@ -2926,6 +2946,10 @@ class CaretakerConsoleApp(App):
         self.query_one("#incident-capsule-load", Button).disabled = True
         self.query_one("#incident-capsule-assist-selected", Button).disabled = True
         self.query_one("#incident-communication-draft", Button).disabled = True
+        self.query_one("#incident-communication-approve", Button).disabled = True
+        self.query_one("#incident-communication-reject", Button).disabled = True
+        self.query_one("#incident-communication-draft-id", Input).value = ""
+        self.query_one("#incident-communication-review-reason", Input).value = ""
         if str(record.get("integrity_status") or "").upper() == "INVALID":
             self.query_one("#incident-capsule-detail-title", Static).update(
                 f"Invalid Incident Capsule | {capsule_id}"
@@ -3606,6 +3630,35 @@ class CaretakerConsoleApp(App):
                 self.query_one("#incident-capsule-detail-title", Static).update(
                     f"Communication draft | {recording.get('status', 'UNRECORDED')}"
                 )
+                draft = response.get("draft") or {}
+                self.query_one("#incident-communication-draft-id", Input).value = str(
+                    draft.get("draft_id") or ""
+                )
+                self.query_one("#incident-communication-approve", Button).disabled = False
+                self.query_one("#incident-communication-reject", Button).disabled = False
+                self._write_json("#incident-capsule-output", response)
+                return
+            if button in {"incident-communication-approve", "incident-communication-reject"}:
+                if self._selected_capsule is None:
+                    raise ValueError("Select an Incident Capsule first")
+                draft_id = self.query_one("#incident-communication-draft-id", Input).value.strip()
+                reason = self.query_one("#incident-communication-review-reason", Input).value.strip()
+                if not draft_id:
+                    raise ValueError("Enter or generate a communication draft ID first")
+                if not reason:
+                    raise ValueError("Enter a reason for the communication review decision")
+                response = await self._request(
+                    "incident-communication-review",
+                    capsule_id=self._selected_capsule.get("capsule_id"),
+                    draft_id=draft_id,
+                    decision=("approved" if button.endswith("approve") else "rejected"),
+                    reason=reason,
+                )
+                self.query_one("#incident-capsule-detail-title", Static).update(
+                    f"Communication review | {response.get('status', 'UNKNOWN')}"
+                )
+                self.query_one("#incident-communication-approve", Button).disabled = True
+                self.query_one("#incident-communication-reject", Button).disabled = True
                 self._write_json("#incident-capsule-output", response)
                 return
             if button == "context-clear":
@@ -4094,6 +4147,8 @@ class CaretakerConsoleApp(App):
             elif button.startswith("incident-capsule-"):
                 output = "#incident-capsule-output"
             elif button == "incident-communication-draft":
+                output = "#incident-capsule-output"
+            elif button.startswith("incident-communication-"):
                 output = "#incident-capsule-output"
             elif button.startswith("logs-"):
                 output = "#logs-output"

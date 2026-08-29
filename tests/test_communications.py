@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from uuid import uuid4
 
@@ -12,6 +13,7 @@ from caretaker.communications import (
     IncidentCommunicationPolicy,
     build_communication_draft,
     generate_communication_draft,
+    review_communication_draft,
 )
 from caretaker.logging.policy import load_operator_policy
 
@@ -171,3 +173,90 @@ def test_cli_exports_a_new_reviewable_draft_without_overwriting(tmp_path: Path) 
     assert output.stat().st_mode & 0o777 == 0o600
     assert '"delivery_authorized": false' in output.read_text(encoding="utf-8")
     assert len(store.load(envelope["capsule"]["capsule_id"])["capsule"]["communications"]) == 1
+
+
+def test_review_records_explicit_decision_once_without_authorizing_delivery(tmp_path: Path) -> None:
+    store = IncidentCapsuleStore(tmp_path)
+    incident_id = uuid4()
+    envelope = store.create_placeholder(incident_id, incident_state={"trigger": "exception"})
+    draft = generate_communication_draft(
+        store,
+        envelope,
+        audience_profile_id="operators-v1",
+        policy=IncidentCommunicationPolicy(),
+        capsule_policy=store.policy,
+    )
+    draft_id = draft["draft"]["draft_id"]
+    latest = store.latest_for_incident(incident_id)
+    assert latest is not None
+    reviewed = review_communication_draft(
+        store,
+        latest,
+        draft_id=draft_id,
+        decision="approved",
+        reason="Operator verified the facts",
+        capsule_policy=store.policy,
+        reviewer_identity="uid:1000",
+    )
+    assert reviewed["status"] == "RECORDED"
+    assert reviewed["delivery_authorized"] is False
+    after_review = store.latest_for_incident(incident_id)
+    assert after_review is not None
+    assert after_review["capsule"]["revision"] == 3
+    assert len(after_review["capsule"]["communications"]) == 2
+    review_record = after_review["capsule"]["communications"][1]
+    assert review_record["status"] == "approved"
+    assert review_record["metadata"]["review_decision"] == "approved"
+    assert review_record["metadata"]["delivery_authorized"] is False
+
+    repeated = review_communication_draft(
+        store,
+        after_review,
+        draft_id=draft_id,
+        decision="rejected",
+        reason="A different later decision cannot rewrite history",
+        capsule_policy=store.policy,
+        reviewer_identity="uid:1000",
+    )
+    assert repeated["status"] == "ALREADY_REVIEWED"
+    assert store.latest_for_incident(incident_id)["capsule"]["revision"] == 3
+
+
+def test_review_requires_recorded_draft_and_reason(tmp_path: Path) -> None:
+    store = IncidentCapsuleStore(tmp_path)
+    envelope = store.create_placeholder(uuid4())
+    with pytest.raises(CommunicationPolicyError, match="not recorded"):
+        review_communication_draft(
+            store,
+            envelope,
+            draft_id=str(uuid4()),
+            decision="approved",
+            reason="review",
+            capsule_policy=store.policy,
+            reviewer_identity="uid:1000",
+        )
+
+
+def test_review_cli_records_decision_and_does_not_claim_delivery(tmp_path: Path, capsys) -> None:
+    from caretaker.communication_cli import main as draft_main
+    from caretaker.communication_review_cli import main as review_main
+
+    store = IncidentCapsuleStore(tmp_path)
+    envelope = store.create_placeholder(uuid4(), incident_state={"trigger": "timeout"})
+    draft_main([
+        "--data-directory", str(tmp_path),
+        "--capsule-id", envelope["capsule"]["capsule_id"],
+        "--audience-profile", "operators-v1",
+    ])
+    draft_output = capsys.readouterr().out
+    draft_id = json.loads(draft_output)["draft"]["draft_id"]
+    assert review_main([
+        "--data-directory", str(tmp_path),
+        "--capsule-id", envelope["capsule"]["capsule_id"],
+        "--draft-id", draft_id,
+        "--decision", "rejected",
+        "--reason", "Missing customer impact confirmation",
+    ]) == 0
+    review_output = json.loads(capsys.readouterr().out)
+    assert review_output["delivery_authorized"] is False
+    assert review_output["status"] == "RECORDED"

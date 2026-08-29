@@ -19,7 +19,7 @@ from .authority import (
 )
 from .capsule import IncidentCapsuleStore
 from .capsule_assistance import assist_capsules
-from .communications import generate_communication_draft
+from .communications import generate_communication_draft, review_communication_draft
 from .behavior import (
     BehaviorSnapshotStore,
     BehaviorStatisticsRepository,
@@ -530,6 +530,58 @@ def main(argv: list[str] | None = None) -> int:
                     "audience_profile_id": draft.get("audience_profile_id"),
                     "source_capsule_id": draft.get("source_capsule_id"),
                     "recording_status": recording.get("status"),
+                    "delivery_authorized": False,
+                },
+            )
+            return {
+                "ok": True,
+                "reviewable": True,
+                "delivery_authorized": False,
+                **result,
+            }
+        if command == "incident-communication-review":
+            draft_id = str(request.get("draft_id") or "").strip()
+            decision = str(request.get("decision") or "").strip()
+            reason = str(request.get("reason") or "").strip()
+            if not draft_id:
+                raise ValueError("incident-communication-review requires draft_id")
+            if not decision:
+                raise ValueError("incident-communication-review requires decision")
+            if not reason:
+                raise ValueError("incident-communication-review requires reason")
+            raw_capsule_id = str(request.get("capsule_id") or "").strip()
+            raw_incident_id = str(request.get("incident_id") or "").strip()
+            if bool(raw_capsule_id) == bool(raw_incident_id):
+                raise ValueError(
+                    "incident-communication-review requires exactly one of capsule_id or incident_id"
+                )
+            envelope = (
+                capsule_store.load(raw_capsule_id)
+                if raw_capsule_id
+                else capsule_store.latest_for_incident(UUID(raw_incident_id))
+            )
+            if envelope is None:
+                raise KeyError(f"No Incident Capsule found for incident {raw_incident_id}")
+            result = review_communication_draft(
+                capsule_store,
+                envelope,
+                draft_id=draft_id,
+                decision=decision,
+                reason=reason,
+                capsule_policy=runtime.active_policy.capsules,
+                reviewer_identity=f"uid:{credentials[1]}",
+                run_id=runtime.run_id,
+            )
+            review = result.get("review") or {}
+            runtime.event(
+                logger_name="caretaker.communication",
+                severity=20,
+                channel=LogChannel.AUDIT,
+                message="Incident communication draft reviewed",
+                fields={
+                    "draft_id": draft_id,
+                    "review_decision": (review.get("metadata") or {}).get("review_decision"),
+                    "recording_status": result.get("status"),
                     "delivery_authorized": False,
                 },
             )

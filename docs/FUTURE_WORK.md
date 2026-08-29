@@ -49,7 +49,7 @@ close incidents, or expand Caretaker authority. See
 
 ## Policy-governed incident communications
 
-**Status: Implemented in development tree for reviewable draft generation; approval and delivery remain future work.**
+**Status: Implemented in development tree for reviewable draft generation and local review records; delivery remains future work.**
 
 During an incident, Caretaker already has or may accumulate useful context:
 observed symptoms, evidence, affected targets, hypotheses, policy and integrity
@@ -95,7 +95,8 @@ An audience profile may control:
 - permitted export or delivery adapters.
 
 The current implementation enforces audience section allowlists, bounded
-output, redaction, explicit unknowns, provenance, and review-required state.
+output, redaction, explicit unknowns, provenance, review-required state, and
+immutable approved/rejected local review records.
 Audience policy constrains disclosure; it does not grant incident, Repair,
 policy, or delivery authority. A communication request from another Caretaker,
 application component, LLM, or external system is input, not authorization.
