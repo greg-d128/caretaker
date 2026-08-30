@@ -144,12 +144,15 @@ worker IDs, and rejects late acknowledgements. Caretaker does not automatically
 replace stale workers or change policy; application-owned lifecycle handling
 remains future work.
 
-The Textual console's **Adaptive** tab provides a manually refreshed,
-read-only view of aggregate provenance, active threshold policy context, and
-transition state. It shows scoped target identity, generation, worker
-acknowledgement coverage, deadlines, stale-worker counts, and the effective
-exception, timing, and Repair-evidence thresholds that produced the current
-supervisor view. The policy context is bounded and unavailable when the live
-runtime cannot be queried. The tab has no threshold-editing,
-transition-acknowledgement, or application action control; threshold changes
-remain a future policy-transition capability.
+The Textual console's **Adaptive** tab provides a manually refreshed view of
+aggregate provenance, active threshold policy context, and transition state.
+It shows scoped target identity, generation, worker acknowledgement coverage,
+deadlines, stale-worker counts, and the effective exception, timing, and
+Repair-evidence thresholds that produced the current supervisor view. The
+policy context is bounded and unavailable when the live runtime cannot be
+queried. An unreviewed threshold proposal can be selected and given an
+explicitly reasoned operator approval or rejection; that action records only
+the advisory review record. The tab has no threshold-editing,
+transition-acknowledgement, or application action control, and an approval
+does not apply a threshold or grant authority. Threshold changes remain a
+future staged policy-transition capability.
