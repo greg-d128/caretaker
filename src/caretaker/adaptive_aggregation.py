@@ -2291,6 +2291,7 @@ class SupervisorAdaptiveAggregationStore:
         required_workers: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...],
         applied_by: str,
         reason: str,
+        authority_lease_id: str | None = None,
         transition_timeout_seconds: float = DEFAULT_TRANSITION_TIMEOUT_SECONDS,
         now: datetime | None = None,
     ) -> dict[str, Any]:
@@ -2348,6 +2349,12 @@ class SupervisorAdaptiveAggregationStore:
         )
         actor = _text(applied_by, name="applied_by", limit=MAX_BATCH_TEXT)
         transition_reason = _text(reason, name="reason", limit=MAX_TRANSITION_REASON)
+        lease_id = None
+        if authority_lease_id is not None:
+            try:
+                lease_id = str(UUID(str(authority_lease_id)))
+            except (TypeError, ValueError) as exc:
+                raise AdaptiveAggregationError("authority_lease_id must be a UUID") from exc
         assert authority_generation is not None
         assert authority_fingerprint is not None
         assert actor is not None and transition_reason is not None
@@ -2413,6 +2420,7 @@ class SupervisorAdaptiveAggregationStore:
             "requested_level": "POLICY",
             "reason": transition_reason,
             "applied_by": actor,
+            "authority_lease_id": lease_id,
             "policy_applied": True,
             "authority_granted": False,
             "created_at": created_at.isoformat(),

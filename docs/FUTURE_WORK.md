@@ -740,14 +740,17 @@ least-loss default, while `DROP` and `REDUCE` are explicit bounded choices;
 incident callbacks, parallel stores, and transport-level throttling remain
 future integrations.
 The supervisor also records delayed, context-bound threshold proposals as
-proposal-only evidence; applying them, verifying them through a staged policy
-transition, and exposing an operator edit workflow remain future work. An
-approved proposal can now be represented by a post-application
+proposal-only evidence. An authenticated control-plane operation now applies
+an approved, effective proposal through a target-scoped runtime authority
+lease, rolls back when the application rejects or fails to expose the changed
+context, and records a post-application transition for worker verification.
+An approved proposal can now be represented by a post-application
 `ADAPTIVE_POLICY_TRANSITION` record that binds the prior proposal/review to the
 new policy and authority fingerprints and requires exact worker
 acknowledgements. This record verifies adoption; it does not apply policy or
-grant authority. The application-owned authority workflow and its control-plane
-integration remain future work.
+grant authority. Remaining work is console proposal-editing UX, persistent
+policy acceptance beyond the bounded runtime lease, and deployment-specific
+worker/process orchestration.
 The current slice also carries bounded timing-breach duration samples and
 worker-supplied numeric resource samples, producing three-standard-deviation
 evidence conflicts for materially different worker distributions. Automatic

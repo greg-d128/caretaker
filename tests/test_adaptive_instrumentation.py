@@ -29,6 +29,7 @@ from caretaker import (
     lightweight,
     lightweight_dependency,
 )
+import caretaker.adaptive as adaptive_module
 from caretaker.guard.policy import GuardBinding
 
 
@@ -70,6 +71,24 @@ class _FakeGuard:
 class _FakeEngine:
     def __init__(self, guard=None) -> None:
         self.guard = guard
+
+
+def test_refresh_adaptive_authority_policy_refreshes_live_controllers(monkeypatch):
+    calls = []
+
+    class Controller:
+        def refresh_authority_policy(self):
+            calls.append("refreshed")
+
+    monkeypatch.setattr(
+        adaptive_module,
+        "_CONTROLLER_REGISTRY",
+        {"one": Controller(), "two": Controller()},
+    )
+
+    adaptive_module.refresh_adaptive_authority_policy()
+
+    assert calls == ["refreshed", "refreshed"]
 
 
 @pytest.fixture(autouse=True)

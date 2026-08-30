@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 import hashlib
 import importlib
 from dataclasses import asdict, replace
@@ -12,6 +13,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Any
 from uuid import UUID, uuid4
 
 from .authority import (
@@ -65,6 +67,46 @@ from .integrity import SignatureVerificationMode, verify_release_publication
 from .builtin_profiles import builtin_profile_names, load_builtin_profile_supervisor
 from .system import SystemCollectionPolicy, SystemDataCollector, SystemOutputPolicy, load_system_policy
 from .store import SQLiteRepairStore
+
+
+_ADAPTIVE_THRESHOLD_SETTING_PATHS = {
+    "exception.occurrences": "lightweight.exception.occurrences",
+    "exception.window_seconds": "lightweight.exception.window_seconds",
+    "soft_timing.occurrences": "lightweight.soft_timing.occurrences",
+    "soft_timing.window_seconds": "lightweight.soft_timing.window_seconds",
+    "repair_evidence.minimum_behavior_samples": (
+        "lightweight.repair_evidence.minimum_behavior_samples"
+    ),
+    "repair_evidence.minimum_observation_calls": (
+        "lightweight.repair_evidence.minimum_observation_calls"
+    ),
+    "repair_evidence.minimum_duration_seconds": (
+        "lightweight.repair_evidence.minimum_duration_seconds"
+    ),
+    "repair_evidence.require_problem_reproduction": (
+        "lightweight.repair_evidence.require_problem_reproduction"
+    ),
+    "transition_timeout_seconds": "lightweight.aggregation.transition_timeout_seconds",
+}
+
+
+def _adaptive_threshold_policy_settings(
+    changes: Mapping[str, Any], *, target_id: str
+) -> tuple[PolicySetting, ...]:
+    """Translate validated proposal fields into target-scoped authority settings."""
+    target = str(target_id).strip()
+    if not target:
+        raise ValueError("adaptive threshold application requires a target id")
+    if not isinstance(changes, Mapping) or not changes:
+        raise ValueError("adaptive threshold application requires threshold changes")
+    settings: list[PolicySetting] = []
+    for raw_name, value in changes.items():
+        name = str(raw_name).strip()
+        path = _ADAPTIVE_THRESHOLD_SETTING_PATHS.get(name)
+        if path is None:
+            raise ValueError(f"unsupported adaptive threshold field {name!r}")
+        settings.append(PolicySetting(path=path, value=value, target=target))
+    return tuple(settings)
 
 
 def create_worker_failure_incident_capsule(
@@ -790,6 +832,216 @@ def main(argv: list[str] | None = None) -> int:
                 origin="caretaker",
             )
             return {"ok": True, "review": review}
+        if command == "adaptive-threshold-apply":
+            request_id = str(request.get("request_id") or "").strip()
+            if not request_id:
+                raise ValueError("adaptive-threshold-apply requires request_id")
+            existing_transitions = [
+                item
+                for item in adaptive_aggregation_store.list_transition_requests()
+                if item.get("request_kind") == "ADAPTIVE_POLICY_TRANSITION"
+                and str(item.get("proposal_request_id") or "") == request_id
+            ]
+            if existing_transitions:
+                if len(existing_transitions) > 1:
+                    raise RuntimeError(
+                        "adaptive threshold proposal has conflicting policy transitions"
+                    )
+                existing = existing_transitions[0]
+                return {
+                    "ok": True,
+                    "proposal_request_id": request_id,
+                    "lease_id": existing.get("authority_lease_id"),
+                    "lease_expires_at": existing.get("expires_at"),
+                    "transition": existing,
+                    "already_applied": True,
+                    "authority_policy": authority.effective.snapshot_dict(),
+                }
+            adaptive_context = current_adaptive_context()
+            if adaptive_context is None:
+                raise PermissionError(
+                    "adaptive threshold application requires current worker context"
+                )
+            current_generations, policy_fingerprints, _ = adaptive_context
+            previous_authority = authority.effective
+            proposals = adaptive_aggregation_store.list_transition_requests(
+                request_id=request_id,
+                current_generations=current_generations,
+                policy_fingerprints=policy_fingerprints,
+                authority_policy_generation=str(previous_authority.generation),
+                authority_policy_fingerprint=previous_authority.fingerprint,
+            )
+            if len(proposals) != 1:
+                raise KeyError(f"No adaptive threshold proposal found for {request_id}")
+            proposal = proposals[0]
+            if proposal.get("request_kind") != "ADAPTIVE_THRESHOLD_PROPOSAL":
+                raise PermissionError("adaptive threshold application requires a threshold proposal")
+            if proposal.get("context_status") != "CURRENT":
+                raise PermissionError(
+                    f"adaptive threshold proposal context is stale: {proposal.get('context_status')}"
+                )
+            if proposal.get("review_status") != "APPROVED_FOR_STAGED_POLICY_REVIEW":
+                raise PermissionError(
+                    "adaptive threshold application requires an approved operator review"
+                )
+            now = datetime.now(timezone.utc)
+            try:
+                effective_at = datetime.fromisoformat(str(proposal["effective_at"]))
+                expires_at = datetime.fromisoformat(str(proposal["expires_at"]))
+            except (KeyError, TypeError, ValueError) as exc:
+                raise PermissionError("adaptive threshold proposal has invalid timing") from exc
+            if effective_at.tzinfo is None:
+                effective_at = effective_at.replace(tzinfo=timezone.utc)
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at <= effective_at:
+                raise PermissionError("adaptive threshold proposal has invalid timing")
+            if now < effective_at:
+                raise PermissionError("adaptive threshold proposal is not effective yet")
+            remaining_seconds = int((expires_at - now).total_seconds())
+            if remaining_seconds <= 0:
+                raise PermissionError("adaptive threshold proposal has expired")
+
+            aggregation_target = str(
+                proposal.get("aggregation_target_id")
+                or extended_aggregation_target_id(
+                    str(proposal["target_id"]), proposal.get("aggregation_scope")
+                )
+            )
+            if policy_fingerprints.get(aggregation_target) != str(
+                proposal.get("policy_fingerprint") or ""
+            ):
+                raise PermissionError("adaptive threshold proposal policy is stale")
+            aggregate = next(
+                (
+                    item
+                    for item in adaptive_aggregation_store.list_aggregates()
+                    if str(item.get("aggregation_target_id") or "") == aggregation_target
+                    and str(item.get("generation_id") or "")
+                    == str(proposal.get("generation_id") or "")
+                    and str(item.get("policy_fingerprint") or "")
+                    == str(proposal.get("policy_fingerprint") or "")
+                    and str(item.get("authority_policy_generation") or "")
+                    == str(previous_authority.generation)
+                    and str(item.get("authority_policy_fingerprint") or "")
+                    == previous_authority.fingerprint
+                ),
+                None,
+            )
+            workers = aggregate.get("workers") if isinstance(aggregate, Mapping) else None
+            if not isinstance(workers, Mapping):
+                raise PermissionError(
+                    "adaptive threshold application requires an aggregate with worker provenance"
+                )
+            required_workers = [
+                {
+                    "worker_id": str(worker_id),
+                    "worker_pid": int(worker.get("worker_pid")),
+                }
+                for worker_id, worker in sorted(workers.items())
+                if isinstance(worker, Mapping)
+            ]
+            if not required_workers:
+                raise PermissionError(
+                    "adaptive threshold application requires at least one worker"
+                )
+            settings = _adaptive_threshold_policy_settings(
+                proposal.get("changes") or {},
+                target_id=str(proposal["target_id"]),
+            )
+            lease = authority.acquire_runtime_lease(
+                settings=settings,
+                requested_by=f"uid:{credentials[1]}",
+                reason=(
+                    f"approved adaptive threshold proposal {request_id}: "
+                    f"{str(request.get('reason') or proposal.get('reason') or '')[:400]}"
+                ).strip(),
+                duration_seconds=remaining_seconds,
+            )
+            try:
+                runtime.refresh_authority_policy()
+                if not unix_socket_exists(runtime_control_socket):
+                    raise RuntimeError("application runtime control is unavailable")
+                response = control_request(
+                    runtime_control_socket,
+                    {
+                        "command": "policy-authority-update",
+                        "snapshot": authority.effective.snapshot_dict(),
+                    },
+                )
+                if response.get("ok") is False:
+                    raise RuntimeError(
+                        str(response.get("error", "application rejected authority policy"))
+                    )
+                authority_generation_holder["generation"] = authority.effective.generation
+                post_context = current_adaptive_context()
+                if post_context is None:
+                    raise RuntimeError("application adaptive context is unavailable after policy update")
+                post_generations, post_policies, post_promotion_policies = post_context
+                applied_policy = str(post_policies.get(aggregation_target) or "")
+                if not applied_policy or applied_policy == str(proposal["policy_fingerprint"]):
+                    raise RuntimeError(
+                        "application did not expose a changed adaptive policy fingerprint"
+                    )
+                if post_generations.get(aggregation_target) != str(proposal["generation_id"]):
+                    raise RuntimeError("application adaptive generation changed during policy update")
+                post_policy = post_promotion_policies.get(aggregation_target) or {}
+                transition_timeout = float(post_policy.get("transition_timeout_seconds", 60.0))
+                transition = adaptive_aggregation_store.create_threshold_policy_transition(
+                    request_id,
+                    applied_policy_fingerprint=applied_policy,
+                    current_generations=post_generations,
+                    current_policy_fingerprints=post_policies,
+                    authority_policy_generation=str(authority.effective.generation),
+                    authority_policy_fingerprint=authority.effective.fingerprint,
+                    required_workers=required_workers,
+                    applied_by=f"uid:{credentials[1]}",
+                    reason=str(request.get("reason") or proposal.get("reason") or "")[:512],
+                    authority_lease_id=str(lease.lease_id),
+                    transition_timeout_seconds=transition_timeout,
+                )
+            except Exception:
+                authority.release_runtime_lease(lease.lease_id)
+                runtime.refresh_authority_policy()
+                if unix_socket_exists(runtime_control_socket):
+                    try:
+                        control_request(
+                            runtime_control_socket,
+                            {
+                                "command": "policy-authority-update",
+                                "snapshot": authority.effective.snapshot_dict(),
+                            },
+                        )
+                    except OSError:
+                        pass
+                authority_generation_holder["generation"] = authority.effective.generation
+                raise
+            runtime.event(
+                logger_name="caretaker.adaptive",
+                severity=30,
+                channel=LogChannel.AUDIT,
+                message="Approved adaptive threshold proposal applied",
+                fields={
+                    "request_id": request_id,
+                    "target_id": proposal.get("target_id"),
+                    "aggregation_target_id": aggregation_target,
+                    "lease_id": str(lease.lease_id),
+                    "transition_request_id": transition.get("request_id"),
+                    "policy_applied": True,
+                    "authority_granted": False,
+                    "authority_policy_generation": authority.effective.generation,
+                    "authority_policy_fingerprint": authority.effective.fingerprint,
+                },
+                origin="caretaker",
+            )
+            return {
+                "ok": True,
+                "proposal_request_id": request_id,
+                "lease_id": str(lease.lease_id),
+                "lease_expires_at": lease.expires_at.isoformat(),
+                "transition": transition,
+                "authority_policy": authority.effective.snapshot_dict(),
+            }
         if command == "adaptive-transition-ack":
             adaptive_context = current_adaptive_context()
             if adaptive_context is None:

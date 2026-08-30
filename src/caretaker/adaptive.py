@@ -300,6 +300,20 @@ def get_adaptive_controller(target_id: str) -> Any | None:
         return _CONTROLLER_REGISTRY.get(target_id)
 
 
+def refresh_adaptive_authority_policy() -> None:
+    """Refresh every live adaptive controller after an authority update.
+
+    Authority updates are application-wide snapshots, so controllers must
+    rebind their target-scoped policy before the runtime reports its adaptive
+    context. A controller failure is propagated so the caller can roll back
+    the authority update rather than exposing a partially refreshed process.
+    """
+    with _STATE_REGISTRY_LOCK:
+        controllers = tuple(_CONTROLLER_REGISTRY.values())
+    for controller in controllers:
+        controller.refresh_authority_policy()
+
+
 def adaptive_aggregation_status() -> tuple[Mapping[str, Any], ...]:
     """Return worker batcher context for supervisor reconciliation."""
     with _STATE_REGISTRY_LOCK:
@@ -1381,6 +1395,11 @@ class _AdaptiveController:
         self._persist()
         self._sync_aggregation_batcher()
         self._publish_state()
+
+    def refresh_authority_policy(self) -> None:
+        """Apply the current authority snapshot to this adaptive target."""
+        with self._lock:
+            self._refresh_policy_if_needed()
 
     def _effective_policy(self) -> LightweightPolicy:
         context = _authority_context()

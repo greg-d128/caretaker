@@ -6,7 +6,12 @@ from types import ModuleType
 import pytest
 import caretaker.run as run_module
 
-from caretaker.run import _behavior_materialization_log, _load_external_signer, main
+from caretaker.run import (
+    _adaptive_threshold_policy_settings,
+    _behavior_materialization_log,
+    _load_external_signer,
+    main,
+)
 
 
 def test_external_signer_provider_can_be_loaded_from_module_attribute(monkeypatch):
@@ -25,6 +30,35 @@ def test_external_signer_provider_can_be_loaded_from_module_attribute(monkeypatc
     signer = _load_external_signer(f"{module.__name__}:Signer")
     assert signer.public_identity()["identity_id"] == "test"
     assert signer.sign_artifact(b"abcdef").startswith(b"signed:")
+
+
+def test_adaptive_threshold_changes_become_target_scoped_authority_settings():
+    settings = _adaptive_threshold_policy_settings(
+        {
+            "exception.occurrences": 4,
+            "repair_evidence.require_problem_reproduction": False,
+            "transition_timeout_seconds": 90,
+        },
+        target_id="example.target",
+    )
+
+    assert [(item.path, item.value, item.target) for item in settings] == [
+        ("lightweight.exception.occurrences", 4, "example.target"),
+        (
+            "lightweight.repair_evidence.require_problem_reproduction",
+            False,
+            "example.target",
+        ),
+        ("lightweight.aggregation.transition_timeout_seconds", 90, "example.target"),
+    ]
+
+
+def test_adaptive_threshold_settings_reject_unknown_fields():
+    with pytest.raises(ValueError, match="unsupported adaptive threshold field"):
+        _adaptive_threshold_policy_settings(
+            {"sampling.behavior_every_calls": 1},
+            target_id="example.target",
+        )
 
 
 def test_external_signer_provider_requires_contract(monkeypatch):

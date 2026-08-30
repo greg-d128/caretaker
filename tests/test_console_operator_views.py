@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import stat
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from caretaker.console import CaretakerConsoleApp
@@ -1299,6 +1300,73 @@ def test_console_reviews_selected_threshold_proposal_without_applying_policy(tmp
             assert "Read-only" in str(
                 app.query_one("#adaptive-aggregation-status", Static).render()
             )
+
+    asyncio.run(exercise())
+
+
+def test_console_applies_current_approved_threshold_proposal(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            requests = []
+            now = datetime.now(timezone.utc)
+
+            async def request(command: str, **payload):
+                requests.append((command, payload))
+                if command == "adaptive-threshold-apply":
+                    return {
+                        "ok": True,
+                        "proposal_request_id": "request-1",
+                        "transition": {
+                            "request_kind": "ADAPTIVE_POLICY_TRANSITION",
+                            "request_id": "transition-1",
+                        },
+                    }
+                if command == "adaptive-aggregation-status":
+                    return {
+                        "ok": True,
+                        "aggregates": [],
+                        "transitions": [],
+                        "policy_context_available": True,
+                        "policy_contexts": [],
+                    }
+                raise AssertionError(command)
+
+            app._request = request  # type: ignore[method-assign]
+            app._application_running = True
+            app._adaptive_aggregation_records = [{
+                "kind": "THRESHOLD",
+                "payload": {
+                    "request_id": "request-1",
+                    "review_status": "APPROVED_FOR_STAGED_POLICY_REVIEW",
+                    "context_status": "CURRENT",
+                    "effective_at": (now - timedelta(seconds=1)).isoformat(),
+                    "expires_at": (now + timedelta(minutes=5)).isoformat(),
+                },
+            }]
+            app._selected_adaptive_threshold_request_id = "request-1"
+            reason = app.query_one("#adaptive-threshold-review-reason", Input)
+            reason.value = "apply reviewed threshold evidence"
+            confirm = app.query_one("#adaptive-threshold-apply-confirm", Checkbox)
+            confirm.disabled = False
+            confirm.value = True
+            app._refresh_adaptive_threshold_review_actions()
+            apply_button = app.query_one("#adaptive-threshold-apply", Button)
+            assert apply_button.disabled is False
+            assert app.query_one("#adaptive-threshold-review-approve", Button).disabled is True
+
+            await app.on_button_pressed(Button.Pressed(apply_button))
+
+            assert requests[0] == (
+                "adaptive-threshold-apply",
+                {
+                    "request_id": "request-1",
+                    "reason": "apply reviewed threshold evidence",
+                },
+            )
+            assert requests[1][0] == "adaptive-aggregation-status"
+            assert app._selected_adaptive_threshold_request_id is None
 
     asyncio.run(exercise())
 

@@ -485,6 +485,7 @@ def test_approved_threshold_change_records_post_policy_worker_transition(
         required_workers=[{"worker_id": "worker-a", "worker_pid": 101}],
         applied_by="uid:1001",
         reason="authority workflow applied reviewed threshold",
+        authority_lease_id="00000000-0000-0000-0000-000000000008",
         now=created + timedelta(seconds=2),
     )
 
@@ -495,6 +496,7 @@ def test_approved_threshold_change_records_post_policy_worker_transition(
     assert transition["requested_level"] == "POLICY"
     assert transition["policy_applied"] is True
     assert transition["authority_granted"] is False
+    assert transition["authority_lease_id"] == "00000000-0000-0000-0000-000000000008"
 
     acknowledgement = store.acknowledge_transition(
         {

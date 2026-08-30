@@ -117,11 +117,17 @@ requester, reason, effective time, expiry, and full context binding. It is
 listed as `PROPOSAL_ONLY` and becomes visibly stale when generation, policy, or
 authority context changes. Recording or displaying it never applies a policy
 change; an authorized application-owned authority workflow must perform any
-later update. After that workflow applies a reviewed change, the supervisor
-can record an `ADAPTIVE_POLICY_TRANSITION` bound to the new policy and
-authority fingerprints. Its required workers must acknowledge the post-change
-context before the transition is `APPLIED`; recording the transition still
-does not itself apply policy or grant authority. An
+later update. The authenticated `adaptive-threshold-apply` control operation
+performs that workflow only after an approved proposal reaches its effective
+time, the old context is still current, and aggregate worker provenance is
+available. It acquires a target-scoped runtime lease bounded by the proposal
+expiry, propagates the authority snapshot to the application, and rolls the
+lease back if the application does not expose the changed policy context.
+After that workflow applies a reviewed change, the supervisor records an
+`ADAPTIVE_POLICY_TRANSITION` bound to the new policy and authority
+fingerprints. Its required workers must acknowledge the post-change context
+before the transition is `APPLIED`; recording the transition still does not
+grant authority. An
 authenticated operator can record one context-checked `APPROVE` or `REJECT`
 review for the proposal. `APPROVE` means only that the proposal is eligible for
 later staged policy review; it does not apply thresholds, reload workers, grant
@@ -131,10 +137,10 @@ stale or expired proposal cannot be reviewed.
 The supervisor exposes `adaptive-aggregation-status`,
 `adaptive-aggregation-reconcile`, `adaptive-aggregation-ack`,
 `adaptive-transition-list`, `adaptive-transition-ack`,
-`adaptive-threshold-proposal`, and `adaptive-threshold-review` through its
-control socket. Both threshold commands derive the live context and the
-caller's local UID; they cannot accept arbitrary context supplied by the
-caller. Its health cycle
+`adaptive-threshold-proposal`, `adaptive-threshold-review`, and
+`adaptive-threshold-apply` through its control socket. All threshold commands
+derive the live context and the caller's local UID; they cannot accept
+arbitrary context supplied by the caller. Its health cycle
 reconciles enabled worker contexts and evaluates
 thresholds automatically. The worker-side
 `apply_supervisor_transition()` method requires exact target, generation, code,
@@ -157,7 +163,8 @@ Repair-evidence thresholds that produced the current supervisor view. The
 policy context is bounded and unavailable when the live runtime cannot be
 queried. An unreviewed threshold proposal can be selected and given an
 explicitly reasoned operator approval or rejection; that action records only
-the advisory review record. The tab has no threshold-editing,
-transition-acknowledgement, or application action control, and an approval
-does not apply a threshold or grant authority. Threshold changes remain a
-future staged policy-transition capability.
+the advisory review record. The tab does not expose transition-acknowledgement
+or threshold-editing controls. It does expose application of a selected
+approved proposal through the separately gated control-plane operation; the
+console does not bypass its review, timing, provenance, authority, or worker
+acknowledgement requirements.

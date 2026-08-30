@@ -89,7 +89,16 @@ from the worker control socket and never applies the proposed policy change.
 `adaptive-threshold-review` records one context-checked operator approval or
 rejection for such a proposal. Approval only makes it eligible for a later
 staged policy workflow; it does not apply policy, reload workers, or grant
-authority.
+authority. `adaptive-threshold-apply` is the next gated step: it accepts only
+an approved, currently effective proposal with matching aggregate worker
+provenance, acquires one target-scoped runtime authority lease for the
+remaining proposal lifetime, and sends the resulting authority snapshot to
+the application. The application must refresh its adaptive controllers and
+expose a changed policy fingerprint; otherwise the lease is released and the
+prior authority snapshot is restored. On success the supervisor records an
+`ADAPTIVE_POLICY_TRANSITION` that workers must acknowledge. Retrying an
+already-applied proposal returns the existing transition without acquiring a
+second lease.
 
 Replacement probation and acceptance counters are policy resolved. The default
 guideline is 1,000 successful executions for each stage with no permitted

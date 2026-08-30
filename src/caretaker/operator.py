@@ -434,6 +434,8 @@ class OperatorRuntimeRegistry:
                     refresh = getattr(guard, "refresh_authority_policy", None)
                     if refresh is not None:
                         refresh()
+                from .adaptive import refresh_adaptive_authority_policy
+                refresh_adaptive_authority_policy()
                 from .logging.handler import get_runtime as get_logging_runtime
                 logging_runtime = get_logging_runtime()
                 if logging_runtime is not None and hasattr(logging_runtime, "apply_authority_policy"):
