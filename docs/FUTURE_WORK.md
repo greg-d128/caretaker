@@ -1094,6 +1094,12 @@ packet verification, expiry, exact context, and acceptance-state checks occur
 before the handler can satisfy the recovery gate. Cross-process spawning and
 fleet coordination remain future work.
 
+The supervisor can now consume coordinated worker-failure evidence and select
+the ordinary or critical-evidence recovery action per scope. Dispatch still
+requires the application-owned handler acknowledgement and records execution
+status without granting authority. Deployment-specific durable incident,
+replacement, and shutdown lifecycle integration remains future work.
+
 ### Recovery decisions recorded for the next implementation slice
 
 The following decisions close the current recovery-design questions:

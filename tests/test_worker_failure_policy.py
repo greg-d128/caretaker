@@ -14,6 +14,7 @@ from caretaker.logging import (
 from caretaker import (
     InMemoryRepairStore,
     SQLiteRepairStore,
+    RecoveryAction,
     RepairRecoveryPolicy,
     WorkerAcceptancePolicy,
     create_recovery_authority_packet,
@@ -474,6 +475,42 @@ def test_worker_failure_reconciliation_groups_persisted_records_and_retains_inco
     filtered = reconcile_worker_failure_records(store, scope="transaction:txn-1")
     assert filtered["group_count"] == 1
     assert filtered["record_count"] == 2
+
+
+def test_supervisor_reconciliation_selects_critical_action_and_requires_handler_ack() -> None:
+    runtime = FakeRuntime()
+    store = InMemoryRepairStore()
+    supervisor = CaretakerApplicationSupervisor(runtime, failure_store=store)
+    record = create_worker_failure_record(
+        {
+            "worker_id": "worker-critical",
+            "worker_kind": "REPAIR_ANALYZER",
+            "transaction_id": "txn-critical",
+            "transaction_state": "ROLLED_BACK",
+        },
+        critical_evidence=True,
+        require_complete_postmortem=True,
+    )
+    store.record_worker_failure(record)
+
+    result = supervisor.reconcile_worker_failures(
+        recovery_policy=RepairRecoveryPolicy(
+            worker_failure_action=RecoveryAction.CONTINUE_DEGRADED,
+            critical_evidence_action=RecoveryAction.GENERATE_INCIDENT,
+        ),
+        recovery_handlers={
+            "GENERATE_INCIDENT": lambda decision: {
+                "accepted": True,
+                "incident_id": f"incident-for-{decision['scope']}",
+            }
+        },
+    )
+
+    decision = result["recovery_decisions"][0]
+    assert decision["critical_evidence_conflict"] is True
+    assert decision["policy_action"]["selected_action"] == "GENERATE_INCIDENT"
+    assert decision["action_execution"]["status"] == "EXECUTED"
+    assert decision["authority_granted"] is False
 
 
 def test_replacement_action_handler_uses_packet_admission_and_acceptance() -> None:

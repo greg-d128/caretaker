@@ -424,6 +424,15 @@ incomplete/invalid packet references are written to an idempotent conflict
 report for investigation. This is evidence coordination only and does not
 select recovery actions or grant authority.
 
+The supervisor can consume that grouped result through
+`reconcile_worker_failures(recovery_policy=..., recovery_handlers=...)`. A
+scope with a conflict involving critical evidence uses the configured
+`critical_evidence_action`; other scopes use `worker_failure_action`. The
+selected action is passed through the same explicit application-handler gates
+as Repair recovery, and absent or rejected handlers remain visible as
+non-executed evidence. This coordination does not create workers, modify
+policy, or grant authority.
+
 If diagnostic logging itself fails, Caretaker does not recursively send another
 logging event. The control response reports `diagnostic_persisted=false` and a
 bounded `diagnostic_persistence_error`, and the bootstrap path makes a best-effort

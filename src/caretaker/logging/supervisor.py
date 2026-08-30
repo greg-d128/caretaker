@@ -18,8 +18,11 @@ from ..repair_recovery import (
     WorkerAcceptancePolicy,
     WorkerReplacementRequest,
     create_worker_failure_record,
+    dispatch_recovery_action,
     evaluate_worker_acceptance,
     reconcile_worker_failure_records,
+    resolve_worker_failure_scope,
+    select_recovery_action,
     validate_worker_acceptance_policy,
     verify_recovery_authority_packet,
 )
@@ -847,17 +850,100 @@ class CaretakerApplicationSupervisor:
         minimum_sample_count: int = 30,
         z_threshold: float = 3.0,
         observed_at: datetime | None = None,
+        recovery_policy: RepairRecoveryPolicy | None = None,
+        recovery_handlers: Mapping[str, Callable[[Mapping[str, Any]], Any]] | None = None,
     ) -> dict[str, Any]:
-        """Reconcile all persisted worker failures without granting authority."""
+        """Reconcile failures and optionally dispatch policy-owned actions.
+
+        Reconciliation is always performed first. When ``recovery_policy`` is
+        supplied, each scope receives an explicit action decision: a conflict
+        involving critical evidence uses ``critical_evidence_action`` and
+        other failures use ``worker_failure_action``. Any effect still requires
+        an application-owned handler acknowledgement through the existing
+        action gates; evidence reconciliation never grants authority.
+        """
         if self.failure_store is None:
             raise RuntimeError("worker failure reconciliation requires a failure store")
-        return reconcile_worker_failure_records(
+        result = reconcile_worker_failure_records(
             self.failure_store,
             scope=scope,
             minimum_sample_count=minimum_sample_count,
             z_threshold=z_threshold,
             observed_at=observed_at,
         )
+        if recovery_policy is None:
+            return result
+        decisions: list[dict[str, Any]] = []
+        records = tuple(self.failure_store.all_worker_failures())
+        for reconciliation in result["reconciliations"]:
+            reconciliation_scope = str(reconciliation["scope"])
+            scoped_records = tuple(
+                record
+                for record in records
+                if (
+                    str(
+                        getattr(record, "reconciliation_scope", None)
+                        or (
+                            record.get("reconciliation_scope")
+                            if isinstance(record, Mapping)
+                            else ""
+                        )
+                        or resolve_worker_failure_scope(
+                            getattr(record, "envelope", None)
+                            or (
+                                record.get("envelope", {})
+                                if isinstance(record, Mapping)
+                                else {}
+                            ),
+                            failure_id=(
+                                getattr(record, "failure_id", None)
+                                or (
+                                    record.get("failure_id")
+                                    if isinstance(record, Mapping)
+                                    else ""
+                                )
+                            ),
+                        )
+                    )
+                    == reconciliation_scope
+                )
+            )
+            critical_conflict = bool(reconciliation.get("conflict")) and any(
+                bool(
+                    getattr(record, "critical_evidence", None)
+                    or (
+                        record.get("critical_evidence")
+                        if isinstance(record, Mapping)
+                        else False
+                    )
+                )
+                for record in scoped_records
+            )
+            action = (
+                recovery_policy.critical_evidence_action
+                if critical_conflict
+                else recovery_policy.worker_failure_action
+            )
+            decision = {
+                "scope": reconciliation_scope,
+                "reconciliation": reconciliation,
+                "critical_evidence_conflict": critical_conflict,
+                "policy_action": select_recovery_action(
+                    action,
+                    enabled=recovery_policy.enabled,
+                ),
+                "authority_granted": False,
+            }
+            decision["action_execution"] = dispatch_recovery_action(
+                decision,
+                handlers=recovery_handlers,
+            )
+            decisions.append(decision)
+        return {
+            **result,
+            "recovery_decisions": tuple(decisions),
+            "authority_granted": False,
+        }
 
     def build_replacement_action_handler(
         self,
