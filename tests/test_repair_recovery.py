@@ -18,6 +18,7 @@ from caretaker import (
     apply_repair_recovery_plan,
     build_repair_recovery_plan,
     create_recovery_authority_packet,
+    dispatch_recovery_action,
     evaluate_worker_acceptance,
     validate_authority_expiry,
     validate_recovery_candidate_binding,
@@ -84,6 +85,7 @@ def test_recovery_plan_marks_incomplete_attempt_as_rollback_without_reactivation
     applied = apply_repair_recovery_plan(store, plan)
     repeated = apply_repair_recovery_plan(store, plan)
     assert applied["applied_count"] == 1
+    assert applied["action_results"][0]["status"] == "FALLBACK_ONLY"
     assert repeated["applied_count"] == 0
     assert repeated["already_recorded_count"] == 1
     assert store.all_recoveries()[0].policy_action["selected_action"] == "ROLLBACK_TO_DEPLOYED_CODE"
@@ -291,6 +293,37 @@ def test_recovery_action_selection_is_explicit_and_disabled_policy_fails_safe() 
     assert disabled["selected_action"] is None
     assert disabled["status"] == "DISABLED_BY_POLICY"
     assert disabled["runtime_fallback"] == "ROLLBACK_TO_DEPLOYED_CODE"
+
+
+def test_recovery_action_dispatch_requires_application_callback_acknowledgement() -> None:
+    decision = {
+        "policy_action": {
+            "selected_action": "GENERATE_INCIDENT",
+        },
+    }
+    missing = dispatch_recovery_action(decision)
+    assert missing["status"] == "NOT_CONFIGURED"
+    assert missing["authority_granted"] is False
+
+    rejected = dispatch_recovery_action(
+        decision,
+        handlers={"GENERATE_INCIDENT": lambda _decision: {"accepted": False}},
+    )
+    assert rejected["status"] == "REJECTED_BY_HANDLER"
+
+    received = []
+    executed = dispatch_recovery_action(
+        decision,
+        handlers={
+            "GENERATE_INCIDENT": lambda current: received.append(current) or {
+                "accepted": True,
+                "incident_id": "incident-1",
+            }
+        },
+    )
+    assert executed["status"] == "EXECUTED"
+    assert executed["authority_granted"] is False
+    assert received == [decision]
 
 
 def test_worker_acceptance_uses_defaults_and_target_override_without_granting_authority() -> None:

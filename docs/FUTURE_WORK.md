@@ -1045,6 +1045,13 @@ action is enabled, remains planned-only, falls back to deployed code, and
 requires application orchestration. It still does not execute worker
 replacement, application shutdown, or incident callbacks itself.
 
+`RepairEngine.apply_recovery_plan()` may now receive an explicit application-
+owned handler map for those actions. A handler must return
+`{"accepted": true}` before its action is recorded as executed; missing,
+rejected, or failed handlers remain visible in the durable recovery record.
+The default call supplies no handlers and therefore performs no application
+orchestration.
+
 ### Recovery decisions recorded for the next implementation slice
 
 The following decisions close the current recovery-design questions:

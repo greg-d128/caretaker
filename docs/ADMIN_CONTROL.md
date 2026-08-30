@@ -366,6 +366,12 @@ If event-history retrieval fails, an actionable pending approval remains visible
 as long as the approval query succeeds. The failed query appears as a
 non-actionable `ERROR` row whose JSON retains the structured control diagnostic.
 
+Recovery action callbacks are not exposed as arbitrary control-socket commands.
+An embedding application must explicitly provide its own handler map to
+`RepairEngine.apply_recovery_plan()`. Caretaker records whether each callback
+was absent, rejected, failed, or accepted; the recovery plan itself never
+grants the callback authority.
+
 If diagnostic logging itself fails, Caretaker does not recursively send another
 logging event. The control response reports `diagnostic_persisted=false` and a
 bounded `diagnostic_persistence_error`, and the bootstrap path makes a best-effort

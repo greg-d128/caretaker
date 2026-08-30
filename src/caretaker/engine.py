@@ -12,7 +12,7 @@ import types
 import threading
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Any, TYPE_CHECKING
+from typing import Any, Callable, Mapping, TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from .auxiliary import AuxiliaryRegistry
@@ -60,7 +60,10 @@ from .observation import ObservationManager
 from .policy import OutputValidationTrigger, RepairPolicy, TimeoutTrigger
 from .postmortem import PostMortemRecorder
 from .provider import CandidateBatch, CandidateProposal, RepairProvider, RepairRequest
-from .repair_recovery import apply_repair_recovery_plan, build_repair_recovery_plan
+from .repair_recovery import (
+    apply_repair_recovery_plan,
+    build_repair_recovery_plan,
+)
 from .registry import RepairTarget, TargetRegistry, build_target
 from .regression import RegressionCorpus, RegressionFixtureStore
 from .runtime import current_episode_id, repair_depth, set_runtime_context
@@ -299,9 +302,18 @@ class RepairEngine:
             live_context_by_target=live_context_by_target,
         )
 
-    def apply_recovery_plan(self, plan: dict[str, Any]) -> dict[str, Any]:
-        """Record fail-safe recovery decisions without reactivating candidates."""
-        return apply_repair_recovery_plan(self.store, plan)
+    def apply_recovery_plan(
+        self,
+        plan: dict[str, Any],
+        *,
+        handlers: Mapping[str, Callable[[Mapping[str, Any]], Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Record recovery decisions and optionally dispatch app callbacks.
+
+        The handlers remain owned by the embedding application. Caretaker does
+        not create authority for a callback and defaults to no dispatch.
+        """
+        return apply_repair_recovery_plan(self.store, plan, handlers=handlers)
 
     def record_candidate_observation_success(
         self,

@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from enum import Enum, auto
 import hashlib
 import json
-from typing import Any
+from typing import Any, Callable
 from uuid import UUID, uuid4
 
 from .domain import RepairAttemptOutcome, RepairAttemptStage, RepairEpisodeOutcome, utcnow
@@ -440,6 +440,7 @@ class RepairRecoveryRecord:
     reason: str
     incomplete_records: tuple[Mapping[str, Any], ...] = ()
     policy_action: Mapping[str, Any] = field(default_factory=dict)
+    action_execution: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -475,6 +476,75 @@ def select_recovery_action(
             RecoveryAction.CONTINUE_DEGRADED,
         },
         "authority_granted": False,
+    }
+
+
+def dispatch_recovery_action(
+    decision: Mapping[str, Any],
+    *,
+    handlers: Mapping[str, Callable[[Mapping[str, Any]], Any]] | None = None,
+) -> dict[str, Any]:
+    """Dispatch one selected recovery action to an application-owned handler.
+
+    The plan remains the policy input, while the callback is the application
+    boundary that owns incident creation, worker replacement, or shutdown.
+    A callback must explicitly acknowledge the action with ``accepted=True``;
+    that acknowledgement is recorded as execution evidence, not as a Caretaker
+    authority grant.
+    """
+    policy_action = decision.get("policy_action")
+    if not isinstance(policy_action, Mapping):
+        return {
+            "status": "INVALID_PLAN",
+            "action": None,
+            "authority_granted": False,
+            "reason": "recovery decision has no policy action",
+        }
+    selected = policy_action.get("selected_action")
+    if selected is None:
+        return {
+            "status": "DISABLED_BY_POLICY",
+            "action": None,
+            "authority_granted": False,
+        }
+    selected = str(selected)
+    if selected in {
+        RecoveryAction.ROLLBACK_TO_DEPLOYED_CODE.name,
+        RecoveryAction.CONTINUE_DEGRADED.name,
+    }:
+        return {
+            "status": "FALLBACK_ONLY",
+            "action": selected,
+            "authority_granted": False,
+        }
+    handler = (handlers or {}).get(selected)
+    if handler is None:
+        return {
+            "status": "NOT_CONFIGURED",
+            "action": selected,
+            "authority_granted": False,
+        }
+    try:
+        result = handler(decision)
+    except Exception as exc:
+        return {
+            "status": "FAILED",
+            "action": selected,
+            "authority_granted": False,
+            "error": f"{type(exc).__name__}: {exc}"[:256],
+        }
+    if not isinstance(result, Mapping) or not bool(result.get("accepted")):
+        return {
+            "status": "REJECTED_BY_HANDLER",
+            "action": selected,
+            "authority_granted": False,
+            "handler_result": dict(result) if isinstance(result, Mapping) else None,
+        }
+    return {
+        "status": "EXECUTED",
+        "action": selected,
+        "authority_granted": False,
+        "handler_result": dict(result),
     }
 
 
@@ -885,13 +955,15 @@ def apply_repair_recovery_plan(
     plan: Mapping[str, Any],
     *,
     now: datetime | None = None,
+    handlers: Mapping[str, Callable[[Mapping[str, Any]], Any]] | None = None,
 ) -> dict[str, Any]:
-    """Durably acknowledge rollback decisions without rewriting source evidence.
+    """Acknowledge recovery decisions and optionally dispatch app callbacks.
 
     This operation does not activate, delete, or rewrite a candidate, attempt,
     incident, or policy record. Reapplying the same plan is idempotent by
-    ``attempt_id``. A future policy-aware recovery controller can use these
-    records when deciding whether to replace workers or create an incident.
+    ``attempt_id``. Handlers are application-owned callbacks and must return
+    ``{"accepted": True}`` before a dispatched action is recorded as executed;
+    missing or rejected handlers remain explicit evidence in the record.
     """
     if plan.get("schema_version") != RECOVERY_PLAN_SCHEMA_VERSION:
         raise ValueError("unsupported Repair recovery plan schema version")
@@ -904,6 +976,7 @@ def apply_repair_recovery_plan(
     observed_at = now or utcnow()
     applied = 0
     skipped = 0
+    action_results: list[dict[str, Any]] = []
     for decision in decisions:
         if not isinstance(decision, Mapping):
             raise ValueError("Repair recovery decision must be an object")
@@ -913,6 +986,7 @@ def apply_repair_recovery_plan(
         if attempt_id in existing:
             skipped += 1
             continue
+        action_execution = dispatch_recovery_action(decision, handlers=handlers)
         record = RepairRecoveryRecord(
             recovery_id=uuid4(),
             attempt_id=attempt_id,
@@ -936,10 +1010,15 @@ def apply_repair_recovery_plan(
                 if isinstance(decision.get("policy_action"), Mapping)
                 else {}
             ),
+            action_execution=action_execution,
         )
         store.record_recovery(record)
         existing.add(attempt_id)
         applied += 1
+        action_results.append({
+            "attempt_id": attempt_id,
+            **action_execution,
+        })
     return {
         "schema_version": RECOVERY_PLAN_SCHEMA_VERSION,
         "applied_count": applied,
@@ -947,4 +1026,5 @@ def apply_repair_recovery_plan(
         "read_only": False,
         "source_evidence_modified": False,
         "automatic_reactivation": False,
+        "action_results": action_results,
     }
