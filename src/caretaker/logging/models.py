@@ -552,6 +552,7 @@ class WorkerHealth:
     last_error_fingerprint: str | None
     authority_packet_id: UUID | None = None
     authority_packet_expires_at: datetime | None = None
+    replaced_worker_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -14,6 +14,7 @@ from .handler import LoggingRuntime
 from ..repair_recovery import (
     RecoveryAuthorityPacket,
     RepairRecoveryPolicy,
+    WorkerReplacementRequest,
     verify_recovery_authority_packet,
 )
 from .models import (
@@ -91,6 +92,7 @@ class WorkerRegistry:
     def __init__(self, *, heartbeat_timeout_seconds: float = 15.0) -> None:
         self.heartbeat_timeout_seconds = heartbeat_timeout_seconds
         self._workers: dict[UUID, WorkerHealth] = {}
+        self._replacement_requests: set[UUID] = set()
         self._lock = threading.RLock()
 
     def register(self, kind: WorkerKind, pid: int) -> WorkerHealth:
@@ -148,6 +150,105 @@ class WorkerRegistry:
             )
             self._workers[health.worker_id] = admitted
             return admitted
+
+    def prepare_replacement(
+        self,
+        worker_id: UUID,
+        packet: RecoveryAuthorityPacket,
+        *,
+        supervisor_time: datetime,
+        target_id: str,
+        generation_id: str,
+        code_hash: str,
+        policy_fingerprint: str,
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        allowed_capabilities: set[str] | frozenset[str] = frozenset(),
+        policy: RepairRecoveryPolicy | None = None,
+        reason: str = "failed worker replacement",
+    ) -> WorkerReplacementRequest:
+        """Prepare a packet-verified replacement handoff for a failed worker."""
+        with self._lock:
+            failed = self._workers[worker_id]
+            if failed.state not in {WorkerState.FAILED, WorkerState.UNAUTHORIZED}:
+                raise ValueError("worker replacement requires a failed or unauthorized worker")
+        verification = verify_recovery_authority_packet(
+            packet,
+            supervisor_time=supervisor_time,
+            target_id=target_id,
+            generation_id=generation_id,
+            code_hash=code_hash,
+            policy_fingerprint=policy_fingerprint,
+            authority_policy_generation=authority_policy_generation,
+            authority_policy_fingerprint=authority_policy_fingerprint,
+            allowed_capabilities=allowed_capabilities,
+            policy=policy,
+        )
+        if not verification["valid"]:
+            raise PermissionError(
+                "worker replacement packet rejected: "
+                + ", ".join(str(item) for item in verification["failures"])
+            )
+        return WorkerReplacementRequest(
+            request_id=uuid4(),
+            failed_worker_id=worker_id,
+            worker_kind=failed.worker_kind.name,
+            issued_at=supervisor_time,
+            authority_packet=packet,
+            reason=str(reason)[:256],
+        )
+
+    def register_replacement(
+        self,
+        request: WorkerReplacementRequest,
+        kind: WorkerKind,
+        pid: int,
+        *,
+        supervisor_time: datetime,
+        target_id: str,
+        generation_id: str,
+        code_hash: str,
+        policy_fingerprint: str,
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        allowed_capabilities: set[str] | frozenset[str] = frozenset(),
+        policy: RepairRecoveryPolicy | None = None,
+    ) -> WorkerHealth:
+        """Admit a replacement only after packet and failed-worker checks."""
+        if request.worker_kind != kind.name:
+            raise PermissionError("worker replacement kind does not match request")
+        with self._lock:
+            if request.request_id in self._replacement_requests:
+                raise PermissionError("worker replacement request has already been consumed")
+            failed = self._workers.get(request.failed_worker_id)
+            if failed is None:
+                raise PermissionError("worker replacement references an unknown worker")
+            if failed.state not in {WorkerState.FAILED, WorkerState.UNAUTHORIZED}:
+                raise PermissionError("worker replacement source is no longer failed")
+            self._replacement_requests.add(request.request_id)
+        try:
+            admitted = self.register_authorized(
+                kind,
+                pid,
+                request.authority_packet,
+                supervisor_time=supervisor_time,
+                target_id=target_id,
+                generation_id=generation_id,
+                code_hash=code_hash,
+                policy_fingerprint=policy_fingerprint,
+                authority_policy_generation=authority_policy_generation,
+                authority_policy_fingerprint=authority_policy_fingerprint,
+                allowed_capabilities=allowed_capabilities,
+                policy=policy,
+            )
+        except Exception:
+            with self._lock:
+                self._replacement_requests.discard(request.request_id)
+            raise
+        with self._lock:
+            replacement = replace(admitted, replaced_worker_id=request.failed_worker_id)
+            self._workers[replacement.worker_id] = replacement
+            return replacement
 
     def heartbeat(
         self,
@@ -322,6 +423,11 @@ class CaretakerApplicationSupervisor:
             "authority_packet_expires_at": (
                 worker.authority_packet_expires_at.isoformat()
                 if worker.authority_packet_expires_at is not None
+                else None
+            ),
+            "replaced_worker_id": (
+                str(worker.replaced_worker_id)
+                if worker.replaced_worker_id is not None
                 else None
             ),
             "transaction_state": "ROLLED_BACK",

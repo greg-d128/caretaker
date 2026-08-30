@@ -991,16 +991,21 @@ worker packet or multiprocess transport protocol.
 
 The application worker registry now supports packet-aware admission and marks
 an admitted worker unauthorized when its packet expires; restarting it clears
-the packet and requires re-admission. This is lifecycle enforcement inside the
-existing registry, not yet process spawning, packet distribution, or worker
-replacement orchestration.
+the packet and requires re-admission. It also creates a packet-verified,
+single-use replacement request and admits a replacement only when the failed
+worker, worker kind, exact context, packet integrity, and packet expiry all
+match. The admitted worker retains the failed worker ID as bounded replacement
+provenance. This is lifecycle enforcement inside the existing registry; OS
+process spawning, cross-process packet transport, and replacement orchestration
+remain future work.
 
 The supervisor now exposes a policy decision boundary for failed workers. It
 records bounded in-flight evidence immediately, supports incident capture, and
 only counts a worker as restarted after a callback-owned replacement reports
 success. Restart exhaustion selects the existing degraded, disable, or stop
-action vocabulary. Process spawning, replacement packet distribution, and
-policy-specific incident/shutdown orchestration remain future work.
+action vocabulary. Process spawning, cross-process replacement packet
+distribution, and policy-specific incident/shutdown orchestration remain future
+work.
 
 ### Recovery decisions recorded for the next implementation slice
 

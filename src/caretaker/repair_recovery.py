@@ -74,6 +74,35 @@ class RecoveryAuthorityPacket:
     schema_version: int = 1
 
 
+@dataclass(frozen=True, slots=True)
+class WorkerReplacementRequest:
+    """Supervisor handoff for an authorized replacement worker.
+
+    The request carries the packet that a replacement must present during
+    admission. It is a routing/provenance record, not an authority grant; the
+    registry verifies the packet and the current supervisor context again.
+    """
+
+    request_id: UUID
+    failed_worker_id: UUID
+    worker_kind: str
+    issued_at: datetime
+    authority_packet: RecoveryAuthorityPacket
+    reason: str
+
+    def summary(self) -> dict[str, Any]:
+        """Return bounded metadata suitable for logs and incident evidence."""
+        return {
+            "request_id": str(self.request_id),
+            "failed_worker_id": str(self.failed_worker_id),
+            "worker_kind": self.worker_kind,
+            "issued_at": self.issued_at.isoformat(),
+            "authority_packet_id": str(self.authority_packet.packet_id),
+            "authority_packet_expires_at": self.authority_packet.expires_at.isoformat(),
+            "reason": self.reason[:256],
+        }
+
+
 def _packet_payload(packet: RecoveryAuthorityPacket) -> dict[str, Any]:
     return {
         "packet_id": str(packet.packet_id),
