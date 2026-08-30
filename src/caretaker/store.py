@@ -45,6 +45,9 @@ class RepairStore(Protocol):
     def recent_events(self, target_id: str | None, limit: int = 50) -> tuple[RepairEvent, ...]: ...
     def attempts_for_target(self, target_id: str) -> tuple[Any, ...]: ...
     def all_attempts(self) -> tuple[Any, ...]: ...
+    def all_episodes(self) -> tuple[Any, ...]: ...
+    def all_generations(self) -> tuple[Any, ...]: ...
+    def all_candidates(self) -> tuple[Any, ...]: ...
     def record_recovery(self, record: RepairRecoveryRecord) -> None: ...
     def all_recoveries(self) -> tuple[Any, ...]: ...
 
@@ -129,6 +132,18 @@ class InMemoryRepairStore:
     def all_attempts(self) -> tuple[RepairAttempt, ...]:
         with self._lock:
             return tuple(sorted(self.attempts.values(), key=lambda attempt: attempt.created_at))
+
+    def all_episodes(self) -> tuple[RepairEpisode, ...]:
+        with self._lock:
+            return tuple(sorted(self.episodes.values(), key=lambda episode: episode.created_at))
+
+    def all_generations(self) -> tuple[CandidateGeneration, ...]:
+        with self._lock:
+            return tuple(sorted(self.generations.values(), key=lambda generation: generation.started_at))
+
+    def all_candidates(self) -> tuple[RepairCandidate, ...]:
+        with self._lock:
+            return tuple(sorted(self.candidates.values(), key=lambda candidate: candidate.created_at))
 
     def record_recovery(self, record: RepairRecoveryRecord) -> None:
         with self._lock:
@@ -264,6 +279,15 @@ class SQLiteRepairStore:
 
     def all_attempts(self) -> tuple[Mapping[str, Any], ...]:
         return tuple(self.query_records("attempts", limit=10000))
+
+    def all_episodes(self) -> tuple[Mapping[str, Any], ...]:
+        return tuple(self.query_records("episodes", limit=10000))
+
+    def all_generations(self) -> tuple[Mapping[str, Any], ...]:
+        return tuple(self.query_records("generations", limit=10000))
+
+    def all_candidates(self) -> tuple[Mapping[str, Any], ...]:
+        return tuple(self.query_records("candidates", limit=10000))
 
     def record_recovery(self, record: RepairRecoveryRecord) -> None:
         self._write("recovery_records", record, target_id=record.target_id)

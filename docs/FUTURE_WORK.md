@@ -1076,11 +1076,13 @@ The remaining implementation work is to:
 
 A first recovery inspection slice now exists as `RepairEngine.recovery_plan()`
 and the runtime command `runtime-repair-recovery-plan`. It inventories durably
-persisted incomplete attempts, reports their last milestone, and selects
-deployed-code-only recovery without reactivating a candidate. An explicit
-`apply_recovery_plan()` operation can idempotently record that rollback decision
-without rewriting the interrupted attempt or its partial evidence. It does not
-yet perform policy-selected replacement or shutdown actions.
+persisted incomplete attempts, reports their last milestone, and projects the
+linked incident, episode, candidate generation, and validation states that must
+be treated as incomplete or not started. An explicit `apply_recovery_plan()`
+operation can idempotently record that rollback decision and those lifecycle
+states without rewriting the interrupted attempt or its partial evidence. The
+projection is deliberately not a mutation of the source records, and it does
+not yet perform policy-selected replacement or shutdown actions.
 
 - mark interrupted incidents, generations, attempts, and validations incomplete;
 - reconstruct or deliberately stale pending approvals;

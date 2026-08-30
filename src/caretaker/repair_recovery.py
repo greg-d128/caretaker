@@ -438,6 +438,7 @@ class RepairRecoveryRecord:
     recovery_action: str
     authority_action: str
     reason: str
+    incomplete_records: tuple[Mapping[str, Any], ...] = ()
 
 
 def _recovered_attempt_ids(store: Any) -> set[str]:
@@ -466,6 +467,81 @@ def _attempts(store: Any, target_id: str | None) -> tuple[Any, ...]:
     if hasattr(store, "all_attempts"):
         return tuple(store.all_attempts())
     return ()
+
+
+def _records_by_id(store: Any, method_name: str, id_field: str) -> dict[str, Any]:
+    if not hasattr(store, method_name):
+        return {}
+    return {
+        str(_field(item, id_field, "")): item
+        for item in getattr(store, method_name)()
+        if _field(item, id_field)
+    }
+
+
+def _incomplete_lifecycle_records(store: Any, attempt: Any) -> tuple[dict[str, Any], ...]:
+    """Project linked lifecycle state without mutating source evidence."""
+    records: list[dict[str, Any]] = []
+    incident_id = str(_field(attempt, "incident_id", ""))
+    if incident_id:
+        records.append({
+            "record_type": "incident",
+            "record_id": incident_id,
+            "state": "INCOMPLETE_REPAIR",
+            "reason": "linked Repair attempt did not durably complete",
+        })
+
+    episode_id = str(_field(attempt, "episode_id", ""))
+    episodes = _records_by_id(store, "all_episodes", "episode_id")
+    episode = episodes.get(episode_id)
+    if episode_id:
+        records.append({
+            "record_type": "episode",
+            "record_id": episode_id,
+            "state": "INCOMPLETE_REPAIR",
+            "completed_at": (
+                _field(episode, "completed_at").isoformat()
+                if isinstance(_field(episode, "completed_at"), datetime)
+                else _field(episode, "completed_at")
+            ) if episode is not None else None,
+            "source_present": episode is not None,
+        })
+
+    candidate_id = str(_field(attempt, "candidate_id", ""))
+    candidates = _records_by_id(store, "all_candidates", "candidate_id")
+    candidate = candidates.get(candidate_id)
+    generation_id = str(_field(candidate, "generation_id", "")) if candidate is not None else ""
+    generations = _records_by_id(store, "all_generations", "generation_id")
+    generation = generations.get(generation_id)
+    if generation_id:
+        records.append({
+            "record_type": "generation",
+            "record_id": generation_id,
+            "state": "INCOMPLETE_REPAIR",
+            "completed_at": (
+                _field(generation, "completed_at").isoformat()
+                if isinstance(_field(generation, "completed_at"), datetime)
+                else _field(generation, "completed_at")
+            ) if generation is not None else None,
+            "source_present": generation is not None,
+        })
+
+    stage = _enum_name(_field(attempt, "stage"))
+    validation_stages = {
+        RepairAttemptStage.VALIDATION.name,
+        RepairAttemptStage.SCORING.name,
+        RepairAttemptStage.ACTIVATION.name,
+        RepairAttemptStage.RETRY.name,
+        RepairAttemptStage.OBSERVATION.name,
+    }
+    records.append({
+        "record_type": "validation",
+        "record_id": str(_field(attempt, "attempt_id", "")),
+        "state": "INCOMPLETE" if stage in validation_stages else "NOT_STARTED",
+        "last_milestone": stage or RepairAttemptStage.CREATED.name,
+        "persisted_check_count": len(_field(attempt, "validation_results", ()) or ()),
+    })
+    return tuple(records)
 
 
 def build_repair_recovery_plan(
@@ -507,6 +583,7 @@ def build_repair_recovery_plan(
         stage = _enum_name(_field(attempt, "stage"))
         if completed_at is not None and outcome != RepairAttemptOutcome.PENDING.name:
             continue
+        incomplete_records = _incomplete_lifecycle_records(store, attempt)
         decisions.append({
             "attempt_id": attempt_id,
             "episode_id": str(_field(attempt, "episode_id", "")),
@@ -523,6 +600,7 @@ def build_repair_recovery_plan(
             "authority_action": "REVALIDATE_BEFORE_ANY_CONTINUATION",
             "candidate_reactivation_allowed": False,
             "approval_survives_restart": False,
+            "incomplete_records": list(incomplete_records),
             "reason": (
                 "Repair transaction did not durably complete; treat it as rolled back "
                 "and do not reactivate an in-memory replacement"
@@ -571,6 +649,9 @@ def build_repair_recovery_plan(
             },
         },
         "incomplete_attempt_count": len(decisions),
+        "incomplete_lifecycle_record_count": sum(
+            len(decision["incomplete_records"]) for decision in decisions
+        ),
         "decisions": decisions,
     }
 
@@ -622,6 +703,10 @@ def apply_repair_recovery_plan(
                 decision.get("authority_action") or "REVALIDATE_BEFORE_ANY_CONTINUATION"
             ),
             reason=str(decision.get("reason") or "interrupted Repair transaction"),
+            incomplete_records=tuple(
+                item for item in (decision.get("incomplete_records") or ())
+                if isinstance(item, Mapping)
+            ),
         )
         store.record_recovery(record)
         existing.add(attempt_id)

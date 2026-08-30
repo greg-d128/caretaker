@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -104,6 +105,51 @@ def test_sqlite_recovery_plan_and_acknowledgement_preserve_attempt_evidence(tmp_
     assert len(recoveries) == 1
     assert recoveries[0]["attempt_id"] == str(interrupted.attempt_id)
     assert recoveries[0]["recovery_action"] == "ROLLBACK_TO_DEPLOYED_CODE"
+
+
+def test_recovery_plan_projects_linked_lifecycle_records_without_mutating_them() -> None:
+    store = InMemoryRepairStore()
+    interrupted = _attempt(
+        target_id="app:charge",
+        completed=False,
+        outcome=RepairAttemptOutcome.PENDING,
+    )
+    generation_id = uuid4()
+    now = datetime.now(timezone.utc)
+    store.record_attempt(interrupted)
+    store.episodes[interrupted.episode_id] = SimpleNamespace(
+        episode_id=interrupted.episode_id,
+        created_at=now,
+        completed_at=None,
+    )
+    store.generations[generation_id] = SimpleNamespace(
+        generation_id=generation_id,
+        started_at=now,
+        completed_at=None,
+    )
+    store.candidates[interrupted.candidate_id] = SimpleNamespace(
+        candidate_id=interrupted.candidate_id,
+        generation_id=generation_id,
+        created_at=now,
+    )
+
+    plan = build_repair_recovery_plan(store)
+
+    assert plan["incomplete_lifecycle_record_count"] == 4
+    records = plan["decisions"][0]["incomplete_records"]
+    assert {item["record_type"] for item in records} == {
+        "incident", "episode", "generation", "validation",
+    }
+    assert next(item for item in records if item["record_type"] == "incident")["state"] == "INCOMPLETE_REPAIR"
+    assert next(item for item in records if item["record_type"] == "validation")["state"] == "INCOMPLETE"
+    assert store.episodes[interrupted.episode_id].completed_at is None
+    assert store.generations[generation_id].completed_at is None
+
+    applied = apply_repair_recovery_plan(store, plan)
+
+    assert applied["applied_count"] == 1
+    recovery = store.all_recoveries()[0]
+    assert len(recovery.incomplete_records) == 4
 
 
 def test_recovery_policy_surfaces_packet_skew_and_failure_actions() -> None:
