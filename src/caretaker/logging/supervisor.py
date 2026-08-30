@@ -381,15 +381,15 @@ class CaretakerApplicationSupervisor:
                         else None
                     ),
                 )
+                restart_result["worker_id"] = str(restarted.worker_id)
+                restart_result["restart_count"] = restarted.restart_count
                 return {
                     "ok": True,
                     "action": "RESTARTED",
                     "incident_status": incident_status,
                     "incident_error": incident_error,
                     "restart": {
-                        "started": True,
-                        "worker_id": str(restarted.worker_id),
-                        "restart_count": restarted.restart_count,
+                        **restart_result,
                     },
                     "failure_envelope": envelope,
                 }

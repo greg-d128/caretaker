@@ -30,7 +30,11 @@ def test_worker_failure_records_incident_and_uses_callback_owned_restart() -> No
         failed,
         policy=WorkerRestartPolicy(maximum_restarts=1),
         create_incident=lambda envelope: incidents.append(dict(envelope)),
-        restart_worker=lambda current: {"started": True, "pid": 5678},
+        restart_worker=lambda current: {
+            "started": True,
+            "pid": 5678,
+            "backoff_seconds": 0.5,
+        },
     )
 
     assert result["action"] == "RESTARTED"
@@ -44,6 +48,7 @@ def test_worker_failure_records_incident_and_uses_callback_owned_restart() -> No
     assert current.restart_count == 1
     assert current.state.name == "STARTING"
     assert current.authority_packet_id is None
+    assert result["restart"]["backoff_seconds"] == 0.5
 
 
 def test_worker_failure_applies_exhaustion_action_and_preserves_failure_evidence() -> None:

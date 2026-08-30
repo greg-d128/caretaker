@@ -1548,9 +1548,58 @@ def main(argv: list[str] | None = None) -> int:
     health_stop = threading.Event()
     system_restart_times: list[float] = []
     application_stop_requested = False
+    system_failure_handled = False
+
+    def record_worker_failure(envelope: dict[str, object]) -> None:
+        runtime.event(
+            logger_name="caretaker.worker-failure",
+            severity=40,
+            channel=LogChannel.EMERGENCY,
+            message="Caretaker worker failure recorded as a rolled-back transaction",
+            fields=dict(envelope),
+            origin="caretaker",
+        )
+
+    def restart_system_collector(_worker: object) -> dict[str, object]:
+        nonlocal collector, collector_thread
+        if child.poll() is not None:
+            return {"started": False, "reason": "application has exited"}
+        restart_policy = runtime.active_policy.worker_restart
+        now = time.monotonic()
+        system_restart_times[:] = [
+            value
+            for value in system_restart_times
+            if value >= now - restart_policy.restart_window_seconds
+        ]
+        delay = min(
+            restart_policy.maximum_backoff_seconds,
+            restart_policy.initial_backoff_seconds * (2 ** len(system_restart_times)),
+        )
+        if health_stop.wait(delay):
+            return {"started": False, "reason": "supervisor stopping"}
+        collector = SystemDataCollector(system_policy, application_pid=child.pid)
+        collector_thread = threading.Thread(
+            target=collector.run,
+            name="caretaker-system-collector",
+            daemon=True,
+        )
+        collector_thread.start()
+        system_restart_times.append(time.monotonic())
+        return {"started": True, "pid": os.getpid(), "backoff_seconds": delay}
+
+    def disable_system_collector(_worker: object) -> dict[str, object]:
+        nonlocal collector, collector_thread
+        if collector is not None:
+            collector.stop()
+        previous_thread = collector_thread
+        collector = None
+        collector_thread = None
+        if previous_thread is not None and previous_thread is not threading.current_thread():
+            previous_thread.join(timeout=1)
+        return {"disabled": True}
 
     def health_loop() -> None:
-        nonlocal application_stop_requested, collector, collector_thread
+        nonlocal application_stop_requested, collector, collector_thread, system_failure_handled
         while not health_stop.wait(1.0):
             effective_authority = authority.effective
             materialize_behavior_snapshots(maximum=100)
@@ -1701,36 +1750,28 @@ def main(argv: list[str] | None = None) -> int:
                 supervisor.workers.mark_failed(control_health.worker_id, error_fingerprint="control-server-stopped")
             if system_health is not None and collector_thread is not None:
                 if collector_thread.is_alive():
+                    system_failure_handled = False
                     supervisor.workers.heartbeat(system_health.worker_id, state=WorkerState.HEALTHY)
-                else:
-                    supervisor.workers.mark_failed(system_health.worker_id, error_fingerprint="system-collector-stopped")
-                    restart_policy = runtime.active_policy.worker_restart
-                    now = time.monotonic()
-                    system_restart_times[:] = [
-                        value for value in system_restart_times
-                        if value >= now - restart_policy.restart_window_seconds
-                    ]
-                    can_restart = (
-                        restart_policy.enabled
-                        and child.poll() is None
-                        and len(system_restart_times) < restart_policy.maximum_restarts
+                elif not system_failure_handled:
+                    failed_worker = supervisor.workers.mark_failed(
+                        system_health.worker_id,
+                        error_fingerprint="system-collector-stopped",
                     )
-                    if can_restart:
-                        delay = min(
-                            restart_policy.maximum_backoff_seconds,
-                            restart_policy.initial_backoff_seconds * (2 ** len(system_restart_times)),
+                    restart_policy = runtime.active_policy.worker_restart
+                    if child.poll() is not None:
+                        restart_policy = replace(
+                            restart_policy,
+                            enabled=False,
                         )
-                        if health_stop.wait(delay):
-                            return
-                        collector = SystemDataCollector(system_policy, application_pid=child.pid)
-                        collector_thread = threading.Thread(
-                            target=collector.run,
-                            name="caretaker-system-collector",
-                            daemon=True,
-                        )
-                        collector_thread.start()
-                        system_restart_times.append(time.monotonic())
-                        restarted = supervisor.workers.record_restart(system_health.worker_id, pid=os.getpid())
+                    failure_result = supervisor.handle_worker_failure(
+                        failed_worker,
+                        policy=restart_policy,
+                        create_incident=record_worker_failure,
+                        restart_worker=restart_system_collector,
+                        disable_component=disable_system_collector,
+                    )
+                    system_failure_handled = True
+                    if failure_result.get("action") == "RESTARTED":
                         runtime.event(
                             logger_name="caretaker.watchdog",
                             severity=30,
@@ -1738,16 +1779,20 @@ def main(argv: list[str] | None = None) -> int:
                             message="Restarted failed Caretaker system collector",
                             fields={
                                 "worker_id": str(system_health.worker_id),
-                                "restart_count": restarted.restart_count,
-                                "backoff_seconds": delay,
+                                "restart_count": failure_result["restart"]["restart_count"],
+                                "backoff_seconds": (
+                                    failure_result["restart"].get("backoff_seconds")
+                                    if isinstance(failure_result.get("restart"), dict)
+                                    else None
+                                ),
                             },
                         )
                     elif (
-                        restart_policy.exhaustion_action is WorkerFailureAction.STOP_APPLICATION
+                        failure_result.get("action") == WorkerFailureAction.STOP_APPLICATION.name
                         and not application_stop_requested
                     ):
                         application_stop_requested = True
-                        shutdown = supervisor.stop_application()
+                        shutdown = failure_result.get("action_result")
                         runtime.event(
                             logger_name="caretaker.watchdog",
                             severity=50,
