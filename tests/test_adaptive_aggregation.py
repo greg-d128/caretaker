@@ -442,6 +442,88 @@ def test_threshold_proposal_review_is_context_bound_idempotent_and_non_mutating(
         )
 
 
+def test_approved_threshold_change_records_post_policy_worker_transition(
+    tmp_path: Path,
+):
+    store = SupervisorAdaptiveAggregationStore(tmp_path)
+    proposal = store.create_threshold_proposal(
+        target_id="example.target",
+        generation_id="generation-a",
+        code_hash="code-a",
+        monitoring_fingerprint="monitoring-a",
+        policy_fingerprint="policy-a",
+        authority_policy_generation="7",
+        authority_policy_fingerprint="authority-a",
+        changes={"exception.occurrences": 4},
+        requested_by="operator:test",
+        reason="review threshold evidence",
+        expires_in_seconds=3600,
+    )
+    created = datetime.fromisoformat(proposal["created_at"])
+    review_context = {
+        "current_generations": {"example.target": "generation-a"},
+        "policy_fingerprints": {"example.target": "policy-a"},
+        "authority_policy_generation": "7",
+        "authority_policy_fingerprint": "authority-a",
+    }
+    store.review_threshold_proposal(
+        proposal["request_id"],
+        decision="APPROVE",
+        reviewed_by="uid:1001",
+        reason="ready for staged policy handling",
+        now=created + timedelta(seconds=1),
+        **review_context,
+    )
+
+    transition = store.create_threshold_policy_transition(
+        proposal["request_id"],
+        applied_policy_fingerprint="policy-b",
+        current_generations={"example.target": "generation-a"},
+        current_policy_fingerprints={"example.target": "policy-b"},
+        authority_policy_generation="8",
+        authority_policy_fingerprint="authority-b",
+        required_workers=[{"worker_id": "worker-a", "worker_pid": 101}],
+        applied_by="uid:1001",
+        reason="authority workflow applied reviewed threshold",
+        now=created + timedelta(seconds=2),
+    )
+
+    assert transition["request_kind"] == "ADAPTIVE_POLICY_TRANSITION"
+    assert transition["status"] == "PENDING"
+    assert transition["previous_policy_fingerprint"] == "policy-a"
+    assert transition["policy_fingerprint"] == "policy-b"
+    assert transition["requested_level"] == "POLICY"
+    assert transition["policy_applied"] is True
+    assert transition["authority_granted"] is False
+
+    acknowledgement = store.acknowledge_transition(
+        {
+            **transition,
+            "worker_id": "worker-a",
+            "applied": True,
+            "observed_level": "POLICY",
+        },
+        peer_pid=101,
+        current_generations={"example.target": "generation-a"},
+        policy_fingerprints={"example.target": "policy-b"},
+        authority_policy_generation="8",
+        authority_policy_fingerprint="authority-b",
+    )
+    assert acknowledgement["transition_status"] == "APPLIED"
+    listed = store.list_transition_requests(
+        current_generations={"example.target": "generation-a"},
+        policy_fingerprints={"example.target": "policy-b"},
+        authority_policy_generation="8",
+        authority_policy_fingerprint="authority-b",
+    )
+    policy_transitions = [
+        item for item in listed
+        if item.get("request_kind") == "ADAPTIVE_POLICY_TRANSITION"
+    ]
+    assert len(policy_transitions) == 1
+    assert policy_transitions[0]["status"] == "APPLIED"
+
+
 def test_threshold_proposal_rejects_non_threshold_fields(tmp_path: Path) -> None:
     store = SupervisorAdaptiveAggregationStore(tmp_path)
     with pytest.raises(AdaptiveAggregationError, match="unsupported adaptive threshold"):

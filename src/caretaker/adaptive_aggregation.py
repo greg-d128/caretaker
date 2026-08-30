@@ -2279,6 +2279,161 @@ class SupervisorAdaptiveAggregationStore:
             "proposal_only": True,
         }
 
+    def create_threshold_policy_transition(
+        self,
+        proposal_request_id: str,
+        *,
+        applied_policy_fingerprint: str,
+        current_generations: Mapping[str, str],
+        current_policy_fingerprints: Mapping[str, str],
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        required_workers: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...],
+        applied_by: str,
+        reason: str,
+        transition_timeout_seconds: float = DEFAULT_TRANSITION_TIMEOUT_SECONDS,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Record worker verification for an already-applied threshold change.
+
+        The application-owned authority workflow applies the policy before
+        calling this method.  This method only creates a durable transition
+        request whose workers must confirm the new exact context.  It never
+        changes policy or grants authority.
+        """
+        try:
+            proposal_id = str(UUID(str(proposal_request_id)))
+        except (TypeError, ValueError) as exc:
+            raise AdaptiveAggregationError("proposal request_id must be a UUID") from exc
+        proposal = self._load_transition_request(self._transition_path(proposal_id))
+        if proposal.get("request_kind") != "ADAPTIVE_THRESHOLD_PROPOSAL":
+            raise PermissionError("only adaptive threshold proposals can start a policy transition")
+        review = self._load_proposal_review(proposal_id)
+        if review is None or review.get("review_status") != "APPROVED_FOR_STAGED_POLICY_REVIEW":
+            raise PermissionError("adaptive threshold proposal requires an approved review")
+        if str(review.get("request_sha256") or "") != _content_hash(proposal):
+            raise PermissionError("adaptive threshold proposal review is bound to different content")
+        aggregation_target = str(
+            proposal.get("aggregation_target_id")
+            or extended_aggregation_target_id(
+                str(proposal["target_id"]), proposal.get("aggregation_scope")
+            )
+        )
+        if aggregation_target not in current_generations:
+            raise PermissionError("adaptive threshold policy transition generation is unavailable")
+        if str(current_generations[aggregation_target]) != str(proposal["generation_id"]):
+            raise PermissionError("adaptive threshold policy transition generation is stale")
+        previous_policy = str(proposal["policy_fingerprint"])
+        applied_policy = _text(
+            applied_policy_fingerprint,
+            name="applied_policy_fingerprint",
+            limit=MAX_BATCH_TEXT,
+        )
+        assert applied_policy is not None
+        if applied_policy == previous_policy:
+            raise AdaptiveAggregationError(
+                "applied_policy_fingerprint must differ from the proposal policy fingerprint"
+            )
+        if str(current_policy_fingerprints.get(aggregation_target) or "") != applied_policy:
+            raise PermissionError("applied adaptive policy fingerprint is not current")
+        authority_generation = _text(
+            authority_policy_generation,
+            name="authority_policy_generation",
+            limit=MAX_BATCH_TEXT,
+        )
+        authority_fingerprint = _text(
+            authority_policy_fingerprint,
+            name="authority_policy_fingerprint",
+            limit=MAX_BATCH_TEXT,
+        )
+        actor = _text(applied_by, name="applied_by", limit=MAX_BATCH_TEXT)
+        transition_reason = _text(reason, name="reason", limit=MAX_TRANSITION_REASON)
+        assert authority_generation is not None
+        assert authority_fingerprint is not None
+        assert actor is not None and transition_reason is not None
+        timeout = _transition_timeout(transition_timeout_seconds)
+        if not isinstance(required_workers, (list, tuple)) or not required_workers:
+            raise AdaptiveAggregationError("adaptive policy transition requires workers")
+        if len(required_workers) > MAX_WORKER_PROVENANCE:
+            raise AdaptiveAggregationError(
+                f"adaptive policy transition exceeds {MAX_WORKER_PROVENANCE} workers"
+            )
+        normalized_workers: list[dict[str, Any]] = []
+        worker_ids: set[str] = set()
+        for item in required_workers:
+            if not isinstance(item, Mapping):
+                raise AdaptiveAggregationError("adaptive policy transition worker must be an object")
+            worker_id = _text(item.get("worker_id"), name="worker_id", limit=MAX_BATCH_TEXT)
+            if worker_id is None or worker_id in worker_ids:
+                raise AdaptiveAggregationError("adaptive policy transition worker IDs must be unique")
+            try:
+                worker_pid = int(item.get("worker_pid"))
+            except (TypeError, ValueError) as exc:
+                raise AdaptiveAggregationError("adaptive policy transition worker_pid must be an integer") from exc
+            if worker_pid < 0:
+                raise AdaptiveAggregationError("adaptive policy transition worker_pid cannot be negative")
+            worker_ids.add(worker_id)
+            normalized_workers.append({"worker_id": worker_id, "worker_pid": worker_pid})
+        created_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        expires_at = created_at + timedelta(seconds=timeout)
+        for path in sorted(self.transition_directory.glob("*.json")):
+            try:
+                existing = self._load_transition_request(path)
+            except Exception:
+                continue
+            if (
+                existing.get("request_kind") == "ADAPTIVE_POLICY_TRANSITION"
+                and str(existing.get("proposal_request_id")) == proposal_id
+            ):
+                return {
+                    **existing,
+                    "status": self._transition_status(
+                        existing,
+                        self._load_transition_acknowledgements(str(existing["request_id"])),
+                        now=created_at,
+                    ),
+                    "duplicate": True,
+                }
+        transition = {
+            "request_id": str(uuid4()),
+            "request_kind": "ADAPTIVE_POLICY_TRANSITION",
+            "proposal_request_id": proposal_id,
+            "proposal_review_sha256": str(review.get("review_sha256") or _content_hash(review)),
+            "target_id": str(proposal["target_id"]),
+            "aggregation_scope": proposal.get("aggregation_scope"),
+            "aggregation_target_id": aggregation_target,
+            "generation_id": str(proposal["generation_id"]),
+            "code_hash": str(proposal["code_hash"]),
+            "monitoring_fingerprint": str(proposal["monitoring_fingerprint"]),
+            "previous_policy_fingerprint": previous_policy,
+            "policy_fingerprint": applied_policy,
+            "authority_policy_generation": authority_generation,
+            "authority_policy_fingerprint": authority_fingerprint,
+            "changes": dict(proposal.get("changes") or {}),
+            "requested_level": "POLICY",
+            "reason": transition_reason,
+            "applied_by": actor,
+            "policy_applied": True,
+            "authority_granted": False,
+            "created_at": created_at.isoformat(),
+            "transition_timeout_seconds": timeout,
+            "expires_at": expires_at.isoformat(),
+            "required_workers": normalized_workers,
+        }
+        _safe_write(
+            self._transition_path(str(transition["request_id"])),
+            {
+                "schema_version": ADAPTIVE_AGGREGATION_SCHEMA_VERSION,
+                "request": transition,
+                "request_sha256": _content_hash(transition),
+            },
+        )
+        return {
+            **transition,
+            "status": "PENDING",
+            "duplicate": False,
+        }
+
     def list_transition_requests(
         self,
         *,
@@ -2428,8 +2583,13 @@ class SupervisorAdaptiveAggregationStore:
         except (TypeError, ValueError) as exc:
             raise AdaptiveAggregationError("transition request_id must be a UUID") from exc
         stored = self._load_transition_request(self._transition_path(request_id))
-        if stored.get("request_kind") != "ADAPTIVE_PROMOTION":
-            raise PermissionError("only Behavior promotion requests can be acknowledged")
+        if stored.get("request_kind") not in {
+            "ADAPTIVE_PROMOTION",
+            "ADAPTIVE_POLICY_TRANSITION",
+        }:
+            raise PermissionError(
+                "only Behavior promotion or adaptive policy transition requests can be acknowledged"
+            )
         if current_generations is not None:
             context_error = self._context_error(
                 stored,

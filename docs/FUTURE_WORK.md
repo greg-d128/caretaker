@@ -741,7 +741,13 @@ incident callbacks, parallel stores, and transport-level throttling remain
 future integrations.
 The supervisor also records delayed, context-bound threshold proposals as
 proposal-only evidence; applying them, verifying them through a staged policy
-transition, and exposing an operator edit workflow remain future work.
+transition, and exposing an operator edit workflow remain future work. An
+approved proposal can now be represented by a post-application
+`ADAPTIVE_POLICY_TRANSITION` record that binds the prior proposal/review to the
+new policy and authority fingerprints and requires exact worker
+acknowledgements. This record verifies adoption; it does not apply policy or
+grant authority. The application-owned authority workflow and its control-plane
+integration remain future work.
 The current slice also carries bounded timing-breach duration samples and
 worker-supplied numeric resource samples, producing three-standard-deviation
 evidence conflicts for materially different worker distributions. Automatic

@@ -116,7 +116,12 @@ bounded set of threshold fields. The proposal records the requested changes,
 requester, reason, effective time, expiry, and full context binding. It is
 listed as `PROPOSAL_ONLY` and becomes visibly stale when generation, policy, or
 authority context changes. Recording or displaying it never applies a policy
-change; an authorized policy workflow must perform any later update. An
+change; an authorized application-owned authority workflow must perform any
+later update. After that workflow applies a reviewed change, the supervisor
+can record an `ADAPTIVE_POLICY_TRANSITION` bound to the new policy and
+authority fingerprints. Its required workers must acknowledge the post-change
+context before the transition is `APPLIED`; recording the transition still
+does not itself apply policy or grant authority. An
 authenticated operator can record one context-checked `APPROVE` or `REJECT`
 review for the proposal. `APPROVE` means only that the proposal is eligible for
 later staged policy review; it does not apply thresholds, reload workers, grant
