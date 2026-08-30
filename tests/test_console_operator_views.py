@@ -666,6 +666,42 @@ def test_behavior_archive_controls_fit_in_console(tmp_path):
     asyncio.run(exercise())
 
 
+def test_behavior_snapshot_displays_collection_request_provenance(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(120, 55)) as pilot:
+            app._activate_tab("behavior")
+            app._show_behavior_snapshot(
+                {
+                    "snapshot": {
+                        "snapshot_id": "snapshot-1",
+                        "subject_key": "function:lab.probe",
+                        "scope": "function",
+                        "subject": {"module_name": "lab", "qualified_name": "probe"},
+                        "profile": {"call_count": 2, "event_count": 2},
+                        "collection_request": {
+                            "request_id": "request-1",
+                            "requested_by": "uid:1001",
+                            "reason": "Investigate [untrusted] output",
+                            "requested_calls": 50,
+                            "observed_calls": 2,
+                            "outcome": "CAPTURED",
+                        },
+                    },
+                    "integrity": {"signature_state": "UNSIGNED"},
+                }
+            )
+            await pilot.pause()
+            path = app._save_active_report()
+            report = path.read_text(encoding="utf-8")
+            assert "Collection request provenance" in report
+            assert "Investigate [untrusted] output" in report
+            assert "uid:1001" in report
+
+    asyncio.run(exercise())
+
+
 def test_save_report_exports_active_tab_as_private_text(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 

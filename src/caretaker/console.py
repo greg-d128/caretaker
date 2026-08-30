@@ -2330,6 +2330,32 @@ class CaretakerConsoleApp(App):
             f"[b]Signature[/b] {signature_detail}"
             f"\n[b]Evidence[/b] {evidence} ({calls_target} completed calls/collection target)"
         )
+        collection_request = snapshot.get("collection_request")
+        if isinstance(collection_request, Mapping):
+            provenance = {
+                key: collection_request[key]
+                for key in (
+                    "request_id",
+                    "requested_by",
+                    "reason",
+                    "scope",
+                    "subject",
+                    "requested_calls",
+                    "requested_generation",
+                    "observed_calls",
+                    "observed_generation",
+                    "authority_policy_generation",
+                    "authority_policy_fingerprint",
+                    "requested_at",
+                    "completed_at",
+                    "outcome",
+                )
+                if key in collection_request
+            }
+            output.write("\n[b]Collection request provenance[/b]")
+            # Render operator-controlled reason text as plain Text so markup in
+            # evidence cannot alter the console's presentation.
+            output.write(Text(json.dumps(provenance, indent=2, sort_keys=True, default=str)))
         if summary is not None:
             summary_profile = summary.get("profile") or {}
             output.write(
