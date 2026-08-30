@@ -1411,7 +1411,10 @@ class CaretakerConsoleApp(App):
         for item in self._adaptive_aggregation_records:
             if item.get("kind") not in {"CONFLICT", "TRANSITION"}:
                 continue
-            if item.get("kind") != "CONFLICT" and str(item.get("status") or "").upper() != "EXPIRED":
+            if item.get("kind") != "CONFLICT" and str(item.get("status") or "").upper() not in {
+                "EXPIRED",
+                "STALE_CONTEXT",
+            }:
                 continue
             adaptive_target = str(item.get("target_id") or "")
             if adaptive_target and (
@@ -1779,7 +1782,25 @@ class CaretakerConsoleApp(App):
                     "related_tab": "adaptive",
                     "payload": payload,
                 })
-            elif kind == "TRANSITION" and str(adaptive_record.get("status") or "").upper() == "EXPIRED":
+            elif kind == "TRANSITION" and str(adaptive_record.get("status") or "").upper() in {
+                "EXPIRED",
+                "STALE_CONTEXT",
+            }:
+                if str(adaptive_record.get("status") or "").upper() == "STALE_CONTEXT":
+                    context_status = str(payload.get("context_status") or "STALE_CONTEXT")
+                    records.append({
+                        "priority": "HIGH",
+                        "kind": "ADAPTIVE TRANSITION STALE",
+                        "target_id": target_id,
+                        "timestamp": str(payload.get("created_at") or ""),
+                        "summary": (
+                            "An adaptive transition no longer matches the current "
+                            f"supervisor context ({context_status}); its acknowledgement is rejected."
+                        ),
+                        "related_tab": "adaptive",
+                        "payload": payload,
+                    })
+                    continue
                 stale_workers = payload.get("stale_worker_ids")
                 stale_count = len(stale_workers) if isinstance(stale_workers, (list, tuple)) else 0
                 records.append({
@@ -3681,12 +3702,18 @@ class CaretakerConsoleApp(App):
                 expired += 1
             required = item.get("required_workers")
             required_count = len(required) if isinstance(required, list) else 0
+            context_status = str(item.get("context_status") or "")
+            displayed_status = (
+                "STALE_CONTEXT"
+                if context_status.startswith("STALE_")
+                else item.get("status") or "UNKNOWN"
+            )
             rows.append({
                 "kind": "TRANSITION",
                 "target_id": item.get("aggregation_target_id") or item.get("target_id") or "-",
                 "scope": item.get("aggregation_scope") or "-",
                 "generation": item.get("generation_id") or "-",
-                "status": item.get("status") or "UNKNOWN",
+                "status": displayed_status,
                 "workers_or_acks": (
                     f"{item.get('acknowledgement_count', 0)}/{required_count} acks"
                     + (

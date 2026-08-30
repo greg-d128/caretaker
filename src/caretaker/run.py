@@ -468,8 +468,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         return matches, child_status
 
-    def reconcile_adaptive_aggregation(*, maximum: int = 100) -> dict[str, Any] | None:
-        """Reconcile worker evidence using supervisor-owned authority context."""
+    def current_adaptive_context() -> tuple[
+        dict[str, str], dict[str, str], dict[str, dict[str, Any]]
+    ] | None:
+        """Read the child's current adaptive context without mutating state."""
         if not unix_socket_exists(runtime_control_socket):
             return None
         try:
@@ -525,6 +527,14 @@ def main(argv: list[str] | None = None) -> int:
             current_generations.pop(aggregation_target, None)
             policy_fingerprints.pop(aggregation_target, None)
             promotion_policies.pop(aggregation_target, None)
+        return current_generations, policy_fingerprints, promotion_policies
+
+    def reconcile_adaptive_aggregation(*, maximum: int = 100) -> dict[str, Any] | None:
+        """Reconcile worker evidence using supervisor-owned authority context."""
+        context = current_adaptive_context()
+        if context is None:
+            return None
+        current_generations, policy_fingerprints, promotion_policies = context
         effective_authority = authority.effective
         result = adaptive_aggregation_store.reconcile(
             current_generations=current_generations,
@@ -596,11 +606,26 @@ def main(argv: list[str] | None = None) -> int:
                         dict(item) for item in raw_contexts if isinstance(item, dict)
                     ]
                     policy_context_available = True
+            adaptive_context = current_adaptive_context()
+            transition_context_kwargs: dict[str, Any] = {}
+            if adaptive_context is not None:
+                current_generations, policy_fingerprints, _ = adaptive_context
+                effective_authority = authority.effective
+                transition_context_kwargs = {
+                    "current_generations": current_generations,
+                    "policy_fingerprints": policy_fingerprints,
+                    "authority_policy_generation": str(effective_authority.generation),
+                    "authority_policy_fingerprint": effective_authority.fingerprint,
+                }
             return {
                 "ok": True,
                 "store": adaptive_aggregation_store.status(),
                 "aggregates": list(adaptive_aggregation_store.list_aggregates()),
-                "transitions": list(adaptive_aggregation_store.list_transition_requests()),
+                "transitions": list(
+                    adaptive_aggregation_store.list_transition_requests(
+                        **transition_context_kwargs,
+                    )
+                ),
                 "policy_contexts": policy_contexts,
                 "policy_context_available": policy_context_available,
             }
@@ -629,6 +654,17 @@ def main(argv: list[str] | None = None) -> int:
             target_id = str(request.get("target_id") or "").strip() or None
             worker_id = str(request.get("worker_id") or "").strip() or None
             limit = max(1, min(int(request.get("limit", 100)), 500))
+            adaptive_context = current_adaptive_context()
+            transition_context_kwargs: dict[str, Any] = {}
+            if adaptive_context is not None:
+                current_generations, policy_fingerprints, _ = adaptive_context
+                effective_authority = authority.effective
+                transition_context_kwargs = {
+                    "current_generations": current_generations,
+                    "policy_fingerprints": policy_fingerprints,
+                    "authority_policy_generation": str(effective_authority.generation),
+                    "authority_policy_fingerprint": effective_authority.fingerprint,
+                }
             return {
                 "ok": True,
                 "transitions": list(
@@ -636,15 +672,27 @@ def main(argv: list[str] | None = None) -> int:
                         target_id=target_id,
                         worker_id=worker_id,
                         limit=limit,
+                        **transition_context_kwargs,
                     )
                 ),
             }
         if command == "adaptive-transition-ack":
+            adaptive_context = current_adaptive_context()
+            if adaptive_context is None:
+                raise PermissionError(
+                    "adaptive transition acknowledgement requires current worker context"
+                )
+            current_generations, policy_fingerprints, _ = adaptive_context
+            effective_authority = authority.effective
             return {
                 "ok": True,
                 "acknowledgement": adaptive_aggregation_store.acknowledge_transition(
                     request,
                     peer_pid=credentials[0],
+                    current_generations=current_generations,
+                    policy_fingerprints=policy_fingerprints,
+                    authority_policy_generation=str(effective_authority.generation),
+                    authority_policy_fingerprint=effective_authority.fingerprint,
                 ),
             }
         if command == "adaptive-aggregation-ack":

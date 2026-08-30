@@ -1191,6 +1191,7 @@ def test_console_displays_read_only_adaptive_transition_deadlines(tmp_path):
                         "acknowledgement_count": 0,
                         "stale_worker_ids": ["worker-a"],
                         "expires_at": "2026-08-30T12:00:30+00:00",
+                        "context_status": "STALE_POLICY",
                     }],
                     "policy_context_available": True,
                     "policy_contexts": [{
@@ -1219,6 +1220,10 @@ def test_console_displays_read_only_adaptive_transition_deadlines(tmp_path):
 
             assert requests == [("adaptive-aggregation-status", {})]
             assert app.query_one("#adaptive-aggregation-table", DataTable).row_count == 3
+            assert app._adaptive_aggregation_records[-1]["status"] == "STALE_CONTEXT"
+            assert "ADAPTIVE TRANSITION STALE" in {
+                item["kind"] for item in app._attention_records
+            }
             status = str(
                 app.query_one("#adaptive-aggregation-status", Static).render()
             )

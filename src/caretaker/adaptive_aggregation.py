@@ -1896,7 +1896,23 @@ class SupervisorAdaptiveAggregationStore:
         worker_id: str | None = None,
         limit: int = 100,
         now: datetime | None = None,
+        current_generations: Mapping[str, str] | None = None,
+        policy_fingerprints: Mapping[str, str] | None = None,
+        authority_policy_generation: str | None = None,
+        authority_policy_fingerprint: str | None = None,
     ) -> tuple[dict[str, Any], ...]:
+        context_arguments = (
+            current_generations,
+            policy_fingerprints,
+            authority_policy_generation,
+            authority_policy_fingerprint,
+        )
+        if any(value is not None for value in context_arguments) and not all(
+            value is not None for value in context_arguments
+        ):
+            raise ValueError(
+                "transition context validation requires generation, policy, and authority context"
+            )
         bounded = max(1, min(int(limit), 500))
         result: list[dict[str, Any]] = []
         for path in sorted(self.transition_directory.glob("*.json")):
@@ -1962,6 +1978,18 @@ class SupervisorAdaptiveAggregationStore:
                     0.0,
                     (deadline - observed_at).total_seconds(),
                 )
+            if current_generations is None:
+                visible["context_status"] = "UNVERIFIED"
+            else:
+                context_error = self._context_error(
+                    request,
+                    current_generations=current_generations,
+                    policy_fingerprints=policy_fingerprints,
+                    policy_fingerprint=None,
+                    authority_policy_generation=str(authority_policy_generation),
+                    authority_policy_fingerprint=str(authority_policy_fingerprint),
+                )
+                visible["context_status"] = context_error or "CURRENT"
             result.append(visible)
         return tuple(result)
 
@@ -1970,8 +1998,24 @@ class SupervisorAdaptiveAggregationStore:
         request: Mapping[str, Any],
         *,
         peer_pid: int,
+        current_generations: Mapping[str, str] | None = None,
+        policy_fingerprints: Mapping[str, str] | None = None,
+        authority_policy_generation: str | None = None,
+        authority_policy_fingerprint: str | None = None,
     ) -> dict[str, Any]:
         """Record a worker's context-checked application of a transition request."""
+        context_arguments = (
+            current_generations,
+            policy_fingerprints,
+            authority_policy_generation,
+            authority_policy_fingerprint,
+        )
+        if any(value is not None for value in context_arguments) and not all(
+            value is not None for value in context_arguments
+        ):
+            raise ValueError(
+                "transition context validation requires generation, policy, and authority context"
+            )
         try:
             request_id = str(UUID(str(request.get("request_id"))))
         except (TypeError, ValueError) as exc:
@@ -1979,6 +2023,19 @@ class SupervisorAdaptiveAggregationStore:
         stored = self._load_transition_request(self._transition_path(request_id))
         if stored.get("request_kind") != "ADAPTIVE_PROMOTION":
             raise PermissionError("only Behavior promotion requests can be acknowledged")
+        if current_generations is not None:
+            context_error = self._context_error(
+                stored,
+                current_generations=current_generations,
+                policy_fingerprints=policy_fingerprints,
+                policy_fingerprint=None,
+                authority_policy_generation=str(authority_policy_generation),
+                authority_policy_fingerprint=str(authority_policy_fingerprint),
+            )
+            if context_error is not None:
+                raise PermissionError(
+                    f"adaptive transition context is stale: {context_error}"
+                )
         acknowledgements = self._load_transition_acknowledgements(request_id)
         if self._transition_status(stored, acknowledgements) == "EXPIRED":
             raise PermissionError("adaptive transition request has expired")

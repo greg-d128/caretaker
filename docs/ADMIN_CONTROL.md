@@ -187,7 +187,9 @@ correlated investigation.
 
 Adaptive Attention items are read-only evidence. Refresh the Adaptive view to
 load the current supervisor aggregation status; the console does not acknowledge
-transitions, replace workers, or change thresholds from Attention.
+transitions, replace workers, or change thresholds from Attention. A transition
+whose context is stale is displayed as `STALE_CONTEXT` and remains evidence for
+investigation rather than an actionable request.
 
 The header reports when the console last refreshed, whether runtime information
 is live or cached, whether Logs and Policy came from the supervisor or persisted

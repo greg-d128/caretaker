@@ -533,6 +533,31 @@ def test_aggregated_exception_threshold_waits_for_supervisor_request(tmp_path: P
     request = store.list_transition_requests()[0]
     with pytest.raises(PermissionError, match="Behavior only"):
         controller.apply_supervisor_transition({**request, "requested_level": "REPAIR"})
+    verified_context = {
+        "current_generations": {"aggregation.supervised": controller.code_hash},
+        "policy_fingerprints": {
+            "aggregation.supervised": status["policy_fingerprint"]
+        },
+        "authority_policy_generation": status["authority_policy_generation"],
+        "authority_policy_fingerprint": status["authority_policy_fingerprint"],
+    }
+    assert store.list_transition_requests(**verified_context)[0]["context_status"] == "CURRENT"
+    stale_context = {
+        **verified_context,
+        "policy_fingerprints": {"aggregation.supervised": "policy-changed"},
+    }
+    assert store.list_transition_requests(**stale_context)[0]["context_status"] == "STALE_POLICY"
+    with pytest.raises(PermissionError, match="stale: STALE_POLICY"):
+        store.acknowledge_transition(
+            {
+                **request,
+                "worker_id": "worker-a",
+                "applied": True,
+                "observed_level": "BEHAVIOR",
+            },
+            peer_pid=101,
+            **stale_context,
+        )
     applied = controller.apply_supervisor_transition(request)
     assert applied["applied"] is True
     assert applied["changed"] is True

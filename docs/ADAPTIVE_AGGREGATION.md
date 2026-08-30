@@ -95,6 +95,13 @@ the evidence counts and observation-window duration. It cannot be acknowledged
 as an applied transition and still requires the ordinary Repair policy,
 validation, approval, and authority gates.
 
+Transition listings can include a `context_status` of `CURRENT`,
+`UNVERIFIED`, or a fail-closed stale-context reason such as `STALE_POLICY` or
+`STALE_AUTHORITY_FINGERPRINT`. The supervisor validates the current target
+generation, policy fingerprint, and authority context before accepting a
+worker acknowledgement; if that context cannot be read or no longer matches,
+the acknowledgement is rejected and no transition state is changed.
+
 The supervisor exposes `adaptive-aggregation-status`,
 `adaptive-aggregation-reconcile`, `adaptive-aggregation-ack`,
 `adaptive-transition-list`, and `adaptive-transition-ack` through its control
