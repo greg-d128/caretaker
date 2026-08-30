@@ -37,6 +37,17 @@ class BufferedSegmentSink:
         self._closed = False
         self._dropped = 0
         self._last_error: Exception | None = None
+        self._metrics_lock = threading.Lock()
+        self._write_calls = 0
+        self._accepted_records = 0
+        self._failed_writes = 0
+        self._write_seconds_total = 0.0
+        self._write_seconds_max = 0.0
+        self._flush_batches = 0
+        self._flush_records = 0
+        self._flush_seconds_total = 0.0
+        self._flush_seconds_max = 0.0
+        self._maximum_queue_depth = 0
         self._thread = threading.Thread(target=self._run, name="caretaker-log-writer", daemon=True)
         self._thread.start()
 
@@ -79,6 +90,31 @@ class BufferedSegmentSink:
         return StorageHealth.NORMAL
 
     def write(self, envelope: LogEnvelope) -> bool:
+        started = time.perf_counter()
+        accepted = False
+        failed = False
+        try:
+            accepted = self._write(envelope)
+            return accepted
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            elapsed = max(0.0, time.perf_counter() - started)
+            with self._metrics_lock:
+                self._write_calls += 1
+                if accepted:
+                    self._accepted_records += 1
+                if failed:
+                    self._failed_writes += 1
+                self._write_seconds_total += elapsed
+                self._write_seconds_max = max(self._write_seconds_max, elapsed)
+                self._maximum_queue_depth = max(
+                    self._maximum_queue_depth,
+                    self._queue.qsize(),
+                )
+
+    def _write(self, envelope: LogEnvelope) -> bool:
         if self._closed:
             return False
         health = self.storage_health()
@@ -192,6 +228,7 @@ class BufferedSegmentSink:
                     break
                 assert isinstance(next_item, LogEnvelope)
                 batch.append(next_item)
+            flush_started = time.perf_counter()
             try:
                 for record in batch:
                     self.writer.write(record)
@@ -199,6 +236,12 @@ class BufferedSegmentSink:
             except Exception as exc:
                 self._last_error = exc
             finally:
+                elapsed = max(0.0, time.perf_counter() - flush_started)
+                with self._metrics_lock:
+                    self._flush_batches += 1
+                    self._flush_records += len(batch)
+                    self._flush_seconds_total += elapsed
+                    self._flush_seconds_max = max(self._flush_seconds_max, elapsed)
                 for _ in batch:
                     self._queue.task_done()
             if stop_after_batch:
@@ -207,6 +250,49 @@ class BufferedSegmentSink:
     def flush(self) -> None:
         self._queue.join()
         self.writer.flush()
+
+    def overhead_status(self) -> dict[str, Any]:
+        """Return bounded wall-clock and queue evidence for operator status.
+
+        These are observations of the logging path, not a complete CPU or
+        application-overhead measurement. They never affect backpressure or
+        policy decisions.
+        """
+        with self._metrics_lock:
+            write_calls = self._write_calls
+            accepted_records = self._accepted_records
+            failed_writes = self._failed_writes
+            write_seconds_total = self._write_seconds_total
+            write_seconds_max = self._write_seconds_max
+            flush_batches = self._flush_batches
+            flush_records = self._flush_records
+            flush_seconds_total = self._flush_seconds_total
+            flush_seconds_max = self._flush_seconds_max
+            maximum_queue_depth = self._maximum_queue_depth
+        queue_depth = self._queue.qsize()
+        capacity = self._queue.maxsize
+        return {
+            "measurement": "logging_path_wall_clock",
+            "write_calls": write_calls,
+            "accepted_records": accepted_records,
+            "dropped_records": self._dropped,
+            "failed_writes": failed_writes,
+            "write_seconds_total": write_seconds_total,
+            "write_seconds_max": write_seconds_max,
+            "flush_batches": flush_batches,
+            "flush_records": flush_records,
+            "flush_seconds_total": flush_seconds_total,
+            "flush_seconds_max": flush_seconds_max,
+            "queue_depth": queue_depth,
+            "queue_capacity": capacity,
+            "queue_utilization": (queue_depth / capacity) if capacity else 0.0,
+            "maximum_queue_depth": maximum_queue_depth,
+            "last_error": (
+                type(self._last_error).__name__
+                if self._last_error is not None
+                else None
+            ),
+        }
 
     def close(self, *, attachment_manifest_hash: str | None = None) -> SegmentManifest | None:
         if self._closed:

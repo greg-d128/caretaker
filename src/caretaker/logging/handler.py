@@ -339,6 +339,14 @@ class LoggingRuntime:
     def flush(self) -> None:
         self.sink.flush()
 
+    def overhead_status(self) -> dict[str, Any]:
+        """Return bounded Caretaker logging-path overhead evidence."""
+        return {
+            "schema_version": 1,
+            "scope": "caretaker_logging",
+            **self.sink.overhead_status(),
+        }
+
     def close(self) -> None:
         if self._closed:
             return

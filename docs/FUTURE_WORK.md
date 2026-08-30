@@ -580,8 +580,10 @@ operator scheduler provides a durable bounded queue, active/pending limits,
 priority/deadline ordering, restart recovery, cancellation state, and explicit
 backpressure. Read-only generation-aware coverage-backlog discovery and console
 visibility are now implemented; opt-in bounded automatic backlog promotion is
-implemented, while application-wide measured overhead budgets remain future
-work. Automatic promotion now separates bounded no-call waiting targets from
+implemented. A bounded logging-path overhead snapshot is also available through the
+supervisor status response and the console, including queue, drop, and flush
+wall-clock measurements; application-wide measured overhead budgets remain
+future work. Automatic promotion now separates bounded no-call waiting targets from
 targets that have begun collecting calls, so a rare function does not consume
 the same automatic collection slot as a hot function. The console reports both
 counts. Fairness across hot and rare functions remains future work. The console

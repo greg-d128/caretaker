@@ -630,7 +630,9 @@ def main(argv: list[str] | None = None) -> int:
                         "runtime_matches_supervisor": runtime_policy_match,
                     },
                     "workers": [asdict(item) for item in supervisor.workers.all()] if supervisor else [],
-                    "runtime": application_runtime}
+                    "runtime": application_runtime,
+                    "caretaker_overhead": runtime.overhead_status(),
+            }
         if command == "adaptive-aggregation-status":
             policy_contexts: list[dict[str, Any]] = []
             policy_context_available = False

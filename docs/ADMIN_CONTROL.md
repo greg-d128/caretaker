@@ -191,7 +191,14 @@ shows a continuously refreshed status line with:
 - functions currently undergoing candidate validation;
 - repairs awaiting operator approval;
 - target count;
-- supervisor worker-health issues and degraded Guard capabilities.
+- supervisor worker-health issues and degraded Guard capabilities;
+- bounded Caretaker logging-path overhead evidence, including queue depth,
+  dropped records, and flush wall-clock time.
+
+The status response exposes the same overhead evidence under
+`caretaker_overhead`. It is an operational measurement of the logging path,
+not a complete CPU or application-overhead measurement, and it does not alter
+policy decisions.
 
 Tabs provide target/FunctionSlot inspection, Guard evidence and baseline
 operations, Repair event/approval controls, persisted logs, and Guard LLM

@@ -1284,6 +1284,20 @@ class CaretakerConsoleApp(App):
         authority_summary = status.get("authority_policy") or {}
         release_integrity = status.get("release_integrity") or {}
         release_integrity_status = str(release_integrity.get("status") or "NOT_CONFIGURED")
+        overhead = status.get("caretaker_overhead")
+        if isinstance(overhead, dict):
+            queue_depth = int(overhead.get("queue_depth") or 0)
+            queue_capacity = int(overhead.get("queue_capacity") or 0)
+            dropped = int(overhead.get("dropped_records") or 0)
+            flush_batches = int(overhead.get("flush_batches") or 0)
+            flush_seconds = float(overhead.get("flush_seconds_total") or 0.0)
+            overhead_line = (
+                "Caretaker logging path: "
+                f"queue {queue_depth}/{queue_capacity}, dropped {dropped}, "
+                f"flushes {flush_batches} ({flush_seconds:.3f}s wall clock)"
+            )
+        else:
+            overhead_line = "Caretaker logging path: unavailable"
         assurance = authority_summary.get("overall_assurance", "UNCONFIGURED")
         runtime_policy_match = authority_summary.get("runtime_matches_supervisor")
         displayed_assurance = "RUNTIME_TAMPER" if runtime_policy_match is False else assurance
@@ -1305,6 +1319,7 @@ class CaretakerConsoleApp(App):
             f"Validating functions: {', '.join(validating) if validating else 'none'}",
             f"Validation backends: {', '.join(validation_backends) if validation_backends else 'none'}",
             f"Degraded capabilities: {', '.join(degraded) if degraded else 'none'}",
+            overhead_line,
             f"Release integrity: {release_integrity_status}",
             "Release root externally anchored: "
             + ("yes" if release_integrity.get("root_anchored") is True else "no / not checked"),

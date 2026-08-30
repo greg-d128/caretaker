@@ -18,6 +18,7 @@ from caretaker.logging import (
     TLVLogCodec,
     read_segment,
 )
+from caretaker.logging.handler import LoggingRuntime
 from caretaker.logging.policy import CompressionPolicy, RotationPolicy
 
 
@@ -97,6 +98,40 @@ def test_segment_hash_chain_across_rotations(tmp_path):
     values = [json.loads(path.read_text()) for path in manifests if not path.name.endswith("signature.json")]
     values.sort(key=lambda item: item["created_at"])
     assert values[1]["previous_segment_hash"] == values[0]["content_hash"]
+
+
+def test_runtime_exposes_bounded_logging_overhead_status(tmp_path: Path) -> None:
+    policy = OperatorLoggingPolicy(
+        directory=str(tmp_path),
+        compression=CompressionPolicy(enabled=False),
+        rotation=RotationPolicy(
+            maximum_segment_bytes=1024 * 1024,
+            maximum_segment_seconds=3600,
+        ),
+    )
+    runtime = LoggingRuntime(policy, supervised=True)
+    try:
+        runtime.event(
+            logger_name="test.overhead",
+            severity=20,
+            channel=LogChannel.APPLICATION,
+            message="overhead probe",
+        )
+        runtime.flush()
+        status = runtime.overhead_status()
+    finally:
+        runtime.close()
+
+    assert status["schema_version"] == 1
+    assert status["measurement"] == "logging_path_wall_clock"
+    assert status["write_calls"] >= 2
+    assert status["accepted_records"] >= 2
+    assert status["dropped_records"] == 0
+    assert status["flush_batches"] >= 1
+    assert status["flush_records"] >= 2
+    assert status["queue_depth"] == 0
+    assert status["queue_capacity"] > 0
+    assert 0.0 <= status["queue_utilization"] <= 1.0
 
 
 def test_event_rotation_binds_attachment_checkpoint_to_signed_manifest(tmp_path):

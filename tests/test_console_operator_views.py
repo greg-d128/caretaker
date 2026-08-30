@@ -56,6 +56,13 @@ def test_overview_displays_release_integrity_separately_from_policy(tmp_path):
                         "runtime_matches_supervisor": True,
                     },
                     "release_integrity": {"status": "TRUSTED", "root_anchored": True},
+                    "caretaker_overhead": {
+                        "queue_depth": 2,
+                        "queue_capacity": 8192,
+                        "dropped_records": 1,
+                        "flush_batches": 3,
+                        "flush_seconds_total": 0.125,
+                    },
                 }
 
             app._request = request  # type: ignore[method-assign]
@@ -66,6 +73,7 @@ def test_overview_displays_release_integrity_separately_from_policy(tmp_path):
             assert "Policy UNCONFIGURED" in status
             assert "Release integrity TRUSTED" in status
             assert "Release root externally anchored: yes" in details
+            assert "Caretaker logging path: queue 2/8192, dropped 1, flushes 3 (0.125s wall clock)" in details
 
     asyncio.run(exercise())
 

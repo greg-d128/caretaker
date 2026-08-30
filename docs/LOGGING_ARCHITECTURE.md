@@ -24,6 +24,12 @@ update derived index              compare long-term drift
 
 Analysis is never performed synchronously in an ordinary logging call.
 
+The supervised status response exposes bounded logging-path overhead evidence:
+submitted and accepted records, drops and write failures, queue depth and
+capacity, and flush counts and wall-clock durations. These measurements are
+observational only; they are not a complete CPU-cost measurement and do not
+change backpressure or policy decisions.
+
 ## Multiprocess model
 
 Each application process uses a lightweight emitter. One supervised service owns the event segment writer and SQLite index. Unix-domain sockets preserve local-only deployment and allow the operating-system credential model to authenticate emitters and administrators.
