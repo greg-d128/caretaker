@@ -933,21 +933,60 @@ infrastructure, source-control, package-publication, or deployment authority.
 
 ## Repair workflow restart and crash recovery
 
-**Status: Explicitly deferred.**
+**Status: Design clarified; implementation unblocked but not complete.**
 
 The default Repair engine, pending approvals, active work, repair-rate history, regression corpus, FunctionSlot replacements, and candidate observation lifecycle are process-local. Historical records may be written to logging or an explicitly supplied SQLite Repair store, but a new engine does not reconstruct an actionable workflow or reactivate a runtime replacement from those records.
 
-Future recovery semantics must define how to:
+The agreed recovery contract is one continuous repair transaction with explicit
+milestones. The transaction scope is flexible while a repair is under
+evaluation; once a repair is accepted, it is outside that transaction's
+rollback scope and a later reversal requires a new incident. Approval is
+checked at transaction start and remains valid through completion, subject to
+authority expiry. Caretaker makes no guarantee about external effects.
+
+The first application-scoped implementation must enforce these decisions:
+
+- An interrupted or failed worker is treated as a rolled-back transaction. The
+  failure envelope retains the partial queue, policy state, and milestone
+  information needed for reconciliation. Its detail level is policy/debug
+  controlled; critical evidence requires a complete individual post-mortem
+  packet for each worker.
+- Failure response is policy driven: preserve degraded operation, generate an
+  incident, replace the worker, or shut down when required evidence cannot be
+  preserved. Duplicate data must be identifiable and reconcilable; an
+  unresolvable conflict produces a report containing both data sets.
+- Authority and approval packets are immutable snapshots of the capabilities,
+  policies, approvals, and other state required by a worker. A worker may use
+  an authorized packet only until its authority expires. Approval copies are
+  policy controlled, with a 60-minute default suggested for ordinary operation
+  and shorter expiry allowed during a suggested change. A worker that fails to
+  apply a transition by the deadline becomes failed or unauthorized and is
+  deliberately replaced using the still-authorized prior policy where
+  possible.
+- A replacement worker must re-enter through an authorized packet. Probation
+  and acceptance counters have policy defaults and per-target overrides;
+  incomplete transactions must not double-count them. The supervisor remains
+  a controller/checker: workers do the ordinary work, while the supervisor may
+  sample evidence, inspect worker behavior, validate external evidence, spawn
+  an additional comparison worker, or restart workers within policy.
+- Supervisor time is authoritative with a bounded clock-drift allowance.
+  Excessive skew is a failure. A supervisor failure loses the control plane;
+  the application may continue only as policy permits and otherwise restarts.
+  Clustered supervisor recovery and restarting the supervisor itself belong to
+  the future Host Caretaker and higher scopes.
+
+The remaining implementation work is to:
 
 - mark interrupted incidents, generations, attempts, and validations incomplete;
 - reconstruct or deliberately stale pending approvals;
 - verify candidate source and policy/authority bindings again after restart;
 - recover probation and long-term observation state without double counting;
-- provide a VM-backed replay backend with guest attestation and disposable-state
-  semantics, plus richer type-preserving rehydration for the existing data-only
-  persistent regression fixtures;
+- persist milestone and failed-worker envelopes with policy-controlled detail;
+- reconcile duplicate evidence and emit conflict reports;
+- apply policy-selected degraded, incident, replacement, or shutdown actions;
 - coordinate the same target across multiple application workers;
-- decide whether an accepted runtime replacement may be reactivated at all.
+- decide whether an accepted runtime replacement may be reactivated at all;
+- define the exact supervisor clock-skew and packet-expiry policy fields.
 
 Until this exists, restart is a rollback to deployed application code, not continuation of an in-memory repair.
 
