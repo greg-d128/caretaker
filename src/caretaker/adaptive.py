@@ -170,6 +170,7 @@ class AdaptiveAggregationPolicy:
     flush_after_observations: int = 64
     flush_interval_seconds: float = 5.0
     aggregation_scope: str | None = None
+    transition_timeout_seconds: float = 60.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -381,6 +382,11 @@ def validate_lightweight_policy(policy: LightweightPolicy) -> None:
         errors.append("aggregation.flush_after_observations must be between 1 and 1000")
     if aggregation.flush_interval_seconds < 0:
         errors.append("aggregation.flush_interval_seconds cannot be negative")
+    if not 0 < aggregation.transition_timeout_seconds <= 86_400:
+        errors.append(
+            "aggregation.transition_timeout_seconds must be greater than zero "
+            "and no more than 86400"
+        )
     if aggregation.aggregation_scope is not None:
         if not isinstance(aggregation.aggregation_scope, str) or not aggregation.aggregation_scope.strip():
             errors.append("aggregation.aggregation_scope must be a non-empty string when provided")
@@ -1432,6 +1438,7 @@ class _AdaptiveController:
                 "minimum_duration_seconds": self.policy.repair_evidence.minimum_duration_seconds,
                 "require_problem_reproduction": self.policy.repair_evidence.require_problem_reproduction,
             },
+            "transition_timeout_seconds": self.policy.aggregation.transition_timeout_seconds,
         }
         batcher = self._aggregation_batcher
         if batcher is None:
@@ -1446,6 +1453,7 @@ class _AdaptiveController:
                 ),
                 "authority_policy_fingerprint": self._authority_fingerprint,
                 "promotion_policy": promotion_policy,
+                "transition_timeout_seconds": self.policy.aggregation.transition_timeout_seconds,
             }
         return {
             "enabled": True,

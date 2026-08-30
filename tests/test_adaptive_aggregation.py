@@ -20,6 +20,7 @@ from caretaker.adaptive import (
     InstrumentationLevel,
     LightweightPolicy,
     lightweight,
+    validate_lightweight_policy,
 )
 from caretaker.authority import get_authority_runtime_context
 
@@ -141,6 +142,74 @@ def test_optional_aggregation_scope_requires_extended_context_and_keeps_populati
     assert next(
         item for item in aggregates if item["aggregation_scope"] == "cluster:blue"
     )["aggregation_target_id"] == extended
+
+
+def test_transition_deadline_expires_and_rejects_late_acknowledgement(
+    tmp_path: Path, monkeypatch
+):
+    store = SupervisorAdaptiveAggregationStore(tmp_path)
+    batch = _batch(batch_id="00000000-0000-0000-0000-00000000000e")
+    batch.update(
+        observation_count=1,
+        sequence_end=1,
+        exception_count=1,
+        exception_events=["2026-08-30T12:00:00+00:00"],
+    )
+    store.submit(batch)
+    context = _context()
+    assert store.reconcile(**context)["merged"] == 1
+    fixed_now = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        "caretaker.adaptive_aggregation._utcnow_iso",
+        lambda: fixed_now.isoformat(),
+    )
+    policy = {
+        "exception": {
+            "enabled": True,
+            "occurrences": 1,
+            "window_seconds": 3600,
+            "promote_to": "BEHAVIOR",
+        },
+        "soft_timing": {
+            "enabled": False,
+            "occurrences": 1,
+            "window_seconds": 3600,
+            "promote_to": "BEHAVIOR",
+        },
+        "repair_evidence": {"enabled": False},
+        "transition_timeout_seconds": 30,
+    }
+    assert store.evaluate_promotions(
+        **context,
+        promotion_policies={"example.target": policy},
+    )["created"] == 1
+    request = store.list_transition_requests()[0]
+    assert request["transition_timeout_seconds"] == 30.0
+    assert request["expires_at"] == "2026-08-30T12:00:30+00:00"
+
+    visible = store.list_transition_requests(
+        now=fixed_now + timedelta(seconds=31),
+    )[0]
+    assert visible["status"] == "EXPIRED"
+    assert visible["deadline_status"] == "EXPIRED"
+    assert visible["stale_worker_ids"] == ["worker-a"]
+    assert visible["remaining_seconds"] == 0.0
+    with pytest.raises(PermissionError, match="expired"):
+        store.acknowledge_transition(
+            {"request_id": request["request_id"], "worker_id": "worker-a"},
+            peer_pid=101,
+        )
+
+
+def test_adaptive_transition_timeout_policy_is_bounded() -> None:
+    with pytest.raises(ValueError, match="transition_timeout_seconds"):
+        validate_lightweight_policy(
+            LightweightPolicy(
+                aggregation=AdaptiveAggregationPolicy(
+                    transition_timeout_seconds=0,
+                )
+            )
+        )
 
 
 def test_supervisor_records_worker_distribution_conflict_without_discarding_evidence(

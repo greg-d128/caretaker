@@ -83,4 +83,10 @@ thresholds automatically. The worker-side
 monitoring, policy, and authority context before applying Behavior. Dynamic
 console-managed thresholds, supervisor-owned Repair activation/evidence beyond
 the current bounded gate, remote transport, and automatic worker process
-orchestration remain future work.
+orchestration remain future work. Each generated Behavior transition carries
+the policy's bounded `transition_timeout_seconds` (60 seconds by default) and
+an absolute `expires_at`. A completed transition remains `APPLIED`; an
+incomplete transition becomes `EXPIRED` after its deadline, reports the stale
+worker IDs, and rejects late acknowledgements. Caretaker does not automatically
+replace stale workers or change policy; application-owned lifecycle handling
+remains future work.

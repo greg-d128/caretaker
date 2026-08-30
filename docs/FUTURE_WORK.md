@@ -734,6 +734,9 @@ discovering or changing workload/population membership. It must move
 repair-evidence evaluation, dynamic threshold administration, remote transport,
 process lifecycle orchestration, and richer non-rate distribution
 reconciliation without double-counting the existing single-process lifecycle.
+Transition deadlines are now policy-defined and stale-worker identities are
+reported fail-closed; automatic replacement or unauthorized-worker lifecycle
+orchestration remains future work.
 
 Recovery action dispatch now has application-owned adapters for incident
 creation and application shutdown. Both effects remain outside Caretaker's

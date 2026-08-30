@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 from uuid import UUID, uuid4
@@ -32,6 +33,8 @@ MAX_TRANSITION_REASON = 512
 MAX_DISTRIBUTION_CONFLICTS = 128
 DEFAULT_DISTRIBUTION_Z_THRESHOLD = 3.0
 DEFAULT_DISTRIBUTION_MINIMUM_OBSERVATIONS = 30
+DEFAULT_TRANSITION_TIMEOUT_SECONDS = 60.0
+MAX_TRANSITION_TIMEOUT_SECONDS = 86_400.0
 _DISTRIBUTION_COUNTER_NAMES = (
     "exception_count",
     "timing_breach_count",
@@ -464,6 +467,29 @@ def _promotion_policy(value: Any, *, name: str) -> dict[str, Any]:
         "window_seconds": window_seconds,
         "promote_to": promote_to,
     }
+
+
+def _transition_timeout(value: Any) -> float:
+    """Normalize the policy timeout captured by a worker transition request."""
+    if isinstance(value, bool):
+        raise AdaptiveAggregationError(
+            "transition_timeout_seconds must be a number"
+        )
+    try:
+        timeout = float(
+            DEFAULT_TRANSITION_TIMEOUT_SECONDS
+            if value is None
+            else value
+        )
+    except (TypeError, ValueError) as exc:
+        raise AdaptiveAggregationError(
+            "transition_timeout_seconds must be a number"
+        ) from exc
+    if not math.isfinite(timeout) or not 0 < timeout <= MAX_TRANSITION_TIMEOUT_SECONDS:
+        raise AdaptiveAggregationError(
+            "transition_timeout_seconds must be greater than zero and no more than 86400"
+        )
+    return timeout
 
 
 def _repair_evidence_policy(value: Any) -> dict[str, Any]:
@@ -1122,9 +1148,25 @@ class SupervisorAdaptiveAggregationStore:
         return tuple(result)
 
     @staticmethod
+    def _transition_expiry(request: Mapping[str, Any]) -> datetime | None:
+        raw = request.get("expires_at")
+        if raw is None or not str(raw).strip():
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return None
+        return parsed.astimezone(timezone.utc)
+
+    @classmethod
     def _transition_status(
+        cls,
         request: Mapping[str, Any],
         acknowledgements: tuple[Mapping[str, Any], ...],
+        *,
+        now: datetime | None = None,
     ) -> str:
         if request.get("request_kind") == "ADAPTIVE_REPAIR_PROPOSAL":
             return "PROPOSAL_ONLY"
@@ -1144,6 +1186,11 @@ class SupervisorAdaptiveAggregationStore:
             bool(by_worker[worker_id].get("applied")) for worker_id in required
         ):
             return "APPLIED"
+        deadline = cls._transition_expiry(request)
+        if deadline is not None:
+            observed_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+            if observed_at >= deadline:
+                return "EXPIRED"
         if by_worker:
             return "PARTIAL"
         return "PENDING"
@@ -1211,6 +1258,16 @@ class SupervisorAdaptiveAggregationStore:
                 if not isinstance(raw_policy, Mapping):
                     skipped += 1
                     continue
+                try:
+                    transition_timeout = _transition_timeout(
+                        raw_policy.get("transition_timeout_seconds")
+                    )
+                except AdaptiveAggregationError as exc:
+                    errors.append({
+                        "target_id": aggregation_target,
+                        "error": str(exc)[:256],
+                    })
+                    continue
                 workers = aggregate.get("workers")
                 if not isinstance(workers, Mapping) or not workers:
                     skipped += 1
@@ -1250,6 +1307,7 @@ class SupervisorAdaptiveAggregationStore:
                     if key in existing_requests:
                         existing += 1
                         continue
+                    created_at = _utcnow_iso()
                     request: dict[str, Any] = {
                         "request_id": str(uuid4()),
                         "request_kind": "ADAPTIVE_PROMOTION",
@@ -1270,7 +1328,12 @@ class SupervisorAdaptiveAggregationStore:
                             f"{len(events)} {signal} threshold events within "
                             f"{policy['window_seconds']:g}s"
                         )[:MAX_TRANSITION_REASON],
-                        "created_at": _utcnow_iso(),
+                        "created_at": created_at,
+                        "transition_timeout_seconds": transition_timeout,
+                        "expires_at": (
+                            datetime.fromisoformat(created_at)
+                            + timedelta(seconds=transition_timeout)
+                        ).isoformat(),
                         "required_workers": required_workers,
                     }
                     envelope = {
@@ -1390,6 +1453,7 @@ class SupervisorAdaptiveAggregationStore:
         aggregation_scope: str | None = None,
         worker_id: str | None = None,
         limit: int = 100,
+        now: datetime | None = None,
     ) -> tuple[dict[str, Any], ...]:
         bounded = max(1, min(int(limit), 500))
         result: list[dict[str, Any]] = []
@@ -1414,11 +1478,48 @@ class SupervisorAdaptiveAggregationStore:
                 continue
             acknowledgements = self._load_transition_acknowledgements(str(request["request_id"]))
             visible = dict(request)
-            visible["status"] = self._transition_status(request, acknowledgements)
+            observed_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+            visible["status"] = self._transition_status(
+                request,
+                acknowledgements,
+                now=observed_at,
+            )
             visible["acknowledgement_count"] = len(acknowledgements)
             visible["acknowledged_worker_ids"] = sorted(
                 str(item["worker_id"]) for item in acknowledgements if item.get("worker_id")
             )
+            deadline = self._transition_expiry(request)
+            visible["deadline_status"] = (
+                "UNSPECIFIED"
+                if deadline is None
+                else (
+                    "COMPLETED"
+                    if visible["status"] == "APPLIED"
+                    else "EXPIRED"
+                    if observed_at >= deadline
+                    else "ACTIVE"
+                )
+            )
+            required_ids = {
+                str(item["worker_id"])
+                for item in required
+                if isinstance(item, Mapping) and item.get("worker_id")
+            }
+            acknowledged_ids = {
+                str(item.get("worker_id"))
+                for item in acknowledgements
+                if item.get("worker_id")
+            }
+            visible["stale_worker_ids"] = sorted(
+                required_ids - acknowledged_ids
+            ) if visible["deadline_status"] == "EXPIRED" else []
+            if deadline is None:
+                visible["remaining_seconds"] = None
+            else:
+                visible["remaining_seconds"] = max(
+                    0.0,
+                    (deadline - observed_at).total_seconds(),
+                )
             result.append(visible)
         return tuple(result)
 
@@ -1436,6 +1537,9 @@ class SupervisorAdaptiveAggregationStore:
         stored = self._load_transition_request(self._transition_path(request_id))
         if stored.get("request_kind") != "ADAPTIVE_PROMOTION":
             raise PermissionError("only Behavior promotion requests can be acknowledged")
+        acknowledgements = self._load_transition_acknowledgements(request_id)
+        if self._transition_status(stored, acknowledgements) == "EXPIRED":
+            raise PermissionError("adaptive transition request has expired")
         worker_id = _text(request.get("worker_id"), name="worker_id", limit=MAX_BATCH_TEXT)
         assert worker_id is not None
         required = {
