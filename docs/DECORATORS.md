@@ -318,8 +318,7 @@ This alpha rejects or does not normalize:
 - closures and nested functions;
 - coroutines and generators;
 - built-in and extension functions;
-- classmethod/staticmethod descriptor orderings;
-- properties.
+- unsupported descriptor forms without a callable getter.
 
 These limitations are detected through target-support assessment where possible.
 
