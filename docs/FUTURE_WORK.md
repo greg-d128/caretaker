@@ -732,6 +732,15 @@ must move repair-evidence evaluation, dynamic threshold administration, remote
 transport, process lifecycle orchestration, and richer non-rate distribution
 reconciliation without double-counting the existing single-process lifecycle.
 
+Recovery action dispatch now has application-owned adapters for incident
+creation and application shutdown. Both effects remain outside Caretaker's
+authority: incident creation must acknowledge a durable incident identifier,
+and shutdown must acknowledge that the application boundary was requested and
+accepted. Missing, malformed, or failed acknowledgements remain rejected and
+are retained as action-execution evidence. Remaining work is wiring these
+adapters into each deployment's policy-selected lifecycle, then coordinating
+their durable incident and shutdown records with multi-worker recovery.
+
 ## Import-hook dependency instrumentation
 
 **Status: Implemented in development tree for explicit pre-import module/function scopes.**

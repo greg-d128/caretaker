@@ -254,6 +254,81 @@ def test_replacement_action_handler_uses_packet_admission_and_acceptance() -> No
     assert len(spawned) == 1
 
 
+def test_incident_action_handler_requires_application_acknowledgement() -> None:
+    decision = {
+        "target_id": "app:charge",
+        "policy_action": {
+            "requested_action": "GENERATE_INCIDENT",
+            "selected_action": "GENERATE_INCIDENT",
+            "policy_enabled": True,
+        },
+    }
+    received = []
+    handler = CaretakerApplicationSupervisor.build_incident_action_handler(
+        lambda current: received.append(current) or {
+            "accepted": True,
+            "incident_id": "incident-42",
+            "incident_recorded": True,
+        }
+    )
+
+    result = dispatch_recovery_action(
+        decision,
+        handlers={"GENERATE_INCIDENT": handler},
+    )
+
+    assert result["status"] == "EXECUTED"
+    assert received == [decision]
+    assert result["handler_result"]["incident_id"] == "incident-42"
+
+    rejected = CaretakerApplicationSupervisor.build_incident_action_handler(
+        lambda _current: None
+    )
+    rejected_result = dispatch_recovery_action(
+        decision,
+        handlers={"GENERATE_INCIDENT": rejected},
+    )
+    assert rejected_result["status"] == "REJECTED_BY_HANDLER"
+    assert "acknowledgement mapping" in rejected_result["handler_result"]["reason"]
+
+
+def test_shutdown_action_handler_requires_application_boundary_acknowledgement() -> None:
+    runtime = FakeRuntime()
+    supervisor = CaretakerApplicationSupervisor(runtime)
+    decision = {
+        "target_id": "app:charge",
+        "policy_action": {
+            "requested_action": "STOP_APPLICATION",
+            "selected_action": "STOP_APPLICATION",
+            "policy_enabled": True,
+        },
+    }
+    received = []
+    handler = supervisor.build_shutdown_action_handler(
+        lambda current: received.append(current) or {
+            "accepted": True,
+            "shutdown_requested": True,
+            "boundary": "application-callback",
+        }
+    )
+
+    result = dispatch_recovery_action(
+        decision,
+        handlers={"STOP_APPLICATION": handler},
+    )
+
+    assert result["status"] == "EXECUTED"
+    assert received == [decision]
+    assert result["handler_result"]["shutdown_requested"] is True
+
+    no_boundary = dispatch_recovery_action(
+        decision,
+        handlers={"STOP_APPLICATION": supervisor.build_shutdown_action_handler()},
+    )
+    assert no_boundary["status"] == "REJECTED_BY_HANDLER"
+    assert "no application boundary" in no_boundary["handler_result"]["reason"]
+
+
 def test_replacement_action_handler_rejects_expired_packet() -> None:
     runtime = FakeRuntime()
     supervisor = CaretakerApplicationSupervisor(runtime)

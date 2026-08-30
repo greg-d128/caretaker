@@ -376,6 +376,19 @@ new process is admitted only through the supervisor-issued packet and
 `WorkerRegistry` acceptance checks. Process creation remains application-owned
 and cross-process orchestration is not provided by this API.
 
+For incident and shutdown actions, applications can use
+`CaretakerApplicationSupervisor.build_incident_action_handler()` and
+`build_shutdown_action_handler()`. The incident callback receives the complete
+recovery decision and must return an acknowledgement mapping containing
+`accepted=true` and a durable `incident_id`. The shutdown callback receives the
+same decision and must return `accepted=true` and `shutdown_requested=true`.
+Returning `None`, a non-mapping value, or an acknowledgement without the
+action-specific gate is recorded as rejected; it is never treated as proof
+that the external effect occurred. The default shutdown adapter wraps the
+configured application process boundary and rejects execution when no
+application boundary exists or the boundary remains alive. These acknowledgements
+are execution evidence only and do not grant Caretaker authority.
+
 If diagnostic logging itself fails, Caretaker does not recursively send another
 logging event. The control response reports `diagnostic_persisted=false` and a
 bounded `diagnostic_persistence_error`, and the bootstrap path makes a best-effort
