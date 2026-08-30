@@ -1097,7 +1097,10 @@ fleet coordination remain future work.
 The supervisor can now consume coordinated worker-failure evidence and select
 the ordinary or critical-evidence recovery action per scope. Dispatch still
 requires the application-owned handler acknowledgement and records execution
-status without granting authority. Deployment-specific durable incident,
+status without granting authority. A durable worker-failure recovery checkpoint
+is written before dispatch and finalized afterward; repeated reconciliation
+does not rerun a completed handler, and a pending checkpoint is surfaced for
+deliberate handling. Deployment-specific durable incident,
 replacement, and shutdown lifecycle integration remains future work.
 
 ### Recovery decisions recorded for the next implementation slice

@@ -431,7 +431,11 @@ scope with a conflict involving critical evidence uses the configured
 selected action is passed through the same explicit application-handler gates
 as Repair recovery, and absent or rejected handlers remain visible as
 non-executed evidence. This coordination does not create workers, modify
-policy, or grant authority.
+policy, or grant authority. A `WorkerFailureRecoveryRecord` is checkpointed as
+`PENDING` before a handler is called and finalized with the handler result;
+repeated reconciliation reuses the existing checkpoint and does not rerun the
+application side effect. A pending checkpoint is surfaced for deliberate
+operator handling rather than retried automatically.
 
 If diagnostic logging itself fails, Caretaker does not recursively send another
 logging event. The control response reports `diagnostic_persisted=false` and a
