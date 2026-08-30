@@ -7,6 +7,7 @@ import pytest
 from caretaker import create_recovery_authority_packet
 from caretaker import WorkerAcceptancePolicy
 from caretaker.logging import WorkerAcceptanceState, WorkerKind, WorkerRegistry, WorkerState
+import caretaker.logging.supervisor as supervisor_module
 
 
 def _packet(*, supervisor_time: datetime):
@@ -204,6 +205,87 @@ def test_packet_refresh_rejects_expired_or_failed_worker() -> None:
             authority_policy_fingerprint="authority-hash",
             allowed_capabilities={"observe"},
         )
+
+
+def test_stale_packet_refresh_cannot_overwrite_newer_refresh(monkeypatch) -> None:
+    registry = WorkerRegistry()
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    packet = _packet(supervisor_time=supervisor_time)
+    worker = registry.register_authorized(
+        WorkerKind.REPAIR_ANALYZER,
+        1234,
+        packet,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+    )
+    newer_time = supervisor_time + timedelta(seconds=60)
+    newer_packet = create_recovery_authority_packet(
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-9",
+        authority_policy_fingerprint="authority-hash-new",
+        capabilities=("observe",),
+        supervisor_time=newer_time,
+    )
+    stale_time = supervisor_time + timedelta(seconds=30)
+    stale_packet = create_recovery_authority_packet(
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        capabilities=("observe",),
+        supervisor_time=stale_time,
+    )
+    original_verify = supervisor_module.verify_recovery_authority_packet
+    refreshed = False
+
+    def verify_and_refresh(candidate, **kwargs):
+        nonlocal refreshed
+        if candidate.packet_id == stale_packet.packet_id and not refreshed:
+            refreshed = True
+            registry.refresh_authorized(
+                worker.worker_id,
+                newer_packet,
+                supervisor_time=newer_time,
+                target_id="app:charge",
+                generation_id="generation-7",
+                code_hash="code-hash",
+                policy_fingerprint="policy-hash",
+                authority_policy_generation="authority-9",
+                authority_policy_fingerprint="authority-hash-new",
+                allowed_capabilities={"observe"},
+            )
+        return original_verify(candidate, **kwargs)
+
+    monkeypatch.setattr(
+        supervisor_module,
+        "verify_recovery_authority_packet",
+        verify_and_refresh,
+    )
+    with pytest.raises(PermissionError, match="changed during refresh"):
+        registry.refresh_authorized(
+            worker.worker_id,
+            stale_packet,
+            supervisor_time=stale_time,
+            target_id="app:charge",
+            generation_id="generation-7",
+            code_hash="code-hash",
+            policy_fingerprint="policy-hash",
+            authority_policy_generation="authority-8",
+            authority_policy_fingerprint="authority-hash",
+            allowed_capabilities={"observe"},
+        )
+    assert registry.get(worker.worker_id).authority_packet_id == newer_packet.packet_id
 
 
 def test_replacement_handoff_requires_packet_and_records_provenance() -> None:

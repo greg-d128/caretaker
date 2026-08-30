@@ -254,6 +254,7 @@ class WorkerRegistry:
                 or current.authority_packet_expires_at is None
             ):
                 raise PermissionError("worker has no authorized packet to refresh")
+            observed_packet_id = current.authority_packet_id
             if supervisor_time >= current.authority_packet_expires_at:
                 raise PermissionError(
                     "worker authority packet has expired; re-admission is required"
@@ -302,6 +303,10 @@ class WorkerRegistry:
             ):
                 raise PermissionError(
                     "worker authority packet has expired; re-admission is required"
+                )
+            if current.authority_packet_id != observed_packet_id:
+                raise PermissionError(
+                    "worker authority packet changed during refresh; retry"
                 )
             updated = replace(
                 current,
