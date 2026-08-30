@@ -40,6 +40,23 @@ from ..state import exception_evidence, value_snapshot
 F = TypeVar("F", bound=Callable[..., Any])
 
 
+def _unwrap_descriptor(value: Any) -> tuple[Callable[..., Any], Callable[[Any], Any]]:
+    """Return a callable and a descriptor-preserving wrapper constructor."""
+    if isinstance(value, classmethod):
+        return value.__func__, classmethod
+    if isinstance(value, staticmethod):
+        return value.__func__, staticmethod
+    if isinstance(value, property):
+        if value.fget is None:
+            raise TypeError("@repair requires a property getter")
+        return value.fget, lambda wrapper: property(
+            wrapper, value.fset, value.fdel, value.__doc__
+        )
+    if not callable(value):
+        raise TypeError("@repair requires a function or supported descriptor")
+    return value, lambda wrapper: wrapper
+
+
 class InvalidOutputError(RuntimeError):
     pass
 
@@ -88,14 +105,15 @@ def repair(
     """Register a synchronous function for incident capture and in-memory repair."""
 
     def decorate(original: F) -> F:
+        callable_original, rebuild_descriptor = _unwrap_descriptor(original)
         selected_engine = engine or get_default_engine()
         declared_policy = policy or DEFAULT_POLICY
-        resolved_target_id = target_id or f"{original.__module__}:{original.__qualname__}"
+        resolved_target_id = target_id or f"{callable_original.__module__}:{callable_original.__qualname__}"
         selected_policy = get_authority_runtime_context().apply(
             declared_policy, prefix="repair", target_id=resolved_target_id
         )
         target = build_target(
-            original,
+            callable_original,
             policy=selected_policy,
             target_id=target_id,
             registered_cases=tuple(cases),
@@ -107,7 +125,7 @@ def repair(
 
         registered_target_id = target.target_id
 
-        @functools.wraps(original)
+        @functools.wraps(callable_original)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             # Authority policy generations can replace the immutable RepairTarget
             # in the registry. Resolve it at each call rather than pinning the
@@ -160,7 +178,7 @@ def repair(
                     logging_fields["args"] = masked_input.masked_args
                     logging_fields["kwargs"] = dict(masked_input.masked_kwargs)
                 logging_runtime.event(
-                    logger_name=original.__module__, severity=10,
+                    logger_name=callable_original.__module__, severity=10,
                     channel=LogChannel.REPAIR,
                     message=f"Repair-enabled call started: {runtime_target.target_id}",
                     fields=logging_fields,
@@ -476,7 +494,7 @@ def repair(
                     and (succeeded or runtime_target.policy.logging.capture_exceptions)
                 ):
                     logging_runtime.event(
-                        logger_name=original.__module__,
+                        logger_name=callable_original.__module__,
                         severity=10 if succeeded else 40,
                         channel=LogChannel.REPAIR,
                         message=(
@@ -497,7 +515,7 @@ def repair(
 
         setattr(wrapper, "__caretaker_target__", target)
         setattr(wrapper, "__caretaker_engine__", selected_engine)
-        return wrapper  # type: ignore[return-value]
+        return rebuild_descriptor(wrapper)  # type: ignore[return-value]
 
     if function is not None:
         return decorate(function)

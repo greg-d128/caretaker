@@ -35,6 +35,10 @@ the intent:
 `RepairPolicy` remains the single policy composition used by the Repair
 execution boundary.
 
+`@repair` preserves `staticmethod`, `classmethod`, and property descriptors
+when it is applied outside those decorators. Property support wraps the getter
+and leaves the setter/deleter unchanged unless they are separately managed.
+
 ## Lightweight adaptive decorators
 
 Use `@lightweight` when the normal execution path should pay only for inexpensive

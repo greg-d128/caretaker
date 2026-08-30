@@ -922,7 +922,6 @@ Adaptive instrumentation escalation is no longer listed as future work; its init
 
 **Status: General future work.**
 
-- Descriptor-aware classmethod, staticmethod, and property support.
 - Async functions, validators, retries, and event-loop hooks.
 - Hard timeout modes using subprocess or cooperative cancellation.
 - Custom transactional resources such as database savepoints and filesystem transactions.
