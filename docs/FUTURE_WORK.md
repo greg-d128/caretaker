@@ -632,7 +632,7 @@ belong only in promoted Behavior collection.
 
 ### Return-type and return-shape learning review
 
-**Status: Implemented in development tree for bounded type/category/shape evidence; novelty detection remains unimplemented.**
+**Status: Implemented in development tree for bounded type/category/shape evidence and an evidence-only comparison report; live novelty decisions remain unimplemented.**
 
 The current contract is intentionally narrower than return learning:
 
@@ -659,9 +659,12 @@ application-defined objects can be represented by bounded type/family
 categories and, where safe, structural shape buckets. Containers are not
 recursively normalized and iterators are not consumed. Category and shape
 bounds plus overflow indicators are retained with the generation and sample
-counts, while no return novelty detector currently distinguishes a rare
-legitimate return from a failure. Categories and shapes remain evidence only
-and do not affect Guard deviations or Repair decisions.
+counts, while the comparison report only identifies newly observed categories
+or shapes when both snapshots are the same generation, the selected snapshot is
+newer, and both have the minimum successful sample count. Incomplete tables and
+incompatible snapshots are disclosed rather than treated as absence evidence.
+Categories, shapes, and this report remain evidence only and do not affect Guard
+deviations or Repair decisions.
 
 Remaining novelty-design review must distinguish declared annotations and
 validators from observed runtime types, structural shapes, bounded categorical
@@ -678,9 +681,10 @@ summaries, and exact values. It should determine:
   and
 - which return signals can be collected within the lightweight overhead budget.
 
-The bounded category contract is tested and is not an unusual-return detector;
-that detector must not be described as implemented until its false-positive,
-freshness, generation, and policy semantics are defined and tested.
+The bounded category contract and comparison report are tested and are not an
+unusual-return detector. A live detector must not be described as implemented
+until its false-positive, freshness, generation, and policy semantics are defined
+and tested.
 
 ## Supervisor-owned multiprocess adaptive aggregation
 

@@ -2570,6 +2570,34 @@ class CaretakerConsoleApp(App):
                 output.write(
                     f"  {change.get('label')}: {change.get('before', 0)} → {change.get('after', 0)}"
                 )
+        return_novelty = comparison.get("return_novelty") or {}
+        output.write("[b]Return observations[/b]")
+        novelty_state = str(return_novelty.get("state") or "unavailable")
+        if novelty_state in {"new-observations", "no-new-observations"}:
+            categories = ", ".join(return_novelty.get("new_categories") or ()) or "none"
+            shapes = ", ".join(return_novelty.get("new_shapes") or ()) or "none"
+            output.write(
+                f"  state={novelty_state}; new categories={categories}; new shapes={shapes}"
+            )
+            if not return_novelty.get("absence_claim_allowed"):
+                output.write(
+                    "  [yellow]Bounded coverage is incomplete; this does not establish that an absent return cannot occur.[/yellow]"
+                )
+        else:
+            output.write(
+                f"  state={novelty_state}; reason={return_novelty.get('reason') or 'not available'}"
+            )
+            if return_novelty.get("minimum_success_samples"):
+                output.write(
+                    f"  successful samples reference/selected="
+                    f"{return_novelty.get('reference_success_samples', 0)}/"
+                    f"{return_novelty.get('selected_success_samples', 0)}; "
+                    f"minimum={return_novelty.get('minimum_success_samples')}"
+                )
+        if return_novelty.get("evidence_only"):
+            output.write(
+                "  [yellow]Return observations are bounded evidence only; they do not trigger Guard or Repair.[/yellow]"
+            )
         code_changed = bool(comparison.get("code_hash_changed"))
         output.write(
             f"[b]Code generation[/b] {'CHANGED' if code_changed else 'same'}\n"

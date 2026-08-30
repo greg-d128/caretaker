@@ -72,6 +72,92 @@ def test_snapshot_store_verifies_content_hash_and_compares_across_code_hashes(tm
     assert comparison["resource_changes"]["network_destinations"]["removed"] == [
         "api.example:443"
     ]
+    assert comparison["return_novelty"]["state"] == "incomparable"
+    assert comparison["return_novelty"]["reason"] == "different-generation"
+
+
+def test_return_novelty_report_is_generation_and_sample_bound(tmp_path: Path):
+    store = BehaviorSnapshotStore(tmp_path)
+    older = _capture(code_hash="a" * 64, events=20)
+    older["profile"].update({
+        "success_count": 20,
+        "return_categories": {"integer:builtins.int": 20},
+        "return_shapes": {"scalar": 20},
+    })
+    newer = _capture(code_hash="a" * 64, events=20)
+    newer["profile"].update({
+        "success_count": 20,
+        "return_categories": {
+            "integer:builtins.int": 19,
+            "text:builtins.str": 1,
+        },
+        "return_shapes": {"scalar": 19, "text:length-small": 1},
+    })
+    left = store.create(older)
+    right = store.create(newer)
+
+    novelty = compare_snapshots(left, right)["return_novelty"]
+
+    assert novelty["state"] == "new-observations"
+    assert novelty["new_categories"] == ["text:builtins.str"]
+    assert novelty["new_category_counts"] == {"text:builtins.str": 1}
+    assert novelty["new_shapes"] == ["text:length-small"]
+    assert novelty["coverage_complete"] is True
+    assert novelty["absence_claim_allowed"] is True
+    assert novelty["evidence_only"] is True
+
+
+def test_return_novelty_does_not_claim_absence_when_coverage_is_incomplete(tmp_path: Path):
+    store = BehaviorSnapshotStore(tmp_path)
+    older = _capture(code_hash="a" * 64, events=20)
+    older["profile"].update({
+        "success_count": 20,
+        "return_categories": {"integer:builtins.int": 20},
+        "return_category_coverage_complete": False,
+        "return_shapes": {"scalar": 20},
+        "return_shape_coverage_complete": False,
+    })
+    newer = _capture(code_hash="a" * 64, events=20)
+    newer["profile"].update({
+        "success_count": 20,
+        "return_categories": {"integer:builtins.int": 20},
+        "return_category_coverage_complete": False,
+        "return_shapes": {"scalar": 20},
+        "return_shape_coverage_complete": False,
+    })
+    left = store.create(older)
+    right = store.create(newer)
+
+    novelty = compare_snapshots(left, right)["return_novelty"]
+
+    assert novelty["state"] == "no-new-observations"
+    assert novelty["coverage_complete"] is False
+    assert novelty["absence_claim_allowed"] is False
+
+
+def test_return_novelty_requires_successful_sample_minimum(tmp_path: Path):
+    store = BehaviorSnapshotStore(tmp_path)
+    older = _capture(code_hash="a" * 64, events=19)
+    older["profile"].update({
+        "success_count": 19,
+        "return_categories": {"integer:builtins.int": 19},
+        "return_shapes": {"scalar": 19},
+    })
+    newer = _capture(code_hash="a" * 64, events=20)
+    newer["profile"].update({
+        "success_count": 20,
+        "return_categories": {"text:builtins.str": 20},
+        "return_shapes": {"text:length-small": 20},
+    })
+    left = store.create(older)
+    right = store.create(newer)
+
+    novelty = compare_snapshots(left, right)["return_novelty"]
+
+    assert novelty["state"] == "insufficient-evidence"
+    assert novelty["reason"] == "minimum-success-samples-not-reached"
+    assert novelty["new_categories"] == []
+    assert novelty["absence_claim_allowed"] is False
 
 
 def test_operator_capture_provenance_is_bounded_persisted_and_hash_protected(tmp_path: Path):

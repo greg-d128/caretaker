@@ -35,6 +35,8 @@ from .logging.signing import (
 
 SCHEMA_VERSION = 2
 STATISTICS_SCHEMA_VERSION = 2
+RETURN_NOVELTY_MINIMUM_SUCCESS_SAMPLES = 20
+RETURN_NOVELTY_MAX_REPORTED_ITEMS = 64
 
 
 def utcnow() -> datetime:
@@ -2644,6 +2646,7 @@ def compare_snapshots(
         duration_changes[key] = _float_change(
             key, float(before_value or 0.0), float(after_value or 0.0)
         )
+    return_novelty = _return_novelty_report(older, newer, left, right)
     return {
         "comparison_id": str(uuid4()),
         "created_at": utcnow().isoformat(),
@@ -2674,8 +2677,131 @@ def compare_snapshots(
                 "failure", int(left.get("failure_count") or 0), int(right.get("failure_count") or 0)
             ),
         },
+        "return_novelty": return_novelty,
         "tree_changes": _compare_children(older.get("children") or (), newer.get("children") or ()),
     }
+
+
+def _return_novelty_report(
+    older: Mapping[str, Any],
+    newer: Mapping[str, Any],
+    left: Mapping[str, Any],
+    right: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Compare bounded return observations without making an absence claim.
+
+    This is deliberately an Explorer/reporting signal. It is not consumed by
+    Guard, Repair, policy, or authority decisions. A comparison is only
+    meaningful when both snapshots describe the same generation and the
+    selected snapshot is demonstrably newer. Incomplete bounded tables never
+    support a claim that a category or shape cannot occur.
+    """
+    report: dict[str, Any] = {
+        "evidence_only": True,
+        "state": "incomparable",
+        "reason": None,
+        "minimum_success_samples": RETURN_NOVELTY_MINIMUM_SUCCESS_SAMPLES,
+        "reference_success_samples": int(left.get("success_count") or 0),
+        "selected_success_samples": int(right.get("success_count") or 0),
+        "new_categories": [],
+        "new_category_counts": {},
+        "new_shapes": [],
+        "new_shape_counts": {},
+        "coverage_complete": False,
+        "absence_claim_allowed": False,
+        "truncated": False,
+    }
+
+    subject_a = older.get("subject_key")
+    subject_b = newer.get("subject_key")
+    if not subject_a or subject_a != subject_b:
+        report["reason"] = "different-subject"
+        return report
+    generation_a = older.get("generation_id")
+    generation_b = newer.get("generation_id")
+    if not generation_a or not generation_b or generation_a != generation_b:
+        report["reason"] = "different-generation"
+        return report
+    if older.get("monitoring_fingerprint") != newer.get("monitoring_fingerprint"):
+        report["reason"] = "different-monitoring"
+        return report
+    schema_a = older.get("statistics_schema_version")
+    schema_b = newer.get("statistics_schema_version")
+    if schema_a is None or schema_b is None or schema_a != schema_b:
+        report["reason"] = "different-statistics-schema"
+        return report
+
+    created_a = _comparison_datetime(older.get("created_at"))
+    created_b = _comparison_datetime(newer.get("created_at"))
+    if created_a is None or created_b is None:
+        report["reason"] = "missing-or-invalid-freshness"
+        return report
+    if created_b <= created_a:
+        report["reason"] = "selected-snapshot-is-not-newer"
+        return report
+    report["freshness"] = {
+        "reference_created_at": older.get("created_at"),
+        "selected_created_at": newer.get("created_at"),
+        "age_seconds": max(0.0, (created_b - created_a).total_seconds()),
+    }
+
+    minimum = RETURN_NOVELTY_MINIMUM_SUCCESS_SAMPLES
+    reference_samples = int(left.get("success_count") or 0)
+    selected_samples = int(right.get("success_count") or 0)
+    if reference_samples < minimum or selected_samples < minimum:
+        report["state"] = "insufficient-evidence"
+        report["reason"] = "minimum-success-samples-not-reached"
+        return report
+
+    old_categories = set(left.get("return_categories") or {})
+    new_categories = set(right.get("return_categories") or {}) - old_categories
+    old_shapes = set(left.get("return_shapes") or {})
+    new_shapes = set(right.get("return_shapes") or {}) - old_shapes
+
+    category_names = sorted(map(str, new_categories))
+    shape_names = sorted(map(str, new_shapes))
+    category_limit = RETURN_NOVELTY_MAX_REPORTED_ITEMS
+    shape_limit = RETURN_NOVELTY_MAX_REPORTED_ITEMS
+    report["new_categories"] = category_names[:category_limit]
+    report["new_category_counts"] = {
+        name: max(0, int((right.get("return_categories") or {}).get(name) or 0))
+        for name in report["new_categories"]
+    }
+    report["new_shapes"] = shape_names[:shape_limit]
+    report["new_shape_counts"] = {
+        name: max(0, int((right.get("return_shapes") or {}).get(name) or 0))
+        for name in report["new_shapes"]
+    }
+    report["truncated"] = (
+        len(category_names) > category_limit or len(shape_names) > shape_limit
+    )
+    report["coverage_complete"] = bool(
+        left.get("return_category_coverage_complete", True)
+        and right.get("return_category_coverage_complete", True)
+        and left.get("return_shape_coverage_complete", True)
+        and right.get("return_shape_coverage_complete", True)
+        and not report["truncated"]
+    )
+    report["absence_claim_allowed"] = bool(report["coverage_complete"])
+    report["state"] = "new-observations" if new_categories or new_shapes else "no-new-observations"
+    report["reason"] = (
+        "new-return-categories-or-shapes-observed"
+        if report["state"] == "new-observations"
+        else "no-new-return-categories-or-shapes-observed"
+    )
+    return report
+
+
+def _comparison_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _semantic_behavior_changes(resource_changes: Mapping[str, Mapping[str, Any]]) -> list[dict[str, str]]:
