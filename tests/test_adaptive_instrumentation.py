@@ -10,6 +10,7 @@ import pytest
 from caretaker import (
     AcceptanceState,
     AuthorityKind,
+    AdaptiveLifecycleStage,
     BehaviorSamplingPolicy,
     ExceptionPromotionPolicy,
     InstrumentationDemotionPolicy,
@@ -20,6 +21,7 @@ from caretaker import (
     PolicyAuthoritySupervisor,
     PolicySetting,
     SoftTimingPromotionPolicy,
+    get_adaptive_controller,
     get_adaptive_state,
     install_dependency_import_hook,
     instrument_dependencies,
@@ -161,6 +163,36 @@ def test_exception_repair_request_observes_behavior_before_full_repair(monkeypat
     assert wrapped() == "managed-result"
     assert original_calls == 3
     assert managed_calls == 1
+
+
+def test_operator_behavior_promotion_is_fixed_to_behavior(tmp_path) -> None:
+    guard = _FakeGuard()
+
+    def sample(value: int) -> int:
+        return value
+
+    wrapped = lightweight(
+        policy=LightweightPolicy(
+            exception=ExceptionPromotionPolicy(enabled=False),
+            soft_timing=SoftTimingPromotionPolicy(enabled=False),
+        ),
+        engine=_FakeEngine(guard),
+        behavior_binding=GuardBinding(enabled=True),
+        target_id="test.adaptive.operator-promotion",
+        state_directory=tmp_path,
+    )(sample)
+
+    controller = get_adaptive_controller("test.adaptive.operator-promotion")
+    assert controller is wrapped.__caretaker_adaptive__
+    assert controller.request_behavior_promotion("operator investigation") is True
+
+    state = get_adaptive_state("test.adaptive.operator-promotion")
+    assert state["level"] == "BEHAVIOR"
+    assert state["stage"] == AdaptiveLifecycleStage.PRE_REPAIR_BEHAVIOR.value
+    assert state["promotion_reason"] == "operator investigation"
+    assert state["repair_requested"] is False
+    assert controller.request_behavior_promotion("duplicate request") is False
+    assert get_adaptive_state("test.adaptive.operator-promotion")["level"] == "BEHAVIOR"
 
 
 def test_soft_timing_promotes_to_behavior_and_guard_begins_on_next_call(tmp_path) -> None:

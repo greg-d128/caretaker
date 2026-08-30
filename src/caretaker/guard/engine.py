@@ -1076,6 +1076,58 @@ class GuardEngine(GuardFacade):
             self._leases[target_id] = lease
         return lease
 
+    def promote_behavior_target(
+        self,
+        target_id: str,
+        *,
+        requested_by: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Authorize an operator-directed promotion of one adaptive target.
+
+        Guard owns the application target boundary. The adaptive controller owns
+        the lifecycle transition and can only be asked for the fixed
+        lightweight-to-Behavior transition here; no caller can request Repair
+        through this operation.
+        """
+        with self._lock:
+            binding = self._targets.get(target_id)
+        if binding is None:
+            raise KeyError(f"No Guard target found for {target_id}")
+        if not binding.binding.enabled:
+            raise PermissionError(f"Guard observation is disabled for {target_id}")
+
+        from ..adaptive import get_adaptive_controller
+
+        controller = get_adaptive_controller(target_id)
+        if controller is None:
+            raise ValueError(
+                f"Target {target_id} is not an installed adaptive target; "
+                "operator promotion requires an adaptive wrapper"
+            )
+        normalized_reason = str(reason).strip()
+        if not normalized_reason:
+            raise ValueError("behavior promotion requires a reason")
+        if len(normalized_reason) > 500:
+            raise ValueError("behavior promotion reason exceeds 500 characters")
+        normalized_requester = str(requested_by).strip()
+        if not normalized_requester:
+            raise ValueError("behavior promotion requires requested_by")
+        if len(normalized_requester) > 200:
+            raise ValueError("behavior promotion requested_by exceeds 200 characters")
+
+        promoted = bool(controller.request_behavior_promotion(normalized_reason))
+        authority = get_authority_runtime_context().effective
+        return {
+            "target_id": target_id,
+            "promoted": promoted,
+            "requested_by": normalized_requester,
+            "reason": normalized_reason,
+            "state": controller.state.public_dict(),
+            "authority_policy_generation": authority.generation,
+            "authority_policy_fingerprint": authority.fingerprint,
+        }
+
     def evaluate_candidate(
         self,
         target_id: str,

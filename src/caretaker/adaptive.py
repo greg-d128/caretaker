@@ -21,6 +21,7 @@ import sys
 import tempfile
 import threading
 import time
+import weakref
 from collections import deque
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass, field, replace
@@ -238,6 +239,7 @@ class AdaptiveInstrumentationState:
 
 _STATE_REGISTRY: dict[str, AdaptiveInstrumentationState] = {}
 _STATE_REGISTRY_LOCK = threading.RLock()
+_CONTROLLER_REGISTRY: weakref.WeakValueDictionary[str, Any] = weakref.WeakValueDictionary()
 
 
 def adaptive_states() -> tuple[Mapping[str, Any], ...]:
@@ -252,6 +254,17 @@ def get_adaptive_state(target_id: str) -> Mapping[str, Any] | None:
     with _STATE_REGISTRY_LOCK:
         state = _STATE_REGISTRY.get(target_id)
         return None if state is None else state.public_dict()
+
+
+def get_adaptive_controller(target_id: str) -> Any | None:
+    """Return a live adaptive controller for an application-registered target.
+
+    The registry is deliberately weak: it provides an operator/Guard lookup for
+    wrappers that are still installed without retaining application targets or
+    changing their lifecycle.
+    """
+    with _STATE_REGISTRY_LOCK:
+        return _CONTROLLER_REGISTRY.get(target_id)
 
 
 def _initial_stage(level: InstrumentationLevel) -> AdaptiveLifecycleStage:
@@ -387,6 +400,8 @@ class _AdaptiveController:
             self.state = loaded
             if self.state.level.value >= InstrumentationLevel.BEHAVIOR.value and self.state.behavior_started_at is None:
                 self.state.behavior_started_at = utcnow_iso()
+        with _STATE_REGISTRY_LOCK:
+            _CONTROLLER_REGISTRY[self.target_id] = self
         self._publish_state()
 
     def invoke(self, *args: Any, **kwargs: Any) -> Any:
@@ -808,6 +823,26 @@ class _AdaptiveController:
             self._persist()
             self._publish_state()
         return False
+
+    def request_behavior_promotion(self, reason: str) -> bool:
+        """Promote this target to pre-repair Behavior on an authorized request.
+
+        This is intentionally narrower than the signal path: it never accepts a
+        requested level and therefore cannot turn an operator request into Repair.
+        The effective lightweight policy and authority generation are refreshed
+        before changing state, just as they are for an application signal.
+        """
+        with self._lock:
+            self._refresh_generation_if_needed()
+            self._refresh_policy_if_needed()
+            if self.state.stage is not AdaptiveLifecycleStage.LIGHTWEIGHT:
+                return False
+            if self.state.level is not InstrumentationLevel.LIGHTWEIGHT:
+                return False
+            return self._promote(
+                InstrumentationLevel.BEHAVIOR,
+                reason,
+            )
 
     def _maybe_promote_repair(self) -> bool:
         with self._lock:

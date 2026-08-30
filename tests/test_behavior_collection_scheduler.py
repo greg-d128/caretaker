@@ -12,6 +12,7 @@ from caretaker.behavior import (
 from caretaker.guard.engine import GuardEngine
 from caretaker.guard.policy import BehaviorSnapshotPolicy, GuardBinding, GuardPolicy
 from caretaker.operator import OperatorRuntimeRegistry
+from caretaker import LightweightPolicy, lightweight
 
 
 def test_scheduler_orders_operator_requests_by_priority_then_deadline(tmp_path: Path) -> None:
@@ -225,6 +226,61 @@ def test_operator_can_cancel_queued_collection_request(tmp_path: Path, monkeypat
 
     assert result["ok"] is True
     assert result["request"]["status"] == "CANCELLED"
+
+
+def test_operator_can_promote_registered_adaptive_target_to_behavior(tmp_path: Path) -> None:
+    guard = GuardEngine()
+
+    def sample(value: int) -> int:
+        return value
+
+    wrapped = lightweight(
+        policy=LightweightPolicy(),
+        engine=type("Engine", (), {"guard": guard})(),
+        behavior_binding=GuardBinding(enabled=True),
+        target_id="example.operator-promotion",
+        state_directory=tmp_path,
+    )(sample)
+    wrapped.__caretaker_adaptive__.prepare_guard_registration()
+
+    registry = OperatorRuntimeRegistry()
+    registry.register_guard_engine(guard)
+    result = registry.handle_request(
+        {
+            "command": "behavior-collection-promote",
+            "target": "example.operator-promotion",
+            "reason": "incident investigation",
+        },
+        (1234, 1001, 1001),
+    )
+
+    assert result["ok"] is True
+    promotion = result["promotion"]
+    assert promotion["promoted"] is True
+    assert promotion["requested_by"] == "uid:1001"
+    assert promotion["state"]["level"] == "BEHAVIOR"
+    assert promotion["state"]["stage"] == "pre-repair-behavior"
+
+
+def test_operator_promotion_rejects_non_adaptive_guard_target() -> None:
+    guard = GuardEngine()
+
+    def sample(value: int) -> int:
+        return value
+
+    guard.register_target("example.not-adaptive", sample, GuardBinding(enabled=True), periodic=False)
+    registry = OperatorRuntimeRegistry()
+    registry.register_guard_engine(guard)
+
+    with pytest.raises(KeyError, match="No eligible Guard target"):
+        registry.handle_request(
+            {
+                "command": "behavior-collection-promote",
+                "target": "example.not-adaptive",
+                "reason": "incident investigation",
+            },
+            (1234, 1001, 1001),
+        )
 
 
 def test_guard_backlog_reports_waiting_and_queued_current_generations(

@@ -891,7 +891,11 @@ def main(argv: list[str] | None = None) -> int:
             )
             return {"ok": True, "envelope": envelope}
 
-        if command in {"behavior-collection-status", "behavior-collection-cancel"}:
+        if command in {
+            "behavior-collection-status",
+            "behavior-collection-cancel",
+            "behavior-collection-promote",
+        }:
             if not unix_socket_exists(runtime_control_socket):
                 return {
                     "ok": True,

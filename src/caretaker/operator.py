@@ -524,6 +524,23 @@ class OperatorRuntimeRegistry:
                 return {"ok": True, "request": _jsonable(cancelled)}
             raise KeyError(f"No behavior collection request found for {request_id}")
 
+        if command == "behavior-collection-promote":
+            if not target_id:
+                raise ValueError("behavior-collection-promote requires target")
+            requested_by = str(request.get("requested_by") or f"uid:{credentials[1]}").strip()
+            reason = str(request.get("reason") or "operator-requested Behavior promotion").strip()
+            for guard in self.guard_engines():
+                try:
+                    promotion = guard.promote_behavior_target(
+                        target_id,
+                        requested_by=requested_by,
+                        reason=reason,
+                    )
+                except (FileNotFoundError, KeyError, PermissionError, ValueError):
+                    continue
+                return {"ok": True, "promotion": _jsonable(promotion)}
+            raise KeyError(f"No eligible Guard target found for {target_id}")
+
         if command in {
             "guard-summary",
             "guard-events",

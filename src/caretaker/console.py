@@ -726,6 +726,7 @@ class CaretakerConsoleApp(App):
                     )
                     yield Button("Save current function sample", id="behavior-capture-function", variant="primary")
                     yield Button("Save current module sample", id="behavior-capture-module", variant="primary")
+                    yield Button("Promote target to Behavior", id="behavior-promote", variant="warning")
                     yield Button("Refresh", id="behavior-refresh")
                 with Horizontal(id="behavior-filter-row"):
                     yield Input(
@@ -4063,6 +4064,23 @@ class CaretakerConsoleApp(App):
                     )
                     self.query_one("#behavior-capture-reason", Input).value = ""
                     self._show_behavior_snapshot(response.get("envelope") or {})
+                    await self.refresh_behavior()
+                    return
+                if button == "behavior-promote":
+                    subject = self.query_one("#behavior-subject", Input).value.strip()
+                    if not subject:
+                        raise ValueError("Enter an adaptive target id first")
+                    reason = self.query_one("#behavior-capture-reason", Input).value.strip()
+                    if not reason:
+                        raise ValueError("Enter a reason for Behavior promotion")
+                    response = await self._request(
+                        "behavior-collection-promote",
+                        target=subject,
+                        reason=reason,
+                    )
+                    promotion = response.get("promotion") or response
+                    self._write_json("#behavior-output", promotion)
+                    self.query_one("#behavior-capture-reason", Input).value = ""
                     await self.refresh_behavior()
                     return
                 snapshot_id = self._selected_behavior_snapshot

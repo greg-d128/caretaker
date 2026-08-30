@@ -567,7 +567,7 @@ are evidence only and cannot automatically become an accepted Guard baseline.
 
 ## Operator-directed and coverage-complete behavior collection
 
-**Status: Implemented in development tree for bounded operator-directed scheduling; coverage-complete backlog orchestration remains future work.**
+**Status: Implemented in development tree for bounded operator-directed scheduling and explicit adaptive promotion; coverage-complete backlog orchestration remains future work.**
 
 The console's bounded manual function and module capture records signed
 collection provenance with each saved snapshot: request ID, authenticated
@@ -580,16 +580,19 @@ priority/deadline ordering, restart recovery, cancellation state, and explicit
 backpressure. Read-only generation-aware coverage-backlog discovery and console
 visibility are now implemented; automatic backlog promotion, application-wide
 measured overhead budgets, and fairness across hot and rare functions remain
-future work.
+future work. The console and operator control plane can also promote one
+registered adaptive lightweight target into pre-repair Behavior. This request
+is fixed to Behavior, records the operator reason and authority generation, and
+cannot authorize Repair or alter policy.
 
-Caretaker should let an operator deliberately promote an eligible lightweight
-slot into Behavior collection from the console. This supports investigation of a
-suspicious function, collection requested by an external audit, and deliberate
-completion or refresh of a behavioral snapshot. The request should identify the
-subject and generation, reason, requested evidence target or duration, requesting
-operator, governing policy/authority generation, and eventual outcome. Promotion
-is an evidence-collection request, not acceptance of the resulting behavior as a
-trusted Guard baseline.
+The initial operator-directed promotion slice is implemented for one registered
+adaptive target at a time. It supports investigation of a suspicious function
+and records the target, reason, requesting operator, and effective authority
+generation in the returned operation record. Promotion is an
+evidence-collection request, not acceptance of the resulting behavior as a
+trusted Guard baseline. Generation-aware promotion requests, requested
+evidence targets or durations, and durable eventual outcomes remain part of
+the broader coverage orchestration work.
 
 Behavior collection must have an application-wide resource budget. A scheduler
 should limit active high-cost collection using measured overhead as well as a
