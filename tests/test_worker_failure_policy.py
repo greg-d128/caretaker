@@ -20,7 +20,9 @@ from caretaker import (
     dispatch_recovery_action,
     create_worker_failure_record,
     create_worker_postmortem_packet,
+    reconcile_worker_failure_records,
     reconcile_worker_postmortems,
+    resolve_worker_failure_scope,
     verify_worker_postmortem_packet,
 )
 
@@ -66,6 +68,22 @@ def test_worker_failure_records_incident_and_uses_callback_owned_restart() -> No
     assert current.state.name == "STARTING"
     assert current.authority_packet_id is None
     assert result["restart"]["backoff_seconds"] == 0.5
+
+
+def test_worker_failure_scope_uses_transaction_or_incident_and_does_not_use_target_alone() -> None:
+    assert resolve_worker_failure_scope({"transaction_id": "txn-7"}) == "transaction:txn-7"
+    assert resolve_worker_failure_scope({"incident_id": "incident-7"}) == "incident:incident-7"
+    first = resolve_worker_failure_scope(
+        {"worker_id": "worker-1", "target_id": "app:charge"},
+        failure_id="failure-1",
+    )
+    second = resolve_worker_failure_scope(
+        {"worker_id": "worker-2", "target_id": "app:charge"},
+        failure_id="failure-2",
+    )
+    assert first == "worker-failure:failure-1"
+    assert second == "worker-failure:failure-2"
+    assert first != second
 
 
 def test_worker_failure_incident_capsule_is_created_immediately_and_policy_bound(tmp_path) -> None:
@@ -400,6 +418,62 @@ def test_worker_postmortem_reconciliation_retains_divergence_in_sqlite_conflict_
     assert len(store.all_worker_postmortem_conflicts()) == 1
     reopened = SQLiteRepairStore(tmp_path / "repair.sqlite")
     assert len(reopened.all_worker_postmortem_conflicts()) == 1
+
+
+def test_worker_failure_reconciliation_groups_persisted_records_and_retains_incomplete_evidence() -> None:
+    store = InMemoryRepairStore()
+    complete = create_worker_failure_record(
+        {
+            "worker_id": "worker-1",
+            "worker_kind": "REPAIR_ANALYZER",
+            "transaction_id": "txn-1",
+            "transaction_state": "ROLLED_BACK",
+        },
+        postmortem_evidence={
+            "milestone": "VALIDATION",
+            "partial_queue": [],
+            "policy_state": {},
+        },
+    )
+    incomplete = create_worker_failure_record(
+        {
+            "worker_id": "worker-2",
+            "worker_kind": "REPAIR_ANALYZER",
+            "transaction_id": "txn-1",
+            "transaction_state": "ROLLED_BACK",
+        },
+        critical_evidence=True,
+        require_complete_postmortem=True,
+    )
+    unrelated = create_worker_failure_record(
+        {
+            "worker_id": "worker-3",
+            "worker_kind": "REPAIR_ANALYZER",
+            "target_id": "app:charge",
+            "transaction_state": "ROLLED_BACK",
+        },
+    )
+    for record in (complete, incomplete, unrelated):
+        store.record_worker_failure(record)
+
+    result = reconcile_worker_failure_records(store)
+
+    assert result["group_count"] == 2
+    assert result["record_count"] == 3
+    transaction = next(
+        item for item in result["reconciliations"] if item["scope"] == "transaction:txn-1"
+    )
+    assert transaction["input_count"] == 2
+    assert transaction["comparison"]["status"] == "INCOMPLETE_EVIDENCE"
+    assert transaction["conflict"] is True
+    assert transaction["conflict_report"].incomplete_records[0]["record_id"] == str(
+        incomplete.failure_id
+    )
+    assert len(store.all_worker_postmortem_conflicts()) == 1
+
+    filtered = reconcile_worker_failure_records(store, scope="transaction:txn-1")
+    assert filtered["group_count"] == 1
+    assert filtered["record_count"] == 2
 
 
 def test_replacement_action_handler_uses_packet_admission_and_acceptance() -> None:

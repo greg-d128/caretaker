@@ -1064,9 +1064,13 @@ multi-worker reconciliation slice. It deduplicates exact packet hashes,
 combines sufficiently sampled behavioral signatures with the agreed
 three-standard-deviation comparison, and retains complete divergent or
 non-comparable packets in deterministic, idempotent conflict reports. The
-caller must provide the transaction/incident scope; Caretaker does not infer
-that unrelated failures belong to one transaction. This is evidence
-reconciliation only and does not merge policy, authority, or recovery state.
+worker-failure intake now assigns a durable reconciliation scope from an
+explicit scope, a transaction/incident context, or an isolated failure ID;
+target identity alone is never used to merge failures. The supervisor and
+public store helper group all persisted failures by that scope, and conflict
+reports retain incomplete/invalid packet references as well as valid packets.
+This is evidence reconciliation only and does not merge policy, authority, or
+recovery state.
 
 The recovery planner now also resolves the configured interrupted-transaction
 action into an explicit, durable policy decision. It records whether the
@@ -1154,8 +1158,8 @@ transaction and fresh approval checks.
 - recover probation and long-term observation state without double counting;
 - collect complete individual post-mortem packets from every affected worker
   when critical evidence is required, with policy-controlled failure handling;
-- coordinate scope assignment and reconcile duplicate evidence across all
-  worker-failure intake paths, including incomplete packets;
+- connect the coordinated worker-failure intake and reconciliation result to
+  deployment-specific incident, replacement, and shutdown orchestration;
 - execute policy-selected degraded, incident, replacement, or shutdown actions;
 - coordinate the same target across multiple application workers;
 - decide whether an accepted runtime replacement may be reactivated at all;

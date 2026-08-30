@@ -404,14 +404,22 @@ reported as incomplete/invalid evidence and is never treated as authorization
 to restart or change policy.
 
 When several workers fail within one known transaction or incident, the
-embedding application supplies that identifier to
-`reconcile_worker_postmortems(records, scope=...)`. Identical packet hashes
-are counted once while source records remain represented. Distinct packets are
-combined only when their JSON `behavior_signature` samples meet the minimum
-sample count and remain within the configured three-standard-deviation
-threshold. Missing, insufficient, or divergent signatures remain uncombined;
-the complete distinct packets and their record IDs are written to an
-idempotent conflict report for investigation.
+embedding application may supply that identifier as `reconciliation_scope` to
+`handle_worker_failure()`. The persisted `WorkerFailureRecord` keeps that
+scope. If it is omitted, Caretaker derives a scope from a carried transaction
+ID or incident ID; a failure with neither is isolated by its own failure ID so
+target identity alone cannot merge unrelated failures. The supervisor's
+`reconcile_worker_failures()` (or the public
+`reconcile_worker_failure_records(store)`) groups all persisted records and
+invokes `reconcile_worker_postmortems()` for each scope. Identical packet
+hashes are counted once while source records remain represented. Distinct
+packets are combined only when their JSON `behavior_signature` samples meet
+the minimum sample count and remain within the configured
+three-standard-deviation threshold. Missing, insufficient, or divergent
+signatures remain uncombined; complete distinct packets, their record IDs, and
+incomplete/invalid packet references are written to an idempotent conflict
+report for investigation. This is evidence coordination only and does not
+select recovery actions or grant authority.
 
 If diagnostic logging itself fails, Caretaker does not recursively send another
 logging event. The control response reports `diagnostic_persisted=false` and a

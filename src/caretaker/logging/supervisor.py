@@ -19,6 +19,7 @@ from ..repair_recovery import (
     WorkerReplacementRequest,
     create_worker_failure_record,
     evaluate_worker_acceptance,
+    reconcile_worker_failure_records,
     validate_worker_acceptance_policy,
     verify_recovery_authority_packet,
 )
@@ -685,6 +686,7 @@ class CaretakerApplicationSupervisor:
         critical_evidence: bool = False,
         collect_postmortem: Callable[[WorkerHealth, Mapping[str, Any]], Any] | None = None,
         require_complete_postmortem: bool = False,
+        reconciliation_scope: str | None = None,
     ) -> dict[str, Any]:
         """Apply the policy boundary for one failed worker.
 
@@ -711,6 +713,7 @@ class CaretakerApplicationSupervisor:
                     f"post-mortem callback failed: {type(exc).__name__}: {exc}"
                 )[:256]
         failure_persistence_error = None
+        failure_record = None
         postmortem_status = (
             "INCOMPLETE"
             if critical_evidence and require_complete_postmortem
@@ -724,6 +727,7 @@ class CaretakerApplicationSupervisor:
                     postmortem_evidence=postmortem_evidence,
                     postmortem_error=postmortem_error,
                     require_complete_postmortem=require_complete_postmortem,
+                    scope=reconciliation_scope,
                 )
                 self.failure_store.record_worker_failure(failure_record)
                 failure_persistence_status = "PERSISTED"
@@ -781,6 +785,11 @@ class CaretakerApplicationSupervisor:
                     "failure_persistence_error": failure_persistence_error,
                     "postmortem_status": postmortem_status,
                     "postmortem_error": postmortem_error,
+                    "reconciliation_scope": (
+                        failure_record.reconciliation_scope
+                        if failure_record is not None
+                        else reconciliation_scope
+                    ),
                     "restart": {
                         **restart_result,
                     },
@@ -807,6 +816,11 @@ class CaretakerApplicationSupervisor:
             "failure_persistence_error": failure_persistence_error,
             "postmortem_status": postmortem_status,
             "postmortem_error": postmortem_error,
+            "reconciliation_scope": (
+                failure_record.reconciliation_scope
+                if self.failure_store is not None and failure_persistence_status == "PERSISTED"
+                else reconciliation_scope
+            ),
             "restart": restart_result,
             "failure_envelope": envelope,
         }
@@ -825,6 +839,25 @@ class CaretakerApplicationSupervisor:
             },
         )
         return result
+
+    def reconcile_worker_failures(
+        self,
+        *,
+        scope: str | None = None,
+        minimum_sample_count: int = 30,
+        z_threshold: float = 3.0,
+        observed_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Reconcile all persisted worker failures without granting authority."""
+        if self.failure_store is None:
+            raise RuntimeError("worker failure reconciliation requires a failure store")
+        return reconcile_worker_failure_records(
+            self.failure_store,
+            scope=scope,
+            minimum_sample_count=minimum_sample_count,
+            z_threshold=z_threshold,
+            observed_at=observed_at,
+        )
 
     def build_replacement_action_handler(
         self,

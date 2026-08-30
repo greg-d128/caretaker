@@ -24,6 +24,7 @@ from .domain import RepairAttemptOutcome, RepairAttemptStage, RepairEpisodeOutco
 RECOVERY_PLAN_SCHEMA_VERSION = 1
 WORKER_POSTMORTEM_SCHEMA_VERSION = 1
 WORKER_POSTMORTEM_MAX_BYTES = 1_048_576
+WORKER_FAILURE_SCOPE_MAX_CHARS = 256
 _WORKER_POSTMORTEM_REQUIRED_EVIDENCE = (
     "milestone",
     "partial_queue",
@@ -466,6 +467,7 @@ class WorkerFailureRecord:
     postmortem_status: str = "NOT_REQUESTED"
     postmortem_packet: Mapping[str, Any] = field(default_factory=dict)
     postmortem_errors: tuple[str, ...] = ()
+    reconciliation_scope: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -501,6 +503,7 @@ class WorkerPostmortemConflictReport:
     packets: tuple[Mapping[str, Any], ...]
     content_sha256: str
     schema_version: int = WORKER_POSTMORTEM_SCHEMA_VERSION
+    incomplete_records: tuple[Mapping[str, Any], ...] = ()
 
 
 def select_recovery_action(
@@ -641,6 +644,55 @@ def dispatch_recovery_action(
     }
 
 
+def resolve_worker_failure_scope(
+    envelope: Mapping[str, Any],
+    *,
+    scope: str | None = None,
+    failure_id: UUID | str | None = None,
+) -> str:
+    """Assign a bounded, non-authorizing scope to one worker failure.
+
+    An embedding application may provide an explicit scope when it knows that
+    several workers belong to one transaction. Otherwise Caretaker uses the
+    narrowest durable context available: an explicitly carried reconciliation
+    scope, transaction ID, or incident ID. A failure without any such context
+    is isolated by its failure ID; target identity alone is intentionally not
+    enough to merge unrelated failures.
+    """
+    if not isinstance(envelope, Mapping):
+        raise TypeError("worker failure envelope must be a mapping")
+
+    def normalize(value: Any, *, label: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError(f"worker failure {label} cannot be empty")
+        if len(text) > WORKER_FAILURE_SCOPE_MAX_CHARS:
+            raise ValueError(
+                f"worker failure {label} cannot exceed "
+                f"{WORKER_FAILURE_SCOPE_MAX_CHARS} characters"
+            )
+        return text
+
+    if scope is not None:
+        return normalize(scope, label="scope")
+
+    carried_scope = envelope.get("reconciliation_scope")
+    if carried_scope:
+        return normalize(carried_scope, label="scope")
+
+    for field_name, prefix in (
+        ("transaction_id", "transaction"),
+        ("repair_transaction_id", "transaction"),
+        ("incident_id", "incident"),
+    ):
+        value = envelope.get(field_name)
+        if value:
+            return normalize(f"{prefix}:{value}", label="scope")
+
+    fallback = str(failure_id or uuid4())
+    return normalize(f"worker-failure:{fallback}", label="scope")
+
+
 def create_worker_failure_record(
     envelope: Mapping[str, Any],
     *,
@@ -649,6 +701,7 @@ def create_worker_failure_record(
     postmortem_evidence: Mapping[str, Any] | None = None,
     postmortem_error: str | None = None,
     require_complete_postmortem: bool = False,
+    scope: str | None = None,
 ) -> WorkerFailureRecord:
     """Create a durable record from a bounded failure envelope.
 
@@ -663,6 +716,12 @@ def create_worker_failure_record(
     worker_kind = str(envelope.get("worker_kind") or "")
     if not worker_id or not worker_kind:
         raise ValueError("worker failure envelope requires worker identity")
+    failure_id = uuid4()
+    reconciliation_scope = resolve_worker_failure_scope(
+        envelope,
+        scope=scope,
+        failure_id=failure_id,
+    )
     errors: list[str] = []
     packet_payload: Mapping[str, Any] = {}
     postmortem_status = "NOT_REQUESTED"
@@ -696,7 +755,7 @@ def create_worker_failure_record(
             errors.append("critical evidence requires a complete worker post-mortem packet")
         postmortem_status = "INCOMPLETE"
     return WorkerFailureRecord(
-        failure_id=uuid4(),
+        failure_id=failure_id,
         worker_id=worker_id,
         worker_kind=worker_kind,
         observed_at=observed_at or utcnow(),
@@ -707,6 +766,7 @@ def create_worker_failure_record(
         postmortem_status=postmortem_status,
         postmortem_packet=packet_payload,
         postmortem_errors=tuple(errors),
+        reconciliation_scope=reconciliation_scope,
     )
 
 
@@ -877,6 +937,7 @@ def reconcile_worker_postmortems(
     unique_packets: dict[str, dict[str, Any]] = {}
     record_ids_by_hash: dict[str, list[str]] = {}
     invalid_records: list[dict[str, Any]] = []
+    not_requested_records: list[dict[str, Any]] = []
     for index, record in enumerate(records):
         if isinstance(record, Mapping):
             record_id = str(record.get("failure_id") or f"record-{index}")
@@ -888,6 +949,13 @@ def reconcile_worker_postmortems(
             envelope = record.envelope
             packet = record.postmortem_packet
             status = record.postmortem_status
+        if status == "NOT_REQUESTED":
+            not_requested_records.append({
+                "record_id": record_id,
+                "status": status,
+                "reason": "worker post-mortem was not requested by policy",
+            })
+            continue
         if status != "COMPLETE" or not isinstance(packet, Mapping):
             invalid_records.append({
                 "record_id": record_id,
@@ -1020,16 +1088,26 @@ def reconcile_worker_postmortems(
                 comparison["outliers"] = outliers
     if len(packet_items) == 1 and not invalid_records:
         comparison["status"] = "DEDUPLICATED" if duplicate_count else "SINGLE_PACKET"
+    elif not packet_items and invalid_records:
+        comparison["status"] = "INCOMPLETE_EVIDENCE"
+    elif not packet_items and not_requested_records:
+        comparison["status"] = "NO_POSTMORTEM_REQUESTED"
+    if invalid_records:
+        comparison["status"] = "INCOMPLETE_EVIDENCE"
     if invalid_records and conflict_reason is None:
         conflict_reason = "one or more worker post-mortem packets are incomplete or invalid"
     report: WorkerPostmortemConflictReport | None = None
-    if conflict_reason is not None and packet_items:
+    if conflict_reason is not None and (packet_items or invalid_records):
         report_payload = {
             "scope": normalized_scope,
             "reason": conflict_reason,
-            "record_ids": tuple(record_id for ids in record_ids_by_hash.values() for record_id in ids),
+            "record_ids": tuple(
+                [record_id for ids in record_ids_by_hash.values() for record_id in ids]
+                + [item["record_id"] for item in invalid_records]
+            ),
             "packet_hashes": tuple(packet_hash for packet_hash, _ in packet_items),
             "packets": tuple(packet for _, packet in packet_items),
+            "incomplete_records": tuple(invalid_records),
         }
         encoded = json.dumps(
             report_payload,
@@ -1049,6 +1127,7 @@ def reconcile_worker_postmortems(
             packet_hashes=tuple(report_payload["packet_hashes"]),
             packets=tuple(report_payload["packets"]),
             content_sha256=hashlib.sha256(encoded).hexdigest(),
+            incomplete_records=tuple(report_payload["incomplete_records"]),
         )
         if store is not None:
             recorder = getattr(store, "record_worker_postmortem_conflict", None)
@@ -1063,10 +1142,71 @@ def reconcile_worker_postmortems(
         "unique_packet_count": len(packet_items),
         "duplicate_count": duplicate_count,
         "invalid_records": invalid_records,
+        "not_requested_records": not_requested_records,
         "comparison": comparison,
         "conflict": report is not None,
         "conflict_report": report,
         "retained_packets": tuple(packet for _, packet in packet_items),
+        "authority_granted": False,
+    }
+
+
+def reconcile_worker_failure_records(
+    store: Any,
+    *,
+    scope: str | None = None,
+    minimum_sample_count: int = 30,
+    z_threshold: float = 3.0,
+    observed_at: datetime | None = None,
+) -> dict[str, Any]:
+    """Coordinate stored worker-failure evidence by its assigned scope.
+
+    Every stored failure is assigned to exactly one scope. A caller may limit
+    reconciliation to one validated scope, but does not need to assemble the
+    worker list manually. Records from older stores without a scope are
+    isolated using their durable failure ID, preserving the safety rule that
+    target identity alone cannot merge unrelated failures.
+
+    This function performs evidence reconciliation only. It never changes
+    policy, authority, worker state, or recovery action selection.
+    """
+    if not hasattr(store, "all_worker_failures"):
+        raise TypeError("store does not support worker failure records")
+    selected_scope = (
+        resolve_worker_failure_scope({}, scope=scope)
+        if scope is not None
+        else None
+    )
+    grouped: dict[str, list[Any]] = {}
+    for record in store.all_worker_failures():
+        envelope = _field(record, "envelope", {})
+        assigned_scope = _field(record, "reconciliation_scope", "")
+        if not assigned_scope:
+            assigned_scope = resolve_worker_failure_scope(
+                envelope if isinstance(envelope, Mapping) else {},
+                failure_id=_field(record, "failure_id", ""),
+            )
+        if selected_scope is not None and assigned_scope != selected_scope:
+            continue
+        grouped.setdefault(str(assigned_scope), []).append(record)
+
+    reconciliations = tuple(
+        reconcile_worker_postmortems(
+            tuple(records),
+            scope=group_scope,
+            store=store,
+            minimum_sample_count=minimum_sample_count,
+            z_threshold=z_threshold,
+            observed_at=observed_at,
+        )
+        for group_scope, records in sorted(grouped.items())
+    )
+    return {
+        "schema_version": WORKER_POSTMORTEM_SCHEMA_VERSION,
+        "scope": selected_scope,
+        "group_count": len(reconciliations),
+        "record_count": sum(len(records) for records in grouped.values()),
+        "reconciliations": reconciliations,
         "authority_granted": False,
     }
 
