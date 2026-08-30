@@ -399,6 +399,16 @@ stored packet later. A missing, malformed, oversized, or tampered packet is
 reported as incomplete/invalid evidence and is never treated as authorization
 to restart or change policy.
 
+When several workers fail within one known transaction or incident, the
+embedding application supplies that identifier to
+`reconcile_worker_postmortems(records, scope=...)`. Identical packet hashes
+are counted once while source records remain represented. Distinct packets are
+combined only when their JSON `behavior_signature` samples meet the minimum
+sample count and remain within the configured three-standard-deviation
+threshold. Missing, insufficient, or divergent signatures remain uncombined;
+the complete distinct packets and their record IDs are written to an
+idempotent conflict report for investigation.
+
 If diagnostic logging itself fails, Caretaker does not recursively send another
 logging event. The control response reports `diagnostic_persisted=false` and a
 bounded `diagnostic_persistence_error`, and the bootstrap path makes a best-effort

@@ -1056,6 +1056,14 @@ content hash, enforces a one-megabyte serialized bound, and records
 required evidence, size, and hash without granting authority. Missing or
 malformed critical packets remain durable evidence of an incomplete
 post-mortem; collection does not itself select or authorize recovery.
+`reconcile_worker_postmortems(records, scope=...)` now provides the first
+multi-worker reconciliation slice. It deduplicates exact packet hashes,
+combines sufficiently sampled behavioral signatures with the agreed
+three-standard-deviation comparison, and retains complete divergent or
+non-comparable packets in deterministic, idempotent conflict reports. The
+caller must provide the transaction/incident scope; Caretaker does not infer
+that unrelated failures belong to one transaction. This is evidence
+reconciliation only and does not merge policy, authority, or recovery state.
 
 The recovery planner now also resolves the configured interrupted-transaction
 action into an explicit, durable policy decision. It records whether the
@@ -1143,7 +1151,8 @@ transaction and fresh approval checks.
 - recover probation and long-term observation state without double counting;
 - collect complete individual post-mortem packets from every affected worker
   when critical evidence is required, with policy-controlled failure handling;
-- reconcile duplicate evidence and emit conflict reports;
+- coordinate scope assignment and reconcile duplicate evidence across all
+  worker-failure intake paths, including incomplete packets;
 - execute policy-selected degraded, incident, replacement, or shutdown actions;
 - coordinate the same target across multiple application workers;
 - decide whether an accepted runtime replacement may be reactivated at all;

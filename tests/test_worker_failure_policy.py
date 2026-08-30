@@ -19,6 +19,7 @@ from caretaker import (
     dispatch_recovery_action,
     create_worker_failure_record,
     create_worker_postmortem_packet,
+    reconcile_worker_postmortems,
     verify_worker_postmortem_packet,
 )
 
@@ -273,6 +274,96 @@ def test_critical_worker_failure_retains_incomplete_postmortem_status() -> None:
                 "policy_state": {},
             },
         )
+
+
+def test_worker_postmortem_reconciliation_deduplicates_and_combines_compatible_streams() -> None:
+    observed_at = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+
+    def record(worker_id: str, mean: float):
+        return create_worker_failure_record(
+            {
+                "worker_id": worker_id,
+                "worker_kind": "REPAIR_ANALYZER",
+                "transaction_state": "ROLLED_BACK",
+                "detail_level": "DIAGNOSTIC",
+            },
+            observed_at=observed_at,
+            postmortem_evidence={
+                "milestone": "VALIDATION",
+                "partial_queue": [],
+                "policy_state": {"repair": "reviewed"},
+                "behavior_signature": {
+                    "sample_count": 100,
+                    "metrics": {
+                        "duration_ms": {"mean": mean, "standard_deviation": 1.0},
+                    },
+                },
+            },
+        )
+
+    first = record("worker-1", 10.0)
+    second = record("worker-2", 10.2)
+    result = reconcile_worker_postmortems(
+        [first, first, second],
+        scope="incident-1",
+    )
+
+    assert result["complete_record_count"] == 3
+    assert result["unique_packet_count"] == 2
+    assert result["duplicate_count"] == 1
+    assert result["comparison"]["status"] == "COMBINED"
+    assert result["comparison"]["metrics"]["duration_ms"]["sample_count"] == 200
+    assert result["conflict"] is False
+
+
+def test_worker_postmortem_reconciliation_retains_divergence_in_sqlite_conflict_report(tmp_path) -> None:
+    def record(worker_id: str, mean: float):
+        return create_worker_failure_record(
+            {
+                "worker_id": worker_id,
+                "worker_kind": "REPAIR_ANALYZER",
+                "transaction_state": "ROLLED_BACK",
+                "detail_level": "DIAGNOSTIC",
+            },
+            postmortem_evidence={
+                "milestone": "VALIDATION",
+                "partial_queue": [worker_id],
+                "policy_state": {"repair": "reviewed"},
+                "behavior_signature": {
+                    "sample_count": 100,
+                    "metrics": {
+                        "duration_ms": {"mean": mean, "standard_deviation": 1.0},
+                    },
+                },
+            },
+        )
+
+    store = SQLiteRepairStore(tmp_path / "repair.sqlite")
+    first = record("worker-1", 10.0)
+    second = record("worker-2", 20.0)
+    result = reconcile_worker_postmortems(
+        [first, second],
+        scope="incident-2",
+        store=store,
+    )
+
+    assert result["comparison"]["status"] == "RETAINED_NOT_COMBINED"
+    assert result["conflict"] is True
+    assert len(result["conflict_report"].packets) == 2
+    reports = store.all_worker_postmortem_conflicts()
+    assert len(reports) == 1
+    assert reports[0]["scope"] == "incident-2"
+    assert len(reports[0]["packets"]) == 2
+    assert reports[0]["reason"].startswith("worker post-mortem behavior signatures")
+    repeated = reconcile_worker_postmortems(
+        [first, second],
+        scope="incident-2",
+        store=store,
+    )
+    assert repeated["conflict_report"].report_id == result["conflict_report"].report_id
+    assert len(store.all_worker_postmortem_conflicts()) == 1
+    reopened = SQLiteRepairStore(tmp_path / "repair.sqlite")
+    assert len(reopened.all_worker_postmortem_conflicts()) == 1
 
 
 def test_replacement_action_handler_uses_packet_admission_and_acceptance() -> None:

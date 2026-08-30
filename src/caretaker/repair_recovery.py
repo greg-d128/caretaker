@@ -14,8 +14,9 @@ from datetime import datetime, timedelta
 from enum import Enum, auto
 import hashlib
 import json
+import math
 from typing import Any, Callable
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from .domain import RepairAttemptOutcome, RepairAttemptStage, RepairEpisodeOutcome, utcnow
 
@@ -487,6 +488,21 @@ class WorkerPostmortemPacket:
     schema_version: int = WORKER_POSTMORTEM_SCHEMA_VERSION
 
 
+@dataclass(frozen=True, slots=True)
+class WorkerPostmortemConflictReport:
+    """Durable report retaining divergent worker evidence for investigation."""
+
+    report_id: UUID
+    scope: str
+    observed_at: datetime
+    reason: str
+    record_ids: tuple[str, ...]
+    packet_hashes: tuple[str, ...]
+    packets: tuple[Mapping[str, Any], ...]
+    content_sha256: str
+    schema_version: int = WORKER_POSTMORTEM_SCHEMA_VERSION
+
+
 def select_recovery_action(
     action: RecoveryAction,
     *,
@@ -828,6 +844,229 @@ def verify_worker_postmortem_packet(
         "packet_id": str(packet.get("packet_id") or ""),
         "worker_id": str(packet.get("worker_id") or ""),
         "failures": failures,
+        "authority_granted": False,
+    }
+
+
+def reconcile_worker_postmortems(
+    records: tuple[WorkerFailureRecord | Mapping[str, Any], ...] | list[WorkerFailureRecord | Mapping[str, Any]],
+    *,
+    scope: str,
+    store: Any | None = None,
+    minimum_sample_count: int = 30,
+    z_threshold: float = 3.0,
+    observed_at: datetime | None = None,
+) -> dict[str, Any]:
+    """Deduplicate and compare individual worker post-mortem evidence.
+
+    ``scope`` is supplied by the caller that knows which workers belong to one
+    failed transaction or incident. Exact packet hashes are deduplicated, but
+    every source record remains represented. Distinct packets are combined
+    only when each supplies a sufficiently large, compatible
+    ``behavior_signature`` with metric means and standard deviations. Any
+    divergent or non-comparable set is retained in a durable conflict report
+    when a store is supplied.
+    """
+    normalized_scope = str(scope or "").strip()
+    if not normalized_scope or len(normalized_scope) > 256:
+        raise ValueError("post-mortem reconciliation scope must contain 1..256 characters")
+    if minimum_sample_count <= 0:
+        raise ValueError("minimum_sample_count must be greater than zero")
+    if not math.isfinite(z_threshold) or z_threshold <= 0:
+        raise ValueError("z_threshold must be finite and greater than zero")
+    unique_packets: dict[str, dict[str, Any]] = {}
+    record_ids_by_hash: dict[str, list[str]] = {}
+    invalid_records: list[dict[str, Any]] = []
+    for index, record in enumerate(records):
+        if isinstance(record, Mapping):
+            record_id = str(record.get("failure_id") or f"record-{index}")
+            envelope = record.get("envelope")
+            packet = record.get("postmortem_packet")
+            status = str(record.get("postmortem_status") or "")
+        else:
+            record_id = str(record.failure_id)
+            envelope = record.envelope
+            packet = record.postmortem_packet
+            status = record.postmortem_status
+        if status != "COMPLETE" or not isinstance(packet, Mapping):
+            invalid_records.append({
+                "record_id": record_id,
+                "status": status or "MISSING",
+                "reason": "post-mortem packet is not complete",
+            })
+            continue
+        verification = verify_worker_postmortem_packet(
+            packet,
+            envelope=envelope if isinstance(envelope, Mapping) else None,
+        )
+        if not verification["valid"]:
+            invalid_records.append({
+                "record_id": record_id,
+                "status": "INVALID",
+                "reason": "post-mortem packet verification failed",
+                "failures": list(verification["failures"]),
+            })
+            continue
+        packet_hash = str(packet["content_sha256"])
+        unique_packets.setdefault(packet_hash, dict(packet))
+        record_ids_by_hash.setdefault(packet_hash, []).append(record_id)
+
+    packet_items = list(unique_packets.items())
+    duplicate_count = sum(max(0, len(ids) - 1) for ids in record_ids_by_hash.values())
+    worker_ids = {
+        str(packet.get("worker_id") or "")
+        for _, packet in packet_items
+    }
+    same_worker_conflict = len(worker_ids) < len(packet_items)
+    comparison: dict[str, Any] = {
+        "status": "DEDUPLICATED" if len(packet_items) <= 1 else "RETAINED_NOT_COMBINED",
+        "minimum_sample_count": minimum_sample_count,
+        "z_threshold": float(z_threshold),
+        "metrics": {},
+    }
+    conflict_reason: str | None = None
+    signatures: list[tuple[str, Mapping[str, Any], int, Mapping[str, Any]]] = []
+    for packet_hash, packet in packet_items:
+        signature = (packet.get("evidence") or {}).get("behavior_signature")
+        if not isinstance(signature, Mapping):
+            continue
+        sample_count = signature.get("sample_count")
+        metrics = signature.get("metrics")
+        if isinstance(sample_count, bool) or not isinstance(sample_count, int) or sample_count < minimum_sample_count:
+            continue
+        if not isinstance(metrics, Mapping) or not metrics:
+            continue
+        valid_metrics = True
+        for metric in metrics.values():
+            if not isinstance(metric, Mapping):
+                valid_metrics = False
+                break
+            mean = metric.get("mean")
+            standard_deviation = metric.get("standard_deviation")
+            if (
+                isinstance(mean, bool)
+                or not isinstance(mean, (int, float))
+                or not math.isfinite(float(mean))
+                or isinstance(standard_deviation, bool)
+                or not isinstance(standard_deviation, (int, float))
+                or not math.isfinite(float(standard_deviation))
+                or float(standard_deviation) < 0
+            ):
+                valid_metrics = False
+                break
+        if valid_metrics:
+            signatures.append((packet_hash, signature, sample_count, metrics))
+    if len(packet_items) > 1:
+        if same_worker_conflict:
+            conflict_reason = "one worker supplied divergent post-mortem packet hashes"
+        elif len(signatures) != len(packet_items):
+            conflict_reason = "worker post-mortem behavior signatures are missing or insufficient"
+        else:
+            metric_names = set(signatures[0][3])
+            if any(set(metrics) != metric_names for _, _, _, metrics in signatures[1:]):
+                conflict_reason = "worker post-mortem behavior signatures have different metrics"
+            else:
+                combined_metrics: dict[str, dict[str, float | int]] = {}
+                outliers: list[dict[str, Any]] = []
+                for metric_name in sorted(metric_names):
+                    observations = [
+                        (sample_count, float(metrics[metric_name]["mean"]), float(metrics[metric_name]["standard_deviation"]), packet_hash)
+                        for packet_hash, _, sample_count, metrics in signatures
+                    ]
+                    total = sum(item[0] for item in observations)
+                    combined_mean = sum(count * mean for count, mean, _, _ in observations) / total
+                    combined_variance = sum(
+                        count * (standard_deviation**2 + (mean - combined_mean) ** 2)
+                        for count, mean, standard_deviation, _ in observations
+                    ) / total
+                    combined_metrics[metric_name] = {
+                        "sample_count": total,
+                        "mean": combined_mean,
+                        "standard_deviation": combined_variance**0.5,
+                    }
+                    for count, mean, standard_deviation, packet_hash in observations:
+                        other_count = total - count
+                        if other_count <= 0:
+                            continue
+                        other_mean = sum(
+                            other_count_item * other_mean_item
+                            for other_count_item, other_mean_item, _, other_hash in observations
+                            if other_hash != packet_hash
+                        ) / other_count
+                        other_variance = sum(
+                            other_count_item * (other_std**2 + (other_mean_item - other_mean) ** 2)
+                            for other_count_item, other_mean_item, other_std, other_hash in observations
+                            if other_hash != packet_hash
+                        ) / other_count
+                        standard_error = (
+                            standard_deviation**2 / count
+                            + other_variance / other_count
+                        ) ** 0.5
+                        z_score = abs(mean - other_mean) / max(standard_error, 1e-9)
+                        if z_score > z_threshold:
+                            outliers.append({
+                                "packet_hash": packet_hash,
+                                "metric": metric_name,
+                                "z_score": z_score,
+                                "z_threshold": float(z_threshold),
+                                "sample_count": count,
+                                "comparison_sample_count": other_count,
+                            })
+                if outliers:
+                    conflict_reason = "worker post-mortem behavior signatures differ beyond the configured threshold"
+                else:
+                    comparison["status"] = "COMBINED"
+                    comparison["metrics"] = combined_metrics
+                comparison["outliers"] = outliers
+    if len(packet_items) == 1 and not invalid_records:
+        comparison["status"] = "DEDUPLICATED" if duplicate_count else "SINGLE_PACKET"
+    if invalid_records and conflict_reason is None:
+        conflict_reason = "one or more worker post-mortem packets are incomplete or invalid"
+    report: WorkerPostmortemConflictReport | None = None
+    if conflict_reason is not None and packet_items:
+        report_payload = {
+            "scope": normalized_scope,
+            "reason": conflict_reason,
+            "record_ids": tuple(record_id for ids in record_ids_by_hash.values() for record_id in ids),
+            "packet_hashes": tuple(packet_hash for packet_hash, _ in packet_items),
+            "packets": tuple(packet for _, packet in packet_items),
+        }
+        encoded = json.dumps(
+            report_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        report = WorkerPostmortemConflictReport(
+            report_id=uuid5(
+                NAMESPACE_URL,
+                "caretaker:worker-postmortem-conflict:" + hashlib.sha256(encoded).hexdigest(),
+            ),
+            scope=normalized_scope,
+            observed_at=observed_at or utcnow(),
+            reason=conflict_reason,
+            record_ids=tuple(report_payload["record_ids"]),
+            packet_hashes=tuple(report_payload["packet_hashes"]),
+            packets=tuple(report_payload["packets"]),
+            content_sha256=hashlib.sha256(encoded).hexdigest(),
+        )
+        if store is not None:
+            recorder = getattr(store, "record_worker_postmortem_conflict", None)
+            if not callable(recorder):
+                raise TypeError("store does not support worker post-mortem conflict reports")
+            recorder(report)
+    return {
+        "schema_version": WORKER_POSTMORTEM_SCHEMA_VERSION,
+        "scope": normalized_scope,
+        "input_count": len(records),
+        "complete_record_count": sum(len(ids) for ids in record_ids_by_hash.values()),
+        "unique_packet_count": len(packet_items),
+        "duplicate_count": duplicate_count,
+        "invalid_records": invalid_records,
+        "comparison": comparison,
+        "conflict": report is not None,
+        "conflict_report": report,
+        "retained_packets": tuple(packet for _, packet in packet_items),
         "authority_granted": False,
     }
 

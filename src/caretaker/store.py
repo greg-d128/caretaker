@@ -27,7 +27,11 @@ from .domain import (
     RepairEpisode,
     RepairEvent,
 )
-from .repair_recovery import RepairRecoveryRecord, WorkerFailureRecord
+from .repair_recovery import (
+    RepairRecoveryRecord,
+    WorkerFailureRecord,
+    WorkerPostmortemConflictReport,
+)
 
 
 class RepairStore(Protocol):
@@ -53,6 +57,8 @@ class RepairStore(Protocol):
     def all_recoveries(self) -> tuple[Any, ...]: ...
     def record_worker_failure(self, record: WorkerFailureRecord) -> None: ...
     def all_worker_failures(self) -> tuple[Any, ...]: ...
+    def record_worker_postmortem_conflict(self, record: WorkerPostmortemConflictReport) -> None: ...
+    def all_worker_postmortem_conflicts(self) -> tuple[Any, ...]: ...
 
 
 class InMemoryRepairStore:
@@ -65,6 +71,7 @@ class InMemoryRepairStore:
         self.attempts: dict[UUID, RepairAttempt] = {}
         self.recoveries: dict[str, RepairRecoveryRecord] = {}
         self.worker_failures: dict[UUID, WorkerFailureRecord] = {}
+        self.worker_postmortem_conflicts: dict[UUID, WorkerPostmortemConflictReport] = {}
         self.observations: dict[UUID, ObservationRecord] = {}
         self.internal_incidents: dict[UUID, InternalIncident] = {}
         self.integrity_verifications: dict[UUID, IntegrityVerification] = {}
@@ -169,6 +176,19 @@ class InMemoryRepairStore:
         with self._lock:
             return tuple(sorted(self.worker_failures.values(), key=lambda record: record.observed_at))
 
+    def record_worker_postmortem_conflict(self, record: WorkerPostmortemConflictReport) -> None:
+        with self._lock:
+            self.worker_postmortem_conflicts[record.report_id] = record
+
+    def all_worker_postmortem_conflicts(self) -> tuple[WorkerPostmortemConflictReport, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    self.worker_postmortem_conflicts.values(),
+                    key=lambda record: record.observed_at,
+                )
+            )
+
 
 class SQLiteRepairStore:
     """Small JSON-backed event store with one logical stream per table."""
@@ -182,6 +202,7 @@ class SQLiteRepairStore:
         "attempts": "attempt_id",
         "recovery_records": "recovery_id",
         "worker_failure_records": "failure_id",
+        "worker_postmortem_conflicts": "report_id",
         "events": "event_id",
         "observations": "observation_id",
         "internal_incidents": "internal_incident_id",
@@ -320,6 +341,12 @@ class SQLiteRepairStore:
 
     def all_worker_failures(self) -> tuple[Mapping[str, Any], ...]:
         return tuple(self.query_records("worker_failure_records", limit=10000))
+
+    def record_worker_postmortem_conflict(self, record: WorkerPostmortemConflictReport) -> None:
+        self._write("worker_postmortem_conflicts", record, target_id=record.scope)
+
+    def all_worker_postmortem_conflicts(self) -> tuple[Mapping[str, Any], ...]:
+        return tuple(self.query_records("worker_postmortem_conflicts", limit=10000))
 
     def query_records(
         self,
