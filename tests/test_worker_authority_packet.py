@@ -92,6 +92,120 @@ def test_expired_worker_becomes_unauthorized_and_restart_clears_packet() -> None
     assert restarted.authority_packet_expires_at is None
 
 
+def test_live_worker_can_refresh_packet_without_resetting_acceptance_state() -> None:
+    registry = WorkerRegistry()
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    acceptance_policy = WorkerAcceptancePolicy(
+        probation_successful_executions=2,
+        acceptance_successful_executions=3,
+    )
+    packet = _packet(supervisor_time=supervisor_time)
+    worker = registry.register_authorized(
+        WorkerKind.REPAIR_ANALYZER,
+        1234,
+        packet,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+        acceptance_policy=acceptance_policy,
+    )
+    worker = registry.record_acceptance_observation(
+        worker.worker_id,
+        success=True,
+        policy=acceptance_policy,
+    )
+    before_refresh = worker
+    refresh_time = supervisor_time + timedelta(seconds=60)
+    refreshed_packet = create_recovery_authority_packet(
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-9",
+        authority_policy_fingerprint="authority-hash-new",
+        capabilities=("observe",),
+        supervisor_time=refresh_time,
+    )
+
+    refreshed = registry.refresh_authorized(
+        worker.worker_id,
+        refreshed_packet,
+        supervisor_time=refresh_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-9",
+        authority_policy_fingerprint="authority-hash-new",
+        allowed_capabilities={"observe"},
+    )
+
+    assert refreshed.worker_id == before_refresh.worker_id
+    assert refreshed.process_id == before_refresh.process_id
+    assert refreshed.process_start_id == before_refresh.process_start_id
+    assert refreshed.authority_packet_id == refreshed_packet.packet_id
+    assert refreshed.authority_packet_expires_at == refreshed_packet.expires_at
+    assert refreshed.acceptance_state is before_refresh.acceptance_state
+    assert refreshed.acceptance_successful_executions == 1
+    assert refreshed.acceptance_failed_executions == 0
+
+
+def test_packet_refresh_rejects_expired_or_failed_worker() -> None:
+    registry = WorkerRegistry()
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    packet = _packet(supervisor_time=supervisor_time)
+    worker = registry.register_authorized(
+        WorkerKind.REPAIR_ANALYZER,
+        1234,
+        packet,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+    )
+    replacement_packet = _packet(
+        supervisor_time=supervisor_time + timedelta(seconds=1),
+    )
+
+    with pytest.raises(PermissionError, match="expired; re-admission"):
+        registry.refresh_authorized(
+            worker.worker_id,
+            replacement_packet,
+            supervisor_time=packet.expires_at,
+            target_id="app:charge",
+            generation_id="generation-7",
+            code_hash="code-hash",
+            policy_fingerprint="policy-hash",
+            authority_policy_generation="authority-8",
+            authority_policy_fingerprint="authority-hash",
+            allowed_capabilities={"observe"},
+        )
+
+    registry.mark_failed(worker.worker_id, error_fingerprint="worker-crash")
+    with pytest.raises(PermissionError, match="live authorized worker"):
+        registry.refresh_authorized(
+            worker.worker_id,
+            replacement_packet,
+            supervisor_time=supervisor_time + timedelta(seconds=1),
+            target_id="app:charge",
+            generation_id="generation-7",
+            code_hash="code-hash",
+            policy_fingerprint="policy-hash",
+            authority_policy_generation="authority-8",
+            authority_policy_fingerprint="authority-hash",
+            allowed_capabilities={"observe"},
+        )
+
+
 def test_replacement_handoff_requires_packet_and_records_provenance() -> None:
     registry = WorkerRegistry()
     supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)

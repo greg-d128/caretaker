@@ -77,6 +77,14 @@ packet ID; target and policy context are resolved from the supervisor's
 registration rather than supplied by the worker. Cross-host transport remains
 a future capability.
 
+When approval state changes before a packet expires, an application may use
+the supervisor registry's `refresh_authorized()` API to reacquire the complete
+authorized packet for the same live worker. The refresh preserves process
+identity and acceptance counters, but requires exact target, generation, code,
+policy, capability, and supervisor-time validation. Failed, unauthorized, or
+expired workers must be replaced and admitted with a new packet; refresh never
+grants policy or repair authority by itself.
+
 For enabled adaptive aggregation, the same socket exposes
 `adaptive-transition-list` and `adaptive-transition-ack`. The supervisor creates
 Behavior-only requests from reconciled application-wide threshold evidence.

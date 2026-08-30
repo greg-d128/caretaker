@@ -1053,6 +1053,15 @@ provenance. This is lifecycle enforcement inside the existing registry; OS
 process spawning, cross-process packet transport, and replacement orchestration
 remain future work.
 
+The registry also supports `refresh_authorized()` for a live worker that needs
+to reacquire an expiring approval packet. Refresh requires the worker to remain
+authorized and unexpired, verifies the replacement packet against the current
+target, generation, code, policy, capabilities, and supervisor context, and
+preserves process identity and acceptance counters. A failed, stopping, or
+expired worker cannot use refresh to regain authority; it must follow the
+replacement admission path. Changing the authority snapshot does not itself
+authorize a policy transition or reset acceptance state.
+
 `WorkerAcceptancePolicy` now resolves conservative replacement-worker
 probation and acceptance counters, with per-target overrides. Authorized
 workers can be initialized in probation, advance one observation at a time, and

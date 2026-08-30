@@ -216,6 +216,101 @@ class WorkerRegistry:
                 self._acceptance_policies[health.worker_id] = resolved_acceptance_policy
             return admitted
 
+    def refresh_authorized(
+        self,
+        worker_id: UUID,
+        packet: RecoveryAuthorityPacket,
+        *,
+        supervisor_time: datetime,
+        target_id: str,
+        generation_id: str,
+        code_hash: str,
+        policy_fingerprint: str,
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        allowed_capabilities: set[str] | frozenset[str] = frozenset(),
+        policy: RepairRecoveryPolicy | None = None,
+    ) -> WorkerHealth:
+        """Refresh a live worker's packet without re-admitting its process.
+
+        Refresh only replaces the immutable authorization snapshot. It does
+        not change the worker's identity, acceptance counters, or execution
+        context. A worker that has failed, stopped, become unauthorized, or
+        already reached packet expiry must re-enter through replacement
+        admission instead.
+        """
+        with self._lock:
+            current = self._workers[worker_id]
+            if current.state in {
+                WorkerState.FAILED,
+                WorkerState.UNAUTHORIZED,
+                WorkerState.STOPPING,
+            }:
+                raise PermissionError(
+                    "worker packet refresh requires a live authorized worker"
+                )
+            if (
+                current.authority_packet_id is None
+                or current.authority_packet_expires_at is None
+            ):
+                raise PermissionError("worker has no authorized packet to refresh")
+            if supervisor_time >= current.authority_packet_expires_at:
+                raise PermissionError(
+                    "worker authority packet has expired; re-admission is required"
+                )
+            expected_context = {
+                "target_id": str(target_id),
+                "generation_id": str(generation_id),
+                "code_hash": str(code_hash),
+                "policy_fingerprint": str(policy_fingerprint),
+            }
+            for name, expected in expected_context.items():
+                if getattr(current, name) != expected:
+                    raise PermissionError(f"worker refresh context mismatch: {name}")
+
+        verification = verify_recovery_authority_packet(
+            packet,
+            supervisor_time=supervisor_time,
+            target_id=target_id,
+            generation_id=generation_id,
+            code_hash=code_hash,
+            policy_fingerprint=policy_fingerprint,
+            authority_policy_generation=authority_policy_generation,
+            authority_policy_fingerprint=authority_policy_fingerprint,
+            allowed_capabilities=allowed_capabilities,
+            policy=policy,
+        )
+        if not verification["valid"]:
+            raise PermissionError(
+                "worker authority packet refresh rejected: "
+                + ", ".join(str(item) for item in verification["failures"])
+            )
+
+        with self._lock:
+            current = self._workers[worker_id]
+            if current.state in {
+                WorkerState.FAILED,
+                WorkerState.UNAUTHORIZED,
+                WorkerState.STOPPING,
+            }:
+                raise PermissionError(
+                    "worker packet refresh requires a live authorized worker"
+                )
+            if (
+                current.authority_packet_expires_at is None
+                or supervisor_time >= current.authority_packet_expires_at
+            ):
+                raise PermissionError(
+                    "worker authority packet has expired; re-admission is required"
+                )
+            updated = replace(
+                current,
+                authority_packet_id=packet.packet_id,
+                authority_packet_expires_at=packet.expires_at,
+            )
+            self._workers[worker_id] = updated
+            return updated
+
     def prepare_replacement(
         self,
         worker_id: UUID,
