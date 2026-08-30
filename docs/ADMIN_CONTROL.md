@@ -40,6 +40,12 @@ supervisor enforces the effective regression policy, source-hash check,
 capsule/fixture incident binding, and configured isolated backend. Replay is
 read-only with respect to capsules and Repair state.
 
+The runtime command `runtime-repair-recovery-plan` exposes a read-only plan for
+persisted Repair attempts that did not durably complete before process loss.
+The plan reports the last milestone and recommends rollback to deployed code;
+it requires authority revalidation and never reactivates a candidate or treats
+an approval as surviving restart.
+
 The `incident-communication-draft` command creates a bounded, policy-governed
 draft for one verified capsule. The console exposes the same operation as
 **Create review draft**, and `caretaker-incident-draft` can write a new

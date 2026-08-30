@@ -977,6 +977,13 @@ The first application-scoped implementation must enforce these decisions:
 
 The remaining implementation work is to:
 
+A first read-only recovery slice now exists as `RepairEngine.recovery_plan()`
+and the runtime command `runtime-repair-recovery-plan`. It inventories
+durably persisted incomplete attempts, reports their last milestone, and
+selects deployed-code-only recovery without reactivating a candidate. It does
+not yet mutate interrupted records or perform policy-selected replacement or
+shutdown actions.
+
 - mark interrupted incidents, generations, attempts, and validations incomplete;
 - reconstruct or deliberately stale pending approvals;
 - verify candidate source and policy/authority bindings again after restart;

@@ -635,6 +635,21 @@ class OperatorRuntimeRegistry:
                 approvals.extend(engine.pending_approvals())
             return {"ok": True, "approvals": _jsonable(approvals)}
 
+        if command == "repair-recovery-plan":
+            engines = (
+                (self._repair_engine_for_target(target_id),)
+                if target_id
+                else self.repair_engines()
+            )
+            return {
+                "ok": True,
+                "target": target_id,
+                "plans": [
+                    _jsonable(engine.recovery_plan(target_id=target_id))
+                    for engine in engines
+                ],
+            }
+
         if command in {"repair-approve", "repair-reject"}:
             episode_id = UUID(str(request["episode_id"]))
             engine = next(

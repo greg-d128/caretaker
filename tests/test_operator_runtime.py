@@ -47,6 +47,22 @@ def test_operator_runtime_reports_validation_activity():
     assert status["validating_functions"] == ["target.one"]
 
 
+def test_operator_runtime_exposes_fail_safe_repair_recovery_plan():
+    registry = OperatorRuntimeRegistry()
+    engine = RepairEngine()
+    registry.register_repair_engine(engine)
+
+    response = registry.handle_request(
+        {"command": "repair-recovery-plan"},
+        (123, 1000, 1000),
+    )
+
+    assert response["ok"] is True
+    assert response["target"] is None
+    assert response["plans"][0]["restart_policy"] == "DEPLOYED_CODE_ONLY"
+    assert response["plans"][0]["automatic_reactivation"] is False
+
+
 def test_operator_registry_attaches_adaptive_state_to_guard_dependency(monkeypatch):
     registry = OperatorRuntimeRegistry()
     guard = GuardEngine()

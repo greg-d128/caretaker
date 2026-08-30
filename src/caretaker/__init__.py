@@ -197,6 +197,7 @@ from .policy import (
 )
 from .postmortem import ExceptionHookManager, PostMortemRecorder
 from .provider import CandidateProposal, OllamaRepairProvider, StaticRepairProvider
+from .repair_recovery import build_repair_recovery_plan
 from .regression import (
     DATA_ONLY_NOT_EXECUTABLE,
     JSON_EXACT_REHYDRATION,
@@ -484,6 +485,7 @@ __all__ = [
     "RootlessPodmanReplayBackend",
     "execute_capsule_replay",
     "execute_historical_capsule_replays",
+    "build_repair_recovery_plan",
     "ReplaySafety",
     "SnapshotStrategy",
     "TimeoutMode",

@@ -43,6 +43,7 @@ class RepairStore(Protocol):
     def record_integrity_incident(self, record: IntegrityIncident) -> None: ...
     def recent_events(self, target_id: str | None, limit: int = 50) -> tuple[RepairEvent, ...]: ...
     def attempts_for_target(self, target_id: str) -> tuple[Any, ...]: ...
+    def all_attempts(self) -> tuple[Any, ...]: ...
 
 
 class InMemoryRepairStore:
@@ -120,6 +121,10 @@ class InMemoryRepairStore:
                     key=lambda attempt: attempt.created_at,
                 )
             )
+
+    def all_attempts(self) -> tuple[RepairAttempt, ...]:
+        with self._lock:
+            return tuple(sorted(self.attempts.values(), key=lambda attempt: attempt.created_at))
 
 
 class SQLiteRepairStore:
@@ -243,6 +248,9 @@ class SQLiteRepairStore:
 
     def attempts_for_target(self, target_id: str) -> tuple[Mapping[str, Any], ...]:
         return tuple(self.query_records("attempts", target_id=target_id, limit=10000))
+
+    def all_attempts(self) -> tuple[Mapping[str, Any], ...]:
+        return tuple(self.query_records("attempts", limit=10000))
 
     def query_records(
         self,
