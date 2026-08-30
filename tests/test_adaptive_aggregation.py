@@ -526,6 +526,154 @@ def test_approved_threshold_change_records_post_policy_worker_transition(
     assert policy_transitions[0]["status"] == "APPLIED"
 
 
+def test_adaptive_policy_transition_rollback_is_idempotent_and_pre_acceptance_only(
+    tmp_path: Path,
+):
+    store = SupervisorAdaptiveAggregationStore(tmp_path)
+    proposal = store.create_threshold_proposal(
+        target_id="example.target",
+        generation_id="generation-a",
+        code_hash="code-a",
+        monitoring_fingerprint="monitoring-a",
+        policy_fingerprint="policy-a",
+        authority_policy_generation="7",
+        authority_policy_fingerprint="authority-a",
+        changes={"exception.occurrences": 4},
+        requested_by="operator:test",
+        reason="review threshold evidence",
+        expires_in_seconds=3600,
+    )
+    created = datetime.fromisoformat(proposal["created_at"])
+    review_context = {
+        "current_generations": {"example.target": "generation-a"},
+        "policy_fingerprints": {"example.target": "policy-a"},
+        "authority_policy_generation": "7",
+        "authority_policy_fingerprint": "authority-a",
+    }
+    store.review_threshold_proposal(
+        proposal["request_id"],
+        decision="APPROVE",
+        reviewed_by="uid:1001",
+        reason="ready for staged policy handling",
+        now=created + timedelta(seconds=1),
+        **review_context,
+    )
+    transition = store.create_threshold_policy_transition(
+        proposal["request_id"],
+        applied_policy_fingerprint="policy-b",
+        current_generations={"example.target": "generation-a"},
+        current_policy_fingerprints={"example.target": "policy-b"},
+        authority_policy_generation="8",
+        authority_policy_fingerprint="authority-b",
+        required_workers=[{"worker_id": "worker-a", "worker_pid": 101}],
+        applied_by="uid:1001",
+        reason="apply reviewed threshold",
+        authority_lease_id="00000000-0000-0000-0000-000000000008",
+        now=created + timedelta(seconds=2),
+    )
+
+    rollback = store.record_transition_rollback(
+        transition["request_id"],
+        rolled_back_by="uid:1001",
+        reason="worker verification did not complete",
+        authority_lease_id=transition["authority_lease_id"],
+        now=created + timedelta(seconds=3),
+    )
+    assert rollback["status"] == "ROLLED_BACK"
+    assert rollback["policy_applied"] is False
+    duplicate = store.record_transition_rollback(
+        transition["request_id"],
+        rolled_back_by="uid:1001",
+        reason="worker verification did not complete",
+        authority_lease_id=transition["authority_lease_id"],
+        now=created + timedelta(seconds=4),
+    )
+    assert duplicate["duplicate"] is True
+    listed = store.list_transition_requests(
+        current_generations={"example.target": "generation-a"},
+        policy_fingerprints={"example.target": "policy-b"},
+        authority_policy_generation="8",
+        authority_policy_fingerprint="authority-b",
+    )
+    transition_view = next(
+        item for item in listed if item["request_kind"] == "ADAPTIVE_POLICY_TRANSITION"
+    )
+    assert transition_view["status"] == "ROLLED_BACK"
+    assert transition_view["rollback_status"] == "ROLLED_BACK"
+    with pytest.raises(PermissionError, match="rolled back"):
+        store.acknowledge_transition(
+            {
+                **transition,
+                "worker_id": "worker-a",
+                "applied": True,
+                "observed_level": "POLICY",
+            },
+            peer_pid=101,
+            current_generations={"example.target": "generation-a"},
+            policy_fingerprints={"example.target": "policy-b"},
+            authority_policy_generation="8",
+            authority_policy_fingerprint="authority-b",
+        )
+
+    applied_proposal = store.create_threshold_proposal(
+        target_id="example.other",
+        generation_id="generation-a",
+        code_hash="code-a",
+        monitoring_fingerprint="monitoring-a",
+        policy_fingerprint="policy-a",
+        authority_policy_generation="7",
+        authority_policy_fingerprint="authority-a",
+        changes={"exception.occurrences": 4},
+        requested_by="operator:test",
+        reason="review another threshold",
+        expires_in_seconds=3600,
+    )
+    applied_created = datetime.fromisoformat(applied_proposal["created_at"])
+    store.review_threshold_proposal(
+        applied_proposal["request_id"],
+        decision="APPROVE",
+        reviewed_by="uid:1001",
+        reason="ready",
+        now=applied_created + timedelta(seconds=1),
+        current_generations={"example.other": "generation-a"},
+        policy_fingerprints={"example.other": "policy-a"},
+        authority_policy_generation="7",
+        authority_policy_fingerprint="authority-a",
+    )
+    accepted = store.create_threshold_policy_transition(
+        applied_proposal["request_id"],
+        applied_policy_fingerprint="policy-b",
+        current_generations={"example.other": "generation-a"},
+        current_policy_fingerprints={"example.other": "policy-b"},
+        authority_policy_generation="8",
+        authority_policy_fingerprint="authority-b",
+        required_workers=[{"worker_id": "worker-b", "worker_pid": 102}],
+        applied_by="uid:1001",
+        reason="apply reviewed threshold",
+        now=applied_created + timedelta(seconds=2),
+    )
+    store.acknowledge_transition(
+        {
+            **accepted,
+            "worker_id": "worker-b",
+            "applied": True,
+            "observed_level": "POLICY",
+        },
+        peer_pid=102,
+        current_generations={"example.other": "generation-a"},
+        policy_fingerprints={"example.other": "policy-b"},
+        authority_policy_generation="8",
+        authority_policy_fingerprint="authority-b",
+    )
+    with pytest.raises(PermissionError, match="new incident"):
+        store.record_transition_rollback(
+            accepted["request_id"],
+            rolled_back_by="uid:1001",
+            reason="too late",
+            now=applied_created + timedelta(seconds=3),
+        )
+
+
 def test_threshold_proposal_rejects_non_threshold_fields(tmp_path: Path) -> None:
     store = SupervisorAdaptiveAggregationStore(tmp_path)
     with pytest.raises(AdaptiveAggregationError, match="unsupported adaptive threshold"):

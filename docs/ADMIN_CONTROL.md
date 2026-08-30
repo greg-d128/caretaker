@@ -99,6 +99,15 @@ prior authority snapshot is restored. On success the supervisor records an
 `ADAPTIVE_POLICY_TRANSITION` that workers must acknowledge. Retrying an
 already-applied proposal returns the existing transition without acquiring a
 second lease.
+`adaptive-threshold-rollback` can record an explicit, authenticated rollback
+for a staged transition that has not reached `APPLIED`. It requires
+`confirm=true` and an operator reason, releases the transition's target-scoped
+runtime lease when it is still active, and records a separate immutable,
+content-hashed rollback record. A rolled-back transition cannot receive later
+worker acknowledgements or be retried as an active policy change. Once all
+required workers have acknowledged a transition and it is `APPLIED`, rollback
+through this operation is rejected; a later correction requires a new incident
+and its own approval path.
 
 Replacement probation and acceptance counters are policy resolved. The default
 guideline is 1,000 successful executions for each stage with no permitted

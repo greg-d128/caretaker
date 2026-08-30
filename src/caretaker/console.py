@@ -226,6 +226,13 @@ class CaretakerConsoleApp(App):
     }
     #adaptive-threshold-review-actions Input { width: 1fr; min-width: 20; }
     #adaptive-threshold-review-actions Button { width: auto; min-width: 18; margin-left: 1; }
+    #adaptive-threshold-rollback-actions {
+        height: 4;
+        padding: 0 1;
+        align-vertical: middle;
+    }
+    #adaptive-threshold-rollback-actions Checkbox { margin-left: 1; }
+    #adaptive-threshold-rollback-actions Button { width: auto; min-width: 18; margin-left: 1; }
     #adaptive-threshold-proposal-actions {
         height: 8;
         padding: 0 1;
@@ -598,6 +605,7 @@ class CaretakerConsoleApp(App):
         self._adaptive_aggregation_status: dict[str, Any] = {}
         self._adaptive_aggregation_records: list[dict[str, Any]] = []
         self._selected_adaptive_threshold_request_id: str | None = None
+        self._selected_adaptive_transition_request_id: str | None = None
         self._selected_target: str | None = None
         self._attention_records: list[dict[str, Any]] = []
         self._selected_attention_record: dict[str, Any] | None = None
@@ -916,6 +924,18 @@ class CaretakerConsoleApp(App):
                     yield Button(
                         "Apply approved change",
                         id="adaptive-threshold-apply",
+                        disabled=True,
+                        variant="warning",
+                    )
+                with Horizontal(id="adaptive-threshold-rollback-actions"):
+                    yield Checkbox(
+                        "Confirm staged rollback",
+                        id="adaptive-threshold-rollback-confirm",
+                        disabled=True,
+                    )
+                    yield Button(
+                        "Roll back staged change",
+                        id="adaptive-threshold-rollback",
                         disabled=True,
                         variant="warning",
                     )
@@ -2051,6 +2071,17 @@ class CaretakerConsoleApp(App):
             else:
                 self._selected_adaptive_threshold_request_id = None
                 self._refresh_adaptive_threshold_review_actions()
+                payload = record.get("payload") or {}
+                request_kind = str(payload.get("request_kind") or "")
+                status = str(payload.get("status") or "").upper()
+                self._selected_adaptive_transition_request_id = (
+                    str(payload.get("request_id") or "").strip()
+                    if request_kind == "ADAPTIVE_POLICY_TRANSITION"
+                    and status not in {"APPLIED", "ROLLED_BACK"}
+                    and payload.get("rollback_status") != "ROLLED_BACK"
+                    else None
+                )
+                self._refresh_adaptive_threshold_rollback_actions()
             return
 
         if event.data_table.id == "attention-table":
@@ -3087,7 +3118,9 @@ class CaretakerConsoleApp(App):
         elif event.input.id == "adaptive-threshold-review-reason":
             self.query_one("#adaptive-threshold-review-confirm", Checkbox).value = False
             self.query_one("#adaptive-threshold-apply-confirm", Checkbox).value = False
+            self.query_one("#adaptive-threshold-rollback-confirm", Checkbox).value = False
             self._refresh_adaptive_threshold_review_actions()
+            self._refresh_adaptive_threshold_rollback_actions()
         elif event.input.id in {
             "adaptive-threshold-proposal-target",
             "adaptive-threshold-proposal-scope",
@@ -3146,6 +3179,8 @@ class CaretakerConsoleApp(App):
             self._refresh_adaptive_threshold_review_actions()
         elif event.checkbox.id == "adaptive-threshold-apply-confirm":
             self._refresh_adaptive_threshold_review_actions()
+        elif event.checkbox.id == "adaptive-threshold-rollback-confirm":
+            self._refresh_adaptive_threshold_rollback_actions()
         elif event.checkbox.id == "adaptive-threshold-proposal-confirm":
             self._refresh_adaptive_threshold_proposal_actions()
         elif event.checkbox.id == "worker-failure-recovery-apply-confirm":
@@ -3758,7 +3793,9 @@ class CaretakerConsoleApp(App):
         output = self.query_one("#adaptive-aggregation-output", RichLog)
         output.clear()
         self._selected_adaptive_threshold_request_id = None
+        self._selected_adaptive_transition_request_id = None
         self._refresh_adaptive_threshold_review_actions()
+        self._refresh_adaptive_threshold_rollback_actions()
         try:
             response = await self._request("adaptive-aggregation-status")
         except Exception as exc:
@@ -3997,6 +4034,21 @@ class CaretakerConsoleApp(App):
             and apply_confirm.value
             and reason.value.strip()
             and effective
+        )
+
+    def _refresh_adaptive_threshold_rollback_actions(self) -> None:
+        """Enable rollback only for a live, not-yet-accepted transition."""
+        selected = bool(self._selected_adaptive_transition_request_id)
+        confirm = self.query_one("#adaptive-threshold-rollback-confirm", Checkbox)
+        reason = self.query_one("#adaptive-threshold-review-reason", Input)
+        confirm.disabled = not selected
+        if not selected:
+            confirm.value = False
+        self.query_one("#adaptive-threshold-rollback", Button).disabled = not bool(
+            selected
+            and self._application_running is True
+            and confirm.value
+            and reason.value.strip()
         )
 
     def _refresh_adaptive_threshold_proposal_actions(self) -> None:
@@ -4769,6 +4821,30 @@ class CaretakerConsoleApp(App):
                 )
                 await self.refresh_adaptive_aggregation()
                 self.query_one("#adaptive-threshold-proposal-confirm", Checkbox).value = False
+                self._write_json("#adaptive-aggregation-output", response)
+                return
+            if button == "adaptive-threshold-rollback":
+                request_id = self._selected_adaptive_transition_request_id
+                if not request_id:
+                    raise ValueError("Select a pending adaptive policy transition first")
+                if self._application_running is not True:
+                    raise RuntimeError("Adaptive policy rollback requires a live runtime")
+                if not self.query_one(
+                    "#adaptive-threshold-rollback-confirm", Checkbox
+                ).value:
+                    raise ValueError("Confirm the staged adaptive policy rollback first")
+                reason = self.query_one(
+                    "#adaptive-threshold-review-reason", Input
+                ).value.strip()
+                if not reason:
+                    raise ValueError("Adaptive policy rollback requires an operator reason")
+                response = await self._request(
+                    "adaptive-threshold-rollback",
+                    request_id=request_id,
+                    confirm=True,
+                    reason=reason,
+                )
+                await self.refresh_adaptive_aggregation()
                 self._write_json("#adaptive-aggregation-output", response)
                 return
             if button == "adaptive-aggregation-refresh":

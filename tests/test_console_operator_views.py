@@ -1506,6 +1506,74 @@ def test_console_creates_threshold_proposal_without_applying_policy(tmp_path):
     asyncio.run(exercise())
 
 
+def test_console_rolls_back_selected_adaptive_transition_with_confirmation(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            requests = []
+
+            async def request(command: str, **payload):
+                requests.append((command, payload))
+                if command == "adaptive-threshold-rollback":
+                    return {
+                        "ok": True,
+                        "transition_request_id": payload["request_id"],
+                        "rollback": {
+                            "status": "ROLLED_BACK",
+                            "policy_applied": False,
+                            "authority_granted": False,
+                        },
+                    }
+                if command == "adaptive-aggregation-status":
+                    return {
+                        "ok": True,
+                        "aggregates": [],
+                        "transitions": [],
+                        "policy_context_available": True,
+                        "policy_contexts": [],
+                    }
+                raise AssertionError(command)
+
+            app._request = request  # type: ignore[method-assign]
+            app._application_running = True
+            app._adaptive_aggregation_records = [{
+                "kind": "TRANSITION",
+                "payload": {
+                    "request_id": "00000000-0000-0000-0000-000000000009",
+                    "request_kind": "ADAPTIVE_POLICY_TRANSITION",
+                    "status": "PENDING",
+                    "rollback_status": "NOT_REQUESTED",
+                },
+            }]
+            app._selected_adaptive_transition_request_id = (
+                "00000000-0000-0000-0000-000000000009"
+            )
+            reason = app.query_one("#adaptive-threshold-review-reason", Input)
+            reason.value = "worker acceptance evidence is incomplete"
+            confirm = app.query_one("#adaptive-threshold-rollback-confirm", Checkbox)
+            confirm.value = True
+            app._refresh_adaptive_threshold_rollback_actions()
+            rollback = app.query_one("#adaptive-threshold-rollback", Button)
+            assert confirm.disabled is False
+            assert rollback.disabled is False
+
+            await app.on_button_pressed(Button.Pressed(rollback))
+
+            assert requests[0] == (
+                "adaptive-threshold-rollback",
+                {
+                    "request_id": "00000000-0000-0000-0000-000000000009",
+                    "confirm": True,
+                    "reason": "worker acceptance evidence is incomplete",
+                },
+            )
+            assert requests[1][0] == "adaptive-aggregation-status"
+            assert app._selected_adaptive_transition_request_id is None
+
+    asyncio.run(exercise())
+
+
 def test_consequential_console_actions_fail_closed(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 

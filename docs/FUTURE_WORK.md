@@ -726,6 +726,13 @@ Workers should batch threshold observations to the supervisor, which owns:
 - checkpointing;
 - cross-process sampling provenance.
 
+The current staged policy path also records an explicit rollback for a
+pre-acceptance `ADAPTIVE_POLICY_TRANSITION`. The authenticated rollback
+operation releases its target-scoped runtime lease when possible, preserves the
+original transition as immutable evidence, and prevents later acknowledgements
+or retries from treating the staged policy as active. Once a transition is
+`APPLIED`, it is accepted state and requires a new incident for correction.
+
 The remaining implementation must explicitly define and enforce whether each
 threshold is process-local, application-wide, or workload/population scoped. It
 now preserves an optional, explicitly declared aggregation scope as an

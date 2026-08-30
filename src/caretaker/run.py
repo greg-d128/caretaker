@@ -848,6 +848,10 @@ def main(argv: list[str] | None = None) -> int:
                         "adaptive threshold proposal has conflicting policy transitions"
                     )
                 existing = existing_transitions[0]
+                if existing.get("rollback_status") == "ROLLED_BACK":
+                    raise PermissionError(
+                        "adaptive threshold policy transition has been rolled back"
+                    )
                 return {
                     "ok": True,
                     "proposal_request_id": request_id,
@@ -1041,6 +1045,87 @@ def main(argv: list[str] | None = None) -> int:
                 "lease_expires_at": lease.expires_at.isoformat(),
                 "transition": transition,
                 "authority_policy": authority.effective.snapshot_dict(),
+            }
+        if command == "adaptive-threshold-rollback":
+            request_id = str(request.get("request_id") or "").strip()
+            if not request_id:
+                raise ValueError("adaptive-threshold-rollback requires request_id")
+            if request.get("confirm") is not True:
+                raise PermissionError(
+                    "adaptive-threshold-rollback requires confirm=true"
+                )
+            reason = str(request.get("reason") or "").strip()
+            if not reason:
+                raise ValueError("adaptive threshold rollback requires an operator reason")
+            transitions = [
+                item
+                for item in adaptive_aggregation_store.list_transition_requests()
+                if item.get("request_kind") == "ADAPTIVE_POLICY_TRANSITION"
+                and str(item.get("request_id") or "") == request_id
+            ]
+            if len(transitions) != 1:
+                raise KeyError(f"No adaptive policy transition found for {request_id}")
+            transition = transitions[0]
+            if transition.get("rollback_status") == "ROLLED_BACK":
+                return {
+                    "ok": True,
+                    "transition_request_id": request_id,
+                    "already_rolled_back": True,
+                    "rollback": transition.get("rollback"),
+                    "authority_granted": False,
+                }
+            if transition.get("status") == "APPLIED":
+                raise PermissionError(
+                    "accepted adaptive policy transitions require a new incident"
+                )
+            lease_id = str(transition.get("authority_lease_id") or "").strip() or None
+            if lease_id:
+                active_lease_ids = {
+                    str(lease.lease_id) for lease in authority.effective.runtime_leases
+                }
+                if lease_id in active_lease_ids:
+                    authority.release_runtime_lease(UUID(lease_id))
+                    runtime.refresh_authority_policy()
+                    authority_generation_holder["generation"] = authority.effective.generation
+                    if unix_socket_exists(runtime_control_socket):
+                        response = control_request(
+                            runtime_control_socket,
+                            {
+                                "command": "policy-authority-update",
+                                "snapshot": authority.effective.snapshot_dict(),
+                            },
+                        )
+                        if response.get("ok") is False:
+                            raise RuntimeError(
+                                str(response.get("error", "application rejected authority rollback"))
+                            )
+            rollback = adaptive_aggregation_store.record_transition_rollback(
+                request_id,
+                rolled_back_by=f"uid:{credentials[1]}",
+                reason=reason,
+                authority_lease_id=lease_id,
+            )
+            runtime.event(
+                logger_name="caretaker.adaptive",
+                severity=30,
+                channel=LogChannel.AUDIT,
+                message="Adaptive policy transition rolled back before acceptance",
+                fields={
+                    "transition_request_id": request_id,
+                    "proposal_request_id": transition.get("proposal_request_id"),
+                    "target_id": transition.get("target_id"),
+                    "lease_id": lease_id,
+                    "policy_applied": False,
+                    "authority_granted": False,
+                },
+                origin="caretaker",
+            )
+            return {
+                "ok": True,
+                "transition_request_id": request_id,
+                "rollback": rollback,
+                "authority_policy": authority.effective.snapshot_dict(),
+                "authority_granted": False,
             }
         if command == "adaptive-transition-ack":
             adaptive_context = current_adaptive_context()

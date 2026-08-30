@@ -133,12 +133,21 @@ review for the proposal. `APPROVE` means only that the proposal is eligible for
 later staged policy review; it does not apply thresholds, reload workers, grant
 authority, or replace the policy. Conflicting review reuse is rejected and a
 stale or expired proposal cannot be reviewed.
+Before acceptance, an authenticated operator can use
+`adaptive-threshold-rollback` with an explicit confirmation and reason. This
+releases the transition's target-scoped runtime lease when present and writes a
+separate content-hashed rollback record while preserving the original
+transition as immutable evidence. Rolled-back transitions are visible as
+`ROLLED_BACK`, reject subsequent worker acknowledgements, and cannot be
+re-applied. An `APPLIED` transition is accepted state; correcting it requires
+a new incident and a new approval workflow.
 
 The supervisor exposes `adaptive-aggregation-status`,
 `adaptive-aggregation-reconcile`, `adaptive-aggregation-ack`,
 `adaptive-transition-list`, `adaptive-transition-ack`,
-`adaptive-threshold-proposal`, `adaptive-threshold-review`, and
-`adaptive-threshold-apply` through its control socket. All threshold commands
+`adaptive-threshold-proposal`, `adaptive-threshold-review`,
+`adaptive-threshold-apply`, and `adaptive-threshold-rollback` through its
+control socket. All threshold commands
 derive the live context and the caller's local UID; they cannot accept
 arbitrary context supplied by the caller. Its health cycle
 reconciles enabled worker contexts and evaluates

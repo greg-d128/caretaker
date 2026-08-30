@@ -1033,6 +1033,7 @@ class SupervisorAdaptiveAggregationStore:
             self.root / "adaptive" / "aggregation" / "transition-acknowledgements"
         )
         self.proposal_review_directory = self.root / "adaptive" / "aggregation" / "proposal-reviews"
+        self.transition_rollback_directory = self.root / "adaptive" / "aggregation" / "transition-rollbacks"
         self.conflict_directory = self.root / "adaptive" / "aggregation" / "conflicts"
         for directory in (
             self.pending_directory,
@@ -1043,6 +1044,7 @@ class SupervisorAdaptiveAggregationStore:
             self.transition_directory,
             self.transition_acknowledgement_directory,
             self.proposal_review_directory,
+            self.transition_rollback_directory,
             self.conflict_directory,
         ):
             directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1135,6 +1137,9 @@ class SupervisorAdaptiveAggregationStore:
 
     def _proposal_review_path(self, request_id: str) -> Path:
         return self.proposal_review_directory / f"{request_id}.json"
+
+    def _transition_rollback_path(self, request_id: str) -> Path:
+        return self.transition_rollback_directory / f"{request_id}.json"
 
     def _write_acknowledgement(
         self,
@@ -1754,6 +1759,25 @@ class SupervisorAdaptiveAggregationStore:
         if str(envelope.get("review_sha256") or "") != _content_hash(review):
             raise AdaptiveAggregationError("adaptive proposal review hash is invalid")
         return dict(review)
+
+    def _load_transition_rollback(self, request_id: str) -> dict[str, Any] | None:
+        path = self._transition_rollback_path(request_id)
+        if not path.exists():
+            return None
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(envelope, Mapping):
+            raise AdaptiveAggregationError("adaptive transition rollback must be an object")
+        if int(envelope.get("schema_version") or 0) != ADAPTIVE_AGGREGATION_SCHEMA_VERSION:
+            raise AdaptiveAggregationError("unsupported adaptive transition rollback schema")
+        rollback = envelope.get("rollback")
+        if not isinstance(rollback, Mapping):
+            raise AdaptiveAggregationError("adaptive transition rollback is missing")
+        normalized_id = str(UUID(str(rollback.get("transition_request_id"))))
+        if normalized_id != request_id or path.stem != request_id:
+            raise AdaptiveAggregationError("adaptive transition rollback ID is invalid")
+        if str(envelope.get("rollback_sha256") or "") != _content_hash(rollback):
+            raise AdaptiveAggregationError("adaptive transition rollback hash is invalid")
+        return dict(rollback)
 
     @staticmethod
     def _transition_expiry(request: Mapping[str, Any]) -> datetime | None:
@@ -2442,6 +2466,83 @@ class SupervisorAdaptiveAggregationStore:
             "duplicate": False,
         }
 
+    def record_transition_rollback(
+        self,
+        transition_request_id: str,
+        *,
+        rolled_back_by: str,
+        reason: str,
+        authority_lease_id: str | None = None,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Record an explicit rollback before a policy transition is accepted.
+
+        The transition request remains immutable evidence.  A separate,
+        content-hashed record describes the operator decision and prevents a
+        later worker acknowledgement or retry from treating the staged policy
+        as active.  An accepted transition requires a new incident and cannot
+        be rolled back through this operation.
+        """
+        try:
+            normalized_id = str(UUID(str(transition_request_id)))
+        except (TypeError, ValueError) as exc:
+            raise AdaptiveAggregationError(
+                "adaptive transition request_id must be a UUID"
+            ) from exc
+        stored = self._load_transition_request(self._transition_path(normalized_id))
+        if stored.get("request_kind") != "ADAPTIVE_POLICY_TRANSITION":
+            raise PermissionError(
+                "only an adaptive policy transition can be rolled back"
+            )
+        existing = self._load_transition_rollback(normalized_id)
+        if existing is not None:
+            return {**existing, "duplicate": True}
+        if self._transition_status(
+            stored,
+            self._load_transition_acknowledgements(normalized_id),
+        ) == "APPLIED":
+            raise PermissionError(
+                "accepted adaptive policy transitions require a new incident"
+            )
+        actor = _text(rolled_back_by, name="rolled_back_by", limit=MAX_BATCH_TEXT)
+        rollback_reason = _text(reason, name="reason", limit=MAX_TRANSITION_REASON)
+        assert actor is not None and rollback_reason is not None
+        lease_id = None
+        if authority_lease_id is not None:
+            try:
+                lease_id = str(UUID(str(authority_lease_id)))
+            except (TypeError, ValueError) as exc:
+                raise AdaptiveAggregationError("authority_lease_id must be a UUID") from exc
+        stored_lease_id = str(stored.get("authority_lease_id") or "") or None
+        if stored_lease_id != lease_id:
+            raise PermissionError("adaptive transition rollback lease does not match the transition")
+        rollback = {
+            "transition_request_id": normalized_id,
+            "request_kind": "ADAPTIVE_POLICY_ROLLBACK",
+            "proposal_request_id": stored.get("proposal_request_id"),
+            "target_id": stored.get("target_id"),
+            "aggregation_scope": stored.get("aggregation_scope"),
+            "aggregation_target_id": stored.get("aggregation_target_id"),
+            "previous_policy_fingerprint": stored.get("previous_policy_fingerprint"),
+            "applied_policy_fingerprint": stored.get("policy_fingerprint"),
+            "authority_lease_id": lease_id,
+            "rolled_back_by": actor,
+            "reason": rollback_reason,
+            "created_at": (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat(),
+            "status": "ROLLED_BACK",
+            "policy_applied": False,
+            "authority_granted": False,
+        }
+        _safe_write(
+            self._transition_rollback_path(normalized_id),
+            {
+                "schema_version": ADAPTIVE_AGGREGATION_SCHEMA_VERSION,
+                "rollback": rollback,
+                "rollback_sha256": _content_hash(rollback),
+            },
+        )
+        return {**rollback, "duplicate": False}
+
     def list_transition_requests(
         self,
         *,
@@ -2560,6 +2661,19 @@ class SupervisorAdaptiveAggregationStore:
                         if review is not None
                         else "UNREVIEWED"
                     )
+            if request.get("request_kind") == "ADAPTIVE_POLICY_TRANSITION":
+                try:
+                    rollback = self._load_transition_rollback(str(request["request_id"]))
+                except Exception as exc:
+                    visible["rollback_status"] = "INVALID"
+                    visible["rollback_error"] = f"{type(exc).__name__}: {exc}"[:256]
+                else:
+                    visible["rollback"] = rollback
+                    if rollback is not None:
+                        visible["rollback_status"] = "ROLLED_BACK"
+                        visible["status"] = "ROLLED_BACK"
+                    else:
+                        visible["rollback_status"] = "NOT_REQUESTED"
             result.append(visible)
         return tuple(result)
 
@@ -2611,6 +2725,8 @@ class SupervisorAdaptiveAggregationStore:
                 raise PermissionError(
                     f"adaptive transition context is stale: {context_error}"
                 )
+        if self._load_transition_rollback(request_id) is not None:
+            raise PermissionError("adaptive transition has been rolled back")
         acknowledgements = self._load_transition_acknowledgements(request_id)
         if self._transition_status(stored, acknowledgements) == "EXPIRED":
             raise PermissionError("adaptive transition request has expired")
@@ -2716,6 +2832,9 @@ class SupervisorAdaptiveAggregationStore:
             ),
             "proposal_reviews": sum(
                 1 for _ in self.proposal_review_directory.glob("*.json")
+            ),
+            "transition_rollbacks": sum(
+                1 for _ in self.transition_rollback_directory.glob("*.json")
             ),
             "conflict_reports": sum(1 for _ in self.conflict_directory.glob("*.json")),
         }
