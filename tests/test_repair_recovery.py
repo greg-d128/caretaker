@@ -13,6 +13,8 @@ from caretaker import (
     SQLiteRepairStore,
     apply_repair_recovery_plan,
     build_repair_recovery_plan,
+    validate_authority_expiry,
+    validate_supervisor_time,
 )
 from caretaker.domain import RepairAttempt, RepairAttemptOutcome, RepairAttemptStage
 from caretaker.policy import PolicyConfigurationError, RepairPolicy, validate_policy
@@ -125,3 +127,32 @@ def test_recovery_policy_surfaces_packet_skew_and_failure_actions() -> None:
                 )
             )
         )
+
+
+def test_supervisor_time_and_authority_expiry_fail_closed() -> None:
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    within = validate_supervisor_time(
+        supervisor_time,
+        supervisor_time.replace(second=20),
+        tolerance_seconds=30,
+    )
+    outside = validate_supervisor_time(
+        supervisor_time,
+        supervisor_time.replace(second=31),
+        tolerance_seconds=30,
+    )
+    assert within["valid"] is True
+    assert outside["valid"] is False
+    assert outside["failure"] == "CLOCK_SKEW_EXCEEDED"
+
+    valid = validate_authority_expiry(
+        supervisor_time.replace(minute=1),
+        supervisor_time=supervisor_time,
+    )
+    expired = validate_authority_expiry(
+        supervisor_time,
+        supervisor_time=supervisor_time,
+    )
+    assert valid["valid"] is True
+    assert expired["valid"] is False
+    assert expired["failure"] == "AUTHORITY_EXPIRED"

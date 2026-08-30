@@ -46,6 +46,11 @@ The plan reports the last milestone and recommends rollback to deployed code;
 it requires authority revalidation and never reactivates a candidate or treats
 an approval as surviving restart.
 
+Recovery time and expiry checks use supervisor time. The recovery API reports
+clock skew explicitly and rejects timestamps outside the configured tolerance;
+authority is invalid at its expiry instant. Packet distribution and worker
+transport remain future supervisor capabilities.
+
 The `incident-communication-draft` command creates a bounded, policy-governed
 draft for one verified capsule. The console exposes the same operation as
 **Create review draft**, and `caretaker-incident-draft` can write a new

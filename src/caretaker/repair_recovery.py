@@ -51,6 +51,46 @@ class RepairRecoveryPolicy:
     allow_candidate_reactivation_after_restart: bool = False
 
 
+def validate_supervisor_time(
+    supervisor_time: datetime,
+    local_time: datetime,
+    *,
+    tolerance_seconds: float,
+) -> dict[str, Any]:
+    """Validate a worker timestamp against supervisor time with bounded drift."""
+    if tolerance_seconds <= 0:
+        raise ValueError("tolerance_seconds must be greater than zero")
+    skew_seconds = (local_time - supervisor_time).total_seconds()
+    absolute_skew_seconds = abs(skew_seconds)
+    valid = absolute_skew_seconds <= tolerance_seconds
+    return {
+        "valid": valid,
+        "supervisor_time": supervisor_time.isoformat(),
+        "local_time": local_time.isoformat(),
+        "skew_seconds": skew_seconds,
+        "absolute_skew_seconds": absolute_skew_seconds,
+        "tolerance_seconds": float(tolerance_seconds),
+        "failure": None if valid else "CLOCK_SKEW_EXCEEDED",
+    }
+
+
+def validate_authority_expiry(
+    expires_at: datetime,
+    *,
+    supervisor_time: datetime,
+) -> dict[str, Any]:
+    """Validate an authority packet's expiry using supervisor time."""
+    remaining_seconds = (expires_at - supervisor_time).total_seconds()
+    valid = remaining_seconds > 0
+    return {
+        "valid": valid,
+        "expires_at": expires_at.isoformat(),
+        "supervisor_time": supervisor_time.isoformat(),
+        "remaining_seconds": remaining_seconds,
+        "failure": None if valid else "AUTHORITY_EXPIRED",
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class RepairRecoveryRecord:
     """Durable acknowledgement that one interrupted attempt was reconciled."""

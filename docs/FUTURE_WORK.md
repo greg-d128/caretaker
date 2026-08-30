@@ -983,6 +983,12 @@ because that execution path is not implemented. Recovery actions are currently
 reported as `PLANNED_ONLY`; the deployed-code rollback remains the only runtime
 behavior until supervisor lifecycle orchestration is implemented.
 
+The recovery API also provides fail-closed `validate_supervisor_time()` and
+`validate_authority_expiry()` primitives. They make supervisor time
+authoritative, report the measured skew, reject skew beyond the configured
+tolerance, and reject packets at or after expiry. They are not yet a complete
+worker packet or multiprocess transport protocol.
+
 The remaining implementation work is to:
 
 A first recovery inspection slice now exists as `RepairEngine.recovery_plan()`

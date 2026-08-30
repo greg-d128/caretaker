@@ -203,6 +203,8 @@ from .repair_recovery import (
     RepairRecoveryRecord,
     apply_repair_recovery_plan,
     build_repair_recovery_plan,
+    validate_authority_expiry,
+    validate_supervisor_time,
 )
 from .regression import (
     DATA_ONLY_NOT_EXECUTABLE,
@@ -496,6 +498,8 @@ __all__ = [
     "RecoveryAction",
     "RepairRecoveryPolicy",
     "apply_repair_recovery_plan",
+    "validate_authority_expiry",
+    "validate_supervisor_time",
     "ReplaySafety",
     "SnapshotStrategy",
     "TimeoutMode",
