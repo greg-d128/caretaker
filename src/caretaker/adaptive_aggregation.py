@@ -12,6 +12,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -25,10 +27,197 @@ MAX_BATCH_COUNTER = 1000
 MAX_WORKER_PROVENANCE = 128
 MAX_PROCESSED_BATCH_IDS = 4096
 MAX_RETAINED_EVENTS = 512
+_BATCH_COUNTER_NAMES = (
+    "exception_count",
+    "timing_breach_count",
+    "behavior_observation_calls",
+    "behavior_samples",
+    "repair_evidence_samples",
+    "problem_reproductions",
+    "successful_executions",
+    "failed_executions",
+)
+
+
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 class AdaptiveAggregationError(ValueError):
     """Raised when an adaptive observation batch is malformed or unsafe."""
+
+
+class AdaptiveObservationBatcher:
+    """Collect bounded worker observations and periodically submit one batch.
+
+    The batcher is deliberately process-local and non-authoritative. It only
+    writes evidence to the supervisor ledger; a failed optional submission must
+    not change the wrapped application's result.
+    """
+
+    def __init__(
+        self,
+        store: "SupervisorAdaptiveAggregationStore",
+        *,
+        worker_id: str,
+        worker_pid: int,
+        target_id: str,
+        generation_id: str,
+        code_hash: str,
+        monitoring_fingerprint: str,
+        policy_fingerprint: str,
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        flush_after_observations: int = 64,
+        flush_interval_seconds: float = 5.0,
+    ) -> None:
+        if not 0 < int(flush_after_observations) <= MAX_BATCH_COUNTER:
+            raise ValueError(
+                f"flush_after_observations must be between 1 and {MAX_BATCH_COUNTER}"
+            )
+        if float(flush_interval_seconds) < 0:
+            raise ValueError("flush_interval_seconds cannot be negative")
+        self.store = store
+        self.worker_id = str(worker_id)
+        self.worker_pid = int(worker_pid)
+        self.flush_after_observations = int(flush_after_observations)
+        self.flush_interval_seconds = float(flush_interval_seconds)
+        self._lock = threading.RLock()
+        self._sequence = 0
+        self._records = 0
+        self._first_observed_at: str | None = None
+        self._last_observed_at: str | None = None
+        self._counters = {name: 0 for name in _BATCH_COUNTER_NAMES}
+        self._events = {"exception_events": [], "timing_events": []}
+        self._last_flush_monotonic = time.monotonic()
+        self._last_error: str | None = None
+        self._dropped_records = 0
+        self._context = {
+            "target_id": str(target_id),
+            "generation_id": str(generation_id),
+            "code_hash": str(code_hash),
+            "monitoring_fingerprint": str(monitoring_fingerprint),
+            "policy_fingerprint": str(policy_fingerprint),
+            "authority_policy_generation": str(authority_policy_generation),
+            "authority_policy_fingerprint": str(authority_policy_fingerprint),
+        }
+
+    @property
+    def context(self) -> Mapping[str, str]:
+        with self._lock:
+            return dict(self._context)
+
+    def record(
+        self,
+        *,
+        observed_at: str | None = None,
+        event_kind: str | None = None,
+        **increments: int,
+    ) -> dict[str, Any] | None:
+        """Record one observation and flush when the bounded policy requires it."""
+        with self._lock:
+            if event_kind not in {None, "exception", "timing"}:
+                raise ValueError("event_kind must be exception or timing")
+            for name, value in increments.items():
+                if name not in _BATCH_COUNTER_NAMES:
+                    raise ValueError(f"unknown adaptive aggregation counter: {name}")
+                if isinstance(value, bool) or int(value) < 0:
+                    raise ValueError(f"{name} must be a non-negative integer")
+                if int(value) > MAX_BATCH_COUNTER:
+                    raise ValueError(f"{name} exceeds {MAX_BATCH_COUNTER}")
+            if self._records >= MAX_BATCH_COUNTER:
+                result = self._flush_locked()
+                if result is not None and result.get("status") == "ERROR":
+                    self._dropped_records += 1
+                    return result
+            timestamp = observed_at or _utcnow_iso()
+            self._records += 1
+            self._sequence += 1
+            self._first_observed_at = self._first_observed_at or timestamp
+            self._last_observed_at = timestamp
+            for name, value in increments.items():
+                self._counters[name] += int(value)
+            if event_kind is not None:
+                event_name = {
+                    "exception": "exception_events",
+                    "timing": "timing_events",
+                }.get(str(event_kind))
+                assert event_name is not None
+                self._events[event_name].append(timestamp)
+            if (
+                self._records >= self.flush_after_observations
+                or (
+                    self.flush_interval_seconds > 0
+                    and time.monotonic() - self._last_flush_monotonic
+                    >= self.flush_interval_seconds
+                )
+            ):
+                return self._flush_locked()
+            return None
+
+    def flush(self) -> dict[str, Any] | None:
+        with self._lock:
+            return self._flush_locked()
+
+    def rebind(self, **context: str) -> dict[str, Any] | None:
+        """Flush the old generation/policy episode before changing its context."""
+        with self._lock:
+            result = self._flush_locked()
+            self._context = {name: str(context[name]) for name in self._context}
+            self._reset_locked()
+            return result
+
+    def status(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "worker_id": self.worker_id,
+                "worker_pid": self.worker_pid,
+                "target_id": self._context["target_id"],
+                "generation_id": self._context["generation_id"],
+                "pending_records": self._records,
+                "next_sequence": self._sequence + 1,
+                "dropped_records": self._dropped_records,
+                "last_error": self._last_error,
+            }
+
+    def _snapshot_locked(self) -> dict[str, Any]:
+        assert self._first_observed_at is not None
+        assert self._last_observed_at is not None
+        return {
+            "batch_id": str(uuid4()),
+            "worker_id": self.worker_id,
+            "worker_pid": self.worker_pid,
+            **self._context,
+            "created_at": _utcnow_iso(),
+            "first_observed_at": self._first_observed_at,
+            "last_observed_at": self._last_observed_at,
+            "sequence_start": self._sequence - self._records + 1,
+            "sequence_end": self._sequence,
+            "observation_count": self._records,
+            **self._counters,
+            **self._events,
+        }
+
+    def _reset_locked(self) -> None:
+        self._records = 0
+        self._first_observed_at = None
+        self._last_observed_at = None
+        self._counters = {name: 0 for name in _BATCH_COUNTER_NAMES}
+        self._events = {"exception_events": [], "timing_events": []}
+        self._last_flush_monotonic = time.monotonic()
+
+    def _flush_locked(self) -> dict[str, Any] | None:
+        if self._records <= 0:
+            return None
+        batch = self._snapshot_locked()
+        try:
+            result = self.store.submit(batch)
+        except Exception as exc:
+            self._last_error = f"{type(exc).__name__}: {exc}"[:256]
+            return {"status": "ERROR", "error": self._last_error}
+        self._last_error = None
+        self._reset_locked()
+        return dict(result)
 
 
 def _text(value: Any, *, name: str, limit: int, required: bool = True) -> str | None:
@@ -93,6 +282,15 @@ def normalize_adaptive_observation_batch(value: Mapping[str, Any]) -> dict[str, 
     sequence_end = _count(value.get("sequence_end"), name="sequence_end", maximum=2**63 - 1)
     if sequence_end < sequence_start:
         raise AdaptiveAggregationError("sequence_end must not precede sequence_start")
+    raw_observation_count = value.get("observation_count")
+    observation_count = _count(
+        (sequence_end - sequence_start + 1)
+        if raw_observation_count is None
+        else raw_observation_count,
+        name="observation_count",
+    )
+    if observation_count <= 0:
+        raise AdaptiveAggregationError("observation_count must be greater than zero")
     normalized = {
         "schema_version": ADAPTIVE_AGGREGATION_SCHEMA_VERSION,
         "batch_id": batch_id,
@@ -128,6 +326,7 @@ def normalize_adaptive_observation_batch(value: Mapping[str, Any]) -> dict[str, 
         ),
         "sequence_start": sequence_start,
         "sequence_end": sequence_end,
+        "observation_count": observation_count,
         "exception_count": _count(value.get("exception_count"), name="exception_count"),
         "timing_breach_count": _count(
             value.get("timing_breach_count"), name="timing_breach_count"
@@ -398,7 +597,7 @@ class SupervisorAdaptiveAggregationStore:
         for name, values in events.items():
             aggregate[name] = sorted(values)[-self.maximum_retained_events :]
         aggregate["total_batches"] = int(aggregate.get("total_batches") or 0) + 1
-        observations = sum(int(batch.get(name) or 0) for name in counter_names)
+        observations = int(batch["observation_count"])
         aggregate["total_observations"] = int(aggregate.get("total_observations") or 0) + observations
         workers = dict(aggregate.get("workers") or {})
         worker_id = str(batch["worker_id"])
@@ -439,7 +638,8 @@ class SupervisorAdaptiveAggregationStore:
         batch: Mapping[str, Any],
         *,
         current_generations: Mapping[str, str],
-        policy_fingerprint: str,
+        policy_fingerprint: str | None,
+        policy_fingerprints: Mapping[str, str] | None,
         authority_policy_generation: str,
         authority_policy_fingerprint: str,
     ) -> str | None:
@@ -448,7 +648,14 @@ class SupervisorAdaptiveAggregationStore:
             return "GENERATION_CONTEXT_UNAVAILABLE"
         if str(current_generations[target]) != str(batch["generation_id"]):
             return "STALE_GENERATION"
-        if str(batch["policy_fingerprint"]) != str(policy_fingerprint):
+        expected_policy = (
+            policy_fingerprints.get(target)
+            if policy_fingerprints is not None
+            else policy_fingerprint
+        )
+        if expected_policy is None:
+            return "POLICY_CONTEXT_UNAVAILABLE"
+        if str(batch["policy_fingerprint"]) != str(expected_policy):
             return "STALE_POLICY"
         if str(batch["authority_policy_generation"]) != str(authority_policy_generation):
             return "STALE_AUTHORITY_GENERATION"
@@ -476,7 +683,8 @@ class SupervisorAdaptiveAggregationStore:
         self,
         *,
         current_generations: Mapping[str, str],
-        policy_fingerprint: str,
+        policy_fingerprint: str | None = None,
+        policy_fingerprints: Mapping[str, str] | None = None,
         authority_policy_generation: str,
         authority_policy_fingerprint: str,
         maximum_batches: int = 100,
@@ -499,6 +707,7 @@ class SupervisorAdaptiveAggregationStore:
                 batch,
                 current_generations=current_generations,
                 policy_fingerprint=policy_fingerprint,
+                policy_fingerprints=policy_fingerprints,
                 authority_policy_generation=authority_policy_generation,
                 authority_policy_fingerprint=authority_policy_fingerprint,
             )

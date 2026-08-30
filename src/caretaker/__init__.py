@@ -3,6 +3,7 @@
 from .acceptance import AcceptanceCriteria
 from .adaptive import (
     AcceptanceState,
+    AdaptiveAggregationPolicy,
     AdaptiveLifecycleStage,
     AdaptiveInstrumentationState,
     DEFAULT_DEPENDENCY_POLICY,
@@ -18,6 +19,7 @@ from .adaptive import (
     RepairEvidencePolicy,
     SoftTimingPromotionPolicy,
     adaptive_states,
+    adaptive_aggregation_status,
     get_adaptive_controller,
     get_adaptive_state,
     instrument_dependencies,
@@ -30,6 +32,7 @@ from .adaptive import (
 )
 from .adaptive_aggregation import (
     AdaptiveAggregationError,
+    AdaptiveObservationBatcher,
     SupervisorAdaptiveAggregationStore,
     normalize_adaptive_observation_batch,
 )
@@ -296,6 +299,9 @@ __all__ = [
     "observed_return_shape",
     "validate_lightweight_policy",
     "AdaptiveAggregationError",
+    "AdaptiveAggregationPolicy",
+    "AdaptiveObservationBatcher",
+    "adaptive_aggregation_status",
     "SupervisorAdaptiveAggregationStore",
     "normalize_adaptive_observation_batch",
     "AuthorityKind",

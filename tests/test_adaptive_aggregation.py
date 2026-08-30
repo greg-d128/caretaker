@@ -7,8 +7,18 @@ import pytest
 
 from caretaker.adaptive_aggregation import (
     AdaptiveAggregationError,
+    AdaptiveObservationBatcher,
     SupervisorAdaptiveAggregationStore,
 )
+from caretaker.adaptive import (
+    AdaptiveAggregationPolicy,
+    BehaviorSamplingPolicy,
+    InstrumentationDemotionPolicy,
+    InstrumentationLevel,
+    LightweightPolicy,
+    lightweight,
+)
+from caretaker.authority import get_authority_runtime_context
 
 
 def _batch(*, batch_id: str, worker_id: str = "worker-a", generation_id: str = "generation-a"):
@@ -29,6 +39,7 @@ def _batch(*, batch_id: str, worker_id: str = "worker-a", generation_id: str = "
         "last_observed_at": (now + timedelta(seconds=1)).isoformat(),
         "sequence_start": 1,
         "sequence_end": 2,
+        "observation_count": 2,
         "exception_count": 1,
         "timing_breach_count": 1,
         "behavior_observation_calls": 2,
@@ -71,6 +82,7 @@ def test_supervisor_aggregation_merges_batches_and_retains_worker_provenance(tmp
     assert aggregate["total_batches"] == 2
     assert aggregate["exception_count"] == 2
     assert aggregate["behavior_observation_calls"] == 4
+    assert aggregate["total_observations"] == 4
     assert sorted(aggregate["workers"]) == ["worker-a", "worker-b"]
     assert aggregate["worker_overflow_count"] == 0
     assert aggregate["processed_batch_count"] == 2
@@ -149,3 +161,73 @@ def test_supervisor_aggregation_requires_explicit_batch_id(tmp_path: Path):
     with pytest.raises(AdaptiveAggregationError, match="batch_id"):
         store.submit(batch)
     assert store.status()["pending"] == 0
+
+
+def test_worker_batcher_flushes_bounded_records_with_sequence_provenance(tmp_path: Path):
+    store = SupervisorAdaptiveAggregationStore(tmp_path)
+    batcher = AdaptiveObservationBatcher(
+        store,
+        worker_id="worker-a",
+        worker_pid=101,
+        target_id="example.target",
+        generation_id="generation-a",
+        code_hash="code-a",
+        monitoring_fingerprint="monitoring-a",
+        policy_fingerprint="policy-a",
+        authority_policy_generation="7",
+        authority_policy_fingerprint="authority-a",
+        flush_after_observations=2,
+        flush_interval_seconds=0,
+    )
+
+    assert batcher.record(behavior_observation_calls=1) is None
+    result = batcher.record(behavior_samples=1)
+
+    assert result is not None
+    assert result["status"] == "QUEUED"
+    assert result["batch_id"]
+    assert batcher.status()["pending_records"] == 0
+    assert store.reconcile(**_context())["merged"] == 1
+    aggregate = store.list_aggregates()[0]
+    assert aggregate["total_observations"] == 2
+    assert aggregate["workers"]["worker-a"]["first_sequence"] == 1
+    assert aggregate["workers"]["worker-a"]["last_sequence"] == 2
+
+
+def test_enabled_adaptive_policy_emits_live_controller_counters(tmp_path: Path):
+    policy = LightweightPolicy(
+        initial_level=InstrumentationLevel.BEHAVIOR,
+        sampling=BehaviorSamplingPolicy(
+            enabled=True,
+            lightweight_every_calls=0,
+            behavior_every_calls=1,
+            randomize_initial_offset=False,
+        ),
+        demotion=InstrumentationDemotionPolicy(enabled=False),
+        aggregation=AdaptiveAggregationPolicy(
+            enabled=True,
+            flush_after_observations=1,
+            flush_interval_seconds=0,
+        ),
+    )
+
+    @lightweight(policy=policy, target_id="aggregation.live", state_directory=tmp_path / "adaptive")
+    def observed(value: int) -> int:
+        return value + 1
+
+    assert observed(1) == 2
+    controller = observed.__caretaker_adaptive__
+    assert controller._aggregation_batcher is not None
+    controller._aggregation_batcher.flush()
+    store = SupervisorAdaptiveAggregationStore(tmp_path)
+    context = dict(_context())
+    context["current_generations"] = {"aggregation.live": controller.code_hash}
+    context["policy_fingerprint"] = controller._policy_fingerprint
+    context["authority_policy_generation"] = str(
+        get_authority_runtime_context().effective.generation
+    )
+    context["authority_policy_fingerprint"] = controller._authority_fingerprint
+    assert store.reconcile(**context)["merged"] == 2
+    aggregate = store.list_aggregates()[0]
+    assert aggregate["behavior_observation_calls"] == 1
+    assert aggregate["successful_executions"] == 1

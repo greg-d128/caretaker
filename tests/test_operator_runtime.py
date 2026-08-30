@@ -75,6 +75,38 @@ def test_operator_registry_attaches_adaptive_state_to_guard_dependency(monkeypat
     assert target["escalation_reason"] == "exception threshold"
 
 
+def test_operator_runtime_exposes_adaptive_aggregation_context(monkeypatch):
+    registry = OperatorRuntimeRegistry()
+    monkeypatch.setattr(
+        "caretaker.adaptive.adaptive_aggregation_status",
+        lambda: (
+            {
+                "enabled": True,
+                "target_id": "test.aggregate",
+                "generation_id": "generation-a",
+                "policy_fingerprint": "policy-a",
+            },
+        ),
+    )
+
+    response = registry.handle_request(
+        {"command": "adaptive-aggregation-context"},
+        (123, 1000, 1000),
+    )
+
+    assert response == {
+        "ok": True,
+        "contexts": [
+            {
+                "enabled": True,
+                "target_id": "test.aggregate",
+                "generation_id": "generation-a",
+                "policy_fingerprint": "policy-a",
+            }
+        ],
+    }
+
+
 def test_authority_update_rolls_back_process_context_when_component_refresh_fails(monkeypatch):
     from caretaker.authority import get_authority_runtime_context
 

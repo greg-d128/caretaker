@@ -389,7 +389,23 @@ class OperatorRuntimeRegistry:
         limit = max(1, min(int(request.get("limit", 50)), 500))
 
         if command == "status":
-            return {"ok": True, **self.status(), "peer_pid": credentials[0]}
+            from .adaptive import adaptive_aggregation_status
+            return {
+                "ok": True,
+                **self.status(),
+                "adaptive_aggregation": list(adaptive_aggregation_status()),
+                "peer_pid": credentials[0],
+            }
+        if command == "adaptive-aggregation-context":
+            from .adaptive import adaptive_aggregation_status
+            return {
+                "ok": True,
+                "contexts": [
+                    dict(item)
+                    for item in adaptive_aggregation_status()
+                    if item.get("enabled")
+                ],
+            }
         if command == "targets":
             return {"ok": True, "targets": self.targets()}
         if command == "target-state":

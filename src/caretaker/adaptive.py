@@ -33,6 +33,7 @@ from typing import Any, TypeVar, overload
 from uuid import uuid4
 
 from .acceptance import AcceptanceCriteria, long_term_accepted, short_term_accepted
+from .adaptive_aggregation import AdaptiveObservationBatcher, SupervisorAdaptiveAggregationStore
 from .domain import CandidateState
 from .runtime import set_runtime_context
 
@@ -41,6 +42,7 @@ _DEPENDENCY_BINDING = object()
 _DEPENDENCY_RUNTIME = threading.local()
 _STATE_CHECKPOINT_CALLS = 100
 _STATE_CHECKPOINT_SECONDS = 30.0
+_ADAPTIVE_WORKER_ID = f"{os.getpid()}-{uuid4().hex}"
 
 
 def _authority_context():
@@ -161,12 +163,22 @@ class InstrumentationDemotionPolicy(AcceptanceCriteria):
 
 
 @dataclass(frozen=True, slots=True)
+class AdaptiveAggregationPolicy:
+    """Optional worker batching for supervisor-owned adaptive evidence."""
+
+    enabled: bool = False
+    flush_after_observations: int = 64
+    flush_interval_seconds: float = 5.0
+
+
+@dataclass(frozen=True, slots=True)
 class LightweightPolicy:
     exception: ExceptionPromotionPolicy = field(default_factory=ExceptionPromotionPolicy)
     soft_timing: SoftTimingPromotionPolicy = field(default_factory=SoftTimingPromotionPolicy)
     sampling: BehaviorSamplingPolicy = field(default_factory=BehaviorSamplingPolicy)
     repair_evidence: RepairEvidencePolicy = field(default_factory=RepairEvidencePolicy)
     demotion: InstrumentationDemotionPolicy = field(default_factory=InstrumentationDemotionPolicy)
+    aggregation: AdaptiveAggregationPolicy = field(default_factory=AdaptiveAggregationPolicy)
     initial_level: InstrumentationLevel = InstrumentationLevel.LIGHTWEIGHT
     behavior_executions: int = 100
     persist_state: bool = True
@@ -279,6 +291,17 @@ def get_adaptive_controller(target_id: str) -> Any | None:
         return _CONTROLLER_REGISTRY.get(target_id)
 
 
+def adaptive_aggregation_status() -> tuple[Mapping[str, Any], ...]:
+    """Return worker batcher context for supervisor reconciliation."""
+    with _STATE_REGISTRY_LOCK:
+        controllers = tuple(_CONTROLLER_REGISTRY.values())
+    return tuple(
+        controller.aggregation_status()
+        for controller in controllers
+        if hasattr(controller, "aggregation_status")
+    )
+
+
 def _initial_stage(level: InstrumentationLevel) -> AdaptiveLifecycleStage:
     if level is InstrumentationLevel.LIGHTWEIGHT:
         return AdaptiveLifecycleStage.LIGHTWEIGHT
@@ -352,6 +375,11 @@ def validate_lightweight_policy(policy: LightweightPolicy) -> None:
         errors.append("demotion.long_term_maximum_failures cannot be negative")
     if not 0 <= demotion.long_term_failure_rate <= 1:
         errors.append("demotion.long_term_failure_rate must be between 0 and 1")
+    aggregation = policy.aggregation
+    if not 1 <= aggregation.flush_after_observations <= 1000:
+        errors.append("aggregation.flush_after_observations must be between 1 and 1000")
+    if aggregation.flush_interval_seconds < 0:
+        errors.append("aggregation.flush_interval_seconds cannot be negative")
     if errors:
         raise ValueError("Invalid LightweightPolicy: " + "; ".join(errors))
 
@@ -389,6 +417,7 @@ class _AdaptiveController:
         self._last_checkpoint_monotonic = time.monotonic()
         self._authority_fingerprint: str | None = None
         self._stale_persisted_state = False
+        self._aggregation_batcher: AdaptiveObservationBatcher | None = None
         self.policy = self._effective_policy()
         validate_lightweight_policy(self.policy)
         self._policy_fingerprint = _policy_hash(self.policy)
@@ -412,6 +441,7 @@ class _AdaptiveController:
             self.state = loaded
             if self.state.level.value >= InstrumentationLevel.BEHAVIOR.value and self.state.behavior_started_at is None:
                 self.state.behavior_started_at = utcnow_iso()
+        self._configure_aggregation_batcher()
         with _STATE_REGISTRY_LOCK:
             _CONTROLLER_REGISTRY[self.target_id] = self
         self._publish_state()
@@ -437,6 +467,7 @@ class _AdaptiveController:
                 sample_behavior = self._advance_sampling_counter(level)
                 if level is InstrumentationLevel.BEHAVIOR:
                     self.state.behavior_observation_calls += 1
+                    self._record_aggregation(behavior_observation_calls=1)
 
             timing_enabled = self.policy.soft_timing.enabled
             started = time.perf_counter() if timing_enabled else None
@@ -761,6 +792,7 @@ class _AdaptiveController:
         now = time.time()
         transitioned = False
         with self._lock:
+            self._record_aggregation(exception_count=1, event_kind="exception")
             if observed_level.value >= InstrumentationLevel.BEHAVIOR.value:
                 self._diagnostic({
                     "timestamp": utcnow_iso(),
@@ -792,6 +824,7 @@ class _AdaptiveController:
         now = time.time()
         transitioned = False
         with self._lock:
+            self._record_aggregation(timing_breach_count=1, event_kind="timing")
             if observed_level.value >= InstrumentationLevel.BEHAVIOR.value:
                 self._diagnostic({
                     "timestamp": utcnow_iso(),
@@ -932,6 +965,7 @@ class _AdaptiveController:
 
     def _record_problem_reproduction(self, kind: str) -> None:
         self.state.problem_reproductions += 1
+        self._record_aggregation(problem_reproductions=1)
         self._diagnostic({
             "timestamp": utcnow_iso(),
             "kind": "repair-evidence-reproduction",
@@ -1016,9 +1050,12 @@ class _AdaptiveController:
     def _record_behavior_sample(self, observed_level: InstrumentationLevel) -> None:
         with self._lock:
             self.state.behavior_samples += 1
+            increments = {"behavior_samples": 1}
             if observed_level is InstrumentationLevel.BEHAVIOR:
                 self.state.repair_evidence_samples += 1
+                increments["repair_evidence_samples"] = 1
                 self._checkpoint_state()
+            self._record_aggregation(**increments)
             self._publish_state()
 
     def _observe_acceptance(self, *, success: bool) -> None:
@@ -1033,8 +1070,10 @@ class _AdaptiveController:
                 return
             if success:
                 self._record_acceptance_success()
+                self._record_aggregation(successful_executions=1)
             else:
                 self._record_acceptance_failure()
+                self._record_aggregation(failed_executions=1)
             self._checkpoint_state()
             self._publish_state()
 
@@ -1149,6 +1188,8 @@ class _AdaptiveController:
         current_code = getattr(self.function, "__code__", None)
         if current_code is self._code_object:
             return
+        if self._aggregation_batcher is not None:
+            self._aggregation_batcher.flush()
         self._code_object = current_code
         self.code_hash = _function_hash(self.function)
         self._exception_events.clear()
@@ -1177,12 +1218,16 @@ class _AdaptiveController:
             self.state = loaded
             if self.state.level.value >= InstrumentationLevel.BEHAVIOR.value and self.state.behavior_started_at is None:
                 self.state.behavior_started_at = utcnow_iso()
+        self._sync_aggregation_batcher()
         self._publish_state()
 
     def _refresh_policy_if_needed(self) -> None:
         authority_fingerprint = _authority_context().effective.fingerprint
         if authority_fingerprint == self._authority_fingerprint:
             return
+
+        if self._aggregation_batcher is not None:
+            self._aggregation_batcher.flush()
 
         previous_authority = self._authority_fingerprint
         previous_policy_fingerprint = self._policy_fingerprint
@@ -1247,6 +1292,7 @@ class _AdaptiveController:
             except FileNotFoundError:
                 pass
         self._persist()
+        self._sync_aggregation_batcher()
         self._publish_state()
 
     def _effective_policy(self) -> LightweightPolicy:
@@ -1254,6 +1300,78 @@ class _AdaptiveController:
         policy = context.apply(self.declared_policy, prefix="lightweight", target_id=self.target_id)
         self._authority_fingerprint = context.effective.fingerprint
         return policy
+
+    def _aggregation_root(self) -> Path:
+        if self._state_directory is None:
+            return Path(os.environ.get("CARETAKER_DATA_DIR", "./caretaker-data"))
+        return Path(self._state_directory).parent
+
+    def _aggregation_context(self) -> dict[str, str]:
+        return {
+            "target_id": self.target_id,
+            # Code identity is the current adaptive generation identity. A code
+            # change causes a new hash and therefore a new supervisor aggregate.
+            "generation_id": self.code_hash,
+            "code_hash": self.code_hash,
+            "monitoring_fingerprint": _monitoring_policy_hash(self.policy),
+            "policy_fingerprint": self._policy_fingerprint,
+            "authority_policy_generation": str(_authority_context().effective.generation),
+            "authority_policy_fingerprint": self._authority_fingerprint or "",
+        }
+
+    def _configure_aggregation_batcher(self) -> None:
+        if not self.policy.aggregation.enabled:
+            self._aggregation_batcher = None
+            return
+        context = self._aggregation_context()
+        self._aggregation_batcher = AdaptiveObservationBatcher(
+            SupervisorAdaptiveAggregationStore(self._aggregation_root()),
+            worker_id=_ADAPTIVE_WORKER_ID,
+            worker_pid=os.getpid(),
+            flush_after_observations=self.policy.aggregation.flush_after_observations,
+            flush_interval_seconds=self.policy.aggregation.flush_interval_seconds,
+            **context,
+        )
+
+    def _rebind_aggregation_batcher(self) -> None:
+        if self._aggregation_batcher is not None:
+            self._aggregation_batcher.rebind(**self._aggregation_context())
+
+    def _sync_aggregation_batcher(self) -> None:
+        if not self.policy.aggregation.enabled:
+            if self._aggregation_batcher is not None:
+                self._aggregation_batcher.flush()
+            self._aggregation_batcher = None
+        elif self._aggregation_batcher is None:
+            self._configure_aggregation_batcher()
+        else:
+            self._rebind_aggregation_batcher()
+
+    def aggregation_status(self) -> dict[str, Any]:
+        batcher = self._aggregation_batcher
+        if batcher is None:
+            return {
+                "enabled": False,
+                "target_id": self.target_id,
+                "generation_id": self.code_hash,
+                "policy_fingerprint": self._policy_fingerprint,
+                "authority_policy_generation": str(
+                    _authority_context().effective.generation
+                ),
+                "authority_policy_fingerprint": self._authority_fingerprint,
+            }
+        return {"enabled": True, **batcher.status(), **batcher.context}
+
+    def _record_aggregation(self, **increments: int) -> None:
+        batcher = self._aggregation_batcher
+        if batcher is None:
+            return
+        try:
+            batcher.record(**increments)
+        except Exception:
+            # Aggregation is optional evidence. It cannot make an application
+            # invocation fail or alter the adaptive authority boundary.
+            return
 
     @staticmethod
     def _append_window(events: deque[float], now: float, window_seconds: float) -> None:

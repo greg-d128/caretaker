@@ -23,6 +23,11 @@ This rule is separate from policy authority. Authority answers **who may request
 - system collection policy;
 - lightweight adaptive instrumentation policy.
 
+The lightweight policy's `aggregation` block is an opt-in evidence transport
+control. Its default is disabled for least-friction startup. When enabled,
+workers batch bounded counters for supervisor-owned merging; it does not grant
+promotion, Repair, or policy-changing authority.
+
 The fingerprint includes field path, declared type, and default. `REVIEWED_POLICY_SURFACE_HASH` is updated only as part of an explicit policy-semantics review. The test suite fails if the dataclass surface changes without that review.
 
 This fingerprint is a **development/conformance guardrail**, not a deployment signature or authority fingerprint. Signed policy/profile provenance remains the responsibility of the policy-authority and profile systems.

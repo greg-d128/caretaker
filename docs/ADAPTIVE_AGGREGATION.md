@@ -32,13 +32,18 @@ resubmission is idempotent.
 ## Current boundary
 
 This first slice establishes durable ownership, batching, generation scope,
-policy-transition rejection, and cross-process provenance. It is evidence
-aggregation only. The existing adaptive controller still owns live promotion
-transitions until a subsequent slice adds supervisor-authorized transition
-requests and worker acknowledgements. No LLM, batch field, or aggregate counter
-creates authority, changes policy, accepts a Guard baseline, or activates Repair.
+policy-transition rejection, and cross-process provenance. The
+`AdaptiveAggregationPolicy` opt-in connects the adaptive controller to the
+in-process batcher; its default is disabled for least-friction startup. It is
+evidence aggregation only. The existing adaptive controller still owns live
+promotion transitions until a subsequent slice adds supervisor-authorized
+transition requests and worker acknowledgements. No LLM, batch field, or
+aggregate counter creates authority, changes policy, accepts a Guard baseline,
+or activates Repair.
 
-The next implementation slice should connect adaptive workers to this ledger
-with an inexpensive in-memory batcher and add a supervisor command/health-cycle
-reconciliation path. It must then move threshold evaluation and promotion state
-to the supervisor without double-counting the existing process-local lifecycle.
+The supervisor now exposes `adaptive-aggregation-status` and
+`adaptive-aggregation-reconcile` through its control socket, and its health
+cycle reconciles enabled worker contexts automatically. The next implementation
+slice must move threshold evaluation and promotion state to the supervisor
+without double-counting the existing process-local lifecycle, then add explicit
+transition requests and worker acknowledgements.

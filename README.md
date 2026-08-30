@@ -23,7 +23,7 @@ Caretaker currently researches Python runtime evidence, signed source/release ma
 
 Caretaker supports one application or service and its process tree. It is not a machine-wide management daemon and does not request privilege escalation. Host-wide `/proc` or `/sys` collection can be enabled when the machine primarily exists to serve the supervised application, but collection still runs with the application account's permissions.
 
-Observation can cover a process tree, but adaptive thresholds, Repair engines, runtime replacements, pending approvals, and acceptance state are currently process-local unless an embedding application supplies additional coordination. Caretaker does not yet provide application-wide atomic Repair coordination across multiple workers.
+Observation can cover a process tree. Adaptive thresholds, Repair engines, runtime replacements, pending approvals, and acceptance state remain process-local; an opt-in aggregation policy can provide supervisor-owned evidence rollups with generation and authority provenance, but it does not yet provide application-wide atomic promotion or Repair coordination across workers.
 
 Caretaker terminates when the application terminates. Caretaker may inspect and restart its own worker components, but **Repair is prohibited from modifying Caretaker's own code**.
 

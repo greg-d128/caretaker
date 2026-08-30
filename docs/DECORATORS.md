@@ -48,6 +48,7 @@ so the hot path is an integer increment and comparison rather than a clock looku
 
 ```python
 from caretaker import (
+    AdaptiveAggregationPolicy,
     BehaviorSamplingPolicy,
     ExceptionPromotionPolicy,
     InstrumentationDemotionPolicy,
@@ -88,12 +89,26 @@ policy = LightweightPolicy(
         long_term_successful_executions=100,
         long_term_minimum_duration_seconds=3600,
     ),
+    # Optional: workers emit bounded evidence batches to the supervisor ledger.
+    # It is disabled by default and never authorizes promotion or Repair.
+    aggregation=AdaptiveAggregationPolicy(
+        enabled=True,
+        flush_after_observations=64,
+        flush_interval_seconds=5,
+    ),
 )
 
 @lightweight(policy=policy, target_id="payments.lookup")
 def lookup(...):
     ...
 ```
+
+When enabled, adaptive workers write bounded pending batches under the configured
+Caretaker data directory. The supervisor is the only component that merges those
+batches, after checking the current generation, policy fingerprint, and authority
+context. Batch failures are recorded as optional evidence failures and do not alter
+the wrapped function's result. This currently aggregates evidence only; adaptive
+promotion and Repair remain process-local decisions.
 
 Caretaker exposes a single adaptive repair lifecycle to operators:
 

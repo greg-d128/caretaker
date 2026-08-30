@@ -20,6 +20,7 @@ from .authority import (
 )
 from .capsule import IncidentCapsuleStore
 from .capsule_assistance import assist_capsules
+from .adaptive_aggregation import SupervisorAdaptiveAggregationStore
 from .communications import generate_communication_draft, review_communication_draft
 from .behavior import (
     BehaviorSnapshotStore,
@@ -269,6 +270,7 @@ def main(argv: list[str] | None = None) -> int:
             policy=policy.regression,
         )
     behavior_statistics = BehaviorStatisticsRepository(policy.directory)
+    adaptive_aggregation_store = SupervisorAdaptiveAggregationStore(policy.directory)
     behavior_revision = {"value": 0}
     behavior_collection_id = str(uuid4())
     runtime.event(
@@ -417,6 +419,54 @@ def main(argv: list[str] | None = None) -> int:
         )
         return matches, child_status
 
+    def reconcile_adaptive_aggregation(*, maximum: int = 100) -> dict[str, Any] | None:
+        """Reconcile worker evidence using supervisor-owned authority context."""
+        if not unix_socket_exists(runtime_control_socket):
+            return None
+        try:
+            response = control_request(
+                runtime_control_socket,
+                {"command": "adaptive-aggregation-context"},
+            )
+        except OSError:
+            return None
+        contexts = response.get("contexts")
+        if not response.get("ok") or not isinstance(contexts, list):
+            return None
+        current_generations: dict[str, str] = {}
+        policy_fingerprints: dict[str, str] = {}
+        ambiguous_targets: set[str] = set()
+        for item in contexts:
+            if not isinstance(item, dict) or not item.get("enabled"):
+                continue
+            target = str(item.get("target_id") or "").strip()
+            generation = str(item.get("generation_id") or "").strip()
+            policy_fingerprint = str(item.get("policy_fingerprint") or "").strip()
+            if not target or not generation or not policy_fingerprint:
+                continue
+            if (
+                target in current_generations
+                and (
+                    current_generations[target] != generation
+                    or policy_fingerprints[target] != policy_fingerprint
+                )
+            ):
+                ambiguous_targets.add(target)
+                continue
+            current_generations[target] = generation
+            policy_fingerprints[target] = policy_fingerprint
+        for target in ambiguous_targets:
+            current_generations.pop(target, None)
+            policy_fingerprints.pop(target, None)
+        effective_authority = authority.effective
+        return adaptive_aggregation_store.reconcile(
+            current_generations=current_generations,
+            policy_fingerprints=policy_fingerprints,
+            authority_policy_generation=str(effective_authority.generation),
+            authority_policy_fingerprint=effective_authority.fingerprint,
+            maximum_batches=maximum,
+        )
+
 
     def control_handler(request, credentials):
         command = request.get("command")
@@ -448,6 +498,17 @@ def main(argv: list[str] | None = None) -> int:
                     },
                     "workers": [asdict(item) for item in supervisor.workers.all()] if supervisor else [],
                     "runtime": application_runtime}
+        if command == "adaptive-aggregation-status":
+            return {
+                "ok": True,
+                "store": adaptive_aggregation_store.status(),
+                "aggregates": list(adaptive_aggregation_store.list_aggregates()),
+            }
+        if command == "adaptive-aggregation-reconcile":
+            result = reconcile_adaptive_aggregation(
+                maximum=max(1, min(int(request.get("maximum", 100)), 1000))
+            )
+            return {"ok": True, "result": result}
         if command == "incident-capsule-list":
             raw_incident_id = str(request.get("incident_id") or "").strip() or None
             incident_id = UUID(raw_incident_id) if raw_incident_id else None
@@ -1428,6 +1489,27 @@ def main(argv: list[str] | None = None) -> int:
         while not health_stop.wait(1.0):
             effective_authority = authority.effective
             materialize_behavior_snapshots(maximum=100)
+            adaptive_result = reconcile_adaptive_aggregation(maximum=100)
+            if adaptive_result is not None and (
+                adaptive_result.get("merged")
+                or adaptive_result.get("rejected")
+                or adaptive_result.get("errors")
+            ):
+                runtime.event(
+                    logger_name="caretaker.adaptive",
+                    severity=30 if adaptive_result.get("rejected") or adaptive_result.get("errors") else 20,
+                    channel=LogChannel.CARETAKER_INTERNAL,
+                    message="Supervisor reconciled adaptive worker observations",
+                    fields={
+                        "merged": adaptive_result.get("merged", 0),
+                        "duplicates": adaptive_result.get("duplicates", 0),
+                        "rejected": adaptive_result.get("rejected", 0),
+                        "errors": adaptive_result.get("errors", []),
+                        "pending": adaptive_result.get("pending", 0),
+                        "authority_policy_generation": effective_authority.generation,
+                        "authority_policy_fingerprint": effective_authority.fingerprint,
+                    },
+                )
             if unix_socket_exists(runtime_control_socket):
                 try:
                     automatic_response = control_request(

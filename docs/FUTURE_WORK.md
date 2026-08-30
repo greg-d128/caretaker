@@ -692,7 +692,7 @@ and tested.
 
 ## Supervisor-owned multiprocess adaptive aggregation
 
-**Status: In progress in development tree for the durable worker-batch ledger; supervisor-authorized promotion remains future work.**
+**Status: In progress in development tree for the durable worker-batch ledger and supervisor reconciliation; supervisor-authorized promotion remains future work.**
 
 The first implementation slice is documented in
 [`ADAPTIVE_AGGREGATION.md`](ADAPTIVE_AGGREGATION.md). A durable
@@ -700,8 +700,8 @@ The first implementation slice is documented in
 batches only when the supervisor supplies matching target-generation, policy,
 and authority context. It merges application-wide counters, retains a bounded
 threshold-event window, protects aggregate state with a content hash, rejects
-stale context, and records bounded worker provenance with idempotent batch
-handling.
+stale context, records bounded worker provenance with idempotent batch handling,
+and reconciles enabled worker contexts during the supervisor health cycle.
 
 Adaptive exception/timing counters and repair-evidence gates are still process
 local for live decisions. Multiple application workers therefore do not yet
@@ -719,10 +719,8 @@ Future design should move authoritative adaptive counters to the supervisor whil
 
 The remaining implementation must explicitly define and enforce whether each
 threshold is process-local, application-wide, or workload/population scoped. It
-must connect workers to the ledger through an inexpensive batcher, add
-supervisor reconciliation and worker acknowledgements, and move threshold
-evaluation and promotion state without double-counting the existing
-single-process lifecycle.
+must add worker acknowledgements and move threshold evaluation and promotion
+state without double-counting the existing single-process lifecycle.
 
 ## Import-hook dependency instrumentation
 
