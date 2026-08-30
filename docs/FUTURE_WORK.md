@@ -1086,7 +1086,7 @@ not yet perform policy-selected replacement or shutdown actions.
 
 - mark interrupted incidents, generations, attempts, and validations incomplete;
 - reconstruct or deliberately stale pending approvals;
-- verify candidate source and policy/authority bindings again after restart;
+- verify the current candidate source and policy/authority bindings again after restart;
 - recover probation and long-term observation state without double counting;
 - persist complete milestone and failed-worker envelopes with policy-controlled detail;
 - reconcile duplicate evidence and emit conflict reports;
