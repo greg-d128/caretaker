@@ -12,10 +12,12 @@ import functools
 import hashlib
 import inspect
 import importlib
+import importlib.machinery
 import json
 import os
 import re
 import secrets
+import sys
 import tempfile
 import threading
 import time
@@ -1729,3 +1731,158 @@ def instrument_dependencies(
                 _DEPENDENCY_RUNTIME.depth = previous_depth
 
     return DependencyInstrumentation(slots=tuple(installed), skipped=tuple(skipped))
+
+
+class _DependencyImportLoader:
+    def __init__(self, delegate: Any, owner: "DependencyImportInstrumentation") -> None:
+        self.delegate = delegate
+        self.owner = owner
+
+    def create_module(self, spec: Any) -> Any:
+        creator = getattr(self.delegate, "create_module", None)
+        return creator(spec) if creator is not None else None
+
+    def exec_module(self, module: ModuleType) -> None:
+        self.delegate.exec_module(module)
+        self.owner._module_loaded(module)
+
+
+class _DependencyImportFinder:
+    def __init__(self, owner: "DependencyImportInstrumentation") -> None:
+        self.owner = owner
+
+    def find_spec(self, fullname: str, path: Any = None, target: Any = None) -> Any:
+        if not self.owner.active or fullname not in self.owner.watched_modules:
+            return None
+        spec = importlib.machinery.PathFinder.find_spec(fullname, path, target)
+        if spec is None or spec.loader is None:
+            return spec
+        if not hasattr(spec.loader, "exec_module"):
+            raise ImportError(
+                f"dependency instrumentation requires an exec_module loader for {fullname!r}"
+            )
+        spec.loader = _DependencyImportLoader(spec.loader, self.owner)
+        return spec
+
+
+@dataclass(slots=True)
+class DependencyImportInstrumentation:
+    """Explicit pre-import dependency instrumentation scope."""
+
+    watched_modules: frozenset[str]
+    instrumented_modules: frozenset[str]
+    selected_functions: Mapping[str, frozenset[str]]
+    policy: LightweightPolicy
+    engine: Any | None
+    target_prefix: str
+    state_directory: str | Path | None
+    include_private: bool
+    owned_only: bool
+    exclude: frozenset[str]
+    prepare_guard: bool
+    installations: list[DependencyInstrumentation] = field(default_factory=list)
+    active: bool = True
+    finder: Any = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.finder = _DependencyImportFinder(self)  # type: ignore[attr-defined]
+
+    def _module_loaded(self, module: ModuleType) -> None:
+        if not self.active or module.__name__ not in self.watched_modules:
+            return
+        references = tuple(
+            (module, name) for name in self.selected_functions.get(module.__name__, ())
+        )
+        installation = instrument_dependencies(
+            modules=(module,) if module.__name__ in self.instrumented_modules else (),
+            functions=references,
+            policy=self.policy,
+            engine=self.engine,
+            target_prefix=self.target_prefix,
+            state_directory=self.state_directory,
+            include_private=self.include_private,
+            owned_only=self.owned_only,
+            exclude=self.exclude,
+            prepare_guard=self.prepare_guard,
+        )
+        self.installations.append(installation)
+
+    def restore(self) -> int:
+        if not self.active:
+            return 0
+        self.active = False
+        try:
+            sys.meta_path.remove(self.finder)
+        except ValueError:
+            pass
+        restored = 0
+        for installation in reversed(self.installations):
+            restored += installation.restore()
+        return restored
+
+    def __enter__(self) -> "DependencyImportInstrumentation":
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        self.restore()
+
+
+def install_dependency_import_hook(
+    modules: Iterable[str] = (),
+    *,
+    functions: Iterable[str] = (),
+    policy: LightweightPolicy | None = None,
+    engine: Any | None = None,
+    target_prefix: str = "dependency",
+    state_directory: str | Path | None = None,
+    include_private: bool = False,
+    owned_only: bool = True,
+    exclude: Iterable[str] = (),
+    prepare_guard: bool = True,
+) -> DependencyImportInstrumentation:
+    """Instrument selected dependency modules before application imports them.
+
+    ``modules`` contains explicit import names whose module-owned functions may
+    be wrapped. ``functions`` contains explicit ``"module:attribute"`` names.
+    The hook is intentionally scoped to this allowlist and must be restored by
+    the caller when startup configuration is complete.
+    """
+    selected_policy = policy or DEFAULT_DEPENDENCY_POLICY
+    validate_lightweight_policy(selected_policy)
+    module_references = tuple(modules)
+    module_names = frozenset(
+        name for name in module_references
+        if isinstance(name, str) and name.strip()
+    )
+    if len(module_names) != len(module_references):
+        raise TypeError("dependency import modules must be non-empty strings")
+    selected: dict[str, set[str]] = {}
+    for reference in functions:
+        if not isinstance(reference, str) or ":" not in reference:
+            raise ValueError("dependency import functions must use 'module:attribute' syntax")
+        module_name, attribute_name = reference.rsplit(":", 1)
+        if not module_name.strip() or not attribute_name.strip():
+            raise ValueError("dependency import function references cannot be empty")
+        selected.setdefault(module_name, set()).add(attribute_name)
+    watched = frozenset((*module_names, *selected))
+    if not watched:
+        raise ValueError("at least one dependency module or function must be selected")
+    instrumentation = DependencyImportInstrumentation(
+        watched_modules=watched,
+        instrumented_modules=module_names,
+        selected_functions={name: frozenset(values) for name, values in selected.items()},
+        policy=selected_policy,
+        engine=engine,
+        target_prefix=target_prefix.strip(".") or "dependency",
+        state_directory=state_directory,
+        include_private=include_private,
+        owned_only=owned_only,
+        exclude=frozenset(str(name) for name in exclude),
+        prepare_guard=prepare_guard,
+    )
+    for module_name in watched:
+        loaded = sys.modules.get(module_name)
+        if loaded is not None:
+            instrumentation._module_loaded(loaded)
+    sys.meta_path.insert(0, instrumentation.finder)
+    return instrumentation

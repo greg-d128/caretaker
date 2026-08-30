@@ -21,6 +21,7 @@ from caretaker import (
     PolicySetting,
     SoftTimingPromotionPolicy,
     get_adaptive_state,
+    install_dependency_import_hook,
     instrument_dependencies,
     get_authority_runtime_context,
     lightweight,
@@ -756,6 +757,47 @@ def test_instrument_dependencies_wraps_module_owned_functions_and_prepares_guard
     assert instrumentation.restore() == 1
     assert module.alpha is original_alpha
     assert instrumentation.restore() == 0
+
+
+def test_import_hook_instruments_selected_module_before_application_capture(tmp_path) -> None:
+    import importlib
+    import sys
+    from uuid import uuid4
+
+    module_name = f"caretaker_import_hook_{uuid4().hex}"
+    module_path = tmp_path / f"{module_name}.py"
+    module_path.write_text(
+        "def alpha(value):\n    return value + 1\n",
+        encoding="utf-8",
+    )
+    policy = LightweightPolicy(
+        exception=ExceptionPromotionPolicy(enabled=False),
+        soft_timing=SoftTimingPromotionPolicy(enabled=False),
+        sampling=BehaviorSamplingPolicy(enabled=False),
+        demotion=InstrumentationDemotionPolicy(enabled=False),
+        persist_state=False,
+    )
+    guard = _FakeGuard()
+    sys.path.insert(0, str(tmp_path))
+    hook = install_dependency_import_hook(
+        modules=(module_name,),
+        policy=policy,
+        engine=_FakeEngine(guard),
+        target_prefix="test.import-hook",
+    )
+    try:
+        module = importlib.import_module(module_name)
+        assert len(hook.installations) == 1
+        slot = hook.installations[0].slots[0]
+        assert slot.installed
+        assert module.alpha(4) == 5
+        assert guard.registered == [f"test.import-hook.{module_name}.alpha"]
+        assert hook.restore() == 1
+        assert module.alpha is slot.original
+    finally:
+        hook.restore()
+        sys.modules.pop(module_name, None)
+        sys.path.remove(str(tmp_path))
 
 
 def test_instrument_dependencies_can_select_reexported_and_builtin_functions() -> None:

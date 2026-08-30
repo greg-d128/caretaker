@@ -649,11 +649,11 @@ The design must explicitly define whether each threshold is process-local, appli
 
 ## Import-hook dependency instrumentation
 
-**Status: General future work.**
+**Status: Implemented in development tree for explicit pre-import module/function scopes.**
 
-`instrument_dependencies()` can wrap imported module attributes, but references captured earlier with `from module import function` cannot be replaced retroactively.
+`instrument_dependencies()` can wrap imported module attributes, but references captured earlier with `from module import function` cannot be replaced retroactively. `install_dependency_import_hook()` now provides an explicit, scoped startup hook for named modules and `module:attribute` functions.
 
-A future import-aware facility should allow instrumentation intent to be registered before application imports. When a selected dependency module loads, Caretaker can wrap configured functions before ordinary application modules capture references.
+When a selected dependency module loads, Caretaker wraps configured functions before ordinary application modules capture references. The hook can be restored, and it never instruments unlisted imports. Broader import routing and already-loaded reference replacement remain future work.
 
 This should remain explicit and policy-controlled. Caretaker should not globally instrument every import by default.
 

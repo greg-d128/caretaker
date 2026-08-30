@@ -155,6 +155,12 @@ selected imported module attributes and returns reversible slot metadata. It is
 intended to run during application initialization, after the Guard/Repair engines are
 constructed but before Guard installs global hooks or normal application work begins.
 
+For startup code that must instrument a dependency before application imports
+capture `from module import function` references, use the explicit
+`install_dependency_import_hook(...)` allowlist. The hook covers only named
+modules or `module:attribute` functions and its `restore()` method removes the
+finder and restores attributes it still owns.
+
 ```python
 import json
 import os
