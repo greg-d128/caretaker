@@ -439,6 +439,7 @@ class RepairRecoveryRecord:
     authority_action: str
     reason: str
     incomplete_records: tuple[Mapping[str, Any], ...] = ()
+    policy_action: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -452,6 +453,29 @@ class WorkerFailureRecord:
     detail_level: str
     transaction_state: str
     envelope: Mapping[str, Any]
+
+
+def select_recovery_action(
+    action: RecoveryAction,
+    *,
+    enabled: bool,
+) -> dict[str, Any]:
+    """Resolve a policy action without performing application orchestration."""
+    if not isinstance(action, RecoveryAction):
+        raise TypeError("recovery action must be a RecoveryAction")
+    return {
+        "requested_action": action.name,
+        "selected_action": action.name if enabled else None,
+        "policy_enabled": enabled,
+        "status": "PLANNED_ONLY" if enabled else "DISABLED_BY_POLICY",
+        "runtime_fallback": RecoveryAction.ROLLBACK_TO_DEPLOYED_CODE.name,
+        "requires_application_orchestration": action
+        not in {
+            RecoveryAction.ROLLBACK_TO_DEPLOYED_CODE,
+            RecoveryAction.CONTINUE_DEGRADED,
+        },
+        "authority_granted": False,
+    }
 
 
 def create_worker_failure_record(
@@ -773,6 +797,10 @@ def build_repair_recovery_plan(
                 live_context_by_target or {}
             ).get(str(_field(attempt, "target_id", ""))),
         )
+        policy_action = select_recovery_action(
+            recovery_policy.interrupted_transaction_action,
+            enabled=recovery_policy.enabled,
+        )
         decisions.append({
             "attempt_id": attempt_id,
             "episode_id": str(_field(attempt, "episode_id", "")),
@@ -785,7 +813,8 @@ def build_repair_recovery_plan(
             "transaction_state": "INTERRUPTED",
             "recovery_action": "ROLLBACK_TO_DEPLOYED_CODE",
             "policy_requested_action": recovery_policy.interrupted_transaction_action.name,
-            "policy_action_status": "PLANNED_ONLY",
+            "policy_action_status": policy_action["status"],
+            "policy_action": policy_action,
             "authority_action": "REVALIDATE_BEFORE_ANY_CONTINUATION",
             "candidate_reactivation_allowed": False,
             "approval_survives_restart": False,
@@ -901,6 +930,11 @@ def apply_repair_recovery_plan(
             incomplete_records=tuple(
                 item for item in (decision.get("incomplete_records") or ())
                 if isinstance(item, Mapping)
+            ),
+            policy_action=(
+                dict(decision.get("policy_action"))
+                if isinstance(decision.get("policy_action"), Mapping)
+                else {}
             ),
         )
         store.record_recovery(record)

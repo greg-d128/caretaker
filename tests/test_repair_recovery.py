@@ -23,6 +23,7 @@ from caretaker import (
     validate_recovery_candidate_binding,
     validate_supervisor_time,
     verify_recovery_authority_packet,
+    select_recovery_action,
 )
 from caretaker.domain import RepairAttempt, RepairAttemptOutcome, RepairAttemptStage
 from caretaker.policy import PolicyConfigurationError, RepairPolicy, validate_policy
@@ -74,6 +75,8 @@ def test_recovery_plan_marks_incomplete_attempt_as_rollback_without_reactivation
     assert decision["recovery_action"] == "ROLLBACK_TO_DEPLOYED_CODE"
     assert decision["policy_requested_action"] == "ROLLBACK_TO_DEPLOYED_CODE"
     assert decision["policy_action_status"] == "PLANNED_ONLY"
+    assert decision["policy_action"]["selected_action"] == "ROLLBACK_TO_DEPLOYED_CODE"
+    assert decision["policy_action"]["requires_application_orchestration"] is False
     assert decision["authority_action"] == "REVALIDATE_BEFORE_ANY_CONTINUATION"
     assert decision["candidate_reactivation_allowed"] is False
     assert decision["approval_survives_restart"] is False
@@ -83,6 +86,7 @@ def test_recovery_plan_marks_incomplete_attempt_as_rollback_without_reactivation
     assert applied["applied_count"] == 1
     assert repeated["applied_count"] == 0
     assert repeated["already_recorded_count"] == 1
+    assert store.all_recoveries()[0].policy_action["selected_action"] == "ROLLBACK_TO_DEPLOYED_CODE"
     assert build_repair_recovery_plan(store, target_id="app:charge")["incomplete_attempt_count"] == 0
 
 
@@ -274,6 +278,19 @@ def test_recovery_policy_surfaces_packet_skew_and_failure_actions() -> None:
                 )
             )
         )
+
+
+def test_recovery_action_selection_is_explicit_and_disabled_policy_fails_safe() -> None:
+    planned = select_recovery_action(RecoveryAction.REPLACE_WORKER, enabled=True)
+    assert planned["selected_action"] == "REPLACE_WORKER"
+    assert planned["status"] == "PLANNED_ONLY"
+    assert planned["requires_application_orchestration"] is True
+    assert planned["authority_granted"] is False
+
+    disabled = select_recovery_action(RecoveryAction.STOP_APPLICATION, enabled=False)
+    assert disabled["selected_action"] is None
+    assert disabled["status"] == "DISABLED_BY_POLICY"
+    assert disabled["runtime_fallback"] == "ROLLBACK_TO_DEPLOYED_CODE"
 
 
 def test_worker_acceptance_uses_defaults_and_target_override_without_granting_authority() -> None:

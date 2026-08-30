@@ -1039,6 +1039,12 @@ degraded, disable, or stop action. This is durable failure evidence, not a
 complete individual post-mortem packet, and a persistence error is surfaced in
 the action result rather than silently treated as success.
 
+The recovery planner now also resolves the configured interrupted-transaction
+action into an explicit, durable policy decision. It records whether the
+action is enabled, remains planned-only, falls back to deployed code, and
+requires application orchestration. It still does not execute worker
+replacement, application shutdown, or incident callbacks itself.
+
 ### Recovery decisions recorded for the next implementation slice
 
 The following decisions close the current recovery-design questions:
@@ -1107,7 +1113,7 @@ transaction and fresh approval checks.
 - recover probation and long-term observation state without double counting;
 - persist complete milestone and failed-worker envelopes with policy-controlled detail;
 - reconcile duplicate evidence and emit conflict reports;
-- apply policy-selected degraded, incident, replacement, or shutdown actions;
+- execute policy-selected degraded, incident, replacement, or shutdown actions;
 - coordinate the same target across multiple application workers;
 - decide whether an accepted runtime replacement may be reactivated at all;
 - connect the recovery policy actions to supervisor worker and application
