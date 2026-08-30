@@ -577,8 +577,10 @@ time, and capture outcome. This metadata is evidence only; it cannot change the
 behavior generation, policy, authority, baseline, or Repair state. The initial
 operator scheduler provides a durable bounded queue, active/pending limits,
 priority/deadline ordering, restart recovery, cancellation state, and explicit
-backpressure. Application-wide measured overhead budgets and a coverage-complete
-backlog remain future work.
+backpressure. Read-only generation-aware coverage-backlog discovery and console
+visibility are now implemented; automatic backlog promotion, application-wide
+measured overhead budgets, and fairness across hot and rare functions remain
+future work.
 
 Caretaker should let an operator deliberately promote an eligible lightweight
 slot into Behavior collection from the console. This supports investigation of a
@@ -600,12 +602,14 @@ fairness, cancellation, and backpressure should be explicit and visible in the
 console.
 
 Every eligible function generation that has never produced a useful behavioral
-snapshot should enter a bounded coverage backlog. Caretaker should gradually work
-through this backlog instead of promoting all functions at startup. Scheduling
-should favor missing, stale, suspicious, repair-relevant, or operator-requested
-coverage while respecting the collection budget. The console should distinguish
-queued, armed/waiting, actively collecting, sufficiently covered, deferred, and
-failed collection states and explain why a subject is in that state.
+snapshot is now represented in a bounded, read-only coverage backlog. Caretaker
+should gradually work through this backlog instead of promoting all functions at
+startup. Automatic scheduling should favor missing, stale, suspicious,
+repair-relevant, or operator-requested coverage while respecting the collection
+budget. The console distinguishes queued, armed/waiting, actively collecting,
+sufficiently covered, deferred, and failed collection states and explains why a
+subject is in that state; automatic promotion and resource-aware fairness remain
+future work.
 
 Sealed behavioral snapshots should inform later lightweight anomaly triggers.
 Candidate signals include expected duration ranges, failure/return categories,
