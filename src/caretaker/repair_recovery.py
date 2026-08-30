@@ -485,7 +485,8 @@ def validate_recovery_candidate_binding(
     *,
     current_target_id: str | None = None,
     current_code_hash: str | None = None,
-    current_policy_snapshot_id: str | UUID | None = None,
+    persisted_policy_fingerprint: str | None = None,
+    current_policy_fingerprint: str | None = None,
     current_authority_policy_generation: int | str | None = None,
     current_authority_policy_fingerprint: str | None = None,
 ) -> dict[str, Any]:
@@ -514,10 +515,12 @@ def validate_recovery_candidate_binding(
         if _field(attempt, name) != _field(candidate, name):
             failures.append(f"PERSISTED_CONTEXT_MISMATCH:{name}")
 
+    if not persisted_policy_fingerprint:
+        failures.append("PERSISTED_POLICY_SNAPSHOT_UNAVAILABLE")
     required_live_context = {
         "target_id": current_target_id,
         "code_hash": current_code_hash,
-        "policy_snapshot_id": current_policy_snapshot_id,
+        "policy_fingerprint": current_policy_fingerprint,
         "authority_policy_generation": current_authority_policy_generation,
         "authority_policy_fingerprint": current_authority_policy_fingerprint,
     }
@@ -528,11 +531,11 @@ def validate_recovery_candidate_binding(
     if current_code_hash is not None and current_code_hash != _field(attempt, "base_source_hash"):
         live_failures.append("LIVE_CONTEXT_MISMATCH:code_hash")
     if (
-        current_policy_snapshot_id is not None
-        and str(current_policy_snapshot_id)
-        != str(_field(attempt, "policy_snapshot_id", ""))
+        current_policy_fingerprint is not None
+        and persisted_policy_fingerprint is not None
+        and current_policy_fingerprint != persisted_policy_fingerprint
     ):
-        live_failures.append("LIVE_CONTEXT_MISMATCH:policy_snapshot_id")
+        live_failures.append("LIVE_CONTEXT_MISMATCH:policy_fingerprint")
     if (
         current_authority_policy_generation is not None
         and str(current_authority_policy_generation)
@@ -552,7 +555,10 @@ def validate_recovery_candidate_binding(
         "failures": failures + live_failures,
         "missing_live_context": missing_live_context,
         "policy_snapshot_id": str(_field(attempt, "policy_snapshot_id", "")),
-        "policy_snapshot_revalidation_required": True,
+        "persisted_policy_fingerprint": persisted_policy_fingerprint,
+        "policy_snapshot_revalidation_required": (
+            not persisted_policy_fingerprint or current_policy_fingerprint is None
+        ),
         "authority_granted": False,
     }
 
@@ -567,12 +573,17 @@ def _candidate_binding_for_attempt(
     candidate = candidates.get(str(_field(attempt, "candidate_id", "")))
     if candidate is not None:
         context = dict(live_context or {})
+        policies = _records_by_id(store, "all_policies", "policy_snapshot_id")
+        policy = policies.get(str(_field(attempt, "policy_snapshot_id", "")))
         return validate_recovery_candidate_binding(
             attempt,
             candidate,
             current_target_id=context.get("target_id"),
             current_code_hash=context.get("code_hash"),
-            current_policy_snapshot_id=context.get("policy_snapshot_id"),
+            persisted_policy_fingerprint=(
+                _field(policy, "fingerprint") if policy is not None else None
+            ),
+            current_policy_fingerprint=context.get("policy_fingerprint"),
             current_authority_policy_generation=context.get("authority_policy_generation"),
             current_authority_policy_fingerprint=context.get("authority_policy_fingerprint"),
         )
@@ -584,7 +595,7 @@ def _candidate_binding_for_attempt(
         "missing_live_context": [
             "target_id",
             "code_hash",
-            "policy_snapshot_id",
+            "policy_fingerprint",
             "authority_policy_generation",
             "authority_policy_fingerprint",
         ],

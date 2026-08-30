@@ -284,9 +284,11 @@ class RepairEngine:
             if target is not None:
                 policy = target.policy.recovery
                 authority = get_authority_runtime_context().effective
+                policy_snapshot = target.policy.snapshot()
                 live_context_by_target[target_id] = {
                     "target_id": target_id,
                     "code_hash": target.slot.load().source_hash,
+                    "policy_fingerprint": policy_snapshot.fingerprint,
                     "authority_policy_generation": authority.generation,
                     "authority_policy_fingerprint": authority.fingerprint,
                 }

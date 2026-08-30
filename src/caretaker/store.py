@@ -45,6 +45,7 @@ class RepairStore(Protocol):
     def recent_events(self, target_id: str | None, limit: int = 50) -> tuple[RepairEvent, ...]: ...
     def attempts_for_target(self, target_id: str) -> tuple[Any, ...]: ...
     def all_attempts(self) -> tuple[Any, ...]: ...
+    def all_policies(self) -> tuple[Any, ...]: ...
     def all_episodes(self) -> tuple[Any, ...]: ...
     def all_generations(self) -> tuple[Any, ...]: ...
     def all_candidates(self) -> tuple[Any, ...]: ...
@@ -132,6 +133,10 @@ class InMemoryRepairStore:
     def all_attempts(self) -> tuple[RepairAttempt, ...]:
         with self._lock:
             return tuple(sorted(self.attempts.values(), key=lambda attempt: attempt.created_at))
+
+    def all_policies(self) -> tuple[PolicySnapshot, ...]:
+        with self._lock:
+            return tuple(sorted(self.policies.values(), key=lambda policy: policy.created_at))
 
     def all_episodes(self) -> tuple[RepairEpisode, ...]:
         with self._lock:
@@ -279,6 +284,9 @@ class SQLiteRepairStore:
 
     def all_attempts(self) -> tuple[Mapping[str, Any], ...]:
         return tuple(self.query_records("attempts", limit=10000))
+
+    def all_policies(self) -> tuple[Mapping[str, Any], ...]:
+        return tuple(self.query_records("policy_snapshots", limit=10000))
 
     def all_episodes(self) -> tuple[Mapping[str, Any], ...]:
         return tuple(self.query_records("episodes", limit=10000))

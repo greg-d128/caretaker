@@ -169,11 +169,15 @@ def test_recovery_candidate_binding_requires_live_context_and_rejects_mismatch()
         authority_policy_fingerprint=attempt.authority_policy_fingerprint,
     )
 
-    persisted = validate_recovery_candidate_binding(attempt, candidate)
+    persisted = validate_recovery_candidate_binding(
+        attempt,
+        candidate,
+        persisted_policy_fingerprint="policy-hash",
+    )
     assert persisted["persisted_binding_valid"] is True
     assert persisted["execution_valid"] is False
     assert set(persisted["missing_live_context"]) == {
-        "target_id", "code_hash", "policy_snapshot_id", "authority_policy_generation",
+        "target_id", "code_hash", "policy_fingerprint", "authority_policy_generation",
         "authority_policy_fingerprint",
     }
     assert persisted["policy_snapshot_revalidation_required"] is True
@@ -184,7 +188,8 @@ def test_recovery_candidate_binding_requires_live_context_and_rejects_mismatch()
         candidate,
         current_target_id=attempt.target_id,
         current_code_hash=attempt.base_source_hash,
-        current_policy_snapshot_id=attempt.policy_snapshot_id,
+        persisted_policy_fingerprint="policy-hash",
+        current_policy_fingerprint="policy-hash",
         current_authority_policy_generation=attempt.authority_policy_generation,
         current_authority_policy_fingerprint=attempt.authority_policy_fingerprint,
     )
@@ -195,7 +200,8 @@ def test_recovery_candidate_binding_requires_live_context_and_rejects_mismatch()
         candidate,
         current_target_id="app:other",
         current_code_hash=attempt.base_source_hash,
-        current_policy_snapshot_id=attempt.policy_snapshot_id,
+        persisted_policy_fingerprint="policy-hash",
+        current_policy_fingerprint="policy-hash",
         current_authority_policy_generation=attempt.authority_policy_generation,
         current_authority_policy_fingerprint=attempt.authority_policy_fingerprint,
     )
