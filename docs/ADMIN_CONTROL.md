@@ -389,6 +389,16 @@ configured application process boundary and rejects execution when no
 application boundary exists or the boundary remains alive. These acknowledgements
 are execution evidence only and do not grant Caretaker authority.
 
+For critical worker evidence, `handle_worker_failure()` can receive an
+application-owned `collect_postmortem(worker, envelope)` callback. The
+callback must return JSON-shaped evidence containing `milestone`,
+`partial_queue`, and `policy_state`; Caretaker wraps it with the bounded
+failure envelope, hashes the packet, and persists its completion status in the
+worker failure record. `verify_worker_postmortem_packet()` can validate that
+stored packet later. A missing, malformed, oversized, or tampered packet is
+reported as incomplete/invalid evidence and is never treated as authorization
+to restart or change policy.
+
 If diagnostic logging itself fails, Caretaker does not recursively send another
 logging event. The control response reports `diagnostic_persisted=false` and a
 bounded `diagnostic_persistence_error`, and the bootstrap path makes a best-effort

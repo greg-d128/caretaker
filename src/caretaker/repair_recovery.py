@@ -21,6 +21,13 @@ from .domain import RepairAttemptOutcome, RepairAttemptStage, RepairEpisodeOutco
 
 
 RECOVERY_PLAN_SCHEMA_VERSION = 1
+WORKER_POSTMORTEM_SCHEMA_VERSION = 1
+WORKER_POSTMORTEM_MAX_BYTES = 1_048_576
+_WORKER_POSTMORTEM_REQUIRED_EVIDENCE = (
+    "milestone",
+    "partial_queue",
+    "policy_state",
+)
 
 
 class RecoveryAction(Enum):
@@ -454,6 +461,30 @@ class WorkerFailureRecord:
     detail_level: str
     transaction_state: str
     envelope: Mapping[str, Any]
+    critical_evidence: bool = False
+    postmortem_status: str = "NOT_REQUESTED"
+    postmortem_packet: Mapping[str, Any] = field(default_factory=dict)
+    postmortem_errors: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerPostmortemPacket:
+    """Complete, individual evidence packet supplied for one failed worker.
+
+    The packet is data only. It proves that the required evidence fields were
+    supplied and bounded for storage; it does not authorize replacement,
+    policy changes, or any other recovery action.
+    """
+
+    packet_id: UUID
+    worker_id: str
+    worker_kind: str
+    captured_at: datetime
+    transaction_state: str
+    failure_envelope: Mapping[str, Any]
+    evidence: Mapping[str, Any]
+    content_sha256: str
+    schema_version: int = WORKER_POSTMORTEM_SCHEMA_VERSION
 
 
 def select_recovery_action(
@@ -598,14 +629,56 @@ def create_worker_failure_record(
     envelope: Mapping[str, Any],
     *,
     observed_at: datetime | None = None,
+    critical_evidence: bool = False,
+    postmortem_evidence: Mapping[str, Any] | None = None,
+    postmortem_error: str | None = None,
+    require_complete_postmortem: bool = False,
 ) -> WorkerFailureRecord:
-    """Create a data-only durable record from a bounded failure envelope."""
+    """Create a durable record from a bounded failure envelope.
+
+    A critical-evidence caller must provide a complete post-mortem packet (or
+    the record explicitly remains ``INCOMPLETE``). Missing packet data never
+    causes a failure record to disappear; the incompleteness is retained for
+    the policy-selected response and later investigation.
+    """
     if not isinstance(envelope, Mapping):
         raise TypeError("worker failure envelope must be a mapping")
     worker_id = str(envelope.get("worker_id") or "")
     worker_kind = str(envelope.get("worker_kind") or "")
     if not worker_id or not worker_kind:
         raise ValueError("worker failure envelope requires worker identity")
+    errors: list[str] = []
+    packet_payload: Mapping[str, Any] = {}
+    postmortem_status = "NOT_REQUESTED"
+    if postmortem_error:
+        errors.append(str(postmortem_error)[:256])
+        postmortem_status = "INCOMPLETE" if critical_evidence else "INVALID"
+    elif postmortem_evidence is not None:
+        try:
+            packet = create_worker_postmortem_packet(
+                envelope,
+                evidence=postmortem_evidence,
+                captured_at=observed_at,
+            )
+            packet_payload = {
+                "packet_id": str(packet.packet_id),
+                "worker_id": packet.worker_id,
+                "worker_kind": packet.worker_kind,
+                "captured_at": packet.captured_at.isoformat(),
+                "transaction_state": packet.transaction_state,
+                "failure_envelope": dict(packet.failure_envelope),
+                "evidence": dict(packet.evidence),
+                "content_sha256": packet.content_sha256,
+                "schema_version": packet.schema_version,
+            }
+            postmortem_status = "COMPLETE"
+        except (TypeError, ValueError) as exc:
+            errors.append(f"{type(exc).__name__}: {exc}"[:256])
+            postmortem_status = "INCOMPLETE" if critical_evidence else "INVALID"
+    if critical_evidence and require_complete_postmortem and postmortem_status != "COMPLETE":
+        if not errors:
+            errors.append("critical evidence requires a complete worker post-mortem packet")
+        postmortem_status = "INCOMPLETE"
     return WorkerFailureRecord(
         failure_id=uuid4(),
         worker_id=worker_id,
@@ -614,7 +687,149 @@ def create_worker_failure_record(
         detail_level=str(envelope.get("detail_level") or "STANDARD"),
         transaction_state=str(envelope.get("transaction_state") or "ROLLED_BACK"),
         envelope=dict(envelope),
+        critical_evidence=bool(critical_evidence),
+        postmortem_status=postmortem_status,
+        postmortem_packet=packet_payload,
+        postmortem_errors=tuple(errors),
     )
+
+
+def create_worker_postmortem_packet(
+    envelope: Mapping[str, Any],
+    *,
+    evidence: Mapping[str, Any],
+    captured_at: datetime | None = None,
+) -> WorkerPostmortemPacket:
+    """Validate and hash one complete individual worker post-mortem packet.
+
+    The application/worker supplies JSON-shaped evidence. The required
+    milestone, partial queue, and policy-state fields make the packet useful
+    for rollback reconciliation without treating arbitrary diagnostic data as
+    authority. A one-megabyte serialized limit prevents a diagnostic packet
+    from exhausting the recovery store.
+    """
+    if not isinstance(envelope, Mapping):
+        raise TypeError("worker failure envelope must be a mapping")
+    if not isinstance(evidence, Mapping):
+        raise TypeError("worker post-mortem evidence must be a mapping")
+    worker_id = str(envelope.get("worker_id") or "")
+    worker_kind = str(envelope.get("worker_kind") or "")
+    if not worker_id or not worker_kind:
+        raise ValueError("worker failure envelope requires worker identity")
+    if str(envelope.get("transaction_state") or "ROLLED_BACK") != "ROLLED_BACK":
+        raise ValueError("worker post-mortem envelope must be marked ROLLED_BACK")
+    missing = [name for name in _WORKER_POSTMORTEM_REQUIRED_EVIDENCE if name not in evidence]
+    if missing:
+        raise ValueError(
+            "worker post-mortem evidence is missing required fields: "
+            + ", ".join(missing)
+        )
+    packet = WorkerPostmortemPacket(
+        packet_id=uuid4(),
+        worker_id=worker_id,
+        worker_kind=worker_kind,
+        captured_at=captured_at or utcnow(),
+        transaction_state=str(envelope.get("transaction_state") or "ROLLED_BACK"),
+        failure_envelope=dict(envelope),
+        evidence=dict(evidence),
+        content_sha256="",
+    )
+    payload = {
+        "packet_id": str(packet.packet_id),
+        "worker_id": packet.worker_id,
+        "worker_kind": packet.worker_kind,
+        "captured_at": packet.captured_at.isoformat(),
+        "transaction_state": packet.transaction_state,
+        "failure_envelope": packet.failure_envelope,
+        "evidence": packet.evidence,
+        "schema_version": packet.schema_version,
+    }
+    try:
+        encoded = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("worker post-mortem evidence must be JSON-shaped") from exc
+    if len(encoded) > WORKER_POSTMORTEM_MAX_BYTES:
+        raise ValueError(
+            f"worker post-mortem packet exceeds {WORKER_POSTMORTEM_MAX_BYTES} bytes"
+        )
+    return replace(packet, content_sha256=hashlib.sha256(encoded).hexdigest())
+
+
+def verify_worker_postmortem_packet(
+    packet: Mapping[str, Any],
+    *,
+    envelope: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Verify stored post-mortem structure, identity, required evidence, and hash."""
+    failures: list[str] = []
+    if not isinstance(packet, Mapping):
+        return {
+            "valid": False,
+            "failures": ["PACKET_NOT_MAPPING"],
+            "authority_granted": False,
+        }
+    required = (
+        "packet_id",
+        "worker_id",
+        "worker_kind",
+        "captured_at",
+        "transaction_state",
+        "failure_envelope",
+        "evidence",
+        "content_sha256",
+        "schema_version",
+    )
+    failures.extend(f"MISSING:{name}" for name in required if name not in packet)
+    if packet.get("schema_version") != WORKER_POSTMORTEM_SCHEMA_VERSION:
+        failures.append("UNSUPPORTED_PACKET_SCHEMA")
+    failure_envelope = packet.get("failure_envelope")
+    evidence = packet.get("evidence")
+    if not isinstance(failure_envelope, Mapping):
+        failures.append("FAILURE_ENVELOPE_NOT_MAPPING")
+    if not isinstance(evidence, Mapping):
+        failures.append("EVIDENCE_NOT_MAPPING")
+    else:
+        failures.extend(
+            f"MISSING_EVIDENCE:{name}"
+            for name in _WORKER_POSTMORTEM_REQUIRED_EVIDENCE
+            if name not in evidence
+        )
+    if isinstance(failure_envelope, Mapping):
+        if str(failure_envelope.get("worker_id") or "") != str(packet.get("worker_id") or ""):
+            failures.append("IDENTITY_MISMATCH:worker_id")
+        if str(failure_envelope.get("worker_kind") or "") != str(packet.get("worker_kind") or ""):
+            failures.append("IDENTITY_MISMATCH:worker_kind")
+        if envelope is not None:
+            for name in ("worker_id", "worker_kind"):
+                if str(envelope.get(name) or "") != str(packet.get(name) or ""):
+                    failures.append(f"CONTEXT_MISMATCH:{name}")
+    hash_input = dict(packet)
+    supplied_hash = str(hash_input.pop("content_sha256", "") or "")
+    try:
+        encoded = json.dumps(
+            hash_input,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        if len(encoded) > WORKER_POSTMORTEM_MAX_BYTES:
+            failures.append("PACKET_TOO_LARGE")
+        elif hashlib.sha256(encoded).hexdigest() != supplied_hash:
+            failures.append("PACKET_CONTENT_HASH_MISMATCH")
+    except (TypeError, ValueError):
+        failures.append("PACKET_NOT_JSON_SHAPED")
+    return {
+        "valid": not failures,
+        "packet_id": str(packet.get("packet_id") or ""),
+        "worker_id": str(packet.get("worker_id") or ""),
+        "failures": failures,
+        "authority_granted": False,
+    }
 
 
 def _recovered_attempt_ids(store: Any) -> set[str]:

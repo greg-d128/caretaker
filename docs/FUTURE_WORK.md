@@ -1046,7 +1046,16 @@ envelope as a data-only `WorkerFailureRecord`; the supervised runtime stores
 these records in `<policy.directory>/repair.sqlite` before selecting a restart,
 degraded, disable, or stop action. This is durable failure evidence, not a
 complete individual post-mortem packet, and a persistence error is surfaced in
-the action result rather than silently treated as success.
+the action result rather than silently treated as success. The supervisor can
+now accept an application-owned post-mortem collector for critical evidence.
+`create_worker_postmortem_packet()` requires the worker identity, rollback
+state, milestone, partial queue, and policy state, stores the packet with a
+content hash, enforces a one-megabyte serialized bound, and records
+`COMPLETE`, `INCOMPLETE`, or `INVALID` status on the individual failure record.
+`verify_worker_postmortem_packet()` checks the stored structure, identity,
+required evidence, size, and hash without granting authority. Missing or
+malformed critical packets remain durable evidence of an incomplete
+post-mortem; collection does not itself select or authorize recovery.
 
 The recovery planner now also resolves the configured interrupted-transaction
 action into an explicit, durable policy decision. It records whether the
@@ -1132,7 +1141,8 @@ transaction and fresh approval checks.
 - reconstruct pending approvals or deliberately stale them for every restart path;
 - verify the current candidate source and policy/authority bindings again after restart;
 - recover probation and long-term observation state without double counting;
-- persist complete milestone and failed-worker envelopes with policy-controlled detail;
+- collect complete individual post-mortem packets from every affected worker
+  when critical evidence is required, with policy-controlled failure handling;
 - reconcile duplicate evidence and emit conflict reports;
 - execute policy-selected degraded, incident, replacement, or shutdown actions;
 - coordinate the same target across multiple application workers;

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from caretaker.logging import (
     CaretakerApplicationSupervisor,
     WorkerFailureAction,
@@ -15,6 +17,9 @@ from caretaker import (
     WorkerAcceptancePolicy,
     create_recovery_authority_packet,
     dispatch_recovery_action,
+    create_worker_failure_record,
+    create_worker_postmortem_packet,
+    verify_worker_postmortem_packet,
 )
 
 
@@ -193,6 +198,81 @@ def test_sqlite_worker_failure_record_survives_store_reopen(tmp_path) -> None:
     assert records[0]["worker_id"] == str(worker.worker_id)
     assert records[0]["detail_level"] == "DIAGNOSTIC"
     assert records[0]["envelope"]["transaction_state"] == "ROLLED_BACK"
+
+
+def test_critical_worker_failure_requires_and_persists_complete_postmortem() -> None:
+    runtime = FakeRuntime()
+    store = InMemoryRepairStore()
+    supervisor = CaretakerApplicationSupervisor(runtime, failure_store=store)
+    worker = supervisor.workers.register(WorkerKind.REPAIR_ANALYZER, 1234)
+    failed = supervisor.workers.mark_failed(worker.worker_id, error_fingerprint="worker-crash")
+    evidence = {
+        "milestone": "VALIDATION",
+        "partial_queue": ["work-1", "work-2"],
+        "policy_state": {"repair": "reviewed"},
+    }
+
+    result = supervisor.handle_worker_failure(
+        failed,
+        policy=WorkerRestartPolicy(enabled=False),
+        critical_evidence=True,
+        collect_postmortem=lambda current, envelope: {
+            **evidence,
+            "worker_id": str(current.worker_id),
+            "transaction_state": envelope["transaction_state"],
+        },
+        require_complete_postmortem=True,
+    )
+
+    assert result["postmortem_status"] == "COMPLETE"
+    record = store.all_worker_failures()[0]
+    assert record.critical_evidence is True
+    assert record.postmortem_status == "COMPLETE"
+    assert record.postmortem_packet["evidence"]["partial_queue"] == ["work-1", "work-2"]
+    assert record.postmortem_packet["content_sha256"]
+    assert verify_worker_postmortem_packet(
+        record.postmortem_packet,
+        envelope=record.envelope,
+    )["valid"] is True
+
+    tampered = dict(record.postmortem_packet)
+    tampered["evidence"] = {**tampered["evidence"], "policy_state": {"repair": "changed"}}
+    assert verify_worker_postmortem_packet(tampered)["failures"] == [
+        "PACKET_CONTENT_HASH_MISMATCH"
+    ]
+
+
+def test_critical_worker_failure_retains_incomplete_postmortem_status() -> None:
+    envelope = {
+        "worker_id": "worker-1",
+        "worker_kind": "REPAIR_ANALYZER",
+        "transaction_state": "ROLLED_BACK",
+        "detail_level": "STANDARD",
+    }
+    record = create_worker_failure_record(
+        envelope,
+        critical_evidence=True,
+        require_complete_postmortem=True,
+    )
+
+    assert record.postmortem_status == "INCOMPLETE"
+    assert record.postmortem_packet == {}
+    assert "complete worker post-mortem" in record.postmortem_errors[0]
+
+    with pytest.raises(ValueError, match="missing required fields"):
+        create_worker_postmortem_packet(
+            envelope,
+            evidence={"milestone": "VALIDATION"},
+        )
+    with pytest.raises(ValueError, match="ROLLED_BACK"):
+        create_worker_postmortem_packet(
+            {**envelope, "transaction_state": "ACTIVE"},
+            evidence={
+                "milestone": "VALIDATION",
+                "partial_queue": [],
+                "policy_state": {},
+            },
+        )
 
 
 def test_replacement_action_handler_uses_packet_admission_and_acceptance() -> None:

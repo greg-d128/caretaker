@@ -682,6 +682,9 @@ class CaretakerApplicationSupervisor:
         restart_worker: Callable[[WorkerHealth], Any] | None = None,
         disable_component: Callable[[WorkerHealth], Any] | None = None,
         diagnostic_debug: bool | None = None,
+        critical_evidence: bool = False,
+        collect_postmortem: Callable[[WorkerHealth, Mapping[str, Any]], Any] | None = None,
+        require_complete_postmortem: bool = False,
     ) -> dict[str, Any]:
         """Apply the policy boundary for one failed worker.
 
@@ -694,12 +697,37 @@ class CaretakerApplicationSupervisor:
             worker,
             diagnostic_debug=diagnostic_debug,
         )
+        postmortem_evidence: Mapping[str, Any] | None = None
+        postmortem_error = None
+        if collect_postmortem is not None:
+            try:
+                collected = collect_postmortem(worker, envelope)
+                if isinstance(collected, Mapping):
+                    postmortem_evidence = collected
+                else:
+                    postmortem_error = "post-mortem callback must return an evidence mapping"
+            except Exception as exc:
+                postmortem_error = (
+                    f"post-mortem callback failed: {type(exc).__name__}: {exc}"
+                )[:256]
         failure_persistence_error = None
+        postmortem_status = (
+            "INCOMPLETE"
+            if critical_evidence and require_complete_postmortem
+            else ("INVALID" if postmortem_error else ("COLLECTED" if postmortem_evidence is not None else "NOT_REQUESTED"))
+        )
         if self.failure_store is not None:
             try:
-                failure_record = create_worker_failure_record(envelope)
+                failure_record = create_worker_failure_record(
+                    envelope,
+                    critical_evidence=critical_evidence,
+                    postmortem_evidence=postmortem_evidence,
+                    postmortem_error=postmortem_error,
+                    require_complete_postmortem=require_complete_postmortem,
+                )
                 self.failure_store.record_worker_failure(failure_record)
                 failure_persistence_status = "PERSISTED"
+                postmortem_status = failure_record.postmortem_status
             except Exception as exc:
                 failure_persistence_status = "FAILED"
                 failure_persistence_error = f"{type(exc).__name__}: {exc}"[:256]
@@ -751,6 +779,8 @@ class CaretakerApplicationSupervisor:
                     "incident_error": incident_error,
                     "failure_persistence_status": failure_persistence_status,
                     "failure_persistence_error": failure_persistence_error,
+                    "postmortem_status": postmortem_status,
+                    "postmortem_error": postmortem_error,
                     "restart": {
                         **restart_result,
                     },
@@ -775,6 +805,8 @@ class CaretakerApplicationSupervisor:
             "incident_error": incident_error,
             "failure_persistence_status": failure_persistence_status,
             "failure_persistence_error": failure_persistence_error,
+            "postmortem_status": postmortem_status,
+            "postmortem_error": postmortem_error,
             "restart": restart_result,
             "failure_envelope": envelope,
         }
