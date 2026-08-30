@@ -38,6 +38,7 @@ from ..state import exception_evidence, value_snapshot
 
 
 F = TypeVar("F", bound=Callable[..., Any])
+_NO_RESULT = object()
 
 
 def _unwrap_descriptor(value: Any) -> tuple[Callable[..., Any], Callable[[Any], Any]]:
@@ -55,6 +56,19 @@ def _unwrap_descriptor(value: Any) -> tuple[Callable[..., Any], Callable[[Any], 
     if not callable(value):
         raise TypeError("@repair requires a function or supported descriptor")
     return value, lambda wrapper: wrapper
+
+
+def _result_evidence(value: Any) -> dict[str, Any]:
+    """Return bounded, data-only evidence for an observed successful result."""
+    snapshot = value_snapshot(value, max_length=512)
+    return {
+        "type_name": snapshot.type_name,
+        "representation": snapshot.representation,
+        "value_hash": snapshot.value_hash,
+        "truncated": snapshot.truncated,
+        "redacted": snapshot.redacted,
+        "size_bytes": snapshot.size_bytes,
+    }
 
 
 class InvalidOutputError(RuntimeError):
@@ -185,6 +199,7 @@ def repair(
                     function_version=version.number,
                 )
             guard_started = False
+            completed_output: Any = _NO_RESULT
             pending = selected_engine.handle_pending_guard_signal(
                 target=runtime_target,
                 version=version,
@@ -197,8 +212,38 @@ def repair(
             )
             if pending is not None:
                 if pending.kind == ResolutionKind.RETRY_SUCCEEDED:
+                    completed_output = pending.retry_output
+                    if (
+                        logging_runtime is not None
+                        and runtime_target.policy.logging.enabled
+                        and (
+                            runtime_target.policy.logging.capture_calls
+                            or runtime_target.policy.logging.capture_results
+                        )
+                    ):
+                        completed_fields: dict[str, Any] = {
+                            "event": "repair.function.call.completed",
+                            "target_id": runtime_target.target_id,
+                            "function_version": version.number,
+                            "candidate_id": str(version.candidate_id) if version.candidate_id else None,
+                            "succeeded": True,
+                            "elapsed_seconds": (
+                                time.perf_counter() - started_counter
+                                if runtime_target.policy.logging.capture_timing
+                                else None
+                            ),
+                        }
+                        if runtime_target.policy.logging.capture_results:
+                            completed_fields["result"] = _result_evidence(completed_output)
+                        logging_runtime.event(
+                            logger_name=callable_original.__module__, severity=10,
+                            channel=LogChannel.REPAIR,
+                            message=f"Repair-enabled call completed: {runtime_target.target_id}",
+                            fields=completed_fields,
+                            function_version=version.number,
+                        )
                     tokens.reset()
-                    return pending.retry_output
+                    return completed_output
                 version = runtime_target.slot.load()
                 call_state = selected_engine.state_capture.capture_before(
                     version.implementation,
@@ -262,8 +307,10 @@ def repair(
                             mode="differential",
                         )
                         if result.equivalent and not differential.return_candidate_on_equivalence:
-                            return result.original_result
-                        return selected_output
+                            completed_output = result.original_result
+                            return completed_output
+                        completed_output = selected_output
+                        return completed_output
 
                     fallback = result.candidate_exception or DifferentialMismatchError(
                         result.decision_reason
@@ -311,7 +358,8 @@ def repair(
                         fallback_exception=fallback,
                     )
                     if resolution.kind == ResolutionKind.RETRY_SUCCEEDED:
-                        return resolution.retry_output
+                        completed_output = resolution.retry_output
+                        return completed_output
                     selected_engine.observation.record_failure(
                         slot=runtime_target.slot,
                         call_id=call_id,
@@ -320,7 +368,8 @@ def repair(
                         mode="differential",
                     )
                     if result.original_succeeded and differential.return_original_if_candidate_fails:
-                        return result.original_result
+                        completed_output = result.original_result
+                        return completed_output
                     raise resolution.retry_exception or fallback
 
                 try:
@@ -350,7 +399,8 @@ def repair(
                         elapsed_seconds=elapsed,
                     )
                     if resolution.kind == ResolutionKind.RETRY_SUCCEEDED:
-                        return resolution.retry_output
+                        completed_output = resolution.retry_output
+                        return completed_output
                     if version.candidate_id is not None:
                         selected_engine.observation.record_failure(
                             slot=runtime_target.slot,
@@ -420,7 +470,8 @@ def repair(
                             elapsed_seconds=elapsed,
                         )
                         if resolution.kind == ResolutionKind.RETRY_SUCCEEDED:
-                            return resolution.retry_output
+                            completed_output = resolution.retry_output
+                            return completed_output
                         if version.candidate_id is not None:
                             selected_engine.observation.record_failure(
                                 slot=runtime_target.slot,
@@ -431,7 +482,8 @@ def repair(
                                 policy=runtime_target.policy.observation,
                             )
                         if runtime_target.policy.mode is RepairMode.OBSERVE:
-                            return output
+                            completed_output = output
+                            return completed_output
                         error = InvalidOutputError(
                             f"Output from {runtime_target.target_id} failed validator "
                             f"{trigger.name}: {validation_reason or 'validator returned false'}; "
@@ -457,7 +509,8 @@ def repair(
                         elapsed_seconds=elapsed,
                     )
                     if resolution.kind == ResolutionKind.RETRY_SUCCEEDED:
-                        return resolution.retry_output
+                        completed_output = resolution.retry_output
+                        return completed_output
                     if version.candidate_id is not None:
                         selected_engine.observation.record_failure(
                             slot=runtime_target.slot,
@@ -474,7 +527,8 @@ def repair(
                         call_id=call_id,
                         output=output,
                     )
-                return output
+                completed_output = output
+                return completed_output
             finally:
                 succeeded = sys.exc_info()[0] is None
                 elapsed_for_logging = time.perf_counter() - started_counter
@@ -490,9 +544,22 @@ def repair(
                 if (
                     logging_runtime is not None
                     and runtime_target.policy.logging.enabled
-                    and runtime_target.policy.logging.capture_calls
+                    and (
+                        runtime_target.policy.logging.capture_calls
+                        or runtime_target.policy.logging.capture_results
+                    )
                     and (succeeded or runtime_target.policy.logging.capture_exceptions)
                 ):
+                    completed_fields = {
+                        "event": "repair.function.call.completed" if succeeded else "repair.function.call.failed",
+                        "target_id": runtime_target.target_id,
+                        "function_version": version.number,
+                        "candidate_id": str(version.candidate_id) if version.candidate_id else None,
+                        "succeeded": succeeded,
+                        "elapsed_seconds": elapsed_for_logging if runtime_target.policy.logging.capture_timing else None,
+                    }
+                    if succeeded and completed_output is not _NO_RESULT and runtime_target.policy.logging.capture_results:
+                        completed_fields["result"] = _result_evidence(completed_output)
                     logging_runtime.event(
                         logger_name=callable_original.__module__,
                         severity=10 if succeeded else 40,
@@ -501,14 +568,7 @@ def repair(
                             f"Repair-enabled call completed: {runtime_target.target_id}"
                             if succeeded else f"Repair-enabled call failed: {runtime_target.target_id}"
                         ),
-                        fields={
-                            "event": "repair.function.call.completed" if succeeded else "repair.function.call.failed",
-                            "target_id": runtime_target.target_id,
-                            "function_version": version.number,
-                            "candidate_id": str(version.candidate_id) if version.candidate_id else None,
-                            "succeeded": succeeded,
-                            "elapsed_seconds": elapsed_for_logging if runtime_target.policy.logging.capture_timing else None,
-                        },
+                        fields=completed_fields,
                         function_version=version.number,
                     )
                 tokens.reset()

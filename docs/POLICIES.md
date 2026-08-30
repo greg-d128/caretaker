@@ -152,6 +152,11 @@ authority: RepairAuthority
 
 `LoggingBinding` selects call, exception, timing, argument, and result evidence for the repair target. The effective operator policy can further constrain or require capture.
 
+When `capture_results=True`, successful return values are recorded only as
+bounded, data-only snapshots containing type, representation, hash, size, and
+truncation metadata. This applies to ordinary, retry, and differential return
+paths; exceptions never place raw result objects in the log.
+
 `RepairAuthority` has four levels:
 
 - `ANALYZE_ONLY`

@@ -59,9 +59,8 @@ def test_logging_rejects_false_retention_guarantee(tmp_path) -> None:
         validate_operator_logging_policy(policy)
 
 
-def test_repair_binding_rejects_unimplemented_result_capture() -> None:
-    with pytest.raises(PolicyConfigurationError, match="capture_results"):
-        validate_policy(RepairPolicy(logging=LoggingBinding(capture_results=True)))
+def test_repair_binding_accepts_bounded_result_capture() -> None:
+    validate_policy(RepairPolicy(logging=LoggingBinding(capture_results=True)))
 
 
 def test_system_policy_can_omit_body_mask_path_and_timestamp_per_source(tmp_path) -> None:

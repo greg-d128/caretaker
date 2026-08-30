@@ -32,7 +32,6 @@ RESERVED_SETTINGS: dict[str, str] = {
     "repair.limits.structural_review_after_repairs": "automatic structural-review scheduling is not implemented",
     "repair.stability.oscillation_window_incidents": "incident-window oscillation detection is not implemented",
     "repair.stability.require_regression_replay_before_reactivation": "automatic regression replay before reactivation is not implemented",
-    "repair.logging.capture_results": "Repair-wide result capture is not implemented on every return path",
     "repair.guard.baseline_name": "named Guard baselines are not implemented",
     "guard.collectors.environment_reads": "environment-read audit attribution is not implemented",
     "guard.collectors.function_calls": "general Python function-call collection is not implemented",

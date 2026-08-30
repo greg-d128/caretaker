@@ -425,8 +425,6 @@ def validate_policy(policy: RepairPolicy) -> None:
             "stability.require_regression_replay_before_reactivation=True is reserved; "
             "automatic regression replay before failed-version reactivation is not implemented"
         )
-    if policy.logging.capture_results:
-        errors.append("logging.capture_results=True is reserved for Repair bindings; result capture is not implemented on every repair return path")
     if policy.guard.baseline_name is not None:
         errors.append("guard.baseline_name is reserved; named Guard baselines are not implemented")
     if policy.guard.enabled and not any((
