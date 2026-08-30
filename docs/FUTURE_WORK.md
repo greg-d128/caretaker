@@ -989,6 +989,12 @@ authoritative, report the measured skew, reject skew beyond the configured
 tolerance, and reject packets at or after expiry. They are not yet a complete
 worker packet or multiprocess transport protocol.
 
+The application worker registry now supports packet-aware admission and marks
+an admitted worker unauthorized when its packet expires; restarting it clears
+the packet and requires re-admission. This is lifecycle enforcement inside the
+existing registry, not yet process spawning, packet distribution, or worker
+replacement orchestration.
+
 The remaining implementation work is to:
 
 A first recovery inspection slice now exists as `RepairEngine.recovery_plan()`

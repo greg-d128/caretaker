@@ -11,6 +11,11 @@ from typing import Callable, Mapping
 from uuid import UUID, uuid4
 
 from .handler import LoggingRuntime
+from ..repair_recovery import (
+    RecoveryAuthorityPacket,
+    RepairRecoveryPolicy,
+    verify_recovery_authority_packet,
+)
 from .models import (
     ActiveWork,
     CaretakerComponent,
@@ -100,6 +105,50 @@ class WorkerRegistry:
             self._workers[health.worker_id] = health
         return health
 
+    def register_authorized(
+        self,
+        kind: WorkerKind,
+        pid: int,
+        packet: RecoveryAuthorityPacket,
+        *,
+        supervisor_time: datetime,
+        target_id: str,
+        generation_id: str,
+        code_hash: str,
+        policy_fingerprint: str,
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        allowed_capabilities: set[str] | frozenset[str] = frozenset(),
+        policy: RepairRecoveryPolicy | None = None,
+    ) -> WorkerHealth:
+        """Admit a worker only after exact packet/context verification."""
+        verification = verify_recovery_authority_packet(
+            packet,
+            supervisor_time=supervisor_time,
+            target_id=target_id,
+            generation_id=generation_id,
+            code_hash=code_hash,
+            policy_fingerprint=policy_fingerprint,
+            authority_policy_generation=authority_policy_generation,
+            authority_policy_fingerprint=authority_policy_fingerprint,
+            allowed_capabilities=allowed_capabilities,
+            policy=policy,
+        )
+        if not verification["valid"]:
+            raise PermissionError(
+                "worker authority packet rejected: "
+                + ", ".join(str(item) for item in verification["failures"])
+            )
+        health = self.register(kind, pid)
+        with self._lock:
+            admitted = replace(
+                health,
+                authority_packet_id=packet.packet_id,
+                authority_packet_expires_at=packet.expires_at,
+            )
+            self._workers[health.worker_id] = admitted
+            return admitted
+
     def heartbeat(
         self,
         worker_id: UUID,
@@ -108,14 +157,26 @@ class WorkerRegistry:
         current_work_ids: tuple[UUID, ...] = (),
         queue_depth: int = 0,
         last_completed_sequence: int | None = None,
+        supervisor_time: datetime | None = None,
     ) -> WorkerHealth:
         with self._lock:
             current = self._workers[worker_id]
+            expired = (
+                supervisor_time is not None
+                and current.authority_packet_expires_at is not None
+                and supervisor_time >= current.authority_packet_expires_at
+            )
             updated = replace(
                 current, last_heartbeat_at=datetime.now(timezone.utc), state=state,
                 current_work_ids=current_work_ids, queue_depth=queue_depth,
                 last_completed_sequence=last_completed_sequence,
             )
+            if expired:
+                updated = replace(
+                    updated,
+                    state=WorkerState.UNAUTHORIZED,
+                    last_error_fingerprint="authority-expired",
+                )
             self._workers[worker_id] = updated
             return updated
 
@@ -145,6 +206,8 @@ class WorkerRegistry:
                 queue_depth=0,
                 restart_count=current.restart_count + 1,
                 last_error_fingerprint=None,
+                authority_packet_id=None,
+                authority_packet_expires_at=None,
             )
             self._workers[worker_id] = updated
             return updated
@@ -152,7 +215,12 @@ class WorkerRegistry:
     def unhealthy(self) -> tuple[WorkerHealth, ...]:
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=self.heartbeat_timeout_seconds)
         with self._lock:
-            return tuple(item for item in self._workers.values() if item.last_heartbeat_at < cutoff or item.state is WorkerState.FAILED)
+            return tuple(
+                item
+                for item in self._workers.values()
+                if item.last_heartbeat_at < cutoff
+                or item.state in {WorkerState.FAILED, WorkerState.UNAUTHORIZED}
+            )
 
     def all(self) -> tuple[WorkerHealth, ...]:
         with self._lock:

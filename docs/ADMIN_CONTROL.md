@@ -49,7 +49,10 @@ an approval as surviving restart.
 Recovery time and expiry checks use supervisor time. The recovery API reports
 clock skew explicitly and rejects timestamps outside the configured tolerance;
 authority is invalid at its expiry instant. Packet distribution and worker
-transport remain future supervisor capabilities.
+transport remain future supervisor capabilities. Where the lifecycle registry is
+used, authorized admission requires exact packet context; an expired worker is
+marked unauthorized and a restart clears its packet so it must be admitted
+again.
 
 The `incident-communication-draft` command creates a bounded, policy-governed
 draft for one verified capsule. The console exposes the same operation as

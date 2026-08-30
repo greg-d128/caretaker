@@ -207,6 +207,7 @@ class WorkerState(Enum):
     DEGRADED = auto()
     STOPPING = auto()
     FAILED = auto()
+    UNAUTHORIZED = auto()
 
 
 class WorkerFailureAction(Enum):
@@ -549,6 +550,8 @@ class WorkerHealth:
     last_completed_sequence: int | None
     restart_count: int
     last_error_fingerprint: str | None
+    authority_packet_id: UUID | None = None
+    authority_packet_expires_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
