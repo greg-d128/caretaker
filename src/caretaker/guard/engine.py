@@ -1076,6 +1076,7 @@ class GuardEngine(GuardFacade):
                     {
                         "target_id": target_id,
                         "generation_id": item.get("generation_id"),
+                        "requested_by": "caretaker:auto",
                         "reason": reason,
                         "state": controller.state.public_dict(),
                     }

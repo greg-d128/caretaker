@@ -1430,10 +1430,26 @@ def main(argv: list[str] | None = None) -> int:
             materialize_behavior_snapshots(maximum=100)
             if unix_socket_exists(runtime_control_socket):
                 try:
-                    control_request(
+                    automatic_response = control_request(
                         runtime_control_socket,
                         {"command": "behavior-collection-auto-cycle"},
                     )
+                    for cycle in automatic_response.get("cycles", ()):
+                        for promotion in cycle.get("promoted", ()):
+                            runtime.event(
+                                logger_name="caretaker.behavior",
+                                severity=20,
+                                channel=LogChannel.GUARD,
+                                message="Automatic behavior collection promotion",
+                                fields={
+                                    "target_id": promotion.get("target_id"),
+                                    "generation_id": promotion.get("generation_id"),
+                                    "requested_by": promotion.get("requested_by"),
+                                    "reason": promotion.get("reason"),
+                                    "authority_policy_generation": authority.effective.generation,
+                                    "authority_policy_fingerprint": authority.effective.fingerprint,
+                                },
+                            )
                 except OSError:
                     pass
             current_leases = {

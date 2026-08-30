@@ -2240,10 +2240,16 @@ class CaretakerConsoleApp(App):
             for status in ("failed", "deferred", "expired", "cancelled")
             if counts.get(status, 0)
         )
+        automatic = ", ".join(
+            f"{'on' if item.get('automatic_promotion') else 'off'}"
+            f"/{int(item.get('automatic_max_promoted') or 0)}"
+            for item in enabled
+        )
         return (
             f"collection queue active {active}/{active_limit}, queued {queued}/{pending_limit}"
             f"{'; terminal ' + terminal if terminal else ''}"
             f"{'; backlog ' + ', '.join(f'{status} {backlog_counts[status]}' for status in sorted(backlog_counts)) if backlog_counts else ''}"
+            f"; automatic {automatic}"
         )
 
     @staticmethod
