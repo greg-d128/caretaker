@@ -90,3 +90,9 @@ incomplete transition becomes `EXPIRED` after its deadline, reports the stale
 worker IDs, and rejects late acknowledgements. Caretaker does not automatically
 replace stale workers or change policy; application-owned lifecycle handling
 remains future work.
+
+The Textual console's **Adaptive** tab provides a manually refreshed,
+read-only view of aggregate provenance and transition state. It shows scoped
+target identity, generation, worker acknowledgement coverage, deadlines, and
+stale-worker counts. The tab has no transition-acknowledgement or application
+action control.

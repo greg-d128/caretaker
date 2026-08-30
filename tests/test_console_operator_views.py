@@ -1093,6 +1093,59 @@ def test_console_displays_read_only_worker_failure_recovery_status(tmp_path):
     asyncio.run(exercise())
 
 
+def test_console_displays_read_only_adaptive_transition_deadlines(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(160, 55)):
+            requests = []
+
+            async def request(command: str, **payload):
+                requests.append((command, payload))
+                assert command == "adaptive-aggregation-status"
+                return {
+                    "ok": True,
+                    "store": {"aggregates": 1, "transition_requests": 1},
+                    "aggregates": [{
+                        "target_id": "app:charge",
+                        "aggregation_target_id": "app:charge::aggregation-scope::blue",
+                        "aggregation_scope": "blue",
+                        "generation_id": "generation-1",
+                        "enabled": True,
+                        "total_batches": 4,
+                        "workers": {"worker-a": {"worker_pid": 123}},
+                    }],
+                    "transitions": [{
+                        "request_id": "request-1",
+                        "target_id": "app:charge",
+                        "aggregation_target_id": "app:charge::aggregation-scope::blue",
+                        "aggregation_scope": "blue",
+                        "generation_id": "generation-1",
+                        "status": "EXPIRED",
+                        "deadline_status": "EXPIRED",
+                        "required_workers": [{"worker_id": "worker-a"}],
+                        "acknowledgement_count": 0,
+                        "stale_worker_ids": ["worker-a"],
+                        "expires_at": "2026-08-30T12:00:30+00:00",
+                    }],
+                }
+
+            app._request = request  # type: ignore[method-assign]
+            await app.refresh_adaptive_aggregation()
+
+            assert requests == [("adaptive-aggregation-status", {})]
+            assert app.query_one("#adaptive-aggregation-table", DataTable).row_count == 2
+            status = str(
+                app.query_one("#adaptive-aggregation-status", Static).render()
+            )
+            assert "Aggregates 1" in status
+            assert "Transitions 1" in status
+            assert "Expired 1" in status
+            assert "Read-only" in status
+
+    asyncio.run(exercise())
+
+
 def test_consequential_console_actions_fail_closed(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 

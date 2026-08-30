@@ -201,6 +201,22 @@ class CaretakerConsoleApp(App):
         height: 12;
         border-top: solid $surface-lighten-2;
     }
+    #adaptive-aggregation-help, #adaptive-aggregation-status {
+        height: auto;
+        padding: 0 2;
+        color: $text-muted;
+    }
+    #adaptive-aggregation-toolbar {
+        height: 4;
+        padding: 0 1;
+        align-vertical: middle;
+    }
+    #adaptive-aggregation-toolbar Button { width: auto; min-width: 12; }
+    #adaptive-aggregation-table { height: 1fr; }
+    #adaptive-aggregation-output {
+        height: 12;
+        border-top: solid $surface-lighten-2;
+    }
     #incident-capsule-facts, #incident-capsule-communications {
         height: 5;
         padding: 0 2;
@@ -541,6 +557,8 @@ class CaretakerConsoleApp(App):
         self._incident_timeline_records: list[dict[str, Any]] = []
         self._worker_failure_recovery_status: dict[str, Any] = {}
         self._worker_failure_recovery_records: list[dict[str, Any]] = []
+        self._adaptive_aggregation_status: dict[str, Any] = {}
+        self._adaptive_aggregation_records: list[dict[str, Any]] = []
         self._selected_target: str | None = None
         self._attention_records: list[dict[str, Any]] = []
         self._selected_attention_record: dict[str, Any] | None = None
@@ -804,6 +822,26 @@ class CaretakerConsoleApp(App):
                     )
                     yield Checkbox("Confirm archive generation", id="behavior-manage-confirm", disabled=True)
                     yield Button("Archive generation", id="behavior-archive", variant="warning", disabled=True)
+
+            with TabPane("Adaptive", id="adaptive"):
+                yield Static(
+                    "Supervisor-owned adaptive aggregation and Behavior transition requests. "
+                    "Inspection is read-only; transition application remains worker- and policy-gated.",
+                    id="adaptive-aggregation-help",
+                )
+                with Horizontal(id="adaptive-aggregation-toolbar"):
+                    yield Button("Refresh", id="adaptive-aggregation-refresh", variant="primary")
+                yield Static(
+                    "Adaptive aggregation status not loaded",
+                    id="adaptive-aggregation-status",
+                )
+                table = DataTable(id="adaptive-aggregation-table")
+                table.cursor_type = "row"
+                table.add_columns(
+                    "#", "Kind", "Target", "Scope", "Generation", "Status", "Workers / Acks", "Deadline"
+                )
+                yield table
+                yield RichLog(id="adaptive-aggregation-output", wrap=True, markup=False)
 
             with TabPane("Repair", id="repair"):
                 yield Static(
@@ -1773,6 +1811,19 @@ class CaretakerConsoleApp(App):
                 return
             self._write_json(
                 "#worker-failure-recovery-output",
+                record.get("payload") or record,
+            )
+            return
+
+        if event.data_table.id == "adaptive-aggregation-table":
+            if not row:
+                return
+            try:
+                record = self._adaptive_aggregation_records[int(row[0]) - 1]
+            except (TypeError, ValueError, IndexError):
+                return
+            self._write_json(
+                "#adaptive-aggregation-output",
                 record.get("payload") or record,
             )
             return
@@ -3344,6 +3395,92 @@ class CaretakerConsoleApp(App):
             "and handler results are intentionally omitted."
         )
 
+    async def refresh_adaptive_aggregation(self) -> None:
+        """Refresh supervisor adaptive aggregation and transition summaries."""
+        table = self.query_one("#adaptive-aggregation-table", DataTable)
+        table.clear()
+        output = self.query_one("#adaptive-aggregation-output", RichLog)
+        output.clear()
+        try:
+            response = await self._request("adaptive-aggregation-status")
+        except Exception as exc:
+            self._adaptive_aggregation_status = {}
+            self._adaptive_aggregation_records = []
+            self.query_one("#adaptive-aggregation-status", Static).update(
+                f"Adaptive aggregation unavailable: {type(exc).__name__}: {exc}"
+            )
+            output.write(str(exc))
+            return
+
+        self._adaptive_aggregation_status = dict(response)
+        aggregates = response.get("aggregates")
+        aggregates = aggregates if isinstance(aggregates, (list, tuple)) else ()
+        transitions = response.get("transitions")
+        transitions = transitions if isinstance(transitions, (list, tuple)) else ()
+        rows: list[dict[str, Any]] = []
+        for item in aggregates:
+            if not isinstance(item, Mapping):
+                continue
+            workers = item.get("workers")
+            worker_count = len(workers) if isinstance(workers, Mapping) else 0
+            rows.append({
+                "kind": "AGGREGATE",
+                "target_id": item.get("aggregation_target_id") or item.get("target_id") or "-",
+                "scope": item.get("aggregation_scope") or "-",
+                "generation": item.get("generation_id") or "-",
+                "status": "ACTIVE" if item.get("enabled", True) else "DISABLED",
+                "workers_or_acks": f"{worker_count} workers / {item.get('total_batches', 0)} batches",
+                "deadline": "-",
+                "payload": dict(item),
+            })
+        expired = 0
+        for item in transitions:
+            if not isinstance(item, Mapping):
+                continue
+            deadline_status = str(item.get("deadline_status") or "UNSPECIFIED")
+            if deadline_status == "EXPIRED":
+                expired += 1
+            required = item.get("required_workers")
+            required_count = len(required) if isinstance(required, list) else 0
+            rows.append({
+                "kind": "TRANSITION",
+                "target_id": item.get("aggregation_target_id") or item.get("target_id") or "-",
+                "scope": item.get("aggregation_scope") or "-",
+                "generation": item.get("generation_id") or "-",
+                "status": item.get("status") or "UNKNOWN",
+                "workers_or_acks": (
+                    f"{item.get('acknowledgement_count', 0)}/{required_count} acks"
+                    + (
+                        f" / {len(item.get('stale_worker_ids') or ())} stale"
+                        if deadline_status == "EXPIRED"
+                        else ""
+                    )
+                ),
+                "deadline": item.get("expires_at") or deadline_status,
+                "payload": dict(item),
+            })
+        self._adaptive_aggregation_records = rows
+        for index, item in enumerate(rows, start=1):
+            table.add_row(
+                index,
+                item["kind"],
+                self._compact_log_text(item["target_id"], limit=28) or "-",
+                self._compact_log_text(item["scope"], limit=20) or "-",
+                self._compact_log_text(item["generation"], limit=20) or "-",
+                self._compact_log_text(item["status"], limit=16) or "-",
+                self._compact_log_text(item["workers_or_acks"], limit=24) or "-",
+                self._compact_log_text(item["deadline"], limit=19) or "-",
+            )
+        self.query_one("#adaptive-aggregation-status", Static).update(
+            f"Aggregates {len(aggregates)} | "
+            f"Transitions {len(transitions)} | "
+            f"Expired {expired} | Read-only; no transitions applied"
+        )
+        output.write(
+            "Select a row for bounded details. The console does not acknowledge, "
+            "apply, expire, or otherwise mutate adaptive state."
+        )
+
     async def _select_incident_capsule(
         self,
         record: dict[str, Any],
@@ -4014,6 +4151,9 @@ class CaretakerConsoleApp(App):
                 return
             if button == "worker-failure-recovery-refresh":
                 await self.refresh_worker_failure_recovery()
+                return
+            if button == "adaptive-aggregation-refresh":
+                await self.refresh_adaptive_aggregation()
                 return
             if button == "incident-capsule-load":
                 if self._selected_capsule is None:
