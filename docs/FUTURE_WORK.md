@@ -618,6 +618,34 @@ belong only in promoted Behavior collection.
 
 ### Return-type and return-shape learning review
 
+**Status: Contract reviewed; return learning and novelty detection remain
+unimplemented.**
+
+The current contract is intentionally narrower than return learning:
+
+- `@logged` may persist a bounded `repr(output)` when its `result` option or
+  the effective logging policy enables result capture. The configured character
+  limit applies, and the value remains evidence rather than an executable
+  object.
+- Repair result capture persists a bounded data-only record containing the
+  runtime type name, representation, representation hash, truncation/redaction
+  flags, and shallow object size. It records successful selected outputs only;
+  an exception is represented by failure evidence, not by a fabricated result.
+- Behavior statistics persist call counts, success/failure counts, durations,
+  resource observations, and event counts. They do not currently persist
+  observed return types, structural shapes, exact values, or return categories.
+- Annotations describe a declared contract and validators perform explicit
+  policy checks. Neither is treated as an observed runtime distribution or as
+  proof that a return is representative.
+
+Consequently, `None`, unions, subclasses, iterators/generators, containers, and
+application-defined objects are currently represented only by the bounded result
+evidence path when enabled; containers are not recursively normalized and
+iterators are not consumed. No return novelty detector currently distinguishes a
+rare legitimate result from a failure. Any future return learning must define
+bounded shape categories, sample-size/freshness/generation provenance, and
+redaction behavior before it is used for Guard deviations or Repair decisions.
+
 Review the current implementation and document exactly how Caretaker learns and
 persists expected function returns and how it detects unusual returns. The review
 should distinguish declared annotations and validators from observed runtime
