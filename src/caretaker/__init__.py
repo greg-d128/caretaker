@@ -28,6 +28,11 @@ from .adaptive import (
     lightweight_on_soft_timeout,
     validate_lightweight_policy,
 )
+from .adaptive_aggregation import (
+    AdaptiveAggregationError,
+    SupervisorAdaptiveAggregationStore,
+    normalize_adaptive_observation_batch,
+)
 from .behavior import observed_return_shape
 from .authority import (
     AuthorityKind,
@@ -290,6 +295,9 @@ __all__ = [
     "lightweight_on_soft_timeout",
     "observed_return_shape",
     "validate_lightweight_policy",
+    "AdaptiveAggregationError",
+    "SupervisorAdaptiveAggregationStore",
+    "normalize_adaptive_observation_batch",
     "AuthorityKind",
     "AuthorityLayerSource",
     "AuthorityLayerVerification",

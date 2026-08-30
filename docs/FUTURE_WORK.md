@@ -692,9 +692,20 @@ and tested.
 
 ## Supervisor-owned multiprocess adaptive aggregation
 
-**Status: Explicitly deferred to future work.**
+**Status: In progress in development tree for the durable worker-batch ledger; supervisor-authorized promotion remains future work.**
 
-Adaptive exception/timing counters and repair-evidence gates are currently process-local/persisted without a supervisor-owned atomic aggregation model. Multiple application workers can therefore observe the same target generation independently.
+The first implementation slice is documented in
+[`ADAPTIVE_AGGREGATION.md`](ADAPTIVE_AGGREGATION.md). A durable
+`SupervisorAdaptiveAggregationStore` now accepts bounded worker observation
+batches only when the supervisor supplies matching target-generation, policy,
+and authority context. It merges application-wide counters, retains a bounded
+threshold-event window, protects aggregate state with a content hash, rejects
+stale context, and records bounded worker provenance with idempotent batch
+handling.
+
+Adaptive exception/timing counters and repair-evidence gates are still process
+local for live decisions. Multiple application workers therefore do not yet
+share supervisor-authorized promotion state.
 
 Future design should move authoritative adaptive counters to the supervisor while keeping process-local hot paths inexpensive. Workers should batch threshold observations to the supervisor, which owns:
 
@@ -706,7 +717,12 @@ Future design should move authoritative adaptive counters to the supervisor whil
 - checkpointing;
 - cross-process sampling provenance.
 
-The design must explicitly define whether each threshold is process-local, application-wide, or workload/population scoped. This work is intentionally deferred until the single-process lifecycle and behavior-statistics model are stable.
+The remaining implementation must explicitly define and enforce whether each
+threshold is process-local, application-wide, or workload/population scoped. It
+must connect workers to the ledger through an inexpensive batcher, add
+supervisor reconciliation and worker acknowledgements, and move threshold
+evaluation and promotion state without double-counting the existing
+single-process lifecycle.
 
 ## Import-hook dependency instrumentation
 
