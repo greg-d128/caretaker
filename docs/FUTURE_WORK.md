@@ -730,10 +730,15 @@ The remaining implementation must explicitly define and enforce whether each
 threshold is process-local, application-wide, or workload/population scoped. It
 now preserves an optional, explicitly declared aggregation scope as an
 extended target identity; it still needs policy and operator semantics for
-discovering or changing workload/population membership. It must move
-repair-evidence evaluation, dynamic threshold administration, remote transport,
-process lifecycle orchestration, and additional resource-aware distribution
-reconciliation without double-counting the existing single-process lifecycle.
+discovering or changing workload/population membership. It must move dynamic
+threshold administration, remote transport, process lifecycle orchestration,
+and additional resource-aware distribution reconciliation without
+double-counting the existing single-process lifecycle. The initial
+repair-evidence gate is proposal-only and is implemented in the current slice.
+Worker submission loss is now policy controlled locally: `RETAIN` is the
+least-loss default, while `DROP` and `REDUCE` are explicit bounded choices;
+incident callbacks, parallel stores, and transport-level throttling remain
+future integrations.
 The current slice also carries bounded timing-breach duration samples and
 worker-supplied numeric resource samples, producing three-standard-deviation
 evidence conflicts for materially different worker distributions. Automatic
