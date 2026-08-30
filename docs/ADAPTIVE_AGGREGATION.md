@@ -51,6 +51,17 @@ bounded `ADAPTIVE_DISTRIBUTION_CONFLICT` report. Both the worker and comparison
 counts remain in the aggregate; conflict detection is investigation evidence,
 not a merge veto or a claim that the workers are equivalent.
 
+Timing-breach batches also carry at most 256 bounded duration samples. The
+supervisor stores mergeable count/mean/variance/minimum/maximum summaries rather
+than an unbounded raw sample list. When each of at least the configured minimum
+number of observations is complete, it compares each worker's breach-duration
+mean with the other workers using the standard error of the two summaries and
+the same three-standard-deviation threshold. A
+`timing_duration_seconds` conflict retains both sample counts and standard
+deviations as evidence. Missing legacy samples and truncated samples are not
+treated as comparable distributions, so incomplete coverage cannot become an
+absence or equivalence claim.
+
 ## Current boundary
 
 This first slice establishes durable ownership, batching, generation scope,

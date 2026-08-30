@@ -732,8 +732,12 @@ now preserves an optional, explicitly declared aggregation scope as an
 extended target identity; it still needs policy and operator semantics for
 discovering or changing workload/population membership. It must move
 repair-evidence evaluation, dynamic threshold administration, remote transport,
-process lifecycle orchestration, and richer non-rate distribution
+process lifecycle orchestration, and additional resource-aware distribution
 reconciliation without double-counting the existing single-process lifecycle.
+The current slice also carries bounded timing-breach duration samples and
+produces three-standard-deviation evidence conflicts for materially different
+worker duration distributions; broader resource and return-shape distributions
+remain future work.
 Transition deadlines are now policy-defined and stale-worker identities are
 reported fail-closed; automatic replacement or unauthorized-worker lifecycle
 orchestration remains future work.

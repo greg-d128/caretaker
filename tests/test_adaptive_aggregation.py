@@ -268,6 +268,54 @@ def test_supervisor_records_worker_distribution_conflict_without_discarding_evid
     )
 
 
+def test_supervisor_reconciles_bounded_timing_duration_distributions(
+    tmp_path: Path,
+):
+    store = SupervisorAdaptiveAggregationStore(
+        tmp_path,
+        distribution_minimum_observations=2,
+    )
+    first = _batch(batch_id="00000000-0000-0000-0000-00000000000f")
+    first.update(
+        timing_breach_count=2,
+        timing_events=[
+            "2026-08-30T12:00:00+00:00",
+            "2026-08-30T12:00:01+00:00",
+        ],
+        duration_samples=[1.0, 1.0],
+    )
+    second = _batch(
+        batch_id="00000000-0000-0000-0000-000000000010",
+        worker_id="worker-b",
+    )
+    second.update(
+        timing_breach_count=2,
+        timing_events=[
+            "2026-08-30T12:00:00+00:00",
+            "2026-08-30T12:00:01+00:00",
+        ],
+        duration_samples=[10.0, 10.0],
+    )
+    store.submit(first)
+    store.submit(second)
+
+    result = store.reconcile(**_context())
+
+    assert result["merged"] == 2
+    assert result["conflicts"] == 2
+    assert result["conflict_reports"] == 2
+    aggregate = store.list_aggregates()[0]
+    duration = aggregate["timing_duration_statistics"]
+    assert duration["count"] == 4
+    assert duration["mean"] == 5.5
+    assert duration["minimum"] == 1.0
+    assert duration["maximum"] == 10.0
+    assert {
+        item["metric"] for item in aggregate["distribution_conflicts"]
+    } == {"timing_duration_seconds"}
+    assert all(item["z_score"] > 3 for item in aggregate["distribution_conflicts"])
+
+
 def test_supervisor_aggregation_is_idempotent_for_resubmitted_batch(tmp_path: Path):
     store = SupervisorAdaptiveAggregationStore(tmp_path)
     batch = _batch(batch_id="00000000-0000-0000-0000-000000000003")

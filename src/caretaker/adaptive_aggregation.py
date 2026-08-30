@@ -35,6 +35,8 @@ DEFAULT_DISTRIBUTION_Z_THRESHOLD = 3.0
 DEFAULT_DISTRIBUTION_MINIMUM_OBSERVATIONS = 30
 DEFAULT_TRANSITION_TIMEOUT_SECONDS = 60.0
 MAX_TRANSITION_TIMEOUT_SECONDS = 86_400.0
+MAX_DURATION_SECONDS = 86_400.0
+MAX_DURATION_SAMPLES = MAX_BATCH_EVENTS
 _DISTRIBUTION_COUNTER_NAMES = (
     "exception_count",
     "timing_breach_count",
@@ -103,6 +105,8 @@ class AdaptiveObservationBatcher:
         self._last_observed_at: str | None = None
         self._counters = {name: 0 for name in _BATCH_COUNTER_NAMES}
         self._events = {"exception_events": [], "timing_events": []}
+        self._duration_samples: list[float] = []
+        self._duration_samples_truncated = False
         self._last_flush_monotonic = time.monotonic()
         self._last_error: str | None = None
         self._dropped_records = 0
@@ -129,12 +133,28 @@ class AdaptiveObservationBatcher:
         *,
         observed_at: str | None = None,
         event_kind: str | None = None,
+        duration_seconds: float | None = None,
         **increments: int,
     ) -> dict[str, Any] | None:
         """Record one observation and flush when the bounded policy requires it."""
         with self._lock:
             if event_kind not in {None, "exception", "timing"}:
                 raise ValueError("event_kind must be exception or timing")
+            normalized_duration: float | None = None
+            if duration_seconds is not None:
+                if isinstance(duration_seconds, bool):
+                    raise ValueError("duration_seconds must be a number")
+                try:
+                    normalized_duration = float(duration_seconds)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("duration_seconds must be a number") from exc
+                if not math.isfinite(normalized_duration) or not 0 <= normalized_duration <= MAX_DURATION_SECONDS:
+                    raise ValueError(
+                        "duration_seconds must be finite and between 0 and "
+                        f"{MAX_DURATION_SECONDS:g}"
+                    )
+                if event_kind != "timing":
+                    raise ValueError("duration_seconds requires a timing event")
             for name, value in increments.items():
                 if name not in _BATCH_COUNTER_NAMES:
                     raise ValueError(f"unknown adaptive aggregation counter: {name}")
@@ -152,6 +172,11 @@ class AdaptiveObservationBatcher:
             self._sequence += 1
             self._first_observed_at = self._first_observed_at or timestamp
             self._last_observed_at = timestamp
+            if normalized_duration is not None:
+                if len(self._duration_samples) < MAX_DURATION_SAMPLES:
+                    self._duration_samples.append(normalized_duration)
+                else:
+                    self._duration_samples_truncated = True
             for name, value in increments.items():
                 self._counters[name] += int(value)
             if event_kind is not None:
@@ -226,6 +251,8 @@ class AdaptiveObservationBatcher:
             "observation_count": self._records,
             **self._counters,
             **self._events,
+            "duration_samples": list(self._duration_samples),
+            "duration_samples_truncated": self._duration_samples_truncated,
         }
 
     def _reset_locked(self) -> None:
@@ -234,6 +261,8 @@ class AdaptiveObservationBatcher:
         self._last_observed_at = None
         self._counters = {name: 0 for name in _BATCH_COUNTER_NAMES}
         self._events = {"exception_events": [], "timing_events": []}
+        self._duration_samples = []
+        self._duration_samples_truncated = False
         self._last_flush_monotonic = time.monotonic()
 
     def _flush_locked(self) -> dict[str, Any] | None:
@@ -322,6 +351,29 @@ def _event_times(value: Any, *, name: str) -> list[str]:
     return sorted(_timestamp(item, name=f"{name}[]") for item in value)
 
 
+def _duration_samples(value: Any, *, name: str) -> list[float]:
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        raise AdaptiveAggregationError(f"{name} must be a list")
+    if len(value) > MAX_DURATION_SAMPLES:
+        raise AdaptiveAggregationError(f"{name} exceeds {MAX_DURATION_SAMPLES} entries")
+    samples: list[float] = []
+    for item in value:
+        if isinstance(item, bool):
+            raise AdaptiveAggregationError(f"{name}[] must be a number")
+        try:
+            duration = float(item)
+        except (TypeError, ValueError) as exc:
+            raise AdaptiveAggregationError(f"{name}[] must be a number") from exc
+        if not math.isfinite(duration) or not 0 <= duration <= MAX_DURATION_SECONDS:
+            raise AdaptiveAggregationError(
+                f"{name}[] must be finite and between 0 and {MAX_DURATION_SECONDS:g}"
+            )
+        samples.append(duration)
+    return samples
+
+
 def normalize_adaptive_observation_batch(value: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize one worker batch into the signed-context-independent protocol."""
     if not isinstance(value, Mapping):
@@ -344,6 +396,7 @@ def normalize_adaptive_observation_batch(value: Mapping[str, Any]) -> dict[str, 
     )
     if observation_count <= 0:
         raise AdaptiveAggregationError("observation_count must be greater than zero")
+    duration_samples_present = "duration_samples" in value
     normalized = {
         "schema_version": ADAPTIVE_AGGREGATION_SCHEMA_VERSION,
         "batch_id": batch_id,
@@ -408,7 +461,16 @@ def normalize_adaptive_observation_batch(value: Mapping[str, Any]) -> dict[str, 
         ),
         "exception_events": _event_times(value.get("exception_events"), name="exception_events"),
         "timing_events": _event_times(value.get("timing_events"), name="timing_events"),
+        "duration_samples": _duration_samples(
+            value.get("duration_samples"), name="duration_samples"
+        ),
+        "duration_samples_truncated": value.get(
+            "duration_samples_truncated",
+            not duration_samples_present,
+        ),
     }
+    if not isinstance(normalized["duration_samples_truncated"], bool):
+        raise AdaptiveAggregationError("duration_samples_truncated must be a boolean")
     if normalized["last_observed_at"] < normalized["first_observed_at"]:
         raise AdaptiveAggregationError("last_observed_at must not precede first_observed_at")
     if sum(
@@ -425,6 +487,17 @@ def normalize_adaptive_observation_batch(value: Mapping[str, Any]) -> dict[str, 
         )
     ) <= 0:
         raise AdaptiveAggregationError("adaptive observation batch must contain observations")
+    if (
+        not normalized["duration_samples_truncated"]
+        and len(normalized["duration_samples"]) != normalized["timing_breach_count"]
+    ):
+        raise AdaptiveAggregationError(
+            "complete duration_samples must match timing_breach_count"
+        )
+    if len(normalized["duration_samples"]) > normalized["timing_breach_count"]:
+        raise AdaptiveAggregationError(
+            "duration_samples cannot exceed timing_breach_count"
+        )
     return normalized
 
 
@@ -432,6 +505,84 @@ def _content_hash(value: Any) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     ).hexdigest()
+
+
+def _duration_statistics(samples: list[float] | tuple[float, ...]) -> dict[str, Any]:
+    """Return mergeable, bounded statistics for timing-breach durations."""
+    if not samples:
+        return {
+            "count": 0,
+            "mean": 0.0,
+            "m2": 0.0,
+            "minimum": None,
+            "maximum": None,
+        }
+    mean = 0.0
+    m2 = 0.0
+    minimum = float(samples[0])
+    maximum = minimum
+    for index, value in enumerate(samples, start=1):
+        numeric = float(value)
+        delta = numeric - mean
+        mean += delta / index
+        m2 += delta * (numeric - mean)
+        minimum = min(minimum, numeric)
+        maximum = max(maximum, numeric)
+    return {
+        "count": len(samples),
+        "mean": mean,
+        "m2": max(0.0, m2),
+        "minimum": minimum,
+        "maximum": maximum,
+    }
+
+
+def _merge_duration_statistics(
+    current: Mapping[str, Any] | None,
+    incoming: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Merge two Welford summaries without retaining unbounded raw samples."""
+    left = current if isinstance(current, Mapping) else _duration_statistics(())
+    left_count = int(left.get("count") or 0)
+    right_count = int(incoming.get("count") or 0)
+    if right_count <= 0:
+        return {
+            "count": left_count,
+            "mean": float(left.get("mean") or 0.0),
+            "m2": max(0.0, float(left.get("m2") or 0.0)),
+            "minimum": left.get("minimum"),
+            "maximum": left.get("maximum"),
+        }
+    if left_count <= 0:
+        return {
+            "count": right_count,
+            "mean": float(incoming.get("mean") or 0.0),
+            "m2": max(0.0, float(incoming.get("m2") or 0.0)),
+            "minimum": incoming.get("minimum"),
+            "maximum": incoming.get("maximum"),
+        }
+    total = left_count + right_count
+    left_mean = float(left.get("mean") or 0.0)
+    right_mean = float(incoming.get("mean") or 0.0)
+    delta = right_mean - left_mean
+    return {
+        "count": total,
+        "mean": left_mean + delta * right_count / total,
+        "m2": max(
+            0.0,
+            float(left.get("m2") or 0.0)
+            + float(incoming.get("m2") or 0.0)
+            + delta * delta * left_count * right_count / total,
+        ),
+        "minimum": min(
+            value for value in (left.get("minimum"), incoming.get("minimum"))
+            if value is not None
+        ),
+        "maximum": max(
+            value for value in (left.get("maximum"), incoming.get("maximum"))
+            if value is not None
+        ),
+    }
 
 
 def _promotion_policy(value: Any, *, name: str) -> dict[str, Any]:
@@ -799,6 +950,7 @@ class SupervisorAdaptiveAggregationStore:
             "failed_executions": 0,
             "exception_events": [],
             "timing_events": [],
+            "timing_duration_statistics": _duration_statistics(()),
             "workers": {},
             "worker_overflow_count": 0,
             "processed_batch_ids": [],
@@ -866,6 +1018,63 @@ class SupervisorAdaptiveAggregationStore:
                     "worker_count": worker_count,
                     "comparison_count": other_count,
                 })
+        duration_eligible = [
+            (str(worker_id), worker)
+            for worker_id, worker in workers.items()
+            if isinstance(worker, Mapping)
+            and bool(worker.get("timing_duration_complete", True))
+            and isinstance(worker.get("timing_duration_statistics"), Mapping)
+            and int(
+                (worker.get("timing_duration_statistics") or {}).get("count") or 0
+            ) >= self.distribution_minimum_observations
+        ]
+        if len(duration_eligible) >= 2:
+            for worker_id, worker in duration_eligible:
+                worker_stats = worker["timing_duration_statistics"]
+                worker_count = int(worker_stats.get("count") or 0)
+                other_stats = _duration_statistics(())
+                for other_id, other in duration_eligible:
+                    if other_id == worker_id:
+                        continue
+                    other_stats = _merge_duration_statistics(
+                        other_stats,
+                        other["timing_duration_statistics"],
+                    )
+                other_count = int(other_stats["count"])
+                if other_count < self.distribution_minimum_observations:
+                    continue
+                worker_mean = float(worker_stats.get("mean") or 0.0)
+                other_mean = float(other_stats.get("mean") or 0.0)
+                worker_variance = (
+                    float(worker_stats.get("m2") or 0.0) / (worker_count - 1)
+                    if worker_count > 1
+                    else 0.0
+                )
+                other_variance = (
+                    float(other_stats.get("m2") or 0.0) / (other_count - 1)
+                    if other_count > 1
+                    else 0.0
+                )
+                standard_error = (
+                    worker_variance / worker_count
+                    + other_variance / other_count
+                ) ** 0.5
+                difference = abs(worker_mean - other_mean)
+                z_score = difference / max(standard_error, 1e-12)
+                if z_score <= self.distribution_z_threshold:
+                    continue
+                conflicts.append({
+                    "worker_id": worker_id,
+                    "metric": "timing_duration_seconds",
+                    "worker_mean": worker_mean,
+                    "comparison_mean": other_mean,
+                    "worker_standard_deviation": worker_variance ** 0.5,
+                    "comparison_standard_deviation": other_variance ** 0.5,
+                    "z_score": z_score,
+                    "z_threshold": self.distribution_z_threshold,
+                    "worker_observations": worker_count,
+                    "comparison_observations": other_count,
+                })
         return conflicts[:MAX_DISTRIBUTION_CONFLICTS]
 
     def _write_conflict_reports(
@@ -909,6 +1118,10 @@ class SupervisorAdaptiveAggregationStore:
         )
         aggregate["last_observed_at"] = max(
             str(aggregate["last_observed_at"]), str(batch["last_observed_at"])
+        )
+        aggregate["timing_duration_statistics"] = _merge_duration_statistics(
+            aggregate.get("timing_duration_statistics"),
+            _duration_statistics(batch.get("duration_samples") or ()),
         )
         counter_names = (
             "exception_count",
@@ -969,6 +1182,14 @@ class SupervisorAdaptiveAggregationStore:
                 "distribution_counters": distribution_counters,
                 "distribution_complete": is_new_worker
                 or bool(worker.get("distribution_complete")),
+                "timing_duration_statistics": _merge_duration_statistics(
+                    worker.get("timing_duration_statistics"),
+                    _duration_statistics(batch.get("duration_samples") or ()),
+                ),
+                "timing_duration_complete": (
+                    bool(worker.get("timing_duration_complete", True))
+                    and not bool(batch.get("duration_samples_truncated"))
+                ),
             })
             workers[worker_id] = worker
             aggregate["workers"] = workers

@@ -836,7 +836,11 @@ class _AdaptiveController:
         now = time.time()
         transitioned = False
         with self._lock:
-            self._record_aggregation(timing_breach_count=1, event_kind="timing")
+            self._record_aggregation(
+                timing_breach_count=1,
+                event_kind="timing",
+                duration_seconds=elapsed,
+            )
             if observed_level.value >= InstrumentationLevel.BEHAVIOR.value:
                 self._diagnostic({
                     "timestamp": utcnow_iso(),
