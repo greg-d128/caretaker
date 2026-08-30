@@ -565,6 +565,15 @@ layers.
 
 **Status: Proposal pending decision.**
 
+The console's bounded manual function and module capture records signed
+collection provenance with each saved snapshot: request ID, authenticated
+operator identity, reason, requested scope/subject/call count, effective
+authority generation and fingerprint, observed generation/call count, completion
+time, and capture outcome. This metadata is evidence only; it cannot change the
+behavior generation, policy, authority, baseline, or Repair state. A scheduler,
+resource budget, queued requests, and coverage-complete backlog remain future
+work.
+
 Caretaker should let an operator deliberately promote an eligible lightweight
 slot into Behavior collection from the console. This supports investigation of a
 suspicious function, collection requested by an external audit, and deliberate

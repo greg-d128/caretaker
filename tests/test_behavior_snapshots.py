@@ -74,6 +74,47 @@ def test_snapshot_store_verifies_content_hash_and_compares_across_code_hashes(tm
     ]
 
 
+def test_operator_capture_provenance_is_bounded_persisted_and_hash_protected(tmp_path: Path):
+    store = BehaviorSnapshotStore(tmp_path)
+    capture = _capture(code_hash="a" * 64, events=3)
+    capture["collection_request"] = {
+        "request_id": "request-1",
+        "requested_at": "2026-08-29T12:00:00+00:00",
+        "requested_by": "uid:1001",
+        "reason": "r" * 600,
+        "scope": "function",
+        "subject": "lab.divide",
+        "requested_calls": 5000,
+        "requested_generation": "generation-requested",
+        "observed_generation": "generation-observed",
+        "observed_calls": -4,
+        "outcome": "CAPTURED",
+        "completed_at": "2026-08-29T12:00:01+00:00",
+        "authority_policy_generation": "authority-3",
+        "authority_policy_fingerprint": "f" * 64,
+        "untrusted_extra": "not retained",
+    }
+
+    envelope = store.create(capture)
+    request = envelope["snapshot"]["collection_request"]
+
+    assert request["request_id"] == "request-1"
+    assert request["requested_by"] == "uid:1001"
+    assert len(request["reason"]) == 500
+    assert request["requested_calls"] == 1000
+    assert request["observed_calls"] == 0
+    assert "untrusted_extra" not in request
+    assert store.load(envelope["snapshot"]["snapshot_id"]) == envelope
+
+    path = store.snapshot_directory / f"{envelope['snapshot']['snapshot_id']}.json"
+    tampered = envelope.copy()
+    tampered["snapshot"] = dict(envelope["snapshot"])
+    tampered["snapshot"]["collection_request"] = dict(request)
+    tampered["snapshot"]["collection_request"]["reason"] = "tampered"
+    path.write_text(json.dumps(tampered), encoding="utf-8")
+    assert store.list()[0]["verified"] is False
+
+
 def test_snapshot_list_summaries_omit_large_profile_details(tmp_path: Path):
     store = BehaviorSnapshotStore(tmp_path)
     capture = _capture(code_hash="a" * 64, events=10)

@@ -201,6 +201,13 @@ closed epoch records its ID, ordinal, and inclusive sample range. Consumers such
 as Behavior, Guard, baselines, and investigations can reuse the immutable epoch;
 they do not need overlapping captures of the same calls.
 
+The manual capture controls accept an optional reason. Each saved operator-
+directed snapshot records the authenticated operator identity, request ID,
+requested scope/subject/call count, effective authority generation and
+fingerprint, observed generation/call count, completion time, and outcome inside
+the signed snapshot payload. This is provenance for evidence collection only;
+it does not authorize Repair, alter policy, or establish a baseline.
+
 Ordinary coverage is displayed as `current/target` when the closed epoch ranges
 are contiguous, non-overlapping, and consistent with their call counts. The
 exceptional label `partial current/target` is retained for legacy, module,

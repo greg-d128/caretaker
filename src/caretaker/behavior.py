@@ -78,6 +78,38 @@ def _profile(value: Mapping[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _collection_request(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Normalize operator capture provenance before it becomes signed evidence."""
+    if not isinstance(value, Mapping):
+        return None
+    string_limits = {
+        "request_id": 128,
+        "requested_at": 64,
+        "requested_by": 128,
+        "reason": 500,
+        "scope": 32,
+        "subject": 500,
+        "requested_generation": 128,
+        "observed_generation": 128,
+        "outcome": 64,
+        "completed_at": 64,
+        "authority_policy_generation": 128,
+        "authority_policy_fingerprint": 128,
+    }
+    result: dict[str, Any] = {}
+    for key, limit in string_limits.items():
+        if key in value and value[key] is not None:
+            result[key] = str(value[key])[:limit]
+    for key in ("requested_calls", "observed_calls"):
+        if key not in value or value[key] is None:
+            continue
+        try:
+            result[key] = max(0, min(int(value[key]), 1000))
+        except (TypeError, ValueError):
+            continue
+    return result or None
+
+
 def snapshot_payload(
     capture: Mapping[str, Any],
     *,
@@ -128,6 +160,7 @@ def snapshot_payload(
         "workload_label": capture.get("workload_label"),
         "profile": _profile(capture.get("profile")),
         "children": children,
+        "collection_request": _collection_request(capture.get("collection_request")),
         "authority_fingerprint": authority_fingerprint,
         "deployment_fingerprint": deployment_fingerprint,
     }

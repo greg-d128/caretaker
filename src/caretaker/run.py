@@ -703,21 +703,62 @@ def main(argv: list[str] | None = None) -> int:
             subject = str(request.get("subject") or "").strip()
             if not subject:
                 raise ValueError("behavior-capture requires subject")
+            reason = str(request.get("reason") or "operator-requested behavior capture").strip()
+            if not reason:
+                raise ValueError("behavior-capture requires a non-empty reason")
+            if len(reason) > 500:
+                raise ValueError("behavior-capture reason exceeds the 500 character limit")
+            requested_calls = max(1, min(int(request.get("calls", 50)), 1000))
+            requested_at = datetime.now(timezone.utc).isoformat()
+            request_id = str(uuid4())
+            authority_fingerprint = authority.effective.fingerprint
+            deployment_fingerprint_value = deployment_fingerprint()
             response = control_request(
                 runtime_control_socket,
                 {
                     "command": "behavior-capture",
                     "scope": scope,
                     "subject": subject,
-                    "calls": int(request.get("calls", 50)),
+                    "calls": requested_calls,
                 },
             )
             if response.get("ok") is False:
                 return response
+            capture = dict(response["capture"])
+            profile = capture.get("profile")
+            observed_calls = (
+                int(profile.get("call_count") or 0)
+                if isinstance(profile, dict)
+                else 0
+            )
+            collection_request = {
+                "request_id": request_id,
+                "requested_at": requested_at,
+                "requested_by": f"uid:{credentials[1]}",
+                "reason": reason,
+                "scope": scope,
+                "subject": subject,
+                "requested_calls": requested_calls,
+                "requested_generation": capture.get("generation_id"),
+                "authority_policy_generation": authority.effective.generation,
+                "authority_policy_fingerprint": authority_fingerprint,
+                "observed_calls": observed_calls,
+                "outcome": "CAPTURED",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }
+            capture["collection_request"] = collection_request
+            # Generation identity is derived from observed subject/code/
+            # monitoring metadata, not request metadata. Previewing it keeps
+            # the identity stable before the store adds sequence commitments.
+            collection_request["observed_generation"] = snapshot_payload(
+                capture,
+                authority_fingerprint=authority_fingerprint,
+                deployment_fingerprint=deployment_fingerprint_value,
+            )["generation_id"]
             envelope = behavior_store.create(
-                response["capture"],
-                authority_fingerprint=authority.effective.fingerprint,
-                deployment_fingerprint=deployment_fingerprint(),
+                capture,
+                authority_fingerprint=authority_fingerprint,
+                deployment_fingerprint=deployment_fingerprint_value,
             )
             behavior_revision["value"] += 1
             snapshot = envelope["snapshot"]
@@ -731,6 +772,13 @@ def main(argv: list[str] | None = None) -> int:
                     "scope": snapshot["scope"],
                     "subject_key": snapshot["subject_key"],
                     "code_hash": snapshot.get("code_hash"),
+                    "collection_request_id": collection_request.get("request_id"),
+                    "requested_by": collection_request.get("requested_by"),
+                    "reason": collection_request.get("reason"),
+                    "requested_calls": collection_request.get("requested_calls"),
+                    "observed_calls": collection_request.get("observed_calls"),
+                    "observed_generation": collection_request.get("observed_generation"),
+                    "outcome": collection_request.get("outcome"),
                     "content_sha256": envelope["integrity"]["content_sha256"],
                     "signature_state": envelope["integrity"]["signature_state"],
                 },

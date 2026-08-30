@@ -693,6 +693,10 @@ class CaretakerConsoleApp(App):
                         placeholder="Target id for function capture, or module name for module capture",
                         id="behavior-subject",
                     )
+                    yield Input(
+                        placeholder="Capture reason (optional)",
+                        id="behavior-capture-reason",
+                    )
                     yield Button("Save current function sample", id="behavior-capture-function", variant="primary")
                     yield Button("Save current module sample", id="behavior-capture-module", variant="primary")
                     yield Button("Refresh", id="behavior-refresh")
@@ -3834,9 +3838,11 @@ class CaretakerConsoleApp(App):
                     if not subject:
                         raise ValueError("Enter a target id or module name first")
                     scope = "function" if button.endswith("function") else "module"
+                    reason = self.query_one("#behavior-capture-reason", Input).value.strip()
                     response = await self._request(
-                        "behavior-capture", scope=scope, subject=subject, calls=50
+                        "behavior-capture", scope=scope, subject=subject, calls=50, reason=reason
                     )
+                    self.query_one("#behavior-capture-reason", Input).value = ""
                     self._show_behavior_snapshot(response.get("envelope") or {})
                     await self.refresh_behavior()
                     return
