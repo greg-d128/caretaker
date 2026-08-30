@@ -1298,6 +1298,7 @@ class CaretakerConsoleApp(App):
             )
         else:
             overhead_line = "Caretaker logging path: unavailable"
+        worker_authorization_line = self._worker_authorization_summary(workers)
         assurance = authority_summary.get("overall_assurance", "UNCONFIGURED")
         runtime_policy_match = authority_summary.get("runtime_matches_supervisor")
         displayed_assurance = "RUNTIME_TAMPER" if runtime_policy_match is False else assurance
@@ -1319,6 +1320,7 @@ class CaretakerConsoleApp(App):
             f"Validating functions: {', '.join(validating) if validating else 'none'}",
             f"Validation backends: {', '.join(validation_backends) if validation_backends else 'none'}",
             f"Degraded capabilities: {', '.join(degraded) if degraded else 'none'}",
+            worker_authorization_line,
             overhead_line,
             f"Release integrity: {release_integrity_status}",
             "Release root externally anchored: "
@@ -1334,6 +1336,54 @@ class CaretakerConsoleApp(App):
         if "." in text:
             text = text.rsplit(".", 1)[-1]
         return text.upper()
+
+    @staticmethod
+    def _worker_authorization_summary(
+        workers: Any,
+        *,
+        now: datetime | None = None,
+    ) -> str:
+        """Render bounded worker packet metadata for the operator overview."""
+        if not isinstance(workers, (list, tuple)):
+            return "Worker authorization packets: unavailable"
+        observed_at = now or datetime.now(timezone.utc)
+        with_packet = 0
+        missing_packet = 0
+        expired = 0
+        expiries: list[datetime] = []
+        for worker in workers:
+            if not isinstance(worker, Mapping):
+                continue
+            packet_id = str(worker.get("authority_packet_id") or "").strip()
+            if not packet_id:
+                missing_packet += 1
+                continue
+            with_packet += 1
+            expiry_value = worker.get("authority_packet_expires_at")
+            try:
+                expiry = datetime.fromisoformat(str(expiry_value))
+                if expiry.tzinfo is None:
+                    expiry = expiry.replace(tzinfo=timezone.utc)
+                else:
+                    expiry = expiry.astimezone(timezone.utc)
+            except (TypeError, ValueError):
+                continue
+            expiries.append(expiry)
+            if expiry <= observed_at:
+                expired += 1
+        if not workers:
+            return "Worker authorization packets: no workers registered"
+        if not expiries:
+            return (
+                "Worker authorization packets: "
+                f"{with_packet} with packets, {missing_packet} without expiry data"
+            )
+        nearest = min(expiries)
+        return (
+            "Worker authorization packets: "
+            f"{with_packet} with packets, {missing_packet} without packets, "
+            f"{expired} expired, nearest expiry {nearest.isoformat()}"
+        )
 
     @classmethod
     def _target_runtime_states(

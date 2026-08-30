@@ -85,6 +85,10 @@ policy, capability, and supervisor-time validation. Failed, unauthorized, or
 expired workers must be replaced and admitted with a new packet; refresh never
 grants policy or repair authority by itself.
 
+The operator overview displays only bounded packet metadata: packet coverage,
+expired-packet count, and the nearest packet expiry. It does not expose packet
+contents or treat visibility as authorization.
+
 For enabled adaptive aggregation, the same socket exposes
 `adaptive-transition-list` and `adaptive-transition-ack`. The supervisor creates
 Behavior-only requests from reconciled application-wide threshold evidence.

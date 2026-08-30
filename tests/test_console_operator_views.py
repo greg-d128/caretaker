@@ -78,6 +78,29 @@ def test_overview_displays_release_integrity_separately_from_policy(tmp_path):
     asyncio.run(exercise())
 
 
+def test_worker_authorization_summary_shows_packet_coverage_and_expiry() -> None:
+    observed_at = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    summary = CaretakerConsoleApp._worker_authorization_summary(
+        [
+            {
+                "authority_packet_id": "packet-1",
+                "authority_packet_expires_at": "2026-08-30T12:05:00+00:00",
+            },
+            {
+                "authority_packet_id": "packet-2",
+                "authority_packet_expires_at": "2026-08-30T11:59:00+00:00",
+            },
+            {"authority_packet_id": None},
+        ],
+        now=observed_at,
+    )
+
+    assert summary == (
+        "Worker authorization packets: 2 with packets, 1 without packets, "
+        "1 expired, nearest expiry 2026-08-30T11:59:00+00:00"
+    )
+
+
 def test_target_status_preserves_terminal_slot_states():
     assert CaretakerConsoleApp._target_status(
         {"slot_state": "INITIALLY_VALIDATED"}
