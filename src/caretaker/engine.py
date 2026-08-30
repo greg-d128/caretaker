@@ -277,7 +277,12 @@ class RepairEngine:
 
     def recovery_plan(self, *, target_id: str | None = None) -> dict[str, Any]:
         """Inspect interrupted persisted Repair work without reactivating it."""
-        return build_repair_recovery_plan(self.store, target_id=target_id)
+        policy = None
+        if target_id:
+            target = self.registry.find(target_id)
+            if target is not None:
+                policy = target.policy.recovery
+        return build_repair_recovery_plan(self.store, target_id=target_id, policy=policy)
 
     def apply_recovery_plan(self, plan: dict[str, Any]) -> dict[str, Any]:
         """Record fail-safe recovery decisions without reactivating candidates."""

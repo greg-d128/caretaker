@@ -90,4 +90,4 @@ A new public policy field requires all of the following before the reviewed surf
 4. authority/profile-surface review when the setting changes a security capability;
 5. operator documentation and migration notes when defaults or semantics change.
 
-If any of those are intentionally deferred, the field must default to an inactive value and be entered in the explicit reserved-setting catalog.
+If any of those are intentionally deferred, the field must default to an inactive value and be entered in the explicit reserved-setting catalog. Recovery policy fields are reviewed with the same rule: the current defaults preserve deployed-code-only restart recovery, require authority revalidation, and reject candidate reactivation because that executor is not implemented yet.

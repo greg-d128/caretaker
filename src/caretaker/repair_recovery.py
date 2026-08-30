@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum, auto
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -18,6 +19,36 @@ from .domain import RepairAttemptOutcome, RepairAttemptStage, utcnow
 
 
 RECOVERY_PLAN_SCHEMA_VERSION = 1
+
+
+class RecoveryAction(Enum):
+    """Policy-selected response vocabulary for interrupted Repair work."""
+
+    CONTINUE_DEGRADED = auto()
+    GENERATE_INCIDENT = auto()
+    REPLACE_WORKER = auto()
+    STOP_APPLICATION = auto()
+    ROLLBACK_TO_DEPLOYED_CODE = auto()
+
+
+@dataclass(frozen=True, slots=True)
+class RepairRecoveryPolicy:
+    """Policy controls for restart and failed-worker recovery.
+
+    The action vocabulary is broader than the current executor. Until worker
+    replacement and application shutdown orchestration are implemented, the
+    recovery planner remains fail-safe and never performs those actions.
+    """
+
+    enabled: bool = True
+    interrupted_transaction_action: RecoveryAction = RecoveryAction.ROLLBACK_TO_DEPLOYED_CODE
+    worker_failure_action: RecoveryAction = RecoveryAction.GENERATE_INCIDENT
+    critical_evidence_action: RecoveryAction = RecoveryAction.STOP_APPLICATION
+    approval_packet_ttl_seconds: int = 3600
+    suggested_change_packet_ttl_seconds: int = 60
+    clock_skew_tolerance_seconds: float = 30.0
+    require_full_worker_postmortem_for_critical_evidence: bool = True
+    allow_candidate_reactivation_after_restart: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +101,7 @@ def build_repair_recovery_plan(
     *,
     target_id: str | None = None,
     now: datetime | None = None,
+    policy: RepairRecoveryPolicy | None = None,
 ) -> dict[str, Any]:
     """Return a fail-safe plan for attempts interrupted by process loss.
 
@@ -79,6 +111,17 @@ def build_repair_recovery_plan(
     durable. The plan is advisory and read-only: it never changes a store,
     activates a candidate, or assumes an approval survives restart.
     """
+    recovery_policy = policy or RepairRecoveryPolicy()
+    if recovery_policy.allow_candidate_reactivation_after_restart:
+        raise ValueError(
+            "candidate reactivation after restart is not implemented and cannot be enabled"
+        )
+    if recovery_policy.approval_packet_ttl_seconds <= 0:
+        raise ValueError("approval_packet_ttl_seconds must be greater than zero")
+    if recovery_policy.suggested_change_packet_ttl_seconds <= 0:
+        raise ValueError("suggested_change_packet_ttl_seconds must be greater than zero")
+    if recovery_policy.clock_skew_tolerance_seconds <= 0:
+        raise ValueError("clock_skew_tolerance_seconds must be greater than zero")
     observed_at = (now or utcnow()).isoformat()
     decisions: list[dict[str, Any]] = []
     recovered_attempt_ids = _recovered_attempt_ids(store)
@@ -102,6 +145,8 @@ def build_repair_recovery_plan(
             "persisted_outcome": outcome or RepairAttemptOutcome.PENDING.name,
             "transaction_state": "INTERRUPTED",
             "recovery_action": "ROLLBACK_TO_DEPLOYED_CODE",
+            "policy_requested_action": recovery_policy.interrupted_transaction_action.name,
+            "policy_action_status": "PLANNED_ONLY",
             "authority_action": "REVALIDATE_BEFORE_ANY_CONTINUATION",
             "candidate_reactivation_allowed": False,
             "approval_survives_restart": False,
@@ -117,6 +162,18 @@ def build_repair_recovery_plan(
         "restart_policy": "DEPLOYED_CODE_ONLY",
         "read_only": True,
         "automatic_reactivation": False,
+        "policy": {
+            "enabled": recovery_policy.enabled,
+            "interrupted_transaction_action": recovery_policy.interrupted_transaction_action.name,
+            "worker_failure_action": recovery_policy.worker_failure_action.name,
+            "critical_evidence_action": recovery_policy.critical_evidence_action.name,
+            "approval_packet_ttl_seconds": recovery_policy.approval_packet_ttl_seconds,
+            "suggested_change_packet_ttl_seconds": recovery_policy.suggested_change_packet_ttl_seconds,
+            "clock_skew_tolerance_seconds": recovery_policy.clock_skew_tolerance_seconds,
+            "require_full_worker_postmortem_for_critical_evidence": (
+                recovery_policy.require_full_worker_postmortem_for_critical_evidence
+            ),
+        },
         "incomplete_attempt_count": len(decisions),
         "decisions": decisions,
     }

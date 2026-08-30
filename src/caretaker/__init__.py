@@ -198,6 +198,8 @@ from .policy import (
 from .postmortem import ExceptionHookManager, PostMortemRecorder
 from .provider import CandidateProposal, OllamaRepairProvider, StaticRepairProvider
 from .repair_recovery import (
+    RecoveryAction,
+    RepairRecoveryPolicy,
     RepairRecoveryRecord,
     apply_repair_recovery_plan,
     build_repair_recovery_plan,
@@ -491,6 +493,8 @@ __all__ = [
     "execute_historical_capsule_replays",
     "build_repair_recovery_plan",
     "RepairRecoveryRecord",
+    "RecoveryAction",
+    "RepairRecoveryPolicy",
     "apply_repair_recovery_plan",
     "ReplaySafety",
     "SnapshotStrategy",

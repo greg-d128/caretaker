@@ -14,6 +14,7 @@ from .contracts import Comparator, Validator
 from .guard.policy import CandidateGuardPolicy, GuardBinding
 from .logging.policy import LoggingBinding
 from .logging.models import RepairAuthority
+from .repair_recovery import RepairRecoveryPolicy
 from .domain import (
     CandidateSelectionMode,
     DifferentialExecutionMode,
@@ -245,6 +246,7 @@ class RepairPolicy:
     limits: RepairLimits = field(default_factory=RepairLimits)
     stability: StabilityPolicy = field(default_factory=StabilityPolicy)
     integrity: IntegrityRepairPolicy = field(default_factory=IntegrityRepairPolicy)
+    recovery: RepairRecoveryPolicy = field(default_factory=RepairRecoveryPolicy)
     logging: LoggingBinding = field(default_factory=LoggingBinding)
     guard: GuardBinding = field(default_factory=GuardBinding)
     candidate_guard: CandidateGuardPolicy = field(default_factory=CandidateGuardPolicy)
@@ -281,6 +283,17 @@ def validate_policy(policy: RepairPolicy) -> None:
     """
 
     errors: list[str] = []
+    recovery = policy.recovery
+    if recovery.approval_packet_ttl_seconds <= 0:
+        errors.append("recovery.approval_packet_ttl_seconds must be greater than zero")
+    if recovery.suggested_change_packet_ttl_seconds <= 0:
+        errors.append("recovery.suggested_change_packet_ttl_seconds must be greater than zero")
+    if recovery.clock_skew_tolerance_seconds <= 0:
+        errors.append("recovery.clock_skew_tolerance_seconds must be greater than zero")
+    if recovery.allow_candidate_reactivation_after_restart:
+        errors.append(
+            "recovery.allow_candidate_reactivation_after_restart is not implemented"
+        )
     if not policy.triggers:
         errors.append("at least one trigger is required")
     for trigger in policy.triggers:

@@ -4,13 +4,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
+
 from caretaker import (
     InMemoryRepairStore,
+    RecoveryAction,
+    RepairRecoveryPolicy,
     SQLiteRepairStore,
     apply_repair_recovery_plan,
     build_repair_recovery_plan,
 )
 from caretaker.domain import RepairAttempt, RepairAttemptOutcome, RepairAttemptStage
+from caretaker.policy import PolicyConfigurationError, RepairPolicy, validate_policy
 
 
 def _attempt(*, target_id: str, completed: bool, outcome: RepairAttemptOutcome) -> RepairAttempt:
@@ -57,6 +62,8 @@ def test_recovery_plan_marks_incomplete_attempt_as_rollback_without_reactivation
     assert decision["attempt_id"] == str(interrupted.attempt_id)
     assert decision["last_milestone"] == "VALIDATION"
     assert decision["recovery_action"] == "ROLLBACK_TO_DEPLOYED_CODE"
+    assert decision["policy_requested_action"] == "ROLLBACK_TO_DEPLOYED_CODE"
+    assert decision["policy_action_status"] == "PLANNED_ONLY"
     assert decision["authority_action"] == "REVALIDATE_BEFORE_ANY_CONTINUATION"
     assert decision["candidate_reactivation_allowed"] is False
     assert decision["approval_survives_restart"] is False
@@ -89,3 +96,32 @@ def test_sqlite_recovery_plan_and_acknowledgement_preserve_attempt_evidence(tmp_
     assert len(recoveries) == 1
     assert recoveries[0]["attempt_id"] == str(interrupted.attempt_id)
     assert recoveries[0]["recovery_action"] == "ROLLBACK_TO_DEPLOYED_CODE"
+
+
+def test_recovery_policy_surfaces_packet_skew_and_failure_actions() -> None:
+    policy = RepairRecoveryPolicy(
+        worker_failure_action=RecoveryAction.REPLACE_WORKER,
+        approval_packet_ttl_seconds=1800,
+        suggested_change_packet_ttl_seconds=30,
+        clock_skew_tolerance_seconds=15.0,
+    )
+    plan = build_repair_recovery_plan(InMemoryRepairStore(), policy=policy)
+
+    assert plan["policy"]["worker_failure_action"] == "REPLACE_WORKER"
+    assert plan["policy"]["approval_packet_ttl_seconds"] == 1800
+    assert plan["policy"]["suggested_change_packet_ttl_seconds"] == 30
+    assert plan["policy"]["clock_skew_tolerance_seconds"] == 15.0
+
+    with pytest.raises(ValueError, match="reactivation"):
+        build_repair_recovery_plan(
+            InMemoryRepairStore(),
+            policy=RepairRecoveryPolicy(allow_candidate_reactivation_after_restart=True),
+        )
+    with pytest.raises(PolicyConfigurationError, match="reactivation"):
+        validate_policy(
+            RepairPolicy(
+                recovery=RepairRecoveryPolicy(
+                    allow_candidate_reactivation_after_restart=True,
+                )
+            )
+        )

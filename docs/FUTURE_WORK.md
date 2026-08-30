@@ -975,6 +975,14 @@ The first application-scoped implementation must enforce these decisions:
   Clustered supervisor recovery and restarting the supervisor itself belong to
   the future Host Caretaker and higher scopes.
 
+`RepairRecoveryPolicy` now carries the reviewed action vocabulary and default
+packet lifetimes: 60 minutes for ordinary approval packets, 60 seconds for
+suggested-change packets, and 30 seconds of permitted clock skew. The current
+planner exposes those settings and rejects candidate reactivation after restart
+because that execution path is not implemented. Recovery actions are currently
+reported as `PLANNED_ONLY`; the deployed-code rollback remains the only runtime
+behavior until supervisor lifecycle orchestration is implemented.
+
 The remaining implementation work is to:
 
 A first recovery inspection slice now exists as `RepairEngine.recovery_plan()`
@@ -994,7 +1002,8 @@ yet perform policy-selected replacement or shutdown actions.
 - apply policy-selected degraded, incident, replacement, or shutdown actions;
 - coordinate the same target across multiple application workers;
 - decide whether an accepted runtime replacement may be reactivated at all;
-- define the exact supervisor clock-skew and packet-expiry policy fields.
+- connect the recovery policy actions to supervisor worker and application
+  lifecycle orchestration.
 
 Until this exists, restart is a rollback to deployed application code, not continuation of an in-memory repair.
 
