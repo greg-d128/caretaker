@@ -16,6 +16,7 @@ from caretaker import (
     SQLiteRepairStore,
     RecoveryAction,
     RepairRecoveryPolicy,
+    WorkerFailureRecoveryRecord,
     WorkerAcceptancePolicy,
     create_recovery_authority_packet,
     dispatch_recovery_action,
@@ -24,6 +25,7 @@ from caretaker import (
     reconcile_worker_failure_records,
     reconcile_worker_postmortems,
     resolve_worker_failure_scope,
+    worker_failure_recovery_status,
     verify_worker_postmortem_packet,
 )
 
@@ -603,6 +605,94 @@ def test_worker_failure_recovery_checkpoint_survives_sqlite_reopen(tmp_path) -> 
     assert persisted[0]["action_execution"]["handler_result"]["incident_id"] == (
         "incident-sqlite-recovery"
     )
+
+
+def test_worker_failure_recovery_status_is_bounded_and_read_only() -> None:
+    store = InMemoryRepairStore()
+    failure = create_worker_failure_record(
+        {
+            "worker_id": "worker-status",
+            "worker_kind": "WRITER",
+            "target_id": "app:status",
+            "transaction_id": "txn-status",
+            "transaction_state": "ROLLED_BACK",
+            "sensitive_diagnostic": "must not cross the summary boundary",
+        },
+        critical_evidence=True,
+        postmortem_error="post-mortem collection was incomplete",
+        require_complete_postmortem=True,
+    )
+    store.record_worker_failure(failure)
+    recovery = WorkerFailureRecoveryRecord(
+        recovery_id=uuid4(),
+        scope="transaction:txn-status",
+        target_id="app:status",
+        observed_at=failure.observed_at,
+        action="GENERATE_INCIDENT",
+        critical_evidence_conflict=True,
+        policy_action={
+            "selected_action": "GENERATE_INCIDENT",
+            "status": "PLANNED_ONLY",
+            "requires_application_orchestration": True,
+        },
+        reconciliation_summary={
+            "input_count": 1,
+            "comparison_status": "INCOMPLETE_EVIDENCE",
+        },
+        action_execution={"status": "PENDING", "accepted": False},
+    )
+    store.record_worker_failure_recovery(recovery)
+    status = worker_failure_recovery_status(store)
+
+    assert status["read_only"] is True
+    assert status["authority_granted"] is False
+    assert status["bounded"] is True
+    assert status["failure_count"] == 1
+    assert status["recovery_count"] == 1
+    assert status["failures"][0]["worker_id"] == "worker-status"
+    assert status["failures"][0]["postmortem_status"] == "INCOMPLETE"
+    assert status["failures"][0]["postmortem_error"] == (
+        "post-mortem collection was incomplete"
+    )
+    assert "envelope" not in status["failures"][0]
+    assert "postmortem_packet" not in status["failures"][0]
+    assert "sensitive_diagnostic" not in str(status)
+    assert status["recoveries"][0]["action_execution"]["status"] == "PENDING"
+    assert status["recoveries"][0]["policy_action"]["selected_action"] == (
+        "GENERATE_INCIDENT"
+    )
+
+
+def test_worker_failure_recovery_status_summarizes_sqlite_conflicts(tmp_path) -> None:
+    store = SQLiteRepairStore(tmp_path / "worker-status.sqlite")
+    record = create_worker_failure_record(
+        {
+            "worker_id": "worker-conflict",
+            "worker_kind": "EVENT_SERVER",
+            "incident_id": "incident-status",
+            "target_id": "app:status",
+            "transaction_state": "ROLLED_BACK",
+        },
+        critical_evidence=True,
+        require_complete_postmortem=True,
+    )
+    store.record_worker_failure(record)
+    reconcile_worker_failure_records(store)
+
+    status = worker_failure_recovery_status(store, limit=1)
+
+    assert status["failure_count"] == 1
+    assert status["conflict_count"] == 1
+    assert status["conflicts"][0]["scope"] == record.reconciliation_scope
+    assert status["conflicts"][0]["incomplete_records"][0]["record_id"] == str(
+        record.failure_id
+    )
+
+
+def test_worker_failure_recovery_status_rejects_unbounded_limits() -> None:
+    store = InMemoryRepairStore()
+    with pytest.raises(ValueError, match="between 1 and 500"):
+        worker_failure_recovery_status(store, limit=501)
 
 def test_replacement_action_handler_uses_packet_admission_and_acceptance() -> None:
     runtime = FakeRuntime()

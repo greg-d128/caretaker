@@ -185,6 +185,22 @@ class CaretakerConsoleApp(App):
         border-top: solid $surface-lighten-2;
     }
     #incident-timeline-table { height: 10; }
+    #worker-failure-recovery-help, #worker-failure-recovery-status {
+        height: auto;
+        padding: 0 2;
+        color: $text-muted;
+    }
+    #worker-failure-recovery-toolbar {
+        height: 4;
+        padding: 0 1;
+        align-vertical: middle;
+    }
+    #worker-failure-recovery-toolbar Button { width: auto; min-width: 12; }
+    #worker-failure-recovery-table { height: 1fr; }
+    #worker-failure-recovery-output {
+        height: 12;
+        border-top: solid $surface-lighten-2;
+    }
     #incident-capsule-facts, #incident-capsule-communications {
         height: 5;
         padding: 0 2;
@@ -523,6 +539,8 @@ class CaretakerConsoleApp(App):
         self._selected_capsule: dict[str, Any] | None = None
         self._incident_artifact_records: list[dict[str, Any]] = []
         self._incident_timeline_records: list[dict[str, Any]] = []
+        self._worker_failure_recovery_status: dict[str, Any] = {}
+        self._worker_failure_recovery_records: list[dict[str, Any]] = []
         self._selected_target: str | None = None
         self._attention_records: list[dict[str, Any]] = []
         self._selected_attention_record: dict[str, Any] | None = None
@@ -638,6 +656,25 @@ class CaretakerConsoleApp(App):
                         table.cursor_type = "row"
                         table.add_columns("#", "Time", "Level", "Channel", "Target", "Message")
                         yield table
+            with TabPane("Recovery", id="recovery"):
+                yield Static(
+                    "Read-only worker-failure evidence and recovery checkpoints. "
+                    "This view never retries, reconciles, or dispatches recovery actions.",
+                    id="worker-failure-recovery-help",
+                )
+                with Horizontal(id="worker-failure-recovery-toolbar"):
+                    yield Button("Refresh", id="worker-failure-recovery-refresh", variant="primary")
+                yield Static(
+                    "Worker recovery status not loaded",
+                    id="worker-failure-recovery-status",
+                )
+                table = DataTable(id="worker-failure-recovery-table")
+                table.cursor_type = "row"
+                table.add_columns(
+                    "#", "Kind", "Scope", "Target", "Worker / Action", "Status", "Critical", "Observed"
+                )
+                yield table
+                yield RichLog(id="worker-failure-recovery-output", wrap=True, markup=False)
             with TabPane("Overview", id="overview"):
                 yield Static(
                     "Registered functions and their operational state. Problem states are listed first; "
@@ -1725,6 +1762,19 @@ class CaretakerConsoleApp(App):
             except (TypeError, ValueError, IndexError):
                 return
             await self._select_incident_timeline(record)
+            return
+
+        if event.data_table.id == "worker-failure-recovery-table":
+            if not row:
+                return
+            try:
+                record = self._worker_failure_recovery_records[int(row[0]) - 1]
+            except (TypeError, ValueError, IndexError):
+                return
+            self._write_json(
+                "#worker-failure-recovery-output",
+                record.get("payload") or record,
+            )
             return
 
         if event.data_table.id == "attention-table":
@@ -3201,6 +3251,99 @@ class CaretakerConsoleApp(App):
         )
         self._apply_incident_capsule_filter()
 
+    async def refresh_worker_failure_recovery(self) -> None:
+        """Refresh the bounded, read-only worker recovery inspection view."""
+        table = self.query_one("#worker-failure-recovery-table", DataTable)
+        table.clear()
+        output = self.query_one("#worker-failure-recovery-output", RichLog)
+        output.clear()
+        try:
+            response = await self._request(
+                "worker-failure-recovery-status",
+                limit=200,
+            )
+        except Exception as exc:
+            self._worker_failure_recovery_status = {}
+            self._worker_failure_recovery_records = []
+            self.query_one("#worker-failure-recovery-status", Static).update(
+                f"Worker recovery status unavailable: {type(exc).__name__}: {exc}"
+            )
+            output.write(str(exc))
+            return
+
+        self._worker_failure_recovery_status = dict(response)
+        if not response.get("available", True):
+            self._worker_failure_recovery_records = []
+            self.query_one("#worker-failure-recovery-status", Static).update(
+                f"Worker recovery status unavailable: {response.get('reason', 'unknown reason')}"
+            )
+            return
+
+        rows: list[dict[str, Any]] = []
+        for item in response.get("failures", ()):
+            if not isinstance(item, Mapping):
+                continue
+            rows.append({
+                "kind": "FAILURE",
+                "scope": item.get("reconciliation_scope") or "-",
+                "target_id": item.get("target_id") or "-",
+                "worker_or_action": item.get("worker_id") or "-",
+                "status": item.get("postmortem_status") or "UNKNOWN",
+                "critical": "yes" if item.get("critical_evidence") else "no",
+                "observed_at": item.get("observed_at") or "-",
+                "payload": dict(item),
+            })
+        for item in response.get("recoveries", ()):
+            if not isinstance(item, Mapping):
+                continue
+            execution = item.get("action_execution")
+            execution = execution if isinstance(execution, Mapping) else {}
+            rows.append({
+                "kind": "CHECKPOINT",
+                "scope": item.get("scope") or "-",
+                "target_id": item.get("target_id") or "-",
+                "worker_or_action": item.get("action") or "-",
+                "status": execution.get("status") or "UNKNOWN",
+                "critical": "yes" if item.get("critical_evidence_conflict") else "no",
+                "observed_at": item.get("observed_at") or "-",
+                "payload": dict(item),
+            })
+        for item in response.get("conflicts", ()):
+            if not isinstance(item, Mapping):
+                continue
+            rows.append({
+                "kind": "CONFLICT",
+                "scope": item.get("scope") or "-",
+                "target_id": "-",
+                "worker_or_action": item.get("report_id") or "-",
+                "status": "REVIEW",
+                "critical": "-",
+                "observed_at": item.get("observed_at") or "-",
+                "payload": dict(item),
+            })
+        self._worker_failure_recovery_records = rows
+        for index, item in enumerate(rows, start=1):
+            table.add_row(
+                index,
+                item["kind"],
+                self._compact_log_text(item["scope"], limit=30) or "-",
+                self._compact_log_text(item["target_id"], limit=22) or "-",
+                self._compact_log_text(item["worker_or_action"], limit=22) or "-",
+                self._compact_log_text(item["status"], limit=20) or "-",
+                item["critical"],
+                self._compact_log_text(item["observed_at"], limit=19) or "-",
+            )
+        self.query_one("#worker-failure-recovery-status", Static).update(
+            f"Failures {response.get('failure_count', 0)} | "
+            f"Checkpoints {response.get('recovery_count', 0)} | "
+            f"Conflicts {response.get('conflict_count', 0)} | "
+            "Read-only; no actions dispatched"
+        )
+        output.write(
+            "Select a row for bounded details. Raw failure envelopes, post-mortem packets, "
+            "and handler results are intentionally omitted."
+        )
+
     async def _select_incident_capsule(
         self,
         record: dict[str, Any],
@@ -3868,6 +4011,9 @@ class CaretakerConsoleApp(App):
                 return
             if button == "incident-capsule-refresh":
                 await self.refresh_incident_capsules()
+                return
+            if button == "worker-failure-recovery-refresh":
+                await self.refresh_worker_failure_recovery()
                 return
             if button == "incident-capsule-load":
                 if self._selected_capsule is None:

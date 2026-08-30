@@ -439,6 +439,15 @@ repeated reconciliation reuses the existing checkpoint and does not rerun the
 application side effect. A pending checkpoint is surfaced for deliberate
 operator handling rather than retried automatically.
 
+The read-only `worker-failure-recovery-status` command exposes a bounded
+inspection projection of those records. It reports worker identity, target and
+reconciliation scope, rollback and post-mortem status, conflict references,
+selected policy action, and checkpoint execution status. It deliberately omits
+failure envelopes, post-mortem packets, and handler results; those remain in
+the protected repair store and capsule evidence. The response marks
+`read_only=true` and `authority_granted=false`. The command never reconciles,
+retries, or dispatches a recovery action.
+
 If diagnostic logging itself fails, Caretaker does not recursively send another
 logging event. The control response reports `diagnostic_persisted=false` and a
 bounded `diagnostic_persistence_error`, and the bootstrap path makes a best-effort

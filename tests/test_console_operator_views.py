@@ -1030,6 +1030,69 @@ def test_console_creates_policy_governed_reviewable_communication_draft(tmp_path
     asyncio.run(exercise())
 
 
+def test_console_displays_read_only_worker_failure_recovery_status(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(160, 55)):
+            requests = []
+
+            async def request(command: str, **payload):
+                requests.append((command, payload))
+                assert command == "worker-failure-recovery-status"
+                return {
+                    "ok": True,
+                    "available": True,
+                    "read_only": True,
+                    "authority_granted": False,
+                    "bounded": True,
+                    "failure_count": 1,
+                    "recovery_count": 1,
+                    "conflict_count": 1,
+                    "failures": [{
+                        "failure_id": "failure-1",
+                        "worker_id": "worker-1",
+                        "reconciliation_scope": "transaction:one",
+                        "target_id": "app:charge",
+                        "postmortem_status": "INCOMPLETE",
+                        "critical_evidence": True,
+                        "observed_at": "2026-08-30T12:00:00+00:00",
+                    }],
+                    "recoveries": [{
+                        "recovery_id": "recovery-1",
+                        "scope": "transaction:one",
+                        "target_id": "app:charge",
+                        "action": "GENERATE_INCIDENT",
+                        "critical_evidence_conflict": True,
+                        "action_execution": {"status": "PENDING"},
+                        "observed_at": "2026-08-30T12:00:00+00:00",
+                    }],
+                    "conflicts": [{
+                        "report_id": "report-1",
+                        "scope": "transaction:one",
+                        "reason": "incomplete post-mortem",
+                        "observed_at": "2026-08-30T12:00:00+00:00",
+                    }],
+                }
+
+            app._request = request  # type: ignore[method-assign]
+            await app.refresh_worker_failure_recovery()
+
+            assert requests == [
+                ("worker-failure-recovery-status", {"limit": 200})
+            ]
+            assert app.query_one("#worker-failure-recovery-table", DataTable).row_count == 3
+            status = str(
+                app.query_one("#worker-failure-recovery-status", Static).render()
+            )
+            assert "Failures 1" in status
+            assert "Checkpoints 1" in status
+            assert "Conflicts 1" in status
+            assert "Read-only" in status
+
+    asyncio.run(exercise())
+
+
 def test_consequential_console_actions_fail_closed(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 

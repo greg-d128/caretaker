@@ -54,6 +54,7 @@ from .logging.ipc import (
 from .logging.policy import OperatorLoggingPolicy, load_operator_policy
 from .logging.segments import read_segment
 from .regression import RegressionFixtureStore
+from .repair_recovery import worker_failure_recovery_status
 from .replay import (
     IsolatedReplayCoordinator,
     RootlessPodmanReplayBackend,
@@ -344,6 +345,7 @@ def main(argv: list[str] | None = None) -> int:
     leases: dict[str, object] = {}
     child_holder: dict[str, subprocess.Popen] = {}
     supervisor_holder: dict[str, CaretakerApplicationSupervisor] = {}
+    failure_store_holder: dict[str, SQLiteRepairStore] = {}
     authority_generation_holder = {"generation": authority.effective.generation}
     authority_runtime_match_holder: dict[str, bool | None] = {"match": None}
     authority_lease_holder = {
@@ -583,6 +585,22 @@ def main(argv: list[str] | None = None) -> int:
                 "store": adaptive_aggregation_store.status(),
                 "aggregates": list(adaptive_aggregation_store.list_aggregates()),
                 "transitions": list(adaptive_aggregation_store.list_transition_requests()),
+            }
+        if command == "worker-failure-recovery-status":
+            store = failure_store_holder.get("store")
+            if store is None:
+                return {
+                    "ok": True,
+                    "available": False,
+                    "reason": "worker failure store is not initialized",
+                    "read_only": True,
+                    "authority_granted": False,
+                }
+            limit = max(1, min(int(request.get("limit", 100)), 500))
+            return {
+                "ok": True,
+                "available": True,
+                **worker_failure_recovery_status(store, limit=limit),
             }
         if command == "adaptive-aggregation-reconcile":
             result = reconcile_adaptive_aggregation(
@@ -1616,6 +1634,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     child_holder["child"] = child
     failure_store = SQLiteRepairStore(Path(policy.directory) / "repair.sqlite")
+    failure_store_holder["store"] = failure_store
     supervisor = CaretakerApplicationSupervisor(
         runtime,
         application_pid=child.pid,

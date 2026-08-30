@@ -1105,6 +1105,12 @@ does not rerun a completed handler, and a pending checkpoint is surfaced for
 deliberate handling. Deployment-specific durable incident,
 replacement, and shutdown lifecycle integration remains future work.
 
+The read-only `worker-failure-recovery-status` control command now provides a
+bounded operator projection of persisted failure, conflict, and recovery
+checkpoint state without returning packet payloads or exposing an action
+endpoint. It is evidence visibility only; deployment-specific lifecycle
+orchestration remains future work.
+
 ### Recovery decisions recorded for the next implementation slice
 
 The following decisions close the current recovery-design questions:

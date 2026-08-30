@@ -8,7 +8,7 @@ an interrupted transaction as successful work.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import Enum, auto
@@ -25,6 +25,7 @@ RECOVERY_PLAN_SCHEMA_VERSION = 1
 WORKER_POSTMORTEM_SCHEMA_VERSION = 1
 WORKER_POSTMORTEM_MAX_BYTES = 1_048_576
 WORKER_FAILURE_SCOPE_MAX_CHARS = 256
+WORKER_FAILURE_STATUS_MAX_LIMIT = 500
 _WORKER_POSTMORTEM_REQUIRED_EVIDENCE = (
     "milestone",
     "partial_queue",
@@ -1244,6 +1245,164 @@ def reconcile_worker_failure_records(
         "authority_granted": False,
     }
     return output
+
+
+def worker_failure_recovery_status(
+    store: Any,
+    *,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Return bounded, read-only summaries of persisted worker recovery state.
+
+    Worker failure envelopes and post-mortem packets can contain sensitive
+    diagnostic evidence. The status surface therefore exposes identity,
+    scope, evidence state, conflict references, and action checkpoint state,
+    but never returns those payloads. This is an inspection projection only;
+    it cannot authorize, retry, or execute a recovery action.
+    """
+    if not isinstance(limit, int) or isinstance(limit, bool):
+        raise TypeError("worker failure status limit must be an integer")
+    if limit <= 0 or limit > WORKER_FAILURE_STATUS_MAX_LIMIT:
+        raise ValueError(
+            "worker failure status limit must be between 1 and "
+            f"{WORKER_FAILURE_STATUS_MAX_LIMIT}"
+        )
+    required_methods = (
+        "all_worker_failures",
+        "all_worker_failure_recoveries",
+        "all_worker_postmortem_conflicts",
+    )
+    missing = [name for name in required_methods if not callable(getattr(store, name, None))]
+    if missing:
+        raise TypeError(
+            "store does not support worker failure status: " + ", ".join(missing)
+        )
+
+    def bounded(value: Any, maximum: int = WORKER_FAILURE_SCOPE_MAX_CHARS) -> str:
+        return str(value or "")[:maximum]
+
+    def timestamp(value: Any) -> str | None:
+        if value is None:
+            return None
+        return bounded(value, 64)
+
+    def failure_summary(record: Any) -> dict[str, Any]:
+        envelope = _field(record, "envelope", {})
+        envelope = envelope if isinstance(envelope, Mapping) else {}
+        errors = _field(record, "postmortem_errors", ())
+        if isinstance(errors, str):
+            errors = (errors,)
+        elif not isinstance(errors, Sequence):
+            errors = ()
+        return {
+            "failure_id": bounded(_field(record, "failure_id", ""), 64),
+            "worker_id": bounded(_field(record, "worker_id", "")),
+            "worker_kind": bounded(_field(record, "worker_kind", "")),
+            "observed_at": timestamp(_field(record, "observed_at")),
+            "detail_level": bounded(_field(record, "detail_level", "STANDARD")),
+            "transaction_state": bounded(
+                _field(record, "transaction_state", "ROLLED_BACK")
+            ),
+            "reconciliation_scope": bounded(
+                _field(record, "reconciliation_scope", "")
+            ),
+            "target_id": bounded(envelope.get("target_id")),
+            "critical_evidence": bool(_field(record, "critical_evidence", False)),
+            "postmortem_status": bounded(
+                _field(record, "postmortem_status", "NOT_REQUESTED")
+            ),
+            "postmortem_error_count": len(errors),
+            "postmortem_error": bounded(errors[0]) if errors else None,
+            "packet_present": bool(_field(record, "postmortem_packet", {})),
+        }
+
+    def recovery_summary(record: Any) -> dict[str, Any]:
+        policy_action = _field(record, "policy_action", {})
+        action_execution = _field(record, "action_execution", {})
+        reconciliation = _field(record, "reconciliation_summary", {})
+        policy_action = policy_action if isinstance(policy_action, Mapping) else {}
+        action_execution = (
+            action_execution if isinstance(action_execution, Mapping) else {}
+        )
+        reconciliation = reconciliation if isinstance(reconciliation, Mapping) else {}
+        return {
+            "recovery_id": bounded(_field(record, "recovery_id", ""), 64),
+            "scope": bounded(_field(record, "scope", "")),
+            "target_id": bounded(_field(record, "target_id", "")),
+            "observed_at": timestamp(_field(record, "observed_at")),
+            "action": bounded(_field(record, "action", "")),
+            "critical_evidence_conflict": bool(
+                _field(record, "critical_evidence_conflict", False)
+            ),
+            "policy_action": {
+                key: policy_action.get(key)
+                for key in (
+                    "requested_action",
+                    "selected_action",
+                    "policy_enabled",
+                    "status",
+                    "requires_application_orchestration",
+                )
+                if key in policy_action
+            },
+            "reconciliation": {
+                key: reconciliation.get(key)
+                for key in (
+                    "input_count",
+                    "complete_record_count",
+                    "unique_packet_count",
+                    "duplicate_count",
+                    "comparison_status",
+                    "invalid_record_count",
+                    "conflict_report_hash",
+                )
+                if key in reconciliation
+            },
+            "action_execution": {
+                key: action_execution.get(key)
+                for key in ("status", "accepted", "reason", "checkpoint_error")
+                if key in action_execution
+            },
+        }
+
+    def conflict_summary(record: Any) -> dict[str, Any]:
+        incomplete = _field(record, "incomplete_records", ())
+        if not isinstance(incomplete, Sequence) or isinstance(incomplete, str):
+            incomplete = ()
+        return {
+            "report_id": bounded(_field(record, "report_id", ""), 64),
+            "scope": bounded(_field(record, "scope", "")),
+            "observed_at": timestamp(_field(record, "observed_at")),
+            "reason": bounded(_field(record, "reason", "")),
+            "record_ids": [bounded(item, 64) for item in (_field(record, "record_ids", ()) or ())],
+            "packet_hashes": [bounded(item, 64) for item in (_field(record, "packet_hashes", ()) or ())],
+            "incomplete_records": [
+                {
+                    "record_id": bounded(item.get("record_id"), 64),
+                    "status": bounded(item.get("status")),
+                    "reason": bounded(item.get("reason")),
+                }
+                for item in incomplete
+                if isinstance(item, Mapping)
+            ],
+            "content_sha256": bounded(_field(record, "content_sha256", ""), 64),
+        }
+
+    failures = tuple(store.all_worker_failures())
+    recoveries = tuple(store.all_worker_failure_recoveries())
+    conflicts = tuple(store.all_worker_postmortem_conflicts())
+    return {
+        "schema_version": WORKER_POSTMORTEM_SCHEMA_VERSION,
+        "read_only": True,
+        "authority_granted": False,
+        "bounded": True,
+        "failure_count": len(failures),
+        "recovery_count": len(recoveries),
+        "conflict_count": len(conflicts),
+        "failures": [failure_summary(item) for item in failures[-limit:]],
+        "recoveries": [recovery_summary(item) for item in recoveries[-limit:]],
+        "conflicts": [conflict_summary(item) for item in conflicts[-limit:]],
+    }
 
 
 def create_worker_failure_recovery_record(
