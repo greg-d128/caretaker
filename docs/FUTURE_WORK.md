@@ -1002,6 +1002,44 @@ success. Restart exhaustion selects the existing degraded, disable, or stop
 action vocabulary. Process spawning, replacement packet distribution, and
 policy-specific incident/shutdown orchestration remain future work.
 
+### Recovery decisions recorded for the next implementation slice
+
+The following decisions close the current recovery-design questions:
+
+- A repair is one continuous transaction with explicit milestones. Its scope
+  covers the work currently under evaluation and may remain flexible while the
+  evaluation is active. Acceptance closes that rollback scope; reversing an
+  accepted result requires a new incident and transaction. Approval is checked
+  at transaction start and remains valid through completion, but never beyond
+  authority expiry. Caretaker does not guarantee external effects.
+- A failed worker is a rolled-back transaction. Its envelope includes the
+  partial queue, policy state, and milestone context available before failure.
+  Detail is controlled by policy and the diagnostic DEBUG setting. When the
+  evidence is critical, every affected worker contributes a complete individual
+  post-mortem packet; a partial packet is itself a recorded evidence failure.
+- A replacement receives an immutable, supervisor-issued packet containing the
+  full capability, policy, approval, target, generation, and code state it
+  needs. Ordinary approval copies may live for 60 minutes by default; suggested
+  changes may use a shorter expiry. Frequent approval changes cause workers to
+  reacquire the packet rather than forcing high-frequency supervisor copies.
+  A replacement is not active merely because a process started: it must verify
+  and re-enter through an authorized packet, then satisfy policy-defined
+  probation and acceptance counters. Defaults may be overridden per target.
+- Supervisor time is authoritative, with bounded clock drift accepted. Excess
+  skew is a worker failure. If only some workers apply a transition by its
+  deadline, the stale workers are treated as failed or unauthorized and are
+  deliberately replaced using the still-authorized prior policy where
+  possible. A failed supervisor loses the application control plane; whether
+  the application continues or restarts is policy driven. Application Caretaker
+  does not elect a replacement supervisor or restart its own control plane;
+  clustered supervisor recovery belongs to Host Caretaker and higher scopes.
+- Evidence is retained across worker disagreement. A worker may combine partial
+  streams only after checking that their distributions are sufficiently close
+  (initially three standard deviations when the sample is large enough).
+  Otherwise the difference remains investigation evidence, including possible
+  environmental causes. Disk pressure, loss, backpressure, duplicate
+  reconciliation, conflict reporting, and shutdown are all policy decisions.
+
 The remaining implementation work is to:
 
 A first recovery inspection slice now exists as `RepairEngine.recovery_plan()`
