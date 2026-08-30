@@ -328,6 +328,41 @@ def test_recovery_action_dispatch_requires_application_callback_acknowledgement(
     assert received == [decision]
 
 
+def test_replacement_dispatch_requires_verified_packet_and_acceptance_state() -> None:
+    decision = {
+        "policy_action": {
+            "requested_action": "REPLACE_WORKER",
+            "selected_action": "REPLACE_WORKER",
+            "policy_enabled": True,
+        },
+    }
+
+    rejected = dispatch_recovery_action(
+        decision,
+        handlers={"REPLACE_WORKER": lambda _decision: {"accepted": True}},
+    )
+    assert rejected["status"] == "REJECTED_BY_HANDLER"
+    assert "authority_packet_verified" in rejected["required_gates"]
+    assert "acceptance_state:PROBATION_OR_ACCEPTED" in rejected["required_gates"]
+
+    accepted = dispatch_recovery_action(
+        decision,
+        handlers={
+            "REPLACE_WORKER": lambda _decision: {
+                "accepted": True,
+                "failed_worker_id": "worker-old",
+                "replacement_worker_id": "worker-new",
+                "authority_packet_id": "packet-1",
+                "authority_packet_verified": True,
+                "authority_packet_expires_at": "2030-01-01T00:00:00+00:00",
+                "acceptance_state": "PROBATION",
+            },
+        },
+    )
+    assert accepted["status"] == "EXECUTED"
+    assert accepted["authority_granted"] is False
+
+
 def test_apply_recovery_plan_persists_callback_execution_result() -> None:
     store = InMemoryRepairStore()
     interrupted = _attempt(
@@ -349,7 +384,11 @@ def test_apply_recovery_plan_persists_callback_execution_result() -> None:
         plan,
         handlers={
             "GENERATE_INCIDENT": lambda decision: seen.append(decision["attempt_id"])
-            or {"accepted": True, "incident_recorded": True},
+            or {
+                "accepted": True,
+                "incident_id": "incident-1",
+                "incident_recorded": True,
+            },
         },
     )
 

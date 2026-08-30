@@ -557,6 +557,35 @@ def dispatch_recovery_action(
             "authority_granted": False,
             "handler_result": dict(result) if isinstance(result, Mapping) else None,
         }
+    required_gates: dict[str, str] = {
+        RecoveryAction.GENERATE_INCIDENT.name: "incident_id",
+        RecoveryAction.STOP_APPLICATION.name: "shutdown_requested",
+    }
+    if selected == RecoveryAction.REPLACE_WORKER.name:
+        missing = [
+            name for name in (
+                "failed_worker_id",
+                "replacement_worker_id",
+                "authority_packet_id",
+                "authority_packet_verified",
+                "acceptance_state",
+                "authority_packet_expires_at",
+            )
+            if not result.get(name)
+        ]
+        if result.get("acceptance_state") not in {"PROBATION", "ACCEPTED"}:
+            missing.append("acceptance_state:PROBATION_OR_ACCEPTED")
+    else:
+        gate = required_gates.get(selected)
+        missing = [gate] if gate and not result.get(gate) else []
+    if missing:
+        return {
+            "status": "REJECTED_BY_HANDLER",
+            "action": selected,
+            "authority_granted": False,
+            "required_gates": missing,
+            "handler_result": dict(result),
+        }
     return {
         "status": "EXECUTED",
         "action": selected,
