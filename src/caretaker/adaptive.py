@@ -1438,6 +1438,7 @@ class _AdaptiveController:
             return {
                 "enabled": False,
                 "target_id": self.target_id,
+                "aggregation_scope": self.policy.aggregation.aggregation_scope,
                 "generation_id": self.code_hash,
                 "policy_fingerprint": self._policy_fingerprint,
                 "authority_policy_generation": str(

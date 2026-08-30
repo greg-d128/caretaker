@@ -20,7 +20,10 @@ from .authority import (
 )
 from .capsule import IncidentCapsuleStore
 from .capsule_assistance import assist_capsules
-from .adaptive_aggregation import SupervisorAdaptiveAggregationStore
+from .adaptive_aggregation import (
+    SupervisorAdaptiveAggregationStore,
+    extended_aggregation_target_id,
+)
 from .communications import generate_communication_draft, review_communication_draft
 from .behavior import (
     BehaviorSnapshotStore,
@@ -486,33 +489,40 @@ def main(argv: list[str] | None = None) -> int:
             if not isinstance(item, dict) or not item.get("enabled"):
                 continue
             target = str(item.get("target_id") or "").strip()
+            aggregation_scope = item.get("aggregation_scope")
+            if aggregation_scope is not None:
+                aggregation_scope = str(aggregation_scope).strip() or None
             generation = str(item.get("generation_id") or "").strip()
             policy_fingerprint = str(item.get("policy_fingerprint") or "").strip()
             if not target or not generation or not policy_fingerprint:
                 continue
+            aggregation_target = extended_aggregation_target_id(
+                target,
+                aggregation_scope,
+            )
             promotion_policy = item.get("promotion_policy")
             if (
-                target in current_generations
+                aggregation_target in current_generations
                 and (
-                    current_generations[target] != generation
-                    or policy_fingerprints[target] != policy_fingerprint
+                    current_generations[aggregation_target] != generation
+                    or policy_fingerprints[aggregation_target] != policy_fingerprint
                     or (
-                        target in promotion_policy_values
-                        and promotion_policy_values[target] != promotion_policy
+                        aggregation_target in promotion_policy_values
+                        and promotion_policy_values[aggregation_target] != promotion_policy
                     )
                 )
             ):
-                ambiguous_targets.add(target)
+                ambiguous_targets.add(aggregation_target)
                 continue
-            current_generations[target] = generation
-            policy_fingerprints[target] = policy_fingerprint
-            promotion_policy_values[target] = promotion_policy
+            current_generations[aggregation_target] = generation
+            policy_fingerprints[aggregation_target] = policy_fingerprint
+            promotion_policy_values[aggregation_target] = promotion_policy
             if isinstance(promotion_policy, dict):
-                promotion_policies[target] = dict(promotion_policy)
-        for target in ambiguous_targets:
-            current_generations.pop(target, None)
-            policy_fingerprints.pop(target, None)
-            promotion_policies.pop(target, None)
+                promotion_policies[aggregation_target] = dict(promotion_policy)
+        for aggregation_target in ambiguous_targets:
+            current_generations.pop(aggregation_target, None)
+            policy_fingerprints.pop(aggregation_target, None)
+            promotion_policies.pop(aggregation_target, None)
         effective_authority = authority.effective
         result = adaptive_aggregation_store.reconcile(
             current_generations=current_generations,
