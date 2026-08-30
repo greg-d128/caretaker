@@ -493,16 +493,17 @@ def test_supervisor_reconciliation_selects_critical_action_and_requires_handler_
     )
     store.record_worker_failure(record)
 
+    calls = []
     result = supervisor.reconcile_worker_failures(
         recovery_policy=RepairRecoveryPolicy(
             worker_failure_action=RecoveryAction.CONTINUE_DEGRADED,
             critical_evidence_action=RecoveryAction.GENERATE_INCIDENT,
         ),
         recovery_handlers={
-            "GENERATE_INCIDENT": lambda decision: {
+            "GENERATE_INCIDENT": lambda decision: calls.append(decision["scope"]) or {
                 "accepted": True,
                 "incident_id": f"incident-for-{decision['scope']}",
-            }
+            },
         },
     )
 
@@ -511,7 +512,62 @@ def test_supervisor_reconciliation_selects_critical_action_and_requires_handler_
     assert decision["policy_action"]["selected_action"] == "GENERATE_INCIDENT"
     assert decision["action_execution"]["status"] == "EXECUTED"
     assert decision["authority_granted"] is False
+    assert len(store.all_worker_failure_recoveries()) == 1
+    assert calls == ["transaction:txn-critical"]
 
+    repeated = supervisor.reconcile_worker_failures(
+        recovery_policy=RepairRecoveryPolicy(
+            worker_failure_action=RecoveryAction.CONTINUE_DEGRADED,
+            critical_evidence_action=RecoveryAction.GENERATE_INCIDENT,
+        ),
+        recovery_handlers={
+            "GENERATE_INCIDENT": lambda _decision: calls.append("unexpected") or {
+                "accepted": True,
+                "incident_id": "unexpected",
+            },
+        },
+    )
+    assert repeated["recovery_decisions"][0]["action_execution"]["status"] == "EXECUTED"
+    assert calls == ["transaction:txn-critical"]
+
+
+def test_worker_failure_recovery_checkpoint_survives_sqlite_reopen(tmp_path) -> None:
+    store = SQLiteRepairStore(tmp_path / "repair.sqlite")
+    record = create_worker_failure_record(
+        {
+            "worker_id": "worker-sqlite",
+            "worker_kind": "WRITER",
+            "incident_id": "incident-sqlite",
+            "transaction_state": "ROLLED_BACK",
+        },
+        critical_evidence=True,
+        require_complete_postmortem=True,
+    )
+    store.record_worker_failure(record)
+    supervisor = CaretakerApplicationSupervisor(FakeRuntime(), failure_store=store)
+    calls = []
+
+    result = supervisor.reconcile_worker_failures(
+        recovery_policy=RepairRecoveryPolicy(
+            critical_evidence_action=RecoveryAction.GENERATE_INCIDENT,
+        ),
+        recovery_handlers={
+            "GENERATE_INCIDENT": lambda _decision: calls.append("called") or {
+                "accepted": True,
+                "incident_id": "incident-sqlite-recovery",
+            },
+        },
+    )
+
+    assert result["recovery_decisions"][0]["action_execution"]["status"] == "EXECUTED"
+    assert calls == ["called"]
+    reopened = SQLiteRepairStore(tmp_path / "repair.sqlite")
+    persisted = reopened.all_worker_failure_recoveries()
+    assert len(persisted) == 1
+    assert persisted[0]["action"] == "GENERATE_INCIDENT"
+    assert persisted[0]["action_execution"]["handler_result"]["incident_id"] == (
+        "incident-sqlite-recovery"
+    )
 
 def test_replacement_action_handler_uses_packet_admission_and_acceptance() -> None:
     runtime = FakeRuntime()

@@ -506,6 +506,20 @@ class WorkerPostmortemConflictReport:
     incomplete_records: tuple[Mapping[str, Any], ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class WorkerFailureRecoveryRecord:
+    """Durable, data-only action decision for one reconciled failure scope."""
+
+    recovery_id: UUID
+    scope: str
+    observed_at: datetime
+    action: str
+    critical_evidence_conflict: bool
+    policy_action: Mapping[str, Any]
+    reconciliation_summary: Mapping[str, Any]
+    action_execution: Mapping[str, Any]
+
+
 def select_recovery_action(
     action: RecoveryAction,
     *,
@@ -1209,6 +1223,76 @@ def reconcile_worker_failure_records(
         "reconciliations": reconciliations,
         "authority_granted": False,
     }
+
+
+def create_worker_failure_recovery_record(
+    decision: Mapping[str, Any],
+    *,
+    action_execution: Mapping[str, Any],
+    observed_at: datetime | None = None,
+) -> WorkerFailureRecoveryRecord:
+    """Create an idempotently identifiable action checkpoint.
+
+    The identity covers the evidence set and selected policy action, but not
+    handler output or observation time. A retry therefore resolves to the
+    same record before an application-owned side effect is attempted again.
+    """
+    scope = str(decision.get("scope") or "").strip()
+    if not scope or len(scope) > WORKER_FAILURE_SCOPE_MAX_CHARS:
+        raise ValueError("worker failure recovery decision requires a bounded scope")
+    policy_action = decision.get("policy_action")
+    reconciliation = decision.get("reconciliation")
+    if not isinstance(policy_action, Mapping) or not isinstance(reconciliation, Mapping):
+        raise ValueError("worker failure recovery decision is missing policy or evidence")
+    report = reconciliation.get("conflict_report")
+    report_hash = str(
+        getattr(report, "content_sha256", "")
+        or (report.get("content_sha256") if isinstance(report, Mapping) else "")
+        or ""
+    )
+    summary = {
+        "scope": scope,
+        "input_count": int(reconciliation.get("input_count") or 0),
+        "complete_record_count": int(reconciliation.get("complete_record_count") or 0),
+        "unique_packet_count": int(reconciliation.get("unique_packet_count") or 0),
+        "duplicate_count": int(reconciliation.get("duplicate_count") or 0),
+        "comparison_status": str(
+            (reconciliation.get("comparison") or {}).get("status")
+            if isinstance(reconciliation.get("comparison"), Mapping)
+            else ""
+        ),
+        "invalid_record_ids": tuple(
+            str(item.get("record_id") or "")
+            for item in reconciliation.get("invalid_records") or ()
+            if isinstance(item, Mapping)
+        ),
+        "conflict_report_hash": report_hash,
+    }
+    identity_payload = {
+        "scope": scope,
+        "critical_evidence_conflict": bool(decision.get("critical_evidence_conflict")),
+        "policy_action": dict(policy_action),
+        "reconciliation_summary": summary,
+    }
+    encoded = json.dumps(
+        identity_payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return WorkerFailureRecoveryRecord(
+        recovery_id=uuid5(
+            NAMESPACE_URL,
+            "caretaker:worker-failure-recovery:" + hashlib.sha256(encoded).hexdigest(),
+        ),
+        scope=scope,
+        observed_at=observed_at or utcnow(),
+        action=str(policy_action.get("selected_action") or ""),
+        critical_evidence_conflict=bool(decision.get("critical_evidence_conflict")),
+        policy_action=dict(policy_action),
+        reconciliation_summary=summary,
+        action_execution=dict(action_execution),
+    )
 
 
 def _recovered_attempt_ids(store: Any) -> set[str]:

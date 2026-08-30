@@ -18,6 +18,7 @@ from ..repair_recovery import (
     WorkerAcceptancePolicy,
     WorkerReplacementRequest,
     create_worker_failure_record,
+    create_worker_failure_recovery_record,
     dispatch_recovery_action,
     evaluate_worker_acceptance,
     reconcile_worker_failure_records,
@@ -934,10 +935,84 @@ class CaretakerApplicationSupervisor:
                 ),
                 "authority_granted": False,
             }
-            decision["action_execution"] = dispatch_recovery_action(
+            recorder = getattr(self.failure_store, "record_worker_failure_recovery", None)
+            reader = getattr(self.failure_store, "all_worker_failure_recoveries", None)
+            if not callable(recorder) or not callable(reader):
+                decision["action_execution"] = {
+                    "status": "CHECKPOINT_NOT_CONFIGURED",
+                    "authority_granted": False,
+                    "reason": "worker failure recovery checkpoint is unavailable",
+                }
+                decisions.append(decision)
+                continue
+            pending_record = create_worker_failure_recovery_record(
+                decision,
+                action_execution={
+                    "status": "PENDING",
+                    "authority_granted": False,
+                },
+            )
+            existing = next(
+                (
+                    item
+                    for item in reader()
+                    if str(
+                        getattr(item, "recovery_id", None)
+                        or (
+                            item.get("recovery_id")
+                            if isinstance(item, Mapping)
+                            else ""
+                        )
+                    ) == str(pending_record.recovery_id)
+                ),
+                None,
+            )
+            decision["recovery_record_id"] = str(pending_record.recovery_id)
+            if existing is not None:
+                existing_execution = (
+                    getattr(existing, "action_execution", None)
+                    or (
+                        existing.get("action_execution")
+                        if isinstance(existing, Mapping)
+                        else None
+                    )
+                )
+                decision["action_execution"] = dict(existing_execution or {
+                    "status": "PENDING",
+                    "authority_granted": False,
+                })
+                decisions.append(decision)
+                continue
+            try:
+                recorder(pending_record)
+            except Exception as exc:
+                decision["action_execution"] = {
+                    "status": "CHECKPOINT_FAILED",
+                    "authority_granted": False,
+                    "error": f"{type(exc).__name__}: {exc}"[:256],
+                }
+                decisions.append(decision)
+                continue
+            execution = dispatch_recovery_action(
                 decision,
                 handlers=recovery_handlers,
             )
+            decision["action_execution"] = execution
+            try:
+                recorder(
+                    create_worker_failure_recovery_record(
+                        decision,
+                        action_execution=execution,
+                    )
+                )
+            except Exception as exc:
+                decision["action_execution"] = {
+                    **execution,
+                    "status": "EXECUTED_CHECKPOINT_FAILED"
+                    if execution.get("status") == "EXECUTED"
+                    else "CHECKPOINT_FAILED_AFTER_DISPATCH",
+                    "checkpoint_error": f"{type(exc).__name__}: {exc}"[:256],
+                }
             decisions.append(decision)
         return {
             **result,
