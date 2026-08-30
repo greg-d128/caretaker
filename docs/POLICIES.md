@@ -55,6 +55,10 @@ is reached, the snapshot records incomplete coverage and an overflow count.
 These observations are evidence only and are not used as a failure or Repair
 signal.
 
+The behavior statistics schema version is incremented when these shape fields
+are introduced, so active epochs written by an older implementation form a
+separate generation rather than being combined silently.
+
 `BehaviorSnapshotPolicy.collection_max_active`, `collection_max_pending`, and
 `collection_max_calls` govern operator-directed behavior captures. Requests are
 durable, bounded, ordered by operator priority and deadline, and recover from an

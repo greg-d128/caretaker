@@ -34,7 +34,7 @@ from .logging.signing import (
 
 
 SCHEMA_VERSION = 2
-STATISTICS_SCHEMA_VERSION = 1
+STATISTICS_SCHEMA_VERSION = 2
 
 
 def utcnow() -> datetime:
