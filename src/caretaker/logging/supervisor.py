@@ -876,38 +876,35 @@ class CaretakerApplicationSupervisor:
             return result
         decisions: list[dict[str, Any]] = []
         records = tuple(self.failure_store.all_worker_failures())
+
+        def record_envelope(record: Any) -> Mapping[str, Any]:
+            envelope = (
+                getattr(record, "envelope", None)
+                or (record.get("envelope", {}) if isinstance(record, Mapping) else {})
+            )
+            return envelope if isinstance(envelope, Mapping) else {}
+
+        def record_scope(record: Any) -> str:
+            stored = getattr(record, "reconciliation_scope", None) or (
+                record.get("reconciliation_scope") if isinstance(record, Mapping) else ""
+            )
+            return str(stored or resolve_worker_failure_scope(
+                record_envelope(record),
+                failure_id=(
+                    getattr(record, "failure_id", None)
+                    or (record.get("failure_id") if isinstance(record, Mapping) else "")
+                ),
+            ))
+
         for reconciliation in result["reconciliations"]:
             reconciliation_scope = str(reconciliation["scope"])
+            reconciliation_target = str(reconciliation.get("target_id") or "")
             scoped_records = tuple(
                 record
                 for record in records
-                if (
-                    str(
-                        getattr(record, "reconciliation_scope", None)
-                        or (
-                            record.get("reconciliation_scope")
-                            if isinstance(record, Mapping)
-                            else ""
-                        )
-                        or resolve_worker_failure_scope(
-                            getattr(record, "envelope", None)
-                            or (
-                                record.get("envelope", {})
-                                if isinstance(record, Mapping)
-                                else {}
-                            ),
-                            failure_id=(
-                                getattr(record, "failure_id", None)
-                                or (
-                                    record.get("failure_id")
-                                    if isinstance(record, Mapping)
-                                    else ""
-                                )
-                            ),
-                        )
-                    )
-                    == reconciliation_scope
-                )
+                if record_scope(record) == reconciliation_scope
+                and str(record_envelope(record).get("target_id") or "")
+                == reconciliation_target
             )
             critical_conflict = bool(reconciliation.get("conflict")) and any(
                 bool(
@@ -927,6 +924,7 @@ class CaretakerApplicationSupervisor:
             )
             decision = {
                 "scope": reconciliation_scope,
+                "target_id": reconciliation_target or None,
                 "reconciliation": reconciliation,
                 "critical_evidence_conflict": critical_conflict,
                 "policy_action": select_recovery_action(

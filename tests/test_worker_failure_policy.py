@@ -421,6 +421,41 @@ def test_worker_postmortem_reconciliation_retains_divergence_in_sqlite_conflict_
     assert len(reopened.all_worker_postmortem_conflicts()) == 1
 
 
+def test_worker_postmortem_reconciliation_never_combines_different_targets() -> None:
+    def record(worker_id: str, target_id: str):
+        return create_worker_failure_record(
+            {
+                "worker_id": worker_id,
+                "worker_kind": "REPAIR_ANALYZER",
+                "target_id": target_id,
+                "transaction_id": "txn-mixed-targets",
+                "transaction_state": "ROLLED_BACK",
+            },
+            postmortem_evidence={
+                "milestone": "VALIDATION",
+                "partial_queue": [],
+                "policy_state": {},
+                "behavior_signature": {
+                    "sample_count": 100,
+                    "metrics": {
+                        "duration_ms": {"mean": 10.0, "standard_deviation": 1.0},
+                    },
+                },
+            },
+        )
+
+    result = reconcile_worker_postmortems(
+        [record("worker-1", "app:charge"), record("worker-2", "app:refund")],
+        scope="transaction:txn-mixed-targets",
+    )
+
+    assert result["comparison"]["status"] == "RETAINED_NOT_COMBINED"
+    assert result["conflict"] is True
+    assert result["conflict_report"].reason.startswith(
+        "worker post-mortem records have different"
+    )
+
+
 def test_worker_failure_reconciliation_groups_persisted_records_and_retains_incomplete_evidence() -> None:
     store = InMemoryRepairStore()
     complete = create_worker_failure_record(

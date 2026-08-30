@@ -414,15 +414,17 @@ ID or incident ID; a failure with neither is isolated by its own failure ID so
 target identity alone cannot merge unrelated failures. The supervisor's
 `reconcile_worker_failures()` (or the public
 `reconcile_worker_failure_records(store)`) groups all persisted records and
-invokes `reconcile_worker_postmortems()` for each scope. Identical packet
-hashes are counted once while source records remain represented. Distinct
-packets are combined only when their JSON `behavior_signature` samples meet
-the minimum sample count and remain within the configured
+partitions each scope by target identity, then invokes
+`reconcile_worker_postmortems()` for each target group. Identical packet hashes
+are counted once while source records remain represented. Distinct packets are
+combined only when their JSON `behavior_signature` samples meet the minimum
+sample count and remain within the configured
 three-standard-deviation threshold. Missing, insufficient, or divergent
-signatures remain uncombined; complete distinct packets, their record IDs, and
-incomplete/invalid packet references are written to an idempotent conflict
-report for investigation. This is evidence coordination only and does not
-select recovery actions or grant authority.
+signatures remain uncombined; different target identities are never combined.
+Complete distinct packets, their record IDs, and incomplete/invalid packet
+references are written to an idempotent conflict report for investigation.
+This is evidence coordination only and does not select recovery actions or
+grant authority.
 
 The supervisor can consume that grouped result through
 `reconcile_worker_failures(recovery_policy=..., recovery_handlers=...)`. A

@@ -512,6 +512,7 @@ class WorkerFailureRecoveryRecord:
 
     recovery_id: UUID
     scope: str
+    target_id: str
     observed_at: datetime
     action: str
     critical_evidence_conflict: bool
@@ -952,6 +953,8 @@ def reconcile_worker_postmortems(
     record_ids_by_hash: dict[str, list[str]] = {}
     invalid_records: list[dict[str, Any]] = []
     not_requested_records: list[dict[str, Any]] = []
+    target_contexts: set[str] = set()
+    missing_target_context = False
     for index, record in enumerate(records):
         if isinstance(record, Mapping):
             record_id = str(record.get("failure_id") or f"record-{index}")
@@ -970,6 +973,10 @@ def reconcile_worker_postmortems(
                 "reason": "worker post-mortem was not requested by policy",
             })
             continue
+        if isinstance(envelope, Mapping) and envelope.get("target_id"):
+            target_contexts.add(str(envelope["target_id"]))
+        else:
+            missing_target_context = True
         if status != "COMPLETE" or not isinstance(packet, Mapping):
             invalid_records.append({
                 "record_id": record_id,
@@ -1039,7 +1046,9 @@ def reconcile_worker_postmortems(
         if valid_metrics:
             signatures.append((packet_hash, signature, sample_count, metrics))
     if len(packet_items) > 1:
-        if same_worker_conflict:
+        if len(target_contexts) > 1 or (target_contexts and missing_target_context):
+            conflict_reason = "worker post-mortem records have different or missing target identities"
+        elif same_worker_conflict:
             conflict_reason = "one worker supplied divergent post-mortem packet hashes"
         elif len(signatures) != len(packet_items):
             conflict_reason = "worker post-mortem behavior signatures are missing or insufficient"
@@ -1151,6 +1160,7 @@ def reconcile_worker_postmortems(
     return {
         "schema_version": WORKER_POSTMORTEM_SCHEMA_VERSION,
         "scope": normalized_scope,
+        "target_ids": tuple(sorted(target_contexts)),
         "input_count": len(records),
         "complete_record_count": sum(len(ids) for ids in record_ids_by_hash.values()),
         "unique_packet_count": len(packet_items),
@@ -1191,7 +1201,7 @@ def reconcile_worker_failure_records(
         if scope is not None
         else None
     )
-    grouped: dict[str, list[Any]] = {}
+    grouped: dict[tuple[str, str], list[Any]] = {}
     for record in store.all_worker_failures():
         envelope = _field(record, "envelope", {})
         assigned_scope = _field(record, "reconciliation_scope", "")
@@ -1202,7 +1212,8 @@ def reconcile_worker_failure_records(
             )
         if selected_scope is not None and assigned_scope != selected_scope:
             continue
-        grouped.setdefault(str(assigned_scope), []).append(record)
+        target_id = str(_field(envelope, "target_id", "") or "") if isinstance(envelope, Mapping) else ""
+        grouped.setdefault((str(assigned_scope), target_id), []).append(record)
 
     reconciliations = tuple(
         reconcile_worker_postmortems(
@@ -1213,16 +1224,26 @@ def reconcile_worker_failure_records(
             z_threshold=z_threshold,
             observed_at=observed_at,
         )
-        for group_scope, records in sorted(grouped.items())
+        for (group_scope, target_id), records in sorted(grouped.items())
     )
-    return {
+    output = {
         "schema_version": WORKER_POSTMORTEM_SCHEMA_VERSION,
         "scope": selected_scope,
         "group_count": len(reconciliations),
         "record_count": sum(len(records) for records in grouped.values()),
-        "reconciliations": reconciliations,
+        "reconciliations": tuple(
+            {
+                **reconciliation,
+                "target_id": target_id or None,
+            }
+            for reconciliation, ((_, target_id), _) in zip(
+                reconciliations,
+                sorted(grouped.items()),
+            )
+        ),
         "authority_granted": False,
     }
+    return output
 
 
 def create_worker_failure_recovery_record(
@@ -1244,6 +1265,9 @@ def create_worker_failure_recovery_record(
     reconciliation = decision.get("reconciliation")
     if not isinstance(policy_action, Mapping) or not isinstance(reconciliation, Mapping):
         raise ValueError("worker failure recovery decision is missing policy or evidence")
+    target_id = str(decision.get("target_id") or "").strip()
+    if len(target_id) > WORKER_FAILURE_SCOPE_MAX_CHARS:
+        raise ValueError("worker failure recovery decision target_id is too long")
     report = reconciliation.get("conflict_report")
     report_hash = str(
         getattr(report, "content_sha256", "")
@@ -1252,6 +1276,7 @@ def create_worker_failure_recovery_record(
     )
     summary = {
         "scope": scope,
+        "target_id": target_id or None,
         "input_count": int(reconciliation.get("input_count") or 0),
         "complete_record_count": int(reconciliation.get("complete_record_count") or 0),
         "unique_packet_count": int(reconciliation.get("unique_packet_count") or 0),
@@ -1270,6 +1295,7 @@ def create_worker_failure_recovery_record(
     }
     identity_payload = {
         "scope": scope,
+        "target_id": target_id,
         "critical_evidence_conflict": bool(decision.get("critical_evidence_conflict")),
         "policy_action": dict(policy_action),
         "reconciliation_summary": summary,
@@ -1286,6 +1312,7 @@ def create_worker_failure_recovery_record(
             "caretaker:worker-failure-recovery:" + hashlib.sha256(encoded).hexdigest(),
         ),
         scope=scope,
+        target_id=target_id,
         observed_at=observed_at or utcnow(),
         action=str(policy_action.get("selected_action") or ""),
         critical_evidence_conflict=bool(decision.get("critical_evidence_conflict")),

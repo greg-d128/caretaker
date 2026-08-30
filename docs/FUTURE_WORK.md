@@ -1071,8 +1071,10 @@ non-comparable packets in deterministic, idempotent conflict reports. The
 worker-failure intake now assigns a durable reconciliation scope from an
 explicit scope, a transaction/incident context, or an isolated failure ID;
 target identity alone is never used to merge failures. The supervisor and
-public store helper group all persisted failures by that scope, and conflict
-reports retain incomplete/invalid packet references as well as valid packets.
+public store helper group all persisted failures by that scope and partition
+each scope by target identity, so one incident cannot combine evidence from
+different targets. Conflict reports retain incomplete/invalid packet
+references as well as valid packets.
 This is evidence reconciliation only and does not merge policy, authority, or
 recovery state.
 
@@ -1174,7 +1176,8 @@ transaction and fresh approval checks.
 - connect the coordinated worker-failure intake and reconciliation result to
   deployment-specific incident, replacement, and shutdown orchestration;
 - execute policy-selected degraded, incident, replacement, or shutdown actions;
-- coordinate the same target across multiple application workers;
+- connect target-partitioned recovery decisions to deployment-specific worker
+  lifecycle orchestration;
 - decide whether an accepted runtime replacement may be reactivated at all;
 - connect the recovery policy actions to supervisor worker and application
   lifecycle orchestration.
