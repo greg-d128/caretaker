@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -96,3 +97,42 @@ def test_segment_hash_chain_across_rotations(tmp_path):
     values = [json.loads(path.read_text()) for path in manifests if not path.name.endswith("signature.json")]
     values.sort(key=lambda item: item["created_at"])
     assert values[1]["previous_segment_hash"] == values[0]["content_hash"]
+
+
+def test_event_rotation_binds_attachment_checkpoint_to_signed_manifest(tmp_path):
+    checkpoints: list[str] = []
+    checkpoint_hash = "a" * 64
+
+    def checkpoint() -> str:
+        checkpoints.append(checkpoint_hash)
+        return checkpoint_hash
+
+    policy = OperatorLoggingPolicy(
+        directory=str(tmp_path),
+        compression=CompressionPolicy(enabled=False),
+        rotation=RotationPolicy(maximum_segment_bytes=900, maximum_segment_seconds=3600),
+        signing=RuntimeSigningPolicy(
+            mode=RuntimeRecordIntegrityMode.EPHEMERAL_SIGNED,
+            run_signer_in_separate_process=False,
+        ),
+    )
+    writer = SegmentWriter(
+        policy,
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        attachment_checkpoint=checkpoint,
+    )
+    writer.write(envelope(1, message="a" * 200))
+    writer.write(envelope(2, message="b" * 200))
+    writer.close()
+
+    assert checkpoints == [checkpoint_hash]
+    signed_manifests = sorted(
+        (tmp_path / "application" / "manifests").glob("*.signature.json")
+    )
+    assert signed_manifests
+    values = [json.loads(path.read_text()) for path in signed_manifests]
+    assert any(
+        value["manifest"]["attachment_manifest_hash"] == checkpoint_hash
+        for value in values
+    )

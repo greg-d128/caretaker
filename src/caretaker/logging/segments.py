@@ -11,7 +11,7 @@ import time
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 from uuid import UUID, uuid4
 
 from .models import CompressionAlgorithm, LogEnvelope, RuntimeRecordIntegrityMode, SignatureStatus
@@ -149,6 +149,7 @@ class SegmentWriter:
         process_start_id: UUID,
         external_signer: Any | None = None,
         signing_service: RuntimeArtifactSigningService | None = None,
+        attachment_checkpoint: Callable[[], str | None] | None = None,
     ) -> None:
         self.policy = policy
         self.run_id = run_id
@@ -165,6 +166,7 @@ class SegmentWriter:
         self._previous_hash: str | None = self._load_previous_hash()
         self._global_sequence = self._load_last_sequence()
         self._reserved_sequences: dict[UUID, int] = {}
+        self._attachment_checkpoint = attachment_checkpoint
         self.signing_service = signing_service or RuntimeArtifactSigningService(
             policy=policy.signing,
             application_id=policy.application_id,
@@ -261,7 +263,12 @@ class SegmentWriter:
                 envelope = replace(envelope, sequence_number=assigned_sequence, fields=fields)
             record = self.codec.encode(envelope)
             if self._record_count and self._rotation_due(len(record)):
-                self.close_segment()
+                attachment_manifest_hash = (
+                    self._attachment_checkpoint()
+                    if self._attachment_checkpoint is not None
+                    else None
+                )
+                self.close_segment(attachment_manifest_hash=attachment_manifest_hash)
                 self._open_new()
             offset = self._file.tell()
             self._file.write(record)

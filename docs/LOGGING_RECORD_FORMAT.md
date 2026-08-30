@@ -44,6 +44,6 @@ SQLite stores offsets and selected metadata but is rebuildable.
 
 ## Attachments
 
-Large bodies are stored outside the 4 KiB event stream. The event contains a compact typed reference. Attachment segments have independent hash chains, manifests, rotation, compression, retention, size limits, and probabilistic overload sampling.
+Large bodies are stored outside the 4 KiB event stream. The event contains a compact typed reference. Attachment segments have independent hash chains, manifests, rotation, compression, retention, size limits, and probabilistic overload sampling. When attachment-manifest signing is enabled, the active attachment manifest is checkpointed and its hash is bound into the signed event manifest at every event-segment rotation, as well as at graceful shutdown.
 
 Attachment overload now preserves all payloads by default. Sampling or dropping requires an explicit `AttachmentOverloadAction`; when selected, the primary event records the resulting storage decision. Critical categories can bypass sampling/drop policies.

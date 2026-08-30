@@ -881,7 +881,6 @@ Until this exists, restart is a rollback to deployed application code, not conti
 - Add external `LogSink` implementations and reliable store-and-forward delivery to independent log collection systems.
 - Evaluate a formal forward-secure signature construction beyond epoch key evolution.
 - Add Zstandard and MessagePack as optional codecs without changing the standard-library default.
-- Add attachment checkpoint binding at every event-segment rotation, not only final graceful closure.
 - Add distributed multi-host ordering and clock-quality evidence.
 - Add index migrations and faster columnar analytical exports.
 

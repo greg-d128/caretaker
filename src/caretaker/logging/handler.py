@@ -85,14 +85,15 @@ class LoggingRuntime:
         self.effective = self.leases.effective
         self.run_id = uuid4()
         self.process_start_id = uuid4()
+        self.attachments = AttachmentStore(policy.directory, policy.attachments)
         self.writer = SegmentWriter(
             policy,
             run_id=self.run_id,
             process_start_id=self.process_start_id,
             external_signer=external_signer,
+            attachment_checkpoint=self._attachment_manifest_checkpoint_hash,
         )
         self.sink = BufferedSegmentSink(self.writer, policy)
-        self.attachments = AttachmentStore(policy.directory, policy.attachments)
         self._sequence = 0
         self._lock = threading.RLock()
         self.supervised = bool(os.environ.get("CARETAKER_SUPERVISED")) if supervised is None else supervised
@@ -128,6 +129,15 @@ class LoggingRuntime:
         with self._lock:
             self._sequence += 1
             return self._sequence
+
+    def _attachment_manifest_checkpoint_hash(self) -> str | None:
+        """Close the active attachment segment at an event rotation boundary."""
+        if not self.active_policy.signing.sign_attachment_manifests:
+            return None
+        manifest = self.attachments.close_segment()
+        if manifest is None:
+            return None
+        return hashlib.sha256(json_bytes(manifest)).hexdigest()
 
     def _emit_policy_state(self) -> None:
         self.event(
