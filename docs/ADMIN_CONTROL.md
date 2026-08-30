@@ -235,7 +235,8 @@ the target projection with a `dependency` slot role, so their actual level is no
 longer lost behind an unavailable marker. The selected-target panel also shows
 the adaptive lifecycle stage
 and recorded escalation reason. Filters accept `role:`, `level:`, and
-`lifecycle:` selectors.
+`lifecycle:` selectors. Loaded adaptive conflicts and expired transitions also
+mark their base target for `adaptive review`.
 
 The **Guard** view distinguishes `NO EVIDENCE`, `LEARNING`, `HEALTHY`, and
 `DEVIATION` instead of reusing Repair lifecycle states. Findings are sorted

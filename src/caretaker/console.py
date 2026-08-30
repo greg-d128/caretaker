@@ -1408,6 +1408,17 @@ class CaretakerConsoleApp(App):
             for item in self._repair_records
         ):
             return "Repair review"
+        for item in self._adaptive_aggregation_records:
+            if item.get("kind") not in {"CONFLICT", "TRANSITION"}:
+                continue
+            if item.get("kind") != "CONFLICT" and str(item.get("status") or "").upper() != "EXPIRED":
+                continue
+            adaptive_target = str(item.get("target_id") or "")
+            if adaptive_target and (
+                adaptive_target == target_id
+                or adaptive_target.startswith(f"{target_id}::aggregation-scope::")
+            ):
+                return "adaptive review"
         return "none"
 
     async def refresh_targets(self) -> None:

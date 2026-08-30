@@ -1347,6 +1347,18 @@ def test_attention_view_combines_operator_issues_and_shared_context(tmp_path):
     asyncio.run(exercise())
 
 
+def test_overview_marks_targets_with_adaptive_findings_for_review(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+    app._adaptive_aggregation_records = [{
+        "kind": "CONFLICT",
+        "target_id": "app:charge::aggregation-scope::blue",
+        "status": "REVIEW",
+    }]
+
+    assert app._target_attention_reason({"target_id": "app:charge"}) == "adaptive review"
+    assert app._target_attention_reason({"target_id": "app:other"}) == "none"
+
+
 def test_guard_operator_state_distinguishes_no_evidence_learning_and_findings():
     assert CaretakerConsoleApp._guard_state(None, [], []) == "NO EVIDENCE"
     assert CaretakerConsoleApp._guard_state({"calls": 1}, [], []) == "LEARNING"
