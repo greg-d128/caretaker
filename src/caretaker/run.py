@@ -580,11 +580,29 @@ def main(argv: list[str] | None = None) -> int:
                     "workers": [asdict(item) for item in supervisor.workers.all()] if supervisor else [],
                     "runtime": application_runtime}
         if command == "adaptive-aggregation-status":
+            policy_contexts: list[dict[str, Any]] = []
+            policy_context_available = False
+            if unix_socket_exists(runtime_control_socket):
+                try:
+                    context_response = control_request(
+                        runtime_control_socket,
+                        {"command": "adaptive-aggregation-context", "limit": 200},
+                    )
+                except OSError:
+                    context_response = {}
+                raw_contexts = context_response.get("contexts")
+                if context_response.get("ok") and isinstance(raw_contexts, list):
+                    policy_contexts = [
+                        dict(item) for item in raw_contexts if isinstance(item, dict)
+                    ]
+                    policy_context_available = True
             return {
                 "ok": True,
                 "store": adaptive_aggregation_store.status(),
                 "aggregates": list(adaptive_aggregation_store.list_aggregates()),
                 "transitions": list(adaptive_aggregation_store.list_transition_requests()),
+                "policy_contexts": policy_contexts,
+                "policy_context_available": policy_context_available,
             }
         if command == "worker-failure-recovery-status":
             store = failure_store_holder.get("store")

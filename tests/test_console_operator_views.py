@@ -1187,6 +1187,26 @@ def test_console_displays_read_only_adaptive_transition_deadlines(tmp_path):
                         "stale_worker_ids": ["worker-a"],
                         "expires_at": "2026-08-30T12:00:30+00:00",
                     }],
+                    "policy_context_available": True,
+                    "policy_contexts": [{
+                        "target_id": "app:charge",
+                        "aggregation_scope": "blue",
+                        "promotion_policy": {
+                            "exception": {
+                                "enabled": True,
+                                "occurrences": 3,
+                                "window_seconds": 30,
+                            },
+                            "soft_timing": {
+                                "enabled": False,
+                            },
+                            "repair_evidence": {
+                                "enabled": True,
+                                "minimum_behavior_samples": 20,
+                                "minimum_observation_calls": 100,
+                            },
+                        },
+                    }],
                 }
 
             app._request = request  # type: ignore[method-assign]
@@ -1201,6 +1221,12 @@ def test_console_displays_read_only_adaptive_transition_deadlines(tmp_path):
             assert "Transitions 1" in status
             assert "Expired 1" in status
             assert "Read-only" in status
+            policy_status = str(
+                app.query_one("#adaptive-aggregation-policy-status", Static).render()
+            )
+            assert "exception=3 in 30s" in policy_status
+            assert "timing=disabled" in policy_status
+            assert "repair evidence=20 samples / 100 calls" in policy_status
 
     asyncio.run(exercise())
 

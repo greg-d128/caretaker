@@ -149,6 +149,8 @@ def test_operator_runtime_exposes_adaptive_aggregation_context(monkeypatch):
                 "policy_fingerprint": "policy-a",
             }
         ],
+        "context_count": 1,
+        "bounded": False,
     }
 
 

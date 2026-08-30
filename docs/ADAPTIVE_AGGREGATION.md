@@ -92,7 +92,11 @@ replace stale workers or change policy; application-owned lifecycle handling
 remains future work.
 
 The Textual console's **Adaptive** tab provides a manually refreshed,
-read-only view of aggregate provenance and transition state. It shows scoped
-target identity, generation, worker acknowledgement coverage, deadlines, and
-stale-worker counts. The tab has no transition-acknowledgement or application
-action control.
+read-only view of aggregate provenance, active threshold policy context, and
+transition state. It shows scoped target identity, generation, worker
+acknowledgement coverage, deadlines, stale-worker counts, and the effective
+exception, timing, and Repair-evidence thresholds that produced the current
+supervisor view. The policy context is bounded and unavailable when the live
+runtime cannot be queried. The tab has no threshold-editing,
+transition-acknowledgement, or application action control; threshold changes
+remain a future policy-transition capability.

@@ -398,13 +398,16 @@ class OperatorRuntimeRegistry:
             }
         if command == "adaptive-aggregation-context":
             from .adaptive import adaptive_aggregation_status
+            contexts = [
+                dict(item)
+                for item in adaptive_aggregation_status()
+                if item.get("enabled")
+            ]
             return {
                 "ok": True,
-                "contexts": [
-                    dict(item)
-                    for item in adaptive_aggregation_status()
-                    if item.get("enabled")
-                ],
+                "contexts": contexts[:limit],
+                "context_count": len(contexts),
+                "bounded": len(contexts) > limit,
             }
         if command == "targets":
             return {"ok": True, "targets": self.targets()}

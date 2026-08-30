@@ -219,6 +219,11 @@ class CaretakerConsoleApp(App):
     }
     #adaptive-aggregation-toolbar Button { width: auto; min-width: 12; }
     #adaptive-aggregation-table { height: 1fr; }
+    #adaptive-aggregation-policy-status {
+        height: auto;
+        padding: 0 2;
+        color: $text-muted;
+    }
     #adaptive-aggregation-output {
         height: 12;
         border-top: solid $surface-lighten-2;
@@ -846,6 +851,10 @@ class CaretakerConsoleApp(App):
                 yield Static(
                     "Adaptive aggregation status not loaded",
                     id="adaptive-aggregation-status",
+                )
+                yield Static(
+                    "Active adaptive policy thresholds unavailable",
+                    id="adaptive-aggregation-policy-status",
                 )
                 table = DataTable(id="adaptive-aggregation-table")
                 table.cursor_type = "row"
@@ -3504,10 +3513,62 @@ class CaretakerConsoleApp(App):
             self.query_one("#adaptive-aggregation-status", Static).update(
                 f"Adaptive aggregation unavailable: {type(exc).__name__}: {exc}"
             )
+            self.query_one("#adaptive-aggregation-policy-status", Static).update(
+                "Active adaptive policy thresholds unavailable"
+            )
             output.write(str(exc))
             return
 
         self._adaptive_aggregation_status = dict(response)
+        policy_contexts = response.get("policy_contexts")
+        policy_contexts = policy_contexts if isinstance(policy_contexts, (list, tuple)) else ()
+        if not response.get("policy_context_available"):
+            policy_lines = [
+                "Active adaptive policy thresholds unavailable: runtime context is not connected."
+            ]
+        elif not policy_contexts:
+            policy_lines = ["Active adaptive policy thresholds: no enabled adaptive contexts."]
+        else:
+            policy_lines = ["Active adaptive policy thresholds"]
+            for context in policy_contexts:
+                if not isinstance(context, Mapping):
+                    continue
+                target = context.get("aggregation_target_id") or context.get("target_id") or "-"
+                scope = context.get("aggregation_scope")
+                if scope and "::aggregation-scope::" not in str(target):
+                    target = f"{target}::aggregation-scope::{scope}"
+                promotion = context.get("promotion_policy")
+                promotion = promotion if isinstance(promotion, Mapping) else {}
+                exception = promotion.get("exception")
+                exception = exception if isinstance(exception, Mapping) else {}
+                timing = promotion.get("soft_timing")
+                timing = timing if isinstance(timing, Mapping) else {}
+                evidence = promotion.get("repair_evidence")
+                evidence = evidence if isinstance(evidence, Mapping) else {}
+                exception_text = (
+                    f"{exception.get('occurrences', '?')} in {exception.get('window_seconds', '?')}s"
+                    if exception.get("enabled")
+                    else "disabled"
+                )
+                timing_text = (
+                    f"{timing.get('occurrences', '?')} in {timing.get('window_seconds', '?')}s"
+                    if timing.get("enabled")
+                    else "disabled"
+                )
+                evidence_text = (
+                    f"{evidence.get('minimum_behavior_samples', 0)} samples / "
+                    f"{evidence.get('minimum_observation_calls', 0)} calls"
+                    if evidence.get("enabled")
+                    else "disabled"
+                )
+                policy_lines.append(
+                    f"{self._compact_log_text(target, limit=42) or '-'} | "
+                    f"exception={exception_text}; timing={timing_text}; "
+                    f"repair evidence={evidence_text}"
+                )
+        self.query_one("#adaptive-aggregation-policy-status", Static).update(
+            "\n".join(policy_lines)
+        )
         aggregates = response.get("aggregates")
         aggregates = aggregates if isinstance(aggregates, (list, tuple)) else ()
         transitions = response.get("transitions")
