@@ -10,7 +10,7 @@ This rule is separate from policy authority. Authority answers **who may request
 2. Security/privacy controls are enforced at the final action boundary where practical. For example, Repair context controls are applied when the LLM request is built, and artifact-integrity requirements are applied when artifacts are loaded or restored.
 3. A setting whose non-default behavior is not implemented is either removed from the supported surface or given an inactive/unset default and rejected explicitly when requested.
 4. A stronger-sounding mode name must not imply a boundary Caretaker cannot provide. Guard uses `DISABLED`, `LEARN`, and `AUDIT`; research/forensic collection depth is policy, while actual prevention/quarantine is an explicit response capability.
-5. Backend/isolation shortfalls are explicit. `FAIL_REPAIR` fails closed, while `PROPOSE_ONLY` preserves evidence without activation. The current `REQUIRE_OPERATOR_APPROVAL` path is an override that can authorize activation without the requested tier; it must not be reported as successful validation at that tier.
+5. Backend/isolation shortfalls are explicit. `FAIL_REPAIR` fails closed, while `PROPOSE_ONLY` preserves evidence without activation. `REQUIRE_OPERATOR_APPROVAL` retains a proposal for operator review, but required isolation remains non-overridable and approval cannot activate it without validation at that tier.
 6. Signed artifacts cannot silently downgrade to hash-only artifacts when policy requires signatures.
 
 ## Reviewed policy-surface fingerprint

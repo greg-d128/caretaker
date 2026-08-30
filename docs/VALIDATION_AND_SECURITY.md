@@ -17,7 +17,7 @@ rejected. Only trusted Caretaker components should create, transport, or
 deserialize these requests, and the request/result channel is not an
 authenticated protocol for mutually untrusted peers.
 
-When the requested isolation backend is unavailable, `REQUIRE_OPERATOR_APPROVAL` can currently authorize activation without that isolation. This is an explicit policy override, not evidence that validation at the requested level passed. Use `FAIL_REPAIR` when the isolation requirement must remain a hard activation condition.
+When the requested isolation backend is unavailable, `REQUIRE_OPERATOR_APPROVAL` retains the candidate for explicit operator review but cannot authorize activation without that isolation. Use `FAIL_REPAIR` when missing isolation should also prevent a pending review item.
 
 ## Hard static gates
 

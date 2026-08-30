@@ -231,7 +231,6 @@ resource exhaustion.
 
 An "implemented" label in this document means that a usable research path exists; it does not mean that every assurance property around that path is complete. Strict expected-failure regression tests preserve the following known debts:
 
-- an operator approval can override missing policy-requested isolation and activate the candidate;
 - same-UID Unix peer credentials do not distinguish application code from an independent operator.
 
 These debts are also executable documentation in `tests/test_validation_trust_boundary.py` and `tests/test_security_assurance_regressions.py`. They should remain strict expected failures until the corresponding boundary is implemented and the test passes normally.
@@ -256,7 +255,10 @@ Administrative commands currently rely on filesystem permissions and Unix PID/UI
 
 ### Non-overridable isolation
 
-Policy should distinguish a hard, non-overridable minimum from a preferred tier that an operator may override. An override record must preserve the fact that the requested validation did not occur and must never satisfy a `validation_passed` predicate.
+Policy may distinguish a hard, non-overridable minimum from a preferred tier
+that an operator may override. The current required-isolation path is hard:
+operator approval can retain the candidate for review but cannot activate it
+without validation at the policy-required tier.
 
 ### VM capability attestation
 
@@ -662,7 +664,7 @@ Validation uses a common capability-based backend contract. Policy specifies a m
 - **VM**: `MultipassValidationBackend`, which uses a pre-provisioned guest with no host-directory mounts. Artifacts cross the boundary through `multipass transfer`. Normal mode can restore a configured clean snapshot before validation; suspicious scenarios can use a disposable clone of a stopped clean template and purge it afterward.
 - **EXTERNAL**: reserved for a future dedicated remote/disposable validation service.
 
-If a configured backend cannot meet `ValidationPolicy.minimum_isolation`, `backend_unavailable_action` controls whether repair fails, remains proposal-only, or enters the explicit operator-override workflow. The current approval path can authorize activation without the requested isolation; this is recorded as an override and is not successful validation at that tier. Making required isolation non-overridable is tracked as security work.
+If a configured backend cannot meet `ValidationPolicy.minimum_isolation`, `backend_unavailable_action` controls whether repair fails, remains proposal-only, or enters an explicit operator-review workflow. Required isolation is non-overridable: approval can retain a proposal for review but cannot authorize activation without validation at the requested tier.
 
 Multipass candidate validation is distinct from the existing whole-subject Multipass deployment documented in `ISOLATED_EXECUTION.md`. The built-in VM backend requires the validator guest to contain Caretaker/application dependencies, refuses host mounts, and by default requires a root-owned network-isolation provisioning marker before advertising guest network control.
 

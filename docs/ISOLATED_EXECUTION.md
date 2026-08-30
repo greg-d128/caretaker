@@ -84,7 +84,7 @@ A repair policy can require the VM tier independently of which backend objects a
 ValidationPolicy(minimum_isolation=ValidationIsolationLevel.VM)
 ```
 
-If only PROCESS or CONTAINER validation is available, `backend_unavailable_action` determines whether the candidate fails, remains proposal-only, or enters explicit operator approval. In the current implementation, approving the latter can activate the candidate without the requested isolation. The record preserves the missing-isolation finding, but approval is an override and must not be reported as validation at the required tier. Select `FAIL_REPAIR` when missing isolation must prevent activation.
+If only PROCESS or CONTAINER validation is available, `backend_unavailable_action` determines whether the candidate fails, remains proposal-only, or enters explicit operator review. Required isolation is non-overridable: approval may retain a proposal for review but cannot activate the candidate without validation at the requested tier. Select `FAIL_REPAIR` when missing isolation should also avoid creating a pending review item.
 
 Validation worker IPC uses a versioned JSON envelope and an explicit data-only
 codec. Registered cases support bounded JSON-compatible primitives, tuples,

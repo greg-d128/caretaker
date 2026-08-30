@@ -116,6 +116,7 @@ class PendingRepairApproval:
     authority_policy_generation: int
     authority_policy_fingerprint: str
     reason: str
+    validation_isolation_satisfied: bool = True
 
 
 
@@ -307,6 +308,10 @@ class RepairEngine:
 
     def approve_repair(self, episode_id: UUID):
         pending = self._pending_approvals[episode_id]
+        if not pending.validation_isolation_satisfied:
+            raise RuntimeError(
+                "Operator approval cannot substitute for policy-required validation isolation"
+            )
         target = self.registry.get(pending.target_id)
         current = target.slot.load()
         logging_runtime = get_logging_runtime()
@@ -1067,6 +1072,7 @@ class RepairEngine:
                         "Required validation isolation backend is unavailable and "
                         "validation.backend_unavailable_action requires operator approval"
                     ),
+                    validation_isolation_satisfied=False,
                 )
                 self._pending_approvals[episode.episode_id] = pending
                 selected_attempt = replace(

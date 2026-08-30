@@ -101,13 +101,6 @@ def _repair_candidate(target) -> RepairCandidate:
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known security debt: operator approval currently authorizes activation when "
-        "the policy-required validation isolation was never obtained."
-    ),
-)
 def test_operator_approval_cannot_substitute_for_required_validation() -> None:
     engine = RepairEngine(
         provider=StaticRepairProvider(
@@ -121,7 +114,8 @@ def test_operator_approval_cannot_substitute_for_required_validation() -> None:
 
     pending = engine.pending_approvals()
     assert len(pending) == 1
-    engine.approve_repair(pending[0].episode_id)
+    with pytest.raises(RuntimeError, match="cannot substitute"):
+        engine.approve_repair(pending[0].episode_id)
 
     # Approval may authorize a separately labelled override in a future design,
     # but it must not satisfy the security invariant "required validation passed".
