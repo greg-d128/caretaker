@@ -269,10 +269,11 @@ without validation at the policy-required tier.
 ### VM capability attestation
 
 The VM backend derives its reset-boundary and network claims from configured
-restore/clone behavior and live guest route checks in addition to the
-root-owned network-isolation marker. Remaining VM assurance work includes
-firewall/egress attestation and relevant profile hashes; the marker must not be
-treated as the sole basis for claiming network isolation.
+restore/clone behavior, a live guest firewall/egress ruleset attestation, and
+route checks in addition to the root-owned network-isolation marker. Remaining
+VM assurance work includes independent host/upstream egress evidence, relevant
+profile hashes, and guest image provenance; the guest ruleset digest and marker
+must not be treated as complete end-to-end network attestation.
 
 ## Deployment-authorized behavior snapshot signing
 
@@ -716,7 +717,7 @@ Outstanding isolation work:
 
 - Docker-rootless compatibility adapter using the same CONTAINER contract;
 - EXTERNAL/remote validator backend;
-- richer capability attestation (seccomp/profile hashes, guest firewall policy hash, image provenance);
+- richer capability attestation (seccomp/profile hashes and image provenance; the guest firewall policy hash is now exposed);
 - optional stronger VM technologies when a deployment requires them.
 
 ## Runtime repair graduation to source/repository workflow

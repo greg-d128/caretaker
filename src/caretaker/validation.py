@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from .adaptive import lightweight_dependency
 import ast
+import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -715,6 +717,67 @@ class MultipassValidationBackend(SubprocessValidationBackend):
         self._lock = threading.RLock()
         self._availability_details: dict[str, Any] = {}
 
+    @staticmethod
+    def _attest_network_ruleset(output: str, subject_uid: str) -> tuple[bool, str | None, str | None]:
+        """Check the documented nftables egress contract without executing guest data."""
+
+        normalized = " ".join(output.split())
+        required = (
+            "table inet caretaker",
+            "chain output",
+        )
+        if any(fragment not in normalized for fragment in required):
+            return False, None, "guest nftables ruleset does not prove the required egress policy"
+
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        chain_start = next(
+            (index for index, line in enumerate(lines) if line.startswith("chain output")),
+            None,
+        )
+        if chain_start is None:
+            return False, None, "guest nftables output has no output chain"
+        depth = 0
+        chain_lines: list[str] = []
+        for line in lines[chain_start:]:
+            depth += line.count("{") - line.count("}")
+            chain_lines.append(line)
+            if depth == 0:
+                break
+        chain_text = " ".join(chain_lines)
+        if not chain_text.startswith("chain output") or depth != 0:
+            return False, None, "guest nftables output has an incomplete output chain"
+
+        chain_required = (
+            "type filter hook output priority 0",
+            "policy accept",
+            f"meta skuid {subject_uid} ip daddr 127.0.0.0/8 accept",
+            f"meta skuid {subject_uid} ip6 daddr ::1 accept",
+            f"meta skuid {subject_uid} reject",
+        )
+        if any(fragment not in chain_text for fragment in chain_required):
+            return False, None, "guest nftables ruleset does not prove the required egress policy"
+
+        allowed_accepts = (
+            f"meta skuid {subject_uid} ip daddr 127.0.0.0/8 accept",
+            f"meta skuid {subject_uid} ip6 daddr ::1 accept",
+        )
+        unexpected_accept = next(
+            (
+                line
+                for line in chain_lines
+                if re.search(r"\baccept\b", line)
+                and "policy accept" not in line
+                and not any(fragment in line for fragment in allowed_accepts)
+            ),
+            None,
+        )
+        if unexpected_accept is not None:
+            return False, None, "guest output chain contains an unapproved accept rule"
+        subject_rules = [line for line in chain_lines if f"meta skuid {subject_uid}" in line]
+        if not subject_rules or "reject" not in subject_rules[-1]:
+            return False, None, "guest output chain does not end subject traffic with reject"
+        return True, hashlib.sha256(output.encode("utf-8")).hexdigest(), None
+
     def capabilities(self) -> ValidationBackendCapabilities:
         details = {
             "instance": self.instance_name,
@@ -726,6 +789,11 @@ class MultipassValidationBackend(SubprocessValidationBackend):
             "network_policy_marker": (
                 self.network_policy_marker if self.require_network_isolation else None
             ),
+            "network_firewall_attestation": (
+                "required-and-verified-at-availability"
+                if self._availability_details.get("network_firewall_ruleset_hash")
+                else "not-yet-verified"
+            ) if self.require_network_isolation else None,
             "reset_boundary": (
                 "disposable_clone"
                 if self.disposable_clone
@@ -816,6 +884,9 @@ class MultipassValidationBackend(SubprocessValidationBackend):
         user = self._guest_command(instance, ["id", "-u", self.subject_user])
         if user.returncode != 0:
             return False, f"Validation subject user {self.subject_user!r} is unavailable in Multipass guest"
+        subject_uid = user.stdout.strip()
+        if not subject_uid.isdigit():
+            return False, "Multipass validation could not determine the numeric subject UID"
         if self.require_network_isolation:
             marker = self._guest_command(
                 instance,
@@ -835,6 +906,23 @@ class MultipassValidationBackend(SubprocessValidationBackend):
                 return False, "Multipass network-isolation marker has invalid permissions"
             if permissions & 0o022:
                 return False, "Multipass network-isolation marker must not be group/world writable"
+            firewall = self._guest_command(
+                instance,
+                ["nft", "-a", "list", "table", "inet", "caretaker"],
+            )
+            if firewall.returncode != 0:
+                return False, (
+                    "Multipass validation could not inspect the guest nftables egress policy: "
+                    + firewall.stderr[-500:]
+                )
+            attested, ruleset_hash, reason = self._attest_network_ruleset(
+                firewall.stdout,
+                subject_uid,
+            )
+            if not attested:
+                return False, reason or "Multipass guest firewall policy attestation failed"
+            self._availability_details["network_firewall_ruleset_hash"] = ruleset_hash
+            self._availability_details["network_firewall_subject_uid"] = int(subject_uid)
             for route_command in (
                 ["ip", "-4", "route", "show", "default"],
                 ["ip", "-6", "route", "show", "default"],

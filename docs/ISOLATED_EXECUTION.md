@@ -99,7 +99,7 @@ work.
 
 `MultipassValidationBackend` requires a pre-provisioned validator guest and refuses instances with host-directory mounts. Request/result artifacts move with `multipass transfer`. In normal mode Caretaker can restore a configured clean snapshot before each validation. `disposable_clone=True` instead clones a stopped clean template for one validation and purges the clone afterward.
 
-The VM backend does not infer that guest egress is safe merely because Multipass is in use. By default it requires a root-owned `/etc/caretaker/validation-network-isolated` provisioning marker and verifies that the guest has no IPv4 or IPv6 default route at validation time. Create that marker only after the guest firewall/egress policy has been installed and enabled. This route check is not a complete firewall or egress attestation.
+The VM backend does not infer that guest egress is safe merely because Multipass is in use. By default it requires a root-owned `/etc/caretaker/validation-network-isolated` provisioning marker, inspects the live guest `nft -a list table inet caretaker` ruleset, and verifies that the documented `output` chain has only the subject's loopback exceptions before a final reject. It also verifies that the guest has no IPv4 or IPv6 default route at validation time. The backend records a SHA-256 digest of the attested guest ruleset in its capabilities. Create the marker only after the guest firewall/egress policy has been installed and enabled. This remains bounded guest-side evidence: it does not independently attest host or upstream firewalls, routing outside the guest, or the provenance of the guest image and profile.
 
 ## 2. Isolation levels
 

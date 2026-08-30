@@ -163,6 +163,20 @@ def test_multipass_availability_verifies_guest_and_network_marker(monkeypatch) -
             return completed(command, stdout="snapshot")
         if "stat" in command:
             return completed(command, stdout="0 644\n")
+        if "nft" in command:
+            return completed(
+                command,
+                stdout=(
+                    "table inet caretaker {\n"
+                    " chain output {\n"
+                    "  type filter hook output priority 0; policy accept;\n"
+                    "  meta skuid 22001 ip daddr 127.0.0.0/8 accept\n"
+                    "  meta skuid 22001 ip6 daddr ::1 accept\n"
+                    "  meta skuid 22001 reject\n"
+                    " }\n"
+                    "}\n"
+                ),
+            )
         if "ip" in command:
             return completed(command, stdout="")
         return completed(command, stdout="22001\n")
@@ -176,7 +190,78 @@ def test_multipass_availability_verifies_guest_and_network_marker(monkeypatch) -
     assert backend.capabilities().isolation_level is ValidationIsolationLevel.VM
     assert backend.capabilities().separate_kernel is True
     assert backend.capabilities().details["image_hash"] == "sha256:vm-image"
+    assert backend.capabilities().details["network_firewall_ruleset_hash"]
+    assert backend.capabilities().details["network_firewall_subject_uid"] == 22001
     assert not any("mount" in command for command in calls)
+
+
+def test_multipass_firewall_attestation_rejects_unapproved_accept_rule() -> None:
+    output = (
+        "table inet caretaker {\n"
+        " chain output {\n"
+        "  type filter hook output priority 0; policy accept;\n"
+        "  meta skuid 22001 ip daddr 127.0.0.0/8 accept\n"
+        "  meta skuid 22001 ip6 daddr ::1 accept\n"
+        "  meta skuid 22001 ip daddr 8.8.8.8 accept\n"
+        "  meta skuid 22001 reject\n"
+        " }\n"
+        "}\n"
+    )
+
+    attested, ruleset_hash, reason = MultipassValidationBackend._attest_network_ruleset(
+        output,
+        "22001",
+    )
+
+    assert attested is False
+    assert ruleset_hash is None
+    assert "unapproved accept" in reason
+
+
+def test_multipass_firewall_attestation_rejects_missing_subject_reject() -> None:
+    output = (
+        "table inet caretaker {\n"
+        " chain output {\n"
+        "  type filter hook output priority 0; policy accept;\n"
+        "  meta skuid 22001 ip daddr 127.0.0.0/8 accept\n"
+        "  meta skuid 22001 ip6 daddr ::1 accept\n"
+        " }\n"
+        "}\n"
+    )
+
+    attested, ruleset_hash, reason = MultipassValidationBackend._attest_network_ruleset(
+        output,
+        "22001",
+    )
+
+    assert attested is False
+    assert ruleset_hash is None
+    assert "required egress policy" in reason
+
+
+def test_multipass_firewall_attestation_requires_rules_in_output_chain() -> None:
+    output = (
+        "table inet caretaker {\n"
+        " chain unrelated {\n"
+        "  meta skuid 22001 ip daddr 127.0.0.0/8 accept\n"
+        "  meta skuid 22001 ip6 daddr ::1 accept\n"
+        "  meta skuid 22001 reject\n"
+        " }\n"
+        " chain output {\n"
+        "  type filter hook output priority 0; policy accept;\n"
+        "  meta skuid 22001 reject\n"
+        " }\n"
+        "}\n"
+    )
+
+    attested, ruleset_hash, reason = MultipassValidationBackend._attest_network_ruleset(
+        output,
+        "22001",
+    )
+
+    assert attested is False
+    assert ruleset_hash is None
+    assert "required egress policy" in reason
 
 
 def test_multipass_restore_uses_clean_snapshot(monkeypatch) -> None:
