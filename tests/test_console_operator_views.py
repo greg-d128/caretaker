@@ -1293,14 +1293,51 @@ def test_attention_view_combines_operator_issues_and_shared_context(tmp_path):
             app._authority_snapshot = {
                 "violations": [{"target": "lab.*", "message": "deployment guarantee violated"}]
             }
+            app._adaptive_aggregation_records = [{
+                "kind": "CONFLICT",
+                "target_id": "app:charge::aggregation-scope::blue",
+                "status": "REVIEW",
+                "payload": {
+                    "aggregate": {"last_observed_at": "2026-08-30T12:00:00+00:00"},
+                    "conflict": {
+                        "worker_id": "worker-a",
+                        "metric": "timing_duration_seconds",
+                        "z_score": 4.25,
+                    },
+                },
+            }, {
+                "kind": "TRANSITION",
+                "target_id": "app:charge::aggregation-scope::blue",
+                "status": "EXPIRED",
+                "deadline": "2026-08-30T12:00:30+00:00",
+                "payload": {
+                    "expires_at": "2026-08-30T12:00:30+00:00",
+                    "stale_worker_ids": ["worker-a"],
+                },
+            }]
             app._refresh_attention()
 
             assert {item["kind"] for item in app._attention_records} == {
                 "ACTIVE INCIDENT",
+                "ADAPTIVE CONFLICT",
+                "ADAPTIVE TRANSITION EXPIRED",
                 "DEGRADED",
                 "REPAIR WAITING",
                 "POLICY VIOLATION",
             }
+            adaptive_items = [
+                item for item in app._attention_records
+                if item["kind"].startswith("ADAPTIVE")
+            ]
+            assert all(item["related_tab"] == "adaptive" for item in adaptive_items)
+            assert "z=4.25" in next(
+                item["summary"] for item in adaptive_items if item["kind"] == "ADAPTIVE CONFLICT"
+            )
+            assert "1 stale worker" in next(
+                item["summary"]
+                for item in adaptive_items
+                if item["kind"] == "ADAPTIVE TRANSITION EXPIRED"
+            )
             app._set_operator_context(target="lab.probe", incident="incident-1")
             rendered = str(app.query_one("#operator-context-label", Static).render())
             assert "target=lab.probe" in rendered

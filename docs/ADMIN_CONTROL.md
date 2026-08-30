@@ -180,9 +180,14 @@ Press `r` to refresh the console; a separate refresh button is not required.
 
 The console opens on **Attention**, an operator queue that combines active
 incidents, Guard deviations, failed or waiting Repair work, authority-policy
-violations, and degraded runtime capabilities. Selecting an item explains why
+violations, degraded runtime capabilities, and adaptive aggregation conflicts
+or expired transitions that have been loaded from the Adaptive view. Selecting an item explains why
 it needs attention and provides direct navigation to its owning view or a
 correlated investigation.
+
+Adaptive Attention items are read-only evidence. Refresh the Adaptive view to
+load the current supervisor aggregation status; the console does not acknowledge
+transitions, replace workers, or change thresholds from Attention.
 
 The header reports when the console last refreshed, whether runtime information
 is live or cached, whether Logs and Policy came from the supervisor or persisted

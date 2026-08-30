@@ -1738,6 +1738,51 @@ class CaretakerConsoleApp(App):
                 "related_tab": "policy",
                 "payload": dict(violation),
             })
+        for adaptive_record in self._adaptive_aggregation_records:
+            kind = str(adaptive_record.get("kind") or "")
+            payload = adaptive_record.get("payload")
+            payload = dict(payload) if isinstance(payload, Mapping) else {}
+            target_id = str(adaptive_record.get("target_id") or "-")
+            if kind == "CONFLICT":
+                conflict = payload.get("conflict")
+                conflict = conflict if isinstance(conflict, Mapping) else {}
+                z_score = conflict.get("z_score")
+                try:
+                    z_text = f"z={float(z_score):.2f}"
+                except (TypeError, ValueError):
+                    z_text = "z=?"
+                records.append({
+                    "priority": "HIGH",
+                    "kind": "ADAPTIVE CONFLICT",
+                    "target_id": target_id,
+                    "timestamp": str(
+                        (payload.get("aggregate") or {}).get("last_observed_at")
+                        if isinstance(payload.get("aggregate"), Mapping)
+                        else ""
+                    ),
+                    "summary": (
+                        f"Worker {conflict.get('worker_id') or '-'} differs on "
+                        f"{conflict.get('metric') or 'an adaptive distribution'} ({z_text}); "
+                        "review retained evidence before treating workers as equivalent."
+                    ),
+                    "related_tab": "adaptive",
+                    "payload": payload,
+                })
+            elif kind == "TRANSITION" and str(adaptive_record.get("status") or "").upper() == "EXPIRED":
+                stale_workers = payload.get("stale_worker_ids")
+                stale_count = len(stale_workers) if isinstance(stale_workers, (list, tuple)) else 0
+                records.append({
+                    "priority": "HIGH",
+                    "kind": "ADAPTIVE TRANSITION EXPIRED",
+                    "target_id": target_id,
+                    "timestamp": str(payload.get("expires_at") or adaptive_record.get("deadline") or ""),
+                    "summary": (
+                        f"An adaptive transition expired without all required acknowledgements "
+                        f"({stale_count} stale worker(s)); inspect the transition and worker state."
+                    ),
+                    "related_tab": "adaptive",
+                    "payload": payload,
+                })
         for component in runtime.get("degraded_components", ()) if runtime else ():
             records.append({
                 "priority": "WARNING",
@@ -3517,6 +3562,7 @@ class CaretakerConsoleApp(App):
                 "Active adaptive policy thresholds unavailable"
             )
             output.write(str(exc))
+            self._refresh_attention()
             return
 
         self._adaptive_aggregation_status = dict(response)
@@ -3664,6 +3710,7 @@ class CaretakerConsoleApp(App):
             "Select a row for bounded details. The console does not acknowledge, "
             "apply, expire, or otherwise mutate adaptive state."
         )
+        self._refresh_attention()
 
     async def _select_incident_capsule(
         self,
