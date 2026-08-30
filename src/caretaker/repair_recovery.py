@@ -479,6 +479,98 @@ def _records_by_id(store: Any, method_name: str, id_field: str) -> dict[str, Any
     }
 
 
+def validate_recovery_candidate_binding(
+    attempt: Any,
+    candidate: Any,
+    *,
+    current_target_id: str | None = None,
+    current_code_hash: str | None = None,
+    current_authority_policy_generation: int | str | None = None,
+    current_authority_policy_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    """Check persisted candidate identity and optionally supplied live context.
+
+    Persisted records can show what a repair was evaluated against, but they
+    cannot re-authorize it after restart. When live values are omitted this
+    function reports the exact revalidation requirements and remains invalid
+    for execution purposes.
+    """
+    failures: list[str] = []
+    for name in ("candidate_id", "episode_id", "incident_id", "target_id"):
+        attempt_value = str(_field(attempt, name, ""))
+        candidate_value = str(_field(candidate, name, ""))
+        if not attempt_value or attempt_value != candidate_value:
+            failures.append(f"PERSISTED_CONTEXT_MISMATCH:{name}")
+    attempt_source_hash = _field(attempt, "base_source_hash")
+    candidate_source_hash = _field(candidate, "base_source_hash")
+    if (
+        not attempt_source_hash
+        or not candidate_source_hash
+        or attempt_source_hash != candidate_source_hash
+    ):
+        failures.append("PERSISTED_CONTEXT_MISMATCH:base_source_hash")
+    for name in ("authority_policy_generation", "authority_policy_fingerprint"):
+        if _field(attempt, name) != _field(candidate, name):
+            failures.append(f"PERSISTED_CONTEXT_MISMATCH:{name}")
+
+    required_live_context = {
+        "target_id": current_target_id,
+        "code_hash": current_code_hash,
+        "authority_policy_generation": current_authority_policy_generation,
+        "authority_policy_fingerprint": current_authority_policy_fingerprint,
+    }
+    missing_live_context = [name for name, value in required_live_context.items() if value is None]
+    live_failures: list[str] = []
+    if current_target_id is not None and str(current_target_id) != str(_field(attempt, "target_id", "")):
+        live_failures.append("LIVE_CONTEXT_MISMATCH:target_id")
+    if current_code_hash is not None and current_code_hash != _field(attempt, "base_source_hash"):
+        live_failures.append("LIVE_CONTEXT_MISMATCH:code_hash")
+    if (
+        current_authority_policy_generation is not None
+        and str(current_authority_policy_generation)
+        != str(_field(attempt, "authority_policy_generation"))
+    ):
+        live_failures.append("LIVE_CONTEXT_MISMATCH:authority_policy_generation")
+    if (
+        current_authority_policy_fingerprint is not None
+        and current_authority_policy_fingerprint
+        != _field(attempt, "authority_policy_fingerprint")
+    ):
+        live_failures.append("LIVE_CONTEXT_MISMATCH:authority_policy_fingerprint")
+    return {
+        "persisted_binding_valid": not failures,
+        "live_context_valid": not live_failures and not missing_live_context,
+        "execution_valid": not failures and not live_failures and not missing_live_context,
+        "failures": failures + live_failures,
+        "missing_live_context": missing_live_context,
+        "policy_snapshot_id": str(_field(attempt, "policy_snapshot_id", "")),
+        "policy_snapshot_revalidation_required": True,
+        "authority_granted": False,
+    }
+
+
+def _candidate_binding_for_attempt(store: Any, attempt: Any) -> dict[str, Any]:
+    candidates = _records_by_id(store, "all_candidates", "candidate_id")
+    candidate = candidates.get(str(_field(attempt, "candidate_id", "")))
+    if candidate is not None:
+        return validate_recovery_candidate_binding(attempt, candidate)
+    return {
+        "persisted_binding_valid": False,
+        "live_context_valid": False,
+        "execution_valid": False,
+        "failures": ["CANDIDATE_RECORD_UNAVAILABLE"],
+        "missing_live_context": [
+            "target_id",
+            "code_hash",
+            "authority_policy_generation",
+            "authority_policy_fingerprint",
+        ],
+        "policy_snapshot_id": str(_field(attempt, "policy_snapshot_id", "")),
+        "policy_snapshot_revalidation_required": True,
+        "authority_granted": False,
+    }
+
+
 def _incomplete_lifecycle_records(store: Any, attempt: Any) -> tuple[dict[str, Any], ...]:
     """Project linked lifecycle state without mutating source evidence."""
     records: list[dict[str, Any]] = []
@@ -584,6 +676,7 @@ def build_repair_recovery_plan(
         if completed_at is not None and outcome != RepairAttemptOutcome.PENDING.name:
             continue
         incomplete_records = _incomplete_lifecycle_records(store, attempt)
+        candidate_binding = _candidate_binding_for_attempt(store, attempt)
         decisions.append({
             "attempt_id": attempt_id,
             "episode_id": str(_field(attempt, "episode_id", "")),
@@ -600,6 +693,7 @@ def build_repair_recovery_plan(
             "authority_action": "REVALIDATE_BEFORE_ANY_CONTINUATION",
             "candidate_reactivation_allowed": False,
             "approval_survives_restart": False,
+            "candidate_binding": candidate_binding,
             "incomplete_records": list(incomplete_records),
             "reason": (
                 "Repair transaction did not durably complete; treat it as rolled back "

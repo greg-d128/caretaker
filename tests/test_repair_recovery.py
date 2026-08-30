@@ -20,6 +20,7 @@ from caretaker import (
     create_recovery_authority_packet,
     evaluate_worker_acceptance,
     validate_authority_expiry,
+    validate_recovery_candidate_binding,
     validate_supervisor_time,
     verify_recovery_authority_packet,
 )
@@ -150,6 +151,54 @@ def test_recovery_plan_projects_linked_lifecycle_records_without_mutating_them()
     assert applied["applied_count"] == 1
     recovery = store.all_recoveries()[0]
     assert len(recovery.incomplete_records) == 4
+
+
+def test_recovery_candidate_binding_requires_live_context_and_rejects_mismatch() -> None:
+    attempt = _attempt(
+        target_id="app:charge",
+        completed=False,
+        outcome=RepairAttemptOutcome.PENDING,
+    )
+    candidate = SimpleNamespace(
+        candidate_id=attempt.candidate_id,
+        episode_id=attempt.episode_id,
+        incident_id=attempt.incident_id,
+        target_id=attempt.target_id,
+        base_source_hash=attempt.base_source_hash,
+        authority_policy_generation=attempt.authority_policy_generation,
+        authority_policy_fingerprint=attempt.authority_policy_fingerprint,
+    )
+
+    persisted = validate_recovery_candidate_binding(attempt, candidate)
+    assert persisted["persisted_binding_valid"] is True
+    assert persisted["execution_valid"] is False
+    assert set(persisted["missing_live_context"]) == {
+        "target_id", "code_hash", "authority_policy_generation",
+        "authority_policy_fingerprint",
+    }
+    assert persisted["policy_snapshot_revalidation_required"] is True
+    assert persisted["authority_granted"] is False
+
+    live = validate_recovery_candidate_binding(
+        attempt,
+        candidate,
+        current_target_id=attempt.target_id,
+        current_code_hash=attempt.base_source_hash,
+        current_authority_policy_generation=attempt.authority_policy_generation,
+        current_authority_policy_fingerprint=attempt.authority_policy_fingerprint,
+    )
+    assert live["execution_valid"] is True
+
+    mismatch = validate_recovery_candidate_binding(
+        attempt,
+        candidate,
+        current_target_id="app:other",
+        current_code_hash=attempt.base_source_hash,
+        current_authority_policy_generation=attempt.authority_policy_generation,
+        current_authority_policy_fingerprint=attempt.authority_policy_fingerprint,
+    )
+    assert mismatch["execution_valid"] is False
+    assert "LIVE_CONTEXT_MISMATCH:target_id" in mismatch["failures"]
 
 
 def test_recovery_policy_surfaces_packet_skew_and_failure_actions() -> None:
