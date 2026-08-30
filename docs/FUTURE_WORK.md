@@ -1090,8 +1090,14 @@ and fingerprint to the projection. A missing or changed policy snapshot still
 keeps execution invalid; all live context must be revalidated before any
 future continuation.
 
+If an interrupted attempt or linked episode was awaiting operator approval,
+the recovery projection records that approval as `STALE_AFTER_RESTART` and
+retains the candidate reference for review. It does not reconstruct the
+process-local approval or grant authority; continuation requires a new
+transaction and fresh approval checks.
+
 - mark interrupted incidents, generations, attempts, and validations incomplete;
-- reconstruct or deliberately stale pending approvals;
+- reconstruct pending approvals or deliberately stale them for every restart path;
 - verify the current candidate source and policy/authority bindings again after restart;
 - recover probation and long-term observation state without double counting;
 - persist complete milestone and failed-worker envelopes with policy-controlled detail;

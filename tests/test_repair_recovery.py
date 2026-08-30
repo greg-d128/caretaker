@@ -209,6 +209,42 @@ def test_recovery_candidate_binding_requires_live_context_and_rejects_mismatch()
     assert "LIVE_CONTEXT_MISMATCH:target_id" in mismatch["failures"]
 
 
+def test_recovery_plan_marks_process_local_pending_approval_stale() -> None:
+    store = InMemoryRepairStore()
+    interrupted = _attempt(
+        target_id="app:charge",
+        completed=False,
+        outcome=RepairAttemptOutcome.AWAITING_APPROVAL,
+    )
+    store.record_attempt(interrupted)
+    store.episodes[interrupted.episode_id] = SimpleNamespace(
+        episode_id=interrupted.episode_id,
+        created_at=datetime.now(timezone.utc),
+        completed_at=None,
+        outcome="AWAITING_APPROVAL",
+    )
+
+    plan = build_repair_recovery_plan(store)
+
+    decision = plan["decisions"][0]
+    assert decision["approval_state"] == "STALE_AFTER_RESTART"
+    assert decision["approval_survives_restart"] is False
+    approval = next(
+        item for item in decision["incomplete_records"]
+        if item["record_type"] == "approval"
+    )
+    assert approval["state"] == "STALE_AFTER_RESTART"
+    assert "new transaction" in approval["reason"]
+
+    applied = apply_repair_recovery_plan(store, plan)
+    assert applied["applied_count"] == 1
+    assert any(
+        item["record_type"] == "approval"
+        and item["state"] == "STALE_AFTER_RESTART"
+        for item in store.all_recoveries()[0].incomplete_records
+    )
+
+
 def test_recovery_policy_surfaces_packet_skew_and_failure_actions() -> None:
     policy = RepairRecoveryPolicy(
         worker_failure_action=RecoveryAction.REPLACE_WORKER,

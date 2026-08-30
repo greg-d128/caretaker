@@ -17,7 +17,7 @@ import json
 from typing import Any
 from uuid import UUID, uuid4
 
-from .domain import RepairAttemptOutcome, RepairAttemptStage, utcnow
+from .domain import RepairAttemptOutcome, RepairAttemptStage, RepairEpisodeOutcome, utcnow
 
 
 RECOVERY_PLAN_SCHEMA_VERSION = 1
@@ -632,6 +632,25 @@ def _incomplete_lifecycle_records(store: Any, attempt: Any) -> tuple[dict[str, A
             ) if episode is not None else None,
             "source_present": episode is not None,
         })
+    approval_pending = (
+        _enum_name(_field(attempt, "outcome")) == RepairAttemptOutcome.AWAITING_APPROVAL.name
+        or (
+            episode is not None
+            and _enum_name(_field(episode, "outcome"))
+            == RepairEpisodeOutcome.AWAITING_APPROVAL.name
+        )
+    )
+    if approval_pending:
+        records.append({
+            "record_type": "approval",
+            "record_id": episode_id or str(_field(attempt, "attempt_id", "")),
+            "state": "STALE_AFTER_RESTART",
+            "candidate_id": str(_field(attempt, "candidate_id", "")),
+            "reason": (
+                "Pending approval was process-local and must be reviewed again "
+                "in a new transaction"
+            ),
+        })
 
     candidate_id = str(_field(attempt, "candidate_id", ""))
     candidates = _records_by_id(store, "all_candidates", "candidate_id")
@@ -735,6 +754,11 @@ def build_repair_recovery_plan(
             "candidate_reactivation_allowed": False,
             "approval_survives_restart": False,
             "candidate_binding": candidate_binding,
+            "approval_state": (
+                "STALE_AFTER_RESTART"
+                if any(item.get("record_type") == "approval" for item in incomplete_records)
+                else "NOT_PENDING"
+            ),
             "incomplete_records": list(incomplete_records),
             "reason": (
                 "Repair transaction did not durably complete; treat it as rolled back "
