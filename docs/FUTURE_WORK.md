@@ -995,6 +995,13 @@ the packet and requires re-admission. This is lifecycle enforcement inside the
 existing registry, not yet process spawning, packet distribution, or worker
 replacement orchestration.
 
+The supervisor now exposes a policy decision boundary for failed workers. It
+records bounded in-flight evidence immediately, supports incident capture, and
+only counts a worker as restarted after a callback-owned replacement reports
+success. Restart exhaustion selects the existing degraded, disable, or stop
+action vocabulary. Process spawning, replacement packet distribution, and
+policy-specific incident/shutdown orchestration remain future work.
+
 The remaining implementation work is to:
 
 A first recovery inspection slice now exists as `RepairEngine.recovery_plan()`

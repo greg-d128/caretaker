@@ -7,7 +7,7 @@ import time
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Mapping
+from typing import Any, Callable, Mapping
 from uuid import UUID, uuid4
 
 from .handler import LoggingRuntime
@@ -297,8 +297,137 @@ class CaretakerApplicationSupervisor:
             logger_name="caretaker.watchdog", severity=40,
             channel=__import__("caretaker.logging.models", fromlist=["LogChannel"]).LogChannel.CARETAKER_INTERNAL,
             message=f"Caretaker worker unhealthy: {worker.worker_kind.name}",
-            fields={"worker_id": str(worker.worker_id), "pid": worker.process_id},
+            fields=self.worker_failure_envelope(worker),
         )
+
+    @staticmethod
+    def worker_failure_envelope(worker: WorkerHealth) -> dict[str, Any]:
+        """Return bounded evidence needed to reconcile one failed worker."""
+        return {
+            "worker_id": str(worker.worker_id),
+            "worker_kind": worker.worker_kind.name,
+            "process_id": worker.process_id,
+            "process_start_id": str(worker.process_start_id),
+            "state": worker.state.name,
+            "current_work_ids": [str(item) for item in worker.current_work_ids],
+            "queue_depth": worker.queue_depth,
+            "last_completed_sequence": worker.last_completed_sequence,
+            "restart_count": worker.restart_count,
+            "last_error_fingerprint": worker.last_error_fingerprint,
+            "authority_packet_id": (
+                str(worker.authority_packet_id)
+                if worker.authority_packet_id is not None
+                else None
+            ),
+            "authority_packet_expires_at": (
+                worker.authority_packet_expires_at.isoformat()
+                if worker.authority_packet_expires_at is not None
+                else None
+            ),
+            "transaction_state": "ROLLED_BACK",
+        }
+
+    def handle_worker_failure(
+        self,
+        worker: WorkerHealth,
+        *,
+        policy: Any,
+        create_incident: Callable[[Mapping[str, Any]], Any] | None = None,
+        restart_worker: Callable[[WorkerHealth], Any] | None = None,
+        disable_component: Callable[[WorkerHealth], Any] | None = None,
+    ) -> dict[str, Any]:
+        """Apply the policy boundary for one failed worker.
+
+        The supervisor records failure evidence and chooses an action, but
+        worker creation and component-specific shutdown remain callbacks owned
+        by the application boundary. A callback must report success before the
+        registry treats a worker as restarted.
+        """
+        envelope = self.worker_failure_envelope(worker)
+        incident_error = None
+        if create_incident is not None:
+            try:
+                create_incident(envelope)
+                incident_status = "RECORDED"
+            except Exception as exc:
+                incident_status = "FAILED"
+                incident_error = f"{type(exc).__name__}: {exc}"[:256]
+        else:
+            incident_status = "NOT_CONFIGURED"
+        restart_policy = policy
+        restart_requested = (
+            bool(getattr(restart_policy, "enabled", False))
+            and worker.restart_count < int(getattr(restart_policy, "maximum_restarts", 0))
+        )
+        restart_result: dict[str, Any] | None = None
+        if restart_requested and restart_worker is not None:
+            try:
+                raw_result = restart_worker(worker)
+                if isinstance(raw_result, Mapping):
+                    restart_result = dict(raw_result)
+                elif raw_result:
+                    restart_result = {"started": True}
+            except Exception as exc:
+                restart_result = {
+                    "started": False,
+                    "error": f"{type(exc).__name__}: {exc}"[:256],
+                }
+            if restart_result and bool(restart_result.get("started")):
+                restarted = self.workers.record_restart(
+                    worker.worker_id,
+                    pid=(
+                        int(restart_result["pid"])
+                        if restart_result.get("pid") is not None
+                        else None
+                    ),
+                )
+                return {
+                    "ok": True,
+                    "action": "RESTARTED",
+                    "incident_status": incident_status,
+                    "incident_error": incident_error,
+                    "restart": {
+                        "started": True,
+                        "worker_id": str(restarted.worker_id),
+                        "restart_count": restarted.restart_count,
+                    },
+                    "failure_envelope": envelope,
+                }
+        exhaustion = getattr(
+            restart_policy,
+            "exhaustion_action",
+            WorkerFailureAction.DISABLE_COMPONENT,
+        )
+        if not isinstance(exhaustion, WorkerFailureAction):
+            exhaustion = WorkerFailureAction[str(exhaustion).upper()]
+        callback_result = None
+        if exhaustion is WorkerFailureAction.DISABLE_COMPONENT and disable_component is not None:
+            callback_result = disable_component(worker)
+        elif exhaustion is WorkerFailureAction.STOP_APPLICATION:
+            callback_result = self.stop_application()
+        result = {
+            "ok": True,
+            "action": exhaustion.name,
+            "incident_status": incident_status,
+            "incident_error": incident_error,
+            "restart": restart_result,
+            "failure_envelope": envelope,
+        }
+        if callback_result is not None:
+            result["action_result"] = callback_result
+        self.runtime.event(
+            logger_name="caretaker.watchdog",
+            severity=50 if exhaustion is WorkerFailureAction.STOP_APPLICATION else 40,
+            channel=__import__("caretaker.logging.models", fromlist=["LogChannel"]).LogChannel.CARETAKER_INTERNAL,
+            message=f"Caretaker worker failure policy applied: {exhaustion.name}",
+            fields={
+                "worker_id": str(worker.worker_id),
+                "action": exhaustion.name,
+                "incident_status": incident_status,
+                "transaction_state": "ROLLED_BACK",
+            },
+        )
+        return result
 
     def monitor_application(self, *, interval_seconds: float = 1.0) -> None:
         while not self._stop.wait(interval_seconds):

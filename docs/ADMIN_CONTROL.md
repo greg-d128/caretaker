@@ -46,6 +46,13 @@ The plan reports the last milestone and recommends rollback to deployed code;
 it requires authority revalidation and never reactivates a candidate or treats
 an approval as surviving restart.
 
+The application supervisor's worker-failure boundary emits a bounded failure
+envelope immediately, including in-flight work and queue context. It can record
+an incident and request a callback-owned replacement; if replacement is not
+available or the restart budget is exhausted, the configured exhaustion action
+selects degraded continuation, component disablement, or application stop.
+Caretaker does not create arbitrary worker processes from this boundary.
+
 Recovery time and expiry checks use supervisor time. The recovery API reports
 clock skew explicitly and rejects timestamps outside the configured tolerance;
 authority is invalid at its expiry instant. Packet distribution and worker
