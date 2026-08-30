@@ -1192,8 +1192,9 @@ The runtime command `runtime-repair-recovery-apply` now exposes that
 acknowledgement operation with an explicit confirmation gate. It builds a fresh
 target-scoped plan and records the result with no application-owned handlers,
 so the command cannot reactivate candidates or dispatch replacement, incident,
-or shutdown actions. The Recovery console remains read-only; operators must
-use the authenticated control plane for this deliberate ledger mutation.
+or shutdown actions. The Recovery console can explicitly request this bounded
+ledger mutation for a selected interrupted plan through the authenticated
+control plane, while remaining read-only with respect to recovery execution.
 
 For a target-scoped `RepairEngine.recovery_plan(target_id=...)`, the engine now
 adds the currently registered source hash and supervisor authority generation

@@ -191,11 +191,12 @@ class CaretakerConsoleApp(App):
         color: $text-muted;
     }
     #worker-failure-recovery-toolbar {
-        height: 4;
+        height: 5;
         padding: 0 1;
         align-vertical: middle;
     }
     #worker-failure-recovery-toolbar Button { width: auto; min-width: 12; }
+    #worker-failure-recovery-toolbar Checkbox { margin-left: 1; }
     #worker-failure-recovery-plan { margin-left: 1; }
     #worker-failure-recovery-plan-status {
         height: auto;
@@ -576,6 +577,7 @@ class CaretakerConsoleApp(App):
         self._worker_failure_recovery_status: dict[str, Any] = {}
         self._worker_failure_recovery_records: list[dict[str, Any]] = []
         self._worker_failure_recovery_plan_records: list[dict[str, Any]] = []
+        self._selected_worker_failure_recovery_record: dict[str, Any] | None = None
         self._adaptive_aggregation_status: dict[str, Any] = {}
         self._adaptive_aggregation_records: list[dict[str, Any]] = []
         self._selected_adaptive_threshold_request_id: str | None = None
@@ -697,12 +699,23 @@ class CaretakerConsoleApp(App):
             with TabPane("Recovery", id="recovery"):
                 yield Static(
                     "Read-only worker-failure evidence and recovery checkpoints. "
-                    "This view never retries, reconciles, or dispatches recovery actions.",
+                    "Recording a selected rollback decision is explicit and still never dispatches recovery actions.",
                     id="worker-failure-recovery-help",
                 )
                 with Horizontal(id="worker-failure-recovery-toolbar"):
                     yield Button("Refresh", id="worker-failure-recovery-refresh", variant="primary")
                     yield Button("Inspect restart plan", id="worker-failure-recovery-plan")
+                    yield Checkbox(
+                        "Confirm rollback record",
+                        id="worker-failure-recovery-apply-confirm",
+                        disabled=True,
+                    )
+                    yield Button(
+                        "Record rollback decision",
+                        id="worker-failure-recovery-apply",
+                        disabled=True,
+                        variant="warning",
+                    )
                 yield Static(
                     "Worker recovery status not loaded",
                     id="worker-failure-recovery-status",
@@ -1951,10 +1964,12 @@ class CaretakerConsoleApp(App):
                 ][int(row[0]) - 1]
             except (TypeError, ValueError, IndexError):
                 return
+            self._selected_worker_failure_recovery_record = record
             self._write_json(
                 "#worker-failure-recovery-output",
                 record.get("payload") or record,
             )
+            self._refresh_worker_failure_recovery_actions()
             return
 
         if event.data_table.id == "adaptive-aggregation-table":
@@ -3062,6 +3077,8 @@ class CaretakerConsoleApp(App):
             self._refresh_adaptive_threshold_review_actions()
         elif event.checkbox.id == "adaptive-threshold-apply-confirm":
             self._refresh_adaptive_threshold_review_actions()
+        elif event.checkbox.id == "worker-failure-recovery-apply-confirm":
+            self._refresh_worker_failure_recovery_actions()
 
     @staticmethod
     def _log_level(severity: Any) -> str:
@@ -3480,7 +3497,9 @@ class CaretakerConsoleApp(App):
             self._worker_failure_recovery_status = {}
             self._worker_failure_recovery_records = []
             self._worker_failure_recovery_plan_records = []
+            self._selected_worker_failure_recovery_record = None
             self._render_worker_failure_recovery_records()
+            self._refresh_worker_failure_recovery_actions()
             self.query_one("#worker-failure-recovery-status", Static).update(
                 f"Worker recovery status unavailable: {type(exc).__name__}: {exc}"
             )
@@ -3494,7 +3513,9 @@ class CaretakerConsoleApp(App):
         if not response.get("available", True):
             self._worker_failure_recovery_records = []
             self._worker_failure_recovery_plan_records = []
+            self._selected_worker_failure_recovery_record = None
             self._render_worker_failure_recovery_records()
+            self._refresh_worker_failure_recovery_actions()
             self.query_one("#worker-failure-recovery-status", Static).update(
                 f"Worker recovery status unavailable: {response.get('reason', 'unknown reason')}"
             )
@@ -3543,7 +3564,9 @@ class CaretakerConsoleApp(App):
                 "payload": dict(item),
             })
         self._worker_failure_recovery_records = rows
+        self._selected_worker_failure_recovery_record = None
         self._render_worker_failure_recovery_records()
+        self._refresh_worker_failure_recovery_actions()
         self.query_one("#worker-failure-recovery-status", Static).update(
             f"Failures {response.get('failure_count', 0)} | "
             f"Checkpoints {response.get('recovery_count', 0)} | "
@@ -3577,9 +3600,27 @@ class CaretakerConsoleApp(App):
                 self._compact_log_text(item["observed_at"], limit=19) or "-",
             )
 
+    def _refresh_worker_failure_recovery_actions(self) -> None:
+        record = self._selected_worker_failure_recovery_record
+        actionable = bool(
+            record
+            and record.get("kind") == "PLAN"
+            and str(record.get("status") or "").upper() == "INTERRUPTED"
+            and self._application_running is True
+        )
+        confirm = self.query_one("#worker-failure-recovery-apply-confirm", Checkbox)
+        confirm.disabled = not actionable
+        if not actionable:
+            confirm.value = False
+        self.query_one("#worker-failure-recovery-apply", Button).disabled = not bool(
+            actionable and confirm.value
+        )
+
     async def refresh_repair_recovery_plan(self) -> None:
         """Load the read-only restart plan exposed by the live runtime."""
         output = self.query_one("#worker-failure-recovery-output", RichLog)
+        self._selected_worker_failure_recovery_record = None
+        self._refresh_worker_failure_recovery_actions()
         try:
             response = await self._request("runtime-repair-recovery-plan")
         except Exception as exc:
@@ -3629,6 +3670,7 @@ class CaretakerConsoleApp(App):
                 })
         self._worker_failure_recovery_plan_records = rows
         self._render_worker_failure_recovery_records()
+        self._refresh_worker_failure_recovery_actions()
         self.query_one("#worker-failure-recovery-plan-status", Static).update(
             f"Restart plans {len(plans)} | Incomplete attempts {total_attempts} | "
             "Rollback is projected to deployed code; read-only, no candidates reactivated"
@@ -4558,6 +4600,27 @@ class CaretakerConsoleApp(App):
                 await self.refresh_worker_failure_recovery()
                 return
             if button == "worker-failure-recovery-plan":
+                await self.refresh_repair_recovery_plan()
+                return
+            if button == "worker-failure-recovery-apply":
+                record = self._selected_worker_failure_recovery_record
+                if not record or record.get("kind") != "PLAN":
+                    raise ValueError("Select an interrupted recovery plan first")
+                if self._application_running is not True:
+                    raise RuntimeError("Recording a recovery decision requires a live runtime")
+                if not self.query_one(
+                    "#worker-failure-recovery-apply-confirm", Checkbox
+                ).value:
+                    raise ValueError("Confirm recording the rollback decision first")
+                target = str(record.get("target_id") or "").strip()
+                request: dict[str, Any] = {
+                    "confirm": True,
+                }
+                if target and target != "-":
+                    request["target"] = target
+                response = await self._request("runtime-repair-recovery-apply", **request)
+                self._write_json("#worker-failure-recovery-output", response)
+                await self.refresh_worker_failure_recovery()
                 await self.refresh_repair_recovery_plan()
                 return
             if button == "adaptive-aggregation-refresh":

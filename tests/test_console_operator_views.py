@@ -1153,6 +1153,73 @@ def test_console_displays_read_only_repair_recovery_plan(tmp_path):
     asyncio.run(exercise())
 
 
+def test_console_records_selected_recovery_rollback_without_dispatch(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            requests = []
+
+            async def request(command: str, **payload):
+                requests.append((command, payload))
+                if command == "runtime-repair-recovery-apply":
+                    return {
+                        "ok": True,
+                        "actions_dispatched": False,
+                        "automatic_reactivation": False,
+                    }
+                if command == "worker-failure-recovery-status":
+                    return {
+                        "ok": True,
+                        "available": True,
+                        "failure_count": 0,
+                        "recovery_count": 1,
+                        "conflict_count": 0,
+                        "failures": [],
+                        "recoveries": [],
+                        "conflicts": [],
+                    }
+                if command == "runtime-repair-recovery-plan":
+                    return {
+                        "ok": True,
+                        "plans": [],
+                    }
+                raise AssertionError(command)
+
+            app._request = request  # type: ignore[method-assign]
+            app._application_running = True
+            record = {
+                "kind": "PLAN",
+                "scope": "incident-1",
+                "target_id": "app:charge",
+                "worker_or_action": "ROLLBACK_TO_DEPLOYED_CODE",
+                "status": "INTERRUPTED",
+                "critical": "-",
+                "observed_at": datetime.now(timezone.utc).isoformat(),
+                "payload": {"attempt_id": "attempt-1"},
+            }
+            app._worker_failure_recovery_plan_records = [record]
+            app._selected_worker_failure_recovery_record = record
+            confirm = app.query_one("#worker-failure-recovery-apply-confirm", Checkbox)
+            confirm.disabled = False
+            confirm.value = True
+            app._refresh_worker_failure_recovery_actions()
+            apply_button = app.query_one("#worker-failure-recovery-apply", Button)
+            assert apply_button.disabled is False
+
+            await app.on_button_pressed(Button.Pressed(apply_button))
+
+            assert requests[0] == (
+                "runtime-repair-recovery-apply",
+                {"confirm": True, "target": "app:charge"},
+            )
+            assert requests[1][0] == "worker-failure-recovery-status"
+            assert requests[2][0] == "runtime-repair-recovery-plan"
+            assert app._selected_worker_failure_recovery_record is None
+
+    asyncio.run(exercise())
+
+
 def test_console_displays_read_only_adaptive_transition_deadlines(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 
