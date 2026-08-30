@@ -99,7 +99,7 @@ def _behavior_materialization_log(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m caretaker.run")
+    parser = argparse.ArgumentParser(prog="caretaker-run")
     parser.add_argument("--policy")
     parser.add_argument("--data-directory")
     parser.add_argument(
@@ -200,7 +200,10 @@ def main(argv: list[str] | None = None) -> int:
     authority.set_snapshot_path(
         Path(policy.directory) / "policy" / "authority-effective.json"
     )
-    external_signer = _load_external_signer(args.external_signer)
+    try:
+        external_signer = _load_external_signer(args.external_signer)
+    except (ImportError, AttributeError, TypeError, ValueError) as exc:
+        parser.error(f"external signer configuration is invalid: {exc}")
     runtime = LoggingRuntime(
         declared_policy,
         source_path=args.policy,

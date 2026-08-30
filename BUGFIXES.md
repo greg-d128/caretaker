@@ -5,14 +5,14 @@ for later implementation batches. An entry describes desired behavior, not
 implemented behavior. Remove or mark an entry resolved only after the code,
 regression tests, and affected documentation are complete.
 
-## Open: `caretaker-run` exposes traceback for invalid external signer references
+## Resolved: `caretaker-run` exposes traceback for invalid external signer references
 
 ### Classification
 
 - Area: supervised CLI configuration and external runtime signing
 - Severity: diagnostic quality and limited information disclosure
 - Authority impact: no observed authority bypass
-- Current implementation status: open
+- Current implementation status: resolved
 - Release-blocking status: does not block the current Phase 3 lifecycle invariant,
   but should be resolved before describing the CLI as production-polished
 
