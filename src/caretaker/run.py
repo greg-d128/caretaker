@@ -471,6 +471,11 @@ def main(argv: list[str] | None = None) -> int:
 
     def control_handler(request, credentials):
         command = request.get("command")
+        if command == "worker-acceptance-observation":
+            supervisor = supervisor_holder.get("supervisor")
+            if supervisor is None:
+                raise RuntimeError("supervisor is not initialized")
+            return supervisor.handle_worker_acceptance_observation(request, credentials)
         if command in {"status", "health"}:
             child = child_holder.get("child")
             supervisor = supervisor_holder.get("supervisor")
@@ -1503,6 +1508,7 @@ def main(argv: list[str] | None = None) -> int:
         "CARETAKER_APPLICATION_ID": policy.application_id,
         "CARETAKER_DATA_DIR": policy.directory,
         "CARETAKER_RUNTIME_CONTROL_SOCKET": str(runtime_control_socket),
+        "CARETAKER_SUPERVISOR_CONTROL_SOCKET": str(control_socket),
         "CARETAKER_AUTHORITY_POLICY": str(authority.snapshot_path),
     })
     if args.policy:

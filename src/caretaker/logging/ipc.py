@@ -17,6 +17,7 @@ import secrets
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
+from uuid import UUID
 
 from .models import AttachmentReference, EvidencePriority, LogEnvelope
 from .records import TLVLogCodec
@@ -634,6 +635,38 @@ def control_request(path: str | Path, request: dict[str, Any], *, timeout: float
         return json.loads(response)
     finally:
         connection.close()
+
+
+def submit_worker_acceptance_observation(
+    path: str | Path,
+    *,
+    worker_id: str | UUID,
+    process_start_id: str | UUID,
+    authority_packet_id: str | UUID,
+    observation_id: str | UUID,
+    success: bool,
+    observed_at: str | None = None,
+    timeout: float = 5.0,
+) -> dict[str, Any]:
+    """Submit one bounded acceptance observation to the local supervisor.
+
+    The supervisor derives the worker's target and policy context from its
+    registration. The worker therefore cannot use this helper to submit a
+    different target, generation, code hash, or policy fingerprint.
+    """
+    if not isinstance(success, bool):
+        raise ValueError("worker acceptance observation success must be a boolean")
+    request: dict[str, Any] = {
+        "command": "worker-acceptance-observation",
+        "worker_id": str(worker_id),
+        "process_start_id": str(process_start_id),
+        "authority_packet_id": str(authority_packet_id),
+        "observation_id": str(observation_id),
+        "success": success,
+    }
+    if observed_at is not None:
+        request["observed_at"] = str(observed_at)
+    return control_request(path, request, timeout=timeout)
 
 
 def _send_control_payload(connection: socket.socket, payload: bytes) -> None:

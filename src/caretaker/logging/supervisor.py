@@ -103,6 +103,7 @@ class WorkerRegistry:
         self.heartbeat_timeout_seconds = heartbeat_timeout_seconds
         self.acceptance_store = acceptance_store
         self._workers: dict[UUID, WorkerHealth] = {}
+        self._acceptance_policies: dict[UUID, WorkerAcceptancePolicy] = {}
         self._replacement_requests: set[UUID] = set()
         self._lock = threading.RLock()
 
@@ -205,6 +206,8 @@ class WorkerRegistry:
                 acceptance_failed_executions=failed,
             )
             self._workers[health.worker_id] = admitted
+            if resolved_acceptance_policy is not None:
+                self._acceptance_policies[health.worker_id] = resolved_acceptance_policy
             return admitted
 
     def prepare_replacement(
@@ -313,20 +316,27 @@ class WorkerRegistry:
         worker_id: UUID,
         *,
         success: bool,
-        policy: WorkerAcceptancePolicy,
+        policy: WorkerAcceptancePolicy | None = None,
         observation_id: str | UUID | None = None,
         observed_at: str | None = None,
     ) -> WorkerHealth:
         """Record exactly one authorized worker observation for acceptance."""
         if not isinstance(success, bool):
             raise TypeError("worker acceptance success must be a boolean")
-        validate_worker_acceptance_policy(policy)
         with self._lock:
             current = self._workers[worker_id]
             if current.target_id is None or current.acceptance_state is WorkerAcceptanceState.UNTRACKED:
                 raise ValueError("worker acceptance is not configured for this worker")
             if current.state in {WorkerState.FAILED, WorkerState.UNAUTHORIZED}:
                 raise PermissionError("failed or unauthorized workers cannot advance acceptance")
+            configured_policy = self._acceptance_policies.get(worker_id)
+            if policy is None:
+                policy = configured_policy
+            elif configured_policy is not None and policy != configured_policy:
+                raise PermissionError("worker acceptance policy does not match admission policy")
+            if policy is None:
+                raise ValueError("worker acceptance policy is not configured for this worker")
+            validate_worker_acceptance_policy(policy)
             if self.acceptance_store is not None:
                 if observation_id is None:
                     raise ValueError("observation_id is required for durable worker acceptance")
@@ -446,6 +456,7 @@ class WorkerRegistry:
                 acceptance_failed_executions=0,
             )
             self._workers[worker_id] = updated
+            self._acceptance_policies.pop(worker_id, None)
             return updated
 
     def unhealthy(self) -> tuple[WorkerHealth, ...]:
@@ -461,6 +472,10 @@ class WorkerRegistry:
     def all(self) -> tuple[WorkerHealth, ...]:
         with self._lock:
             return tuple(self._workers.values())
+
+    def get(self, worker_id: UUID) -> WorkerHealth:
+        with self._lock:
+            return self._workers[worker_id]
 
 
 class Watchdog:
@@ -682,6 +697,47 @@ class CaretakerApplicationSupervisor:
             },
         )
         return result
+
+    def handle_worker_acceptance_observation(
+        self,
+        request: Mapping[str, Any],
+        credentials: tuple[int, int, int],
+    ) -> dict[str, Any]:
+        """Accept one observation from the registered worker process only."""
+        try:
+            worker_id = UUID(str(request["worker_id"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("worker acceptance observation requires a valid worker_id") from exc
+        worker = self.workers.get(worker_id)
+        if worker.process_id != credentials[0]:
+            raise PermissionError("worker process identity does not match its registration")
+        if str(request.get("process_start_id") or "") != str(worker.process_start_id):
+            raise PermissionError("worker process start identity does not match its registration")
+        if str(request.get("authority_packet_id") or "") != str(worker.authority_packet_id or ""):
+            raise PermissionError("worker authority packet identity does not match its registration")
+        success = request.get("success")
+        if not isinstance(success, bool):
+            raise ValueError("worker acceptance observation success must be a boolean")
+        observation_id = str(request.get("observation_id") or "")
+        if not observation_id or len(observation_id) > 256:
+            raise ValueError("worker acceptance observation requires a 1..256 observation_id")
+        updated = self.workers.record_acceptance_observation(
+            worker_id,
+            success=success,
+            policy=None,
+            observation_id=observation_id,
+            observed_at=(str(request["observed_at"]) if request.get("observed_at") else None),
+        )
+        return {
+            "ok": True,
+            "worker_id": str(updated.worker_id),
+            "target_id": updated.target_id,
+            "state": updated.state.name,
+            "acceptance_state": updated.acceptance_state.name,
+            "acceptance_successful_executions": updated.acceptance_successful_executions,
+            "acceptance_failed_executions": updated.acceptance_failed_executions,
+            "authority_granted": False,
+        }
 
     def monitor_application(self, *, interval_seconds: float = 1.0) -> None:
         while not self._stop.wait(interval_seconds):

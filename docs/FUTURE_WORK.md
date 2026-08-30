@@ -1007,8 +1007,11 @@ is 1,000 successful executions for each stage with no failures; these states
 never grant authority or replace packet verification. An optional SQLite
 acceptance ledger now checkpoints progress by exact target, generation, code,
 and policy context, deduplicates observation IDs, and restores matching
-progress after restart. Cross-process observation ingestion and broader
-reconciliation remain future lifecycle work.
+progress after restart. A registered live worker can submit one bounded
+observation at a time through the local supervisor control socket; the
+supervisor binds the observation to the registered process and derives its
+target and policy context. Cross-host transport and broader reconciliation
+remain future lifecycle work.
 
 The supervisor now exposes a policy decision boundary for failed workers. It
 records bounded in-flight evidence immediately, supports incident capture, and

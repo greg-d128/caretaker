@@ -59,7 +59,13 @@ authority is invalid at its expiry instant. The lifecycle registry can prepare a
 single-use, packet-verified replacement handoff and admit the replacement only
 after exact context verification; an expired worker is marked unauthorized and
 a restart clears its packet so it must be admitted again. OS process spawning
-and cross-process packet transport remain future supervisor capabilities.
+remains a future supervisor capability. The supervisor also accepts one
+bounded `worker-acceptance-observation` request from a registered worker over
+this local control socket. The request is bound
+to the peer PID, registered process-start identity, and current authority
+packet ID; target and policy context are resolved from the supervisor's
+registration rather than supplied by the worker. Cross-host transport remains
+a future capability.
 
 Replacement probation and acceptance counters are policy resolved. The default
 guideline is 1,000 successful executions for each stage with no permitted
