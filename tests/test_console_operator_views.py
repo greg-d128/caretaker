@@ -1438,6 +1438,74 @@ def test_console_applies_current_approved_threshold_proposal(tmp_path):
     asyncio.run(exercise())
 
 
+def test_console_creates_threshold_proposal_without_applying_policy(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            requests = []
+
+            async def request(command: str, **payload):
+                requests.append((command, payload))
+                if command == "adaptive-threshold-proposal":
+                    return {
+                        "ok": True,
+                        "proposal": {
+                            "request_id": "request-2",
+                            "proposal_only": True,
+                            "status": "PROPOSAL_ONLY",
+                        },
+                    }
+                if command == "adaptive-aggregation-status":
+                    return {
+                        "ok": True,
+                        "aggregates": [],
+                        "transitions": [],
+                        "policy_context_available": True,
+                        "policy_contexts": [],
+                    }
+                raise AssertionError(command)
+
+            app._request = request  # type: ignore[method-assign]
+            app._application_running = True
+            app.query_one("#adaptive-threshold-proposal-target", Input).value = "app:charge"
+            app.query_one("#adaptive-threshold-proposal-scope", Input).value = "checkout"
+            app.query_one("#adaptive-threshold-proposal-changes", TextArea).text = (
+                '{"exception.occurrences": 5, "exception.window_seconds": 45}'
+            )
+            app.query_one("#adaptive-threshold-proposal-reason", Input).value = (
+                "stage a higher threshold after reviewed worker evidence"
+            )
+            app.query_one("#adaptive-threshold-proposal-delay", Input).value = "120"
+            app.query_one("#adaptive-threshold-proposal-expiry", Input).value = "1800"
+            confirm = app.query_one("#adaptive-threshold-proposal-confirm", Checkbox)
+            confirm.value = True
+            app._refresh_adaptive_threshold_proposal_actions()
+            create = app.query_one("#adaptive-threshold-proposal-create", Button)
+            assert create.disabled is False
+
+            await app.on_button_pressed(Button.Pressed(create))
+
+            assert requests[0] == (
+                "adaptive-threshold-proposal",
+                {
+                    "target_id": "app:charge",
+                    "aggregation_scope": "checkout",
+                    "changes": {
+                        "exception.occurrences": 5,
+                        "exception.window_seconds": 45,
+                    },
+                    "reason": "stage a higher threshold after reviewed worker evidence",
+                    "effective_after_seconds": 120.0,
+                    "expires_in_seconds": 1800.0,
+                },
+            )
+            assert requests[1][0] == "adaptive-aggregation-status"
+            assert confirm.value is False
+
+    asyncio.run(exercise())
+
+
 def test_consequential_console_actions_fail_closed(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 

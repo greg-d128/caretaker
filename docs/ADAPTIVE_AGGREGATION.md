@@ -161,10 +161,14 @@ It shows scoped target identity, generation, worker acknowledgement coverage,
 deadlines, stale-worker counts, and the effective exception, timing, and
 Repair-evidence thresholds that produced the current supervisor view. The
 policy context is bounded and unavailable when the live runtime cannot be
-queried. An unreviewed threshold proposal can be selected and given an
-explicitly reasoned operator approval or rejection; that action records only
-the advisory review record. The tab does not expose transition-acknowledgement
-or threshold-editing controls. It does expose application of a selected
-approved proposal through the separately gated control-plane operation; the
-console does not bypass its review, timing, provenance, authority, or worker
-acknowledgement requirements.
+queried. The console can draft a new bounded, proposal-only threshold change
+with an explicit operator reason, target/scope, delay, expiry, and confirmation;
+the runtime validates its fields and derives all context from the live worker
+registration. Selecting an existing proposal loads its target, scope, and
+changes as a starting point, but does not edit the immutable record. An
+unreviewed threshold proposal can be selected and given an explicitly reasoned
+operator approval or rejection; that action records only the advisory review
+record. The tab does not expose transition-acknowledgement controls. It does
+expose application of a selected approved proposal through the separately
+gated control-plane operation; the console does not bypass its review, timing,
+provenance, authority, or worker acknowledgement requirements.

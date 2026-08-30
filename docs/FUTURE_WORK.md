@@ -748,9 +748,10 @@ An approved proposal can now be represented by a post-application
 `ADAPTIVE_POLICY_TRANSITION` record that binds the prior proposal/review to the
 new policy and authority fingerprints and requires exact worker
 acknowledgements. This record verifies adoption; it does not apply policy or
-grant authority. Remaining work is console proposal-editing UX, persistent
-policy acceptance beyond the bounded runtime lease, and deployment-specific
-worker/process orchestration.
+grant authority. The Adaptive console now drafts new proposal-only changes;
+editing an existing proposal still means creating a new immutable proposal.
+Remaining work is persistent policy acceptance beyond the bounded runtime
+lease and deployment-specific worker/process orchestration.
 The current slice also carries bounded timing-breach duration samples and
 worker-supplied numeric resource samples, producing three-standard-deviation
 evidence conflicts for materially different worker distributions. Automatic

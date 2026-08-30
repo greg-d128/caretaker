@@ -226,6 +226,23 @@ class CaretakerConsoleApp(App):
     }
     #adaptive-threshold-review-actions Input { width: 1fr; min-width: 20; }
     #adaptive-threshold-review-actions Button { width: auto; min-width: 18; margin-left: 1; }
+    #adaptive-threshold-proposal-actions {
+        height: 8;
+        padding: 0 1;
+    }
+    #adaptive-threshold-proposal-fields {
+        height: 3;
+        align-vertical: middle;
+    }
+    #adaptive-threshold-proposal-fields Input { width: 1fr; min-width: 15; margin-right: 1; }
+    #adaptive-threshold-proposal-submit {
+        height: 5;
+        align-vertical: middle;
+    }
+    #adaptive-threshold-proposal-changes { width: 2fr; height: 4; }
+    #adaptive-threshold-proposal-reason { width: 2fr; min-width: 20; margin-left: 1; }
+    #adaptive-threshold-proposal-submit Checkbox { margin-left: 1; }
+    #adaptive-threshold-proposal-submit Button { width: auto; min-width: 18; margin-left: 1; }
     #adaptive-aggregation-table { height: 1fr; }
     #adaptive-aggregation-policy-status {
         height: auto;
@@ -864,7 +881,7 @@ class CaretakerConsoleApp(App):
             with TabPane("Adaptive", id="adaptive"):
                 yield Static(
                     "Supervisor-owned adaptive aggregation and Behavior transition requests. "
-                    "Inspection is read-only; threshold review records are advisory, and transition application remains worker- and policy-gated.",
+                    "Inspection is read-only; threshold proposals and reviews are advisory, and transition application remains worker- and policy-gated.",
                     id="adaptive-aggregation-help",
                 )
                 with Horizontal(id="adaptive-aggregation-toolbar"):
@@ -902,6 +919,33 @@ class CaretakerConsoleApp(App):
                         disabled=True,
                         variant="warning",
                     )
+                with Vertical(id="adaptive-threshold-proposal-actions"):
+                    with Horizontal(id="adaptive-threshold-proposal-fields"):
+                        yield Input(placeholder="Target id (required)", id="adaptive-threshold-proposal-target")
+                        yield Input(placeholder="Aggregation scope (optional)", id="adaptive-threshold-proposal-scope")
+                        yield Input(value="60", placeholder="Effective delay (seconds)", id="adaptive-threshold-proposal-delay")
+                        yield Input(value="3600", placeholder="Expiry (seconds)", id="adaptive-threshold-proposal-expiry")
+                    with Horizontal(id="adaptive-threshold-proposal-submit"):
+                        yield TextArea(
+                            id="adaptive-threshold-proposal-changes",
+                            language="json",
+                            show_line_numbers=False,
+                        )
+                        yield Input(
+                            placeholder="Reason for proposing this threshold change",
+                            id="adaptive-threshold-proposal-reason",
+                            max_length=512,
+                        )
+                        yield Checkbox(
+                            "Confirm proposal only",
+                            id="adaptive-threshold-proposal-confirm",
+                        )
+                        yield Button(
+                            "Create proposal",
+                            id="adaptive-threshold-proposal-create",
+                            disabled=True,
+                            variant="primary",
+                        )
                 yield Static(
                     "Adaptive aggregation status not loaded",
                     id="adaptive-aggregation-status",
@@ -1993,6 +2037,17 @@ class CaretakerConsoleApp(App):
                     else None
                 )
                 self._refresh_adaptive_threshold_review_actions()
+                target = str(payload.get("target_id") or "").strip()
+                self.query_one("#adaptive-threshold-proposal-target", Input).value = target
+                self.query_one("#adaptive-threshold-proposal-scope", Input).value = str(
+                    payload.get("aggregation_scope") or ""
+                ).strip()
+                changes = payload.get("changes")
+                if isinstance(changes, Mapping):
+                    self.query_one(
+                        "#adaptive-threshold-proposal-changes", TextArea
+                    ).text = json.dumps(changes, indent=2, sort_keys=True)
+                self._refresh_adaptive_threshold_proposal_actions()
             else:
                 self._selected_adaptive_threshold_request_id = None
                 self._refresh_adaptive_threshold_review_actions()
@@ -3033,6 +3088,20 @@ class CaretakerConsoleApp(App):
             self.query_one("#adaptive-threshold-review-confirm", Checkbox).value = False
             self.query_one("#adaptive-threshold-apply-confirm", Checkbox).value = False
             self._refresh_adaptive_threshold_review_actions()
+        elif event.input.id in {
+            "adaptive-threshold-proposal-target",
+            "adaptive-threshold-proposal-scope",
+            "adaptive-threshold-proposal-delay",
+            "adaptive-threshold-proposal-expiry",
+            "adaptive-threshold-proposal-reason",
+        }:
+            self.query_one("#adaptive-threshold-proposal-confirm", Checkbox).value = False
+            self._refresh_adaptive_threshold_proposal_actions()
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        if event.text_area.id == "adaptive-threshold-proposal-changes":
+            self.query_one("#adaptive-threshold-proposal-confirm", Checkbox).value = False
+            self._refresh_adaptive_threshold_proposal_actions()
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         if event.checkbox.id == "guard-baseline-confirm":
@@ -3077,6 +3146,8 @@ class CaretakerConsoleApp(App):
             self._refresh_adaptive_threshold_review_actions()
         elif event.checkbox.id == "adaptive-threshold-apply-confirm":
             self._refresh_adaptive_threshold_review_actions()
+        elif event.checkbox.id == "adaptive-threshold-proposal-confirm":
+            self._refresh_adaptive_threshold_proposal_actions()
         elif event.checkbox.id == "worker-failure-recovery-apply-confirm":
             self._refresh_worker_failure_recovery_actions()
 
@@ -3928,6 +3999,20 @@ class CaretakerConsoleApp(App):
             and effective
         )
 
+    def _refresh_adaptive_threshold_proposal_actions(self) -> None:
+        """Enable only the explicit proposal-only threshold operation."""
+        target = self.query_one("#adaptive-threshold-proposal-target", Input).value.strip()
+        changes = self.query_one("#adaptive-threshold-proposal-changes", TextArea).text.strip()
+        reason = self.query_one("#adaptive-threshold-proposal-reason", Input).value.strip()
+        confirm = self.query_one("#adaptive-threshold-proposal-confirm", Checkbox)
+        self.query_one("#adaptive-threshold-proposal-create", Button).disabled = not bool(
+            self._application_running is True
+            and target
+            and changes
+            and reason
+            and confirm.value
+        )
+
     async def _select_incident_capsule(
         self,
         record: dict[str, Any],
@@ -4622,6 +4707,69 @@ class CaretakerConsoleApp(App):
                 self._write_json("#worker-failure-recovery-output", response)
                 await self.refresh_worker_failure_recovery()
                 await self.refresh_repair_recovery_plan()
+                return
+            if button == "adaptive-threshold-proposal-create":
+                target = self.query_one(
+                    "#adaptive-threshold-proposal-target", Input
+                ).value.strip()
+                scope = self.query_one(
+                    "#adaptive-threshold-proposal-scope", Input
+                ).value.strip()
+                raw_changes = self.query_one(
+                    "#adaptive-threshold-proposal-changes", TextArea
+                ).text.strip()
+                reason = self.query_one(
+                    "#adaptive-threshold-proposal-reason", Input
+                ).value.strip()
+                if not target:
+                    raise ValueError("Threshold proposal requires a target id")
+                if not raw_changes:
+                    raise ValueError("Threshold proposal requires JSON changes")
+                try:
+                    changes = json.loads(raw_changes)
+                except json.JSONDecodeError as exc:
+                    raise ValueError("Threshold proposal changes must be valid JSON") from exc
+                if not isinstance(changes, Mapping) or not changes:
+                    raise ValueError("Threshold proposal changes must be a non-empty JSON object")
+                if not reason:
+                    raise ValueError("Threshold proposal requires an operator reason")
+                try:
+                    effective_after_seconds = float(
+                        self.query_one(
+                            "#adaptive-threshold-proposal-delay", Input
+                        ).value.strip()
+                        or "60"
+                    )
+                    expires_in_seconds = float(
+                        self.query_one(
+                            "#adaptive-threshold-proposal-expiry", Input
+                        ).value.strip()
+                        or "3600"
+                    )
+                except ValueError as exc:
+                    raise ValueError(
+                        "Threshold proposal delay and expiry must be numbers"
+                    ) from exc
+                if effective_after_seconds < 0 or expires_in_seconds <= 0:
+                    raise ValueError(
+                        "Threshold proposal delay must be non-negative and expiry must be positive"
+                    )
+                if not self.query_one(
+                    "#adaptive-threshold-proposal-confirm", Checkbox
+                ).value:
+                    raise ValueError("Confirm that this is a proposal-only threshold change")
+                response = await self._request(
+                    "adaptive-threshold-proposal",
+                    target_id=target,
+                    aggregation_scope=scope or None,
+                    changes=dict(changes),
+                    reason=reason,
+                    effective_after_seconds=effective_after_seconds,
+                    expires_in_seconds=expires_in_seconds,
+                )
+                await self.refresh_adaptive_aggregation()
+                self.query_one("#adaptive-threshold-proposal-confirm", Checkbox).value = False
+                self._write_json("#adaptive-aggregation-output", response)
                 return
             if button == "adaptive-aggregation-refresh":
                 await self.refresh_adaptive_aggregation()
