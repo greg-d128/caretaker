@@ -28,6 +28,7 @@ from .adaptive import (
     lightweight_on_soft_timeout,
     validate_lightweight_policy,
 )
+from .behavior import observed_return_shape
 from .authority import (
     AuthorityKind,
     AuthorityLayerSource,
@@ -287,6 +288,7 @@ __all__ = [
     "lightweight_dependency",
     "lightweight_on_exception",
     "lightweight_on_soft_timeout",
+    "observed_return_shape",
     "validate_lightweight_policy",
     "AuthorityKind",
     "AuthorityLayerSource",

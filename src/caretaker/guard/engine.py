@@ -42,6 +42,7 @@ from ..behavior import (
     behavior_generation_id,
     monitoring_configuration_fingerprint,
     observed_return_category,
+    observed_return_shape,
 )
 from ..logging.models import LoggingCapability, LoggingMode, RequiredCapabilityFailureAction
 from ..logging.policy import mode_requirements
@@ -370,6 +371,8 @@ class GuardEngine(GuardFacade):
             "statistics": {
                 "statistics_target": snapshots.statistics_target,
                 "maximum_resources": snapshots.maximum_resources,
+                "maximum_return_categories": snapshots.maximum_return_categories,
+                "maximum_return_shapes": snapshots.maximum_return_shapes,
                 "randomized_epoch_boundaries": snapshots.randomized_epoch_boundaries,
                 "randomized_epoch_min_samples": snapshots.randomized_epoch_min_samples,
                 "randomized_epoch_max_samples": snapshots.randomized_epoch_max_samples,
@@ -620,6 +623,10 @@ class GuardEngine(GuardFacade):
             attributes["return_category"] = ValueSnapshot(
                 type_name="caretaker.return-category",
                 representation=observed_return_category(result),
+            )
+            attributes["return_shape"] = ValueSnapshot(
+                type_name="caretaker.return-shape",
+                representation=observed_return_shape(result),
             )
         event = BehaviorEvent.create(
             event_kind=BehaviorEventKind.FUNCTION_CALL,

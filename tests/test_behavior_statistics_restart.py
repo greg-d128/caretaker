@@ -10,6 +10,7 @@ from caretaker.behavior import (
     BehaviorSnapshotStore,
     BehaviorStatisticsRepository,
     observed_return_category,
+    observed_return_shape,
 )
 from caretaker.evidence import (
     BehaviorEvent,
@@ -42,10 +43,13 @@ def _completed(
     *,
     stage: str = "LIGHTWEIGHT",
     return_category: str | None = None,
+    return_shape: str | None = None,
 ) -> BehaviorEvent:
     attributes = {"observation_stage": stage}
     if return_category is not None:
         attributes["return_category"] = return_category
+    if return_shape is not None:
+        attributes["return_shape"] = return_shape
     return BehaviorEvent.create(
         event_kind=BehaviorEventKind.FUNCTION_CALL,
         operation="function.call.completed",
@@ -131,6 +135,29 @@ def test_return_category_observation_is_type_only_and_does_not_consume_iterators
     assert next(iterator) == 1
 
 
+def test_return_shape_observation_is_bounded_and_does_not_consume_iterators() -> None:
+    values = [None, 1, "", "text", [1, 2], {"secret": "value"}, set()]
+    shapes = [observed_return_shape(value) for value in values]
+    iterator = iter((1, 2))
+
+    assert shapes == [
+        "none",
+        "scalar",
+        "text:length-empty",
+        "text:length-small",
+        "list:length-small",
+        "mapping:length-singleton",
+        "set:length-empty",
+    ]
+    assert observed_return_shape(iterator) == "iterator"
+    assert next(iterator) == 1
+
+    class SensitiveList(list):
+        pass
+
+    assert observed_return_shape(SensitiveList(["secret"])) == "object"
+
+
 def test_return_categories_are_bounded_and_restart_safe(tmp_path: Path) -> None:
     repository = BehaviorStatisticsRepository(
         tmp_path,
@@ -175,6 +202,51 @@ def test_return_categories_are_bounded_and_restart_safe(tmp_path: Path) -> None:
     assert restarted_capture is not None
     assert restarted_capture["profile"]["return_categories"][categories[0]] == 2
     assert restarted_capture["profile"]["return_category_overflow_count"] == 1
+
+
+def test_return_shapes_are_bounded_and_restart_safe(tmp_path: Path) -> None:
+    repository = BehaviorStatisticsRepository(
+        tmp_path,
+        maximum_return_shapes=2,
+        materialize_after_samples=10_000,
+        checkpoint_every_samples=1,
+        automatic_materialization=False,
+    )
+    target_id = "return-shape.target"
+    configuration = {"sampling": {"every": 1}}
+    shapes = (
+        observed_return_shape([]),
+        observed_return_shape([1]),
+        observed_return_shape({"secret": "value"}),
+    )
+    for shape in shapes:
+        repository.observe_event(
+            _completed(target_id, 0.1, return_shape=shape),
+            monitoring_configuration=configuration,
+        )
+
+    capture = repository.current_capture(target_id)
+    assert capture is not None
+    profile = capture["profile"]
+    assert profile["return_shapes"] == {shapes[0]: 1, shapes[1]: 1}
+    assert profile["return_shape_coverage_complete"] is False
+    assert profile["return_shape_overflow_count"] == 1
+
+    restarted = BehaviorStatisticsRepository(
+        tmp_path,
+        maximum_return_shapes=2,
+        materialize_after_samples=10_000,
+        checkpoint_every_samples=1,
+        automatic_materialization=False,
+    )
+    restarted.observe_event(
+        _completed(target_id, 0.1, return_shape=shapes[0]),
+        monitoring_configuration=configuration,
+    )
+    restarted_capture = restarted.current_capture(target_id)
+    assert restarted_capture is not None
+    assert restarted_capture["profile"]["return_shapes"][shapes[0]] == 2
+    assert restarted_capture["profile"]["return_shape_overflow_count"] == 1
 
 
 def test_failed_call_does_not_create_a_return_category_observation(tmp_path: Path) -> None:

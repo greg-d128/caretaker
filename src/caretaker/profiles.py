@@ -143,12 +143,12 @@ POLICY_CAPABILITIES: tuple[PolicyCapability, ...] = (
     ),
     PolicyCapability(
         "guard.return-behavior-categories",
-        4,
+        5,
         "0.6.1",
-        "Bounded return behavior categories",
-        "Controls bounded, type-only categories observed from successful Behavior-stage returns.",
-        "Review category cardinality, type-name disclosure, generation provenance, and overflow handling.",
-        ("guard.snapshots.maximum_return_categories",),
+        "Bounded return behavior categories and shapes",
+        "Controls bounded, type-only categories and non-value structural buckets observed from successful Behavior-stage returns.",
+        "Review category/shape cardinality, type-name disclosure, generation provenance, safe container handling, and overflow handling.",
+        ("guard.snapshots.maximum_return_categories", "guard.snapshots.maximum_return_shapes"),
     ),
     PolicyCapability(
         "guard.behavior-collection-scheduler",

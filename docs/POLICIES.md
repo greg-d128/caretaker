@@ -47,9 +47,13 @@ successful-return categories retained per generation and per observation
 stratum. Categories contain only the concrete runtime type and a coarse
 builtin family such as `none`, `text`, `mapping`, or `iterator`; Caretaker does
 not retain exact values, call `repr`, consume containers, or advance iterators.
-When the bound is reached, the snapshot records incomplete category coverage and
-an overflow count. These observations are evidence only and are not used as a
-failure or Repair signal.
+`BehaviorSnapshotPolicy.maximum_return_shapes` independently bounds non-value
+structural buckets such as `list:length-small` or `text:length-large`.
+Only exact builtin containers and scalar text/byte values contribute length
+buckets; subclasses and application objects remain opaque. When either bound
+is reached, the snapshot records incomplete coverage and an overflow count.
+These observations are evidence only and are not used as a failure or Repair
+signal.
 
 `BehaviorSnapshotPolicy.collection_max_active`, `collection_max_pending`, and
 `collection_max_calls` govern operator-directed behavior captures. Requests are

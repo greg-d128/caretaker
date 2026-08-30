@@ -632,8 +632,7 @@ belong only in promoted Behavior collection.
 
 ### Return-type and return-shape learning review
 
-**Status: Implemented in development tree for bounded type/category evidence;
-novelty detection and return-shape inference remain unimplemented.**
+**Status: Implemented in development tree for bounded type/category/shape evidence; novelty detection remains unimplemented.**
 
 The current contract is intentionally narrower than return learning:
 
@@ -646,20 +645,23 @@ The current contract is intentionally narrower than return learning:
   flags, and shallow object size. It records successful selected outputs only;
   an exception is represented by failure evidence, not by a fabricated result.
 - Behavior statistics persist call counts, success/failure counts, durations,
-  resource observations, event counts, and bounded categories for successful
-  returns observed during Behavior collection. A category contains the concrete
-  runtime type and a coarse builtin family; it never contains an exact value.
+  resource observations, event counts, bounded categories, and bounded
+  non-value structural shapes for successful returns observed during Behavior
+  collection. A category contains the concrete runtime type and a coarse builtin
+  family; a shape contains only a safe scalar/container family and coarse length
+  bucket, never an exact value.
 - Annotations describe a declared contract and validators perform explicit
   policy checks. Neither is treated as an observed runtime distribution or as
   proof that a return is representative.
 
 Consequently, `None`, unions, subclasses, iterators/generators, containers, and
 application-defined objects can be represented by bounded type/family
-categories. Containers are not recursively normalized and iterators are not
-consumed. The category bound and overflow indicator are retained with the
-generation and sample counts, while no return novelty detector currently
-distinguishes a rare legitimate return from a failure. Categories remain
-evidence only and do not affect Guard deviations or Repair decisions.
+categories and, where safe, structural shape buckets. Containers are not
+recursively normalized and iterators are not consumed. Category and shape
+bounds plus overflow indicators are retained with the generation and sample
+counts, while no return novelty detector currently distinguishes a rare
+legitimate return from a failure. Categories and shapes remain evidence only
+and do not affect Guard deviations or Repair decisions.
 
 Remaining novelty-design review must distinguish declared annotations and
 validators from observed runtime types, structural shapes, bounded categorical

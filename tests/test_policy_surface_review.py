@@ -112,6 +112,13 @@ def test_behavior_collection_scheduler_limits_are_validated():
                 snapshots=replace(policy.snapshots, collection_auto_max_promoted=0),
             )
         )
+    with pytest.raises(GuardPolicyConfigurationError, match="maximum_return_shapes"):
+        validate_guard_policy(
+            replace(
+                policy,
+                snapshots=replace(policy.snapshots, maximum_return_shapes=0),
+            )
+        )
 
 
 def test_reserved_setting_catalog_covers_known_deferred_controls():

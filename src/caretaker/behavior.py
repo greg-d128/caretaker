@@ -105,6 +105,53 @@ def observed_return_category(value: Any) -> str:
     return f"{family}:{type_name}"
 
 
+def observed_return_shape(value: Any) -> str:
+    """Return a bounded structural bucket without inspecting return contents.
+
+    Only exact builtin containers contribute a coarse length bucket. Subclasses
+    and application objects are intentionally represented as opaque objects,
+    while iterators are classified without being consumed.
+    """
+    value_type = type(value)
+    if value is None:
+        return "none"
+    if value_type in {bool, int, float, complex}:
+        return "scalar"
+    if value_type in {str, bytes, bytearray}:
+        family = {
+            str: "text",
+            bytes: "bytes",
+            bytearray: "bytearray",
+        }[value_type]
+        return f"{family}:length-{_return_length_bucket(len(value))}"
+    if value_type in {list, tuple, dict, set, frozenset}:
+        family = {
+            list: "list",
+            tuple: "tuple",
+            dict: "mapping",
+            set: "set",
+            frozenset: "frozenset",
+        }[value_type]
+        return f"{family}:length-{_return_length_bucket(len(value))}"
+    if isinstance(value, types.GeneratorType):
+        return "iterator-generator"
+    if isinstance(value, Iterator):
+        return "iterator"
+    return "object"
+
+
+def _return_length_bucket(length: int) -> str:
+    if length == 0:
+        return "empty"
+    if length == 1:
+        return "singleton"
+    if length <= 4:
+        return "small"
+    if length <= 16:
+        return "medium"
+    return "large"
+
+
 def _return_category_attribute(value: Any) -> str | None:
     if isinstance(value, str):
         return value[:256] or None
@@ -114,6 +161,18 @@ def _return_category_attribute(value: Any) -> str | None:
     if isinstance(value, Mapping):
         candidate = value.get("category") or value.get("representation")
         return candidate[:256] if isinstance(candidate, str) and candidate else None
+    return None
+
+
+def _return_shape_attribute(value: Any) -> str | None:
+    if isinstance(value, str):
+        return value[:128] or None
+    if isinstance(value, ValueSnapshot):
+        candidate = value.representation
+        return candidate[:128] or None
+    if isinstance(value, Mapping):
+        candidate = value.get("shape") or value.get("representation")
+        return candidate[:128] if isinstance(candidate, str) and candidate else None
     return None
 
 
@@ -155,6 +214,16 @@ def _profile(value: Mapping[str, Any] | None) -> dict[str, Any]:
         ),
         "return_category_overflow_count": int(
             source.get("return_category_overflow_count") or 0
+        ),
+        "return_shapes": {
+            str(key): int(item)
+            for key, item in dict(source.get("return_shapes") or {}).items()
+        },
+        "return_shape_coverage_complete": bool(
+            source.get("return_shape_coverage_complete", True)
+        ),
+        "return_shape_overflow_count": int(
+            source.get("return_shape_overflow_count") or 0
         ),
     }
 
@@ -1842,6 +1911,7 @@ class BehaviorStatisticsRepository:
         statistics_target: int = 1000,
         maximum_resources: int = 1000,
         maximum_return_categories: int = 32,
+        maximum_return_shapes: int = 32,
         checkpoint_every_samples: int = 25,
         materialize_after_samples: int = 100,
         maximum_snapshot_age_seconds: float = 3600.0,
@@ -1868,6 +1938,9 @@ class BehaviorStatisticsRepository:
         self.maximum_return_categories = int(maximum_return_categories)
         if self.maximum_return_categories <= 0:
             raise ValueError("maximum_return_categories must be greater than zero")
+        self.maximum_return_shapes = int(maximum_return_shapes)
+        if self.maximum_return_shapes <= 0:
+            raise ValueError("maximum_return_shapes must be greater than zero")
         self.checkpoint_every_samples = max(1, int(checkpoint_every_samples))
         self.materialize_after_samples = max(1, int(materialize_after_samples))
         self.maximum_snapshot_age_seconds = max(0.0, float(maximum_snapshot_age_seconds))
@@ -1905,6 +1978,7 @@ class BehaviorStatisticsRepository:
             statistics_target=policy.statistics_target,
             maximum_resources=policy.maximum_resources,
             maximum_return_categories=policy.maximum_return_categories,
+            maximum_return_shapes=policy.maximum_return_shapes,
             checkpoint_every_samples=policy.checkpoint_every_samples,
             materialize_after_samples=policy.materialize_after_samples,
             maximum_snapshot_age_seconds=policy.maximum_snapshot_age_seconds,
@@ -1972,6 +2046,9 @@ class BehaviorStatisticsRepository:
             "return_category_counts": {},
             "return_category_coverage_complete": True,
             "return_category_overflow_count": 0,
+            "return_shape_counts": {},
+            "return_shape_coverage_complete": True,
+            "return_shape_overflow_count": 0,
             "event_kind_counts": {},
             "resource_counts": {},
             "resource_coverage_complete": True,
@@ -2094,6 +2171,7 @@ class BehaviorStatisticsRepository:
                 "success_count": int(item.get("success_count") or 0),
                 "failure_count": int(item.get("failure_count") or 0),
                 "return_categories": dict(item.get("return_category_counts") or {}),
+                "return_shapes": dict(item.get("return_shape_counts") or {}),
                 "duration_seconds": _distribution_summary(item.get("duration_seconds") or {}),
             }
         profile = {
@@ -2111,6 +2189,16 @@ class BehaviorStatisticsRepository:
             ),
             "return_category_overflow_count": int(
                 state.get("return_category_overflow_count") or 0
+            ),
+            "return_shapes": {
+                str(key): int(value)
+                for key, value in dict(state.get("return_shape_counts") or {}).items()
+            },
+            "return_shape_coverage_complete": bool(
+                state.get("return_shape_coverage_complete", True)
+            ),
+            "return_shape_overflow_count": int(
+                state.get("return_shape_overflow_count") or 0
             ),
             "event_kind_counts": dict(state.get("event_kind_counts") or {}),
             "resource_counts": resources,
@@ -2289,6 +2377,27 @@ class BehaviorStatisticsRepository:
                             stratum_categories[category] = int(stratum_categories[category]) + 1
                         elif len(stratum_categories) < self.maximum_return_categories:
                             stratum_categories[category] = 1
+                    shape = _return_shape_attribute(
+                        event_attributes.get("return_shape")
+                    )
+                    if shape is not None:
+                        shapes = state.setdefault("return_shape_counts", {})
+                        if shape in shapes:
+                            shapes[shape] = int(shapes[shape]) + 1
+                        elif len(shapes) < self.maximum_return_shapes:
+                            shapes[shape] = 1
+                        else:
+                            state["return_shape_coverage_complete"] = False
+                            state["return_shape_overflow_count"] = int(
+                                state.get("return_shape_overflow_count") or 0
+                            ) + 1
+                        stratum_shapes = stratum.setdefault(
+                            "return_shape_counts", {}
+                        )
+                        if shape in stratum_shapes:
+                            stratum_shapes[shape] = int(stratum_shapes[shape]) + 1
+                        elif len(stratum_shapes) < self.maximum_return_shapes:
+                            stratum_shapes[shape] = 1
                 elif outcome == "FAILED":
                     state["failure_count"] = int(state.get("failure_count") or 0) + 1
                     stratum["failure_count"] = int(stratum.get("failure_count") or 0) + 1
