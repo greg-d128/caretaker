@@ -54,6 +54,13 @@ communication summary shows status, channel, audience, and content hash; it
 does not render a message body as if it were delivered. Missing sections and
 invalid capsules remain explicitly unavailable.
 
+The Explorer also reports availability for bounded evidence sections including
+function/call state, call arguments, failure and captured variables, thread and
+process state, source identity, state differences, capsule logs, repair and
+validation metadata, and system state. Each section is labeled `CAPTURED`,
+`EMPTY`, `MISSING`, `REDACTED`, or `TRUNCATED`; the labels describe the stored
+evidence and never imply that an absent section was observed to be absent.
+
 For a selected incident, the Explorer also shows a bounded timeline of matching
 persisted log records. Each record is labeled as persisted-log evidence and
 includes its record identifier and derived content hash. This timeline is a

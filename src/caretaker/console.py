@@ -599,6 +599,10 @@ class CaretakerConsoleApp(App):
                             yield Button("Approve", id="incident-communication-approve", disabled=True)
                             yield Button("Reject", id="incident-communication-reject", disabled=True)
                         yield Static("Incident facts unavailable", id="incident-capsule-facts")
+                        yield Static(
+                            "Evidence sections unavailable",
+                            id="incident-capsule-evidence-sections",
+                        )
                         yield Static("Communication history unavailable", id="incident-capsule-communications")
                         yield RichLog(id="incident-capsule-output", wrap=False, markup=True)
                         yield Static("Side artifacts", id="incident-artifact-title")
@@ -2923,6 +2927,88 @@ class CaretakerConsoleApp(App):
             facts.append("No standard incident facts were captured at this capsule level.")
         self.query_one("#incident-capsule-facts", Static).update("\n".join(facts))
 
+        def section_status(value: Any) -> str:
+            if value is None:
+                return "MISSING"
+            if isinstance(value, Mapping):
+                if value.get("redacted") is True:
+                    return "REDACTED"
+                if value.get("truncated") is True:
+                    return "TRUNCATED"
+                statuses = [section_status(item) for item in value.values()]
+                if "REDACTED" in statuses:
+                    return "REDACTED"
+                if "TRUNCATED" in statuses:
+                    return "TRUNCATED"
+                meaningful = [
+                    item for key, item in value.items()
+                    if key not in {"redacted", "truncated"} and item not in (None, "", (), [], {})
+                ]
+                return "CAPTURED" if meaningful else "EMPTY"
+            if isinstance(value, (list, tuple, set, frozenset)):
+                if not value:
+                    return "EMPTY"
+                statuses = [section_status(item) for item in value]
+                if "REDACTED" in statuses:
+                    return "REDACTED"
+                if "TRUNCATED" in statuses:
+                    return "TRUNCATED"
+                return "CAPTURED"
+            return "CAPTURED"
+
+        state_data = state if isinstance(state, Mapping) else {}
+        call = state_data.get("call")
+        failure = state_data.get("failure")
+        target = state_data.get("target")
+        metadata = state_data.get("metadata")
+        metadata = metadata if isinstance(metadata, Mapping) else {}
+        traceback = failure.get("traceback") if isinstance(failure, Mapping) else None
+        variable_frames = (
+            [
+                frame.get("locals")
+                for frame in traceback
+                if isinstance(frame, Mapping) and frame.get("locals")
+            ]
+            if isinstance(traceback, (list, tuple))
+            else None
+        )
+        thread_state = (
+            {
+                key: call.get(key)
+                for key in ("process_id", "thread_id", "task_name")
+                if isinstance(call, Mapping) and key in call
+            }
+            or None
+        )
+        source_state = (
+            {
+                key: target.get(key)
+                for key in ("filename", "line_number", "source_hash", "module_name", "qualified_name")
+                if isinstance(target, Mapping) and key in target
+            }
+            or None
+        )
+        section_values = (
+            ("function state", call),
+            ("call arguments", call.get("bound_arguments") if isinstance(call, Mapping) else None),
+            ("failure", failure),
+            ("captured variables", variable_frames),
+            ("thread/process state", thread_state),
+            ("source identity", source_state),
+            ("state differences", state_data.get("state_differences")),
+            ("capsule logs", state_data.get("logs")),
+            ("repair evidence", metadata.get("repair") or metadata.get("repair_attempts")),
+            ("validation evidence", metadata.get("validation") or metadata.get("validation_results")),
+            ("system state", metadata.get("system_state") or metadata.get("system")),
+        )
+        evidence_sections = ["Evidence sections"]
+        for label, value in section_values:
+            evidence_sections.append(f"{label}: {section_status(value)}")
+        evidence_sections.append("capsule integrity: VERIFIED")
+        self.query_one("#incident-capsule-evidence-sections", Static).update(
+            "\n".join(evidence_sections)
+        )
+
         communications = ["Communication history"]
         records = payload.get("communications")
         if isinstance(records, (list, tuple)):
@@ -2975,6 +3061,9 @@ class CaretakerConsoleApp(App):
                 "Select an Incident Capsule"
             )
             self.query_one("#incident-capsule-facts", Static).update("Incident facts unavailable")
+            self.query_one("#incident-capsule-evidence-sections", Static).update(
+                "Evidence sections unavailable"
+            )
             self.query_one("#incident-capsule-communications", Static).update(
                 "Communication history unavailable"
             )
@@ -3003,6 +3092,9 @@ class CaretakerConsoleApp(App):
             "Select an Incident Capsule"
         )
         self.query_one("#incident-capsule-facts", Static).update("Incident facts unavailable")
+        self.query_one("#incident-capsule-evidence-sections", Static).update(
+            "Evidence sections unavailable"
+        )
         self.query_one("#incident-capsule-communications", Static).update(
             "Communication history unavailable"
         )
@@ -3043,6 +3135,9 @@ class CaretakerConsoleApp(App):
                 f"Invalid Incident Capsule | {capsule_id}"
             )
             self.query_one("#incident-capsule-facts", Static).update("Invalid capsule evidence")
+            self.query_one("#incident-capsule-evidence-sections", Static).update(
+                "Evidence sections unavailable for invalid evidence"
+            )
             self.query_one("#incident-capsule-communications", Static).update(
                 "Communication history unavailable for invalid evidence"
             )
@@ -3109,6 +3204,9 @@ class CaretakerConsoleApp(App):
                 )
         except Exception as exc:
             self.query_one("#incident-capsule-facts", Static).update("Incident facts unavailable")
+            self.query_one("#incident-capsule-evidence-sections", Static).update(
+                "Evidence sections unavailable"
+            )
             self.query_one("#incident-capsule-communications", Static).update(
                 "Communication history unavailable"
             )

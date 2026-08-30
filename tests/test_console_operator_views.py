@@ -793,6 +793,23 @@ def test_console_incident_explorer_loads_verified_capsule_and_side_artifact(tmp_
                             "capsule_id": capsule_id,
                             "incident_id": incident_id,
                             "revision": 2,
+                            "incident_state": {
+                                "target": {
+                                    "module_name": "lab",
+                                    "qualified_name": "probe",
+                                    "source_hash": "a" * 64,
+                                },
+                                "call": {
+                                    "process_id": 42,
+                                    "thread_id": 7,
+                                    "bound_arguments": {"value": 3},
+                                },
+                                "failure": {
+                                    "traceback": [{"locals": {"value": 3}}],
+                                },
+                                "state_differences": [],
+                                "logs": [],
+                            },
                             "artifacts": [{
                                 "artifact_id": artifact_id,
                                 "kind": "operator-view",
@@ -827,6 +844,14 @@ def test_console_incident_explorer_loads_verified_capsule_and_side_artifact(tmp_
             await app._select_incident_capsule(app._capsule_records[0])
             assert app.query_one("#incident-artifact-table", DataTable).row_count == 1
             assert app.query_one("#incident-timeline-table", DataTable).row_count == 1
+            evidence_sections = str(
+                app.query_one("#incident-capsule-evidence-sections", Static).render()
+            )
+            assert "function state: CAPTURED" in evidence_sections
+            assert "failure: CAPTURED" in evidence_sections
+            assert "captured variables: CAPTURED" in evidence_sections
+            assert "state differences: EMPTY" in evidence_sections
+            assert "capsule integrity: VERIFIED" in evidence_sections
             await app._select_incident_timeline(app._incident_timeline_records[0])
             await app._select_incident_artifact(app._incident_artifact_records[0])
             assert requests == [
