@@ -500,13 +500,28 @@ class OperatorRuntimeRegistry:
         if command == "behavior-collection-status":
             collections = []
             for guard in self.guard_engines():
+                status = guard.behavior_collection_status()
+                status["requests"] = list(guard.behavior_collection_requests(limit=100))
                 collections.append(
                     {
                         "guard": guard.__class__.__name__,
-                        **guard.behavior_collection_status(),
+                        **status,
                     }
                 )
             return {"ok": True, "collections": collections}
+
+        if command == "behavior-collection-cancel":
+            request_id = str(request.get("request_id") or "").strip()
+            if not request_id:
+                raise ValueError("behavior-collection-cancel requires request_id")
+            reason = str(request.get("reason") or "operator cancelled collection").strip()
+            for guard in self.guard_engines():
+                try:
+                    cancelled = guard.cancel_behavior_collection(request_id, reason=reason)
+                except (FileNotFoundError, ValueError):
+                    continue
+                return {"ok": True, "request": _jsonable(cancelled)}
+            raise KeyError(f"No behavior collection request found for {request_id}")
 
         if command in {
             "guard-summary",

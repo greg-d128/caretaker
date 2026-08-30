@@ -915,6 +915,23 @@ class GuardEngine(GuardFacade):
             }
         return {"enabled": True, **scheduler.status()}
 
+    def behavior_collection_requests(self, *, limit: int = 100) -> tuple[dict[str, Any], ...]:
+        scheduler = self.behavior_collection_scheduler
+        if scheduler is None:
+            return ()
+        return scheduler.list_requests(limit=limit)
+
+    def cancel_behavior_collection(
+        self,
+        request_id: str,
+        *,
+        reason: str = "operator cancelled collection",
+    ) -> dict[str, Any]:
+        scheduler = self.behavior_collection_scheduler
+        if scheduler is None:
+            raise ValueError("Guard behavior collection scheduling is unavailable")
+        return scheduler.cancel(request_id, reason=reason)
+
     def evidence_bundle(self, target_id: str, *, calls: int = 20) -> GuardEvidenceBundle | None:
         binding = self._targets.get(target_id)
         if binding is None:

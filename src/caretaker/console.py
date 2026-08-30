@@ -2225,8 +2225,18 @@ class CaretakerConsoleApp(App):
         queued = sum(int(item.get("queued") or 0) for item in enabled)
         pending_limit = sum(int(item.get("maximum_pending") or 0) for item in enabled)
         active_limit = sum(int(item.get("maximum_active") or 0) for item in enabled)
+        counts: dict[str, int] = {}
+        for item in enabled:
+            for status, count in dict(item.get("counts") or {}).items():
+                counts[str(status)] = counts.get(str(status), 0) + int(count or 0)
+        terminal = ", ".join(
+            f"{status} {counts.get(status, 0)}"
+            for status in ("failed", "deferred", "expired", "cancelled")
+            if counts.get(status, 0)
+        )
         return (
             f"collection queue active {active}/{active_limit}, queued {queued}/{pending_limit}"
+            f"{'; terminal ' + terminal if terminal else ''}"
         )
 
     @staticmethod

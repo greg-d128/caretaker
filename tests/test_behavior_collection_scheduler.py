@@ -199,3 +199,29 @@ def test_operator_function_capture_uses_scheduler_provenance(tmp_path: Path, mon
     assert request["requested_by"] == "uid:1001"
     assert request["reason"] == "operator verification"
     assert request["status"] == "CAPTURED"
+
+
+def test_operator_can_cancel_queued_collection_request(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CARETAKER_DATA_DIR", str(tmp_path))
+    guard = GuardEngine(policy=GuardPolicy())
+    request = guard.behavior_collection_scheduler.enqueue(
+        scope="function",
+        subject="example.target",
+        requested_calls=1,
+        requested_by="uid:1001",
+        reason="queued work",
+    )
+    registry = OperatorRuntimeRegistry()
+    registry.register_guard_engine(guard)
+
+    result = registry.handle_request(
+        {
+            "command": "behavior-collection-cancel",
+            "request_id": request["request_id"],
+            "reason": "operator no longer needs it",
+        },
+        (1234, 1001, 1001),
+    )
+
+    assert result["ok"] is True
+    assert result["request"]["status"] == "CANCELLED"
