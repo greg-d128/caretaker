@@ -22,6 +22,7 @@ from uuid import UUID, uuid4
 
 ADAPTIVE_AGGREGATION_SCHEMA_VERSION = 1
 MAX_BATCH_TEXT = 256
+MAX_AGGREGATION_SCOPE_TEXT = 256
 MAX_BATCH_EVENTS = 256
 MAX_BATCH_COUNTER = 1000
 MAX_WORKER_PROVENANCE = 128
@@ -76,6 +77,7 @@ class AdaptiveObservationBatcher:
         policy_fingerprint: str,
         authority_policy_generation: str,
         authority_policy_fingerprint: str,
+        aggregation_scope: str | None = None,
         flush_after_observations: int = 64,
         flush_interval_seconds: float = 5.0,
     ) -> None:
@@ -85,6 +87,7 @@ class AdaptiveObservationBatcher:
             )
         if float(flush_interval_seconds) < 0:
             raise ValueError("flush_interval_seconds cannot be negative")
+        extended_aggregation_target_id(str(target_id), aggregation_scope)
         self.store = store
         self.worker_id = str(worker_id)
         self.worker_pid = int(worker_pid)
@@ -102,6 +105,9 @@ class AdaptiveObservationBatcher:
         self._dropped_records = 0
         self._context = {
             "target_id": str(target_id),
+            "aggregation_scope": (
+                str(aggregation_scope).strip() if aggregation_scope is not None else None
+            ),
             "generation_id": str(generation_id),
             "code_hash": str(code_hash),
             "monitoring_fingerprint": str(monitoring_fingerprint),
@@ -111,7 +117,7 @@ class AdaptiveObservationBatcher:
         }
 
     @property
-    def context(self) -> Mapping[str, str]:
+    def context(self) -> Mapping[str, str | None]:
         with self._lock:
             return dict(self._context)
 
@@ -167,11 +173,23 @@ class AdaptiveObservationBatcher:
         with self._lock:
             return self._flush_locked()
 
-    def rebind(self, **context: str) -> dict[str, Any] | None:
+    def rebind(self, **context: str | None) -> dict[str, Any] | None:
         """Flush the old generation/policy episode before changing its context."""
         with self._lock:
             result = self._flush_locked()
-            self._context = {name: str(context[name]) for name in self._context}
+            next_context: dict[str, str | None] = {}
+            for name in self._context:
+                value = context[name]
+                next_context[name] = (
+                    str(value).strip()
+                    if value is not None
+                    else None
+                )
+            extended_aggregation_target_id(
+                str(next_context["target_id"]),
+                next_context["aggregation_scope"],
+            )
+            self._context = next_context
             self._reset_locked()
             return result
 
@@ -181,6 +199,7 @@ class AdaptiveObservationBatcher:
                 "worker_id": self.worker_id,
                 "worker_pid": self.worker_pid,
                 "target_id": self._context["target_id"],
+                "aggregation_scope": self._context["aggregation_scope"],
                 "generation_id": self._context["generation_id"],
                 "pending_records": self._records,
                 "next_sequence": self._sequence + 1,
@@ -241,6 +260,29 @@ def _text(value: Any, *, name: str, limit: int, required: bool = True) -> str | 
     if len(result) > limit:
         raise AdaptiveAggregationError(f"{name} exceeds {limit} characters")
     return result
+
+
+def extended_aggregation_target_id(
+    target_id: str,
+    aggregation_scope: str | None = None,
+) -> str:
+    """Return the exact context key for one target and optional population.
+
+    A scoped identity is intentionally opaque to callers. It is used as a key
+    in supervisor generation and policy maps, while the durable aggregate also
+    retains the original target and scope separately for operator display.
+    """
+    target = _text(target_id, name="target_id", limit=MAX_BATCH_TEXT)
+    assert target is not None
+    if aggregation_scope is None:
+        return target
+    scope = _text(
+        aggregation_scope,
+        name="aggregation_scope",
+        limit=MAX_AGGREGATION_SCOPE_TEXT,
+    )
+    assert scope is not None
+    return f"{target}::aggregation-scope::{scope}"
 
 
 def _count(value: Any, *, name: str, maximum: int = MAX_BATCH_COUNTER) -> int:
@@ -305,6 +347,12 @@ def normalize_adaptive_observation_batch(value: Mapping[str, Any]) -> dict[str, 
         "worker_id": _text(value.get("worker_id"), name="worker_id", limit=MAX_BATCH_TEXT),
         "worker_pid": worker_pid,
         "target_id": _text(value.get("target_id"), name="target_id", limit=MAX_BATCH_TEXT),
+        "aggregation_scope": _text(
+            value.get("aggregation_scope"),
+            name="aggregation_scope",
+            limit=MAX_AGGREGATION_SCOPE_TEXT,
+            required=False,
+        ),
         "generation_id": _text(value.get("generation_id"), name="generation_id", limit=MAX_BATCH_TEXT),
         "code_hash": _text(value.get("code_hash"), name="code_hash", limit=MAX_BATCH_TEXT),
         "monitoring_fingerprint": _text(
@@ -562,9 +610,10 @@ class SupervisorAdaptiveAggregationStore:
     @staticmethod
     def _aggregate_key(batch: Mapping[str, Any]) -> str:
         context = "\0".join(
-            str(batch[name])
+            str(batch.get(name) or "")
             for name in (
                 "target_id",
+                "aggregation_scope",
                 "generation_id",
                 "code_hash",
                 "monitoring_fingerprint",
@@ -699,6 +748,11 @@ class SupervisorAdaptiveAggregationStore:
             "schema_version": self._STATE_SCHEMA_VERSION,
             "aggregate_key": key,
             "target_id": batch["target_id"],
+            "aggregation_scope": batch.get("aggregation_scope"),
+            "aggregation_target_id": extended_aggregation_target_id(
+                str(batch["target_id"]),
+                batch.get("aggregation_scope"),
+            ),
             "generation_id": batch["generation_id"],
             "code_hash": batch["code_hash"],
             "monitoring_fingerprint": batch["monitoring_fingerprint"],
@@ -809,6 +863,8 @@ class SupervisorAdaptiveAggregationStore:
                     "report_kind": "ADAPTIVE_DISTRIBUTION_CONFLICT",
                     "aggregate_key": aggregate["aggregate_key"],
                     "target_id": aggregate["target_id"],
+                    "aggregation_scope": aggregate.get("aggregation_scope"),
+                    "aggregation_target_id": aggregate.get("aggregation_target_id"),
                     "generation_id": aggregate["generation_id"],
                     "code_hash": aggregate["code_hash"],
                     "policy_fingerprint": aggregate["policy_fingerprint"],
@@ -906,12 +962,16 @@ class SupervisorAdaptiveAggregationStore:
         authority_policy_fingerprint: str,
     ) -> str | None:
         target = str(batch["target_id"])
-        if target not in current_generations:
+        aggregation_target = extended_aggregation_target_id(
+            target,
+            batch.get("aggregation_scope"),
+        )
+        if aggregation_target not in current_generations:
             return "GENERATION_CONTEXT_UNAVAILABLE"
-        if str(current_generations[target]) != str(batch["generation_id"]):
+        if str(current_generations[aggregation_target]) != str(batch["generation_id"]):
             return "STALE_GENERATION"
         expected_policy = (
-            policy_fingerprints.get(target)
+            policy_fingerprints.get(aggregation_target)
             if policy_fingerprints is not None
             else policy_fingerprint
         )
@@ -1138,7 +1198,16 @@ class SupervisorAdaptiveAggregationStore:
                     skipped += 1
                     continue
                 target = str(aggregate["target_id"])
-                raw_policy = promotion_policies.get(target)
+                aggregation_target = str(
+                    aggregate.get("aggregation_target_id")
+                    or extended_aggregation_target_id(
+                        target,
+                        aggregate.get("aggregation_scope"),
+                    )
+                )
+                raw_policy = promotion_policies.get(aggregation_target)
+                if raw_policy is None and aggregate.get("aggregation_scope") is None:
+                    raw_policy = promotion_policies.get(target)
                 if not isinstance(raw_policy, Mapping):
                     skipped += 1
                     continue
@@ -1166,7 +1235,7 @@ class SupervisorAdaptiveAggregationStore:
                     try:
                         policy = _promotion_policy(raw_policy.get(signal), name=signal)
                     except AdaptiveAggregationError as exc:
-                        errors.append({"target_id": target, "error": str(exc)[:256]})
+                        errors.append({"target_id": aggregation_target, "error": str(exc)[:256]})
                         continue
                     if not policy["enabled"]:
                         continue
@@ -1186,6 +1255,8 @@ class SupervisorAdaptiveAggregationStore:
                         "request_kind": "ADAPTIVE_PROMOTION",
                         "aggregate_key": str(aggregate["aggregate_key"]),
                         "target_id": target,
+                        "aggregation_scope": aggregate.get("aggregation_scope"),
+                        "aggregation_target_id": aggregation_target,
                         "generation_id": str(aggregate["generation_id"]),
                         "code_hash": str(aggregate["code_hash"]),
                         "monitoring_fingerprint": str(aggregate["monitoring_fingerprint"]),
@@ -1216,7 +1287,7 @@ class SupervisorAdaptiveAggregationStore:
                         raw_policy.get("repair_evidence")
                     )
                 except AdaptiveAggregationError as exc:
-                    errors.append({"target_id": target, "error": str(exc)[:256]})
+                    errors.append({"target_id": aggregation_target, "error": str(exc)[:256]})
                     evidence_policy = None
                 if evidence_policy is not None and evidence_policy["enabled"]:
                     behavior_applied = any(
@@ -1259,6 +1330,8 @@ class SupervisorAdaptiveAggregationStore:
                                 "request_kind": "ADAPTIVE_REPAIR_PROPOSAL",
                                 "aggregate_key": str(aggregate["aggregate_key"]),
                                 "target_id": target,
+                                "aggregation_scope": aggregate.get("aggregation_scope"),
+                                "aggregation_target_id": aggregation_target,
                                 "generation_id": str(aggregate["generation_id"]),
                                 "code_hash": str(aggregate["code_hash"]),
                                 "monitoring_fingerprint": str(aggregate["monitoring_fingerprint"]),
@@ -1314,6 +1387,7 @@ class SupervisorAdaptiveAggregationStore:
         self,
         *,
         target_id: str | None = None,
+        aggregation_scope: str | None = None,
         worker_id: str | None = None,
         limit: int = 100,
     ) -> tuple[dict[str, Any], ...]:
@@ -1327,6 +1401,10 @@ class SupervisorAdaptiveAggregationStore:
             except Exception:
                 continue
             if target_id is not None and str(request.get("target_id")) != str(target_id):
+                continue
+            if aggregation_scope is not None and str(request.get("aggregation_scope") or "") != str(
+                aggregation_scope
+            ):
                 continue
             required = request.get("required_workers") or ()
             if worker_id is not None and not any(
@@ -1371,6 +1449,7 @@ class SupervisorAdaptiveAggregationStore:
             raise PermissionError("transition peer process does not match worker provenance")
         for name in (
             "target_id",
+            "aggregation_scope",
             "generation_id",
             "code_hash",
             "monitoring_fingerprint",

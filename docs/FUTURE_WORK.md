@@ -728,8 +728,11 @@ Workers should batch threshold observations to the supervisor, which owns:
 
 The remaining implementation must explicitly define and enforce whether each
 threshold is process-local, application-wide, or workload/population scoped. It
-must move repair-evidence evaluation, dynamic threshold administration, remote
-transport, process lifecycle orchestration, and richer non-rate distribution
+now preserves an optional, explicitly declared aggregation scope as an
+extended target identity; it still needs policy and operator semantics for
+discovering or changing workload/population membership. It must move
+repair-evidence evaluation, dynamic threshold administration, remote transport,
+process lifecycle orchestration, and richer non-rate distribution
 reconciliation without double-counting the existing single-process lifecycle.
 
 Recovery action dispatch now has application-owned adapters for incident

@@ -169,6 +169,7 @@ class AdaptiveAggregationPolicy:
     enabled: bool = False
     flush_after_observations: int = 64
     flush_interval_seconds: float = 5.0
+    aggregation_scope: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -380,6 +381,11 @@ def validate_lightweight_policy(policy: LightweightPolicy) -> None:
         errors.append("aggregation.flush_after_observations must be between 1 and 1000")
     if aggregation.flush_interval_seconds < 0:
         errors.append("aggregation.flush_interval_seconds cannot be negative")
+    if aggregation.aggregation_scope is not None:
+        if not isinstance(aggregation.aggregation_scope, str) or not aggregation.aggregation_scope.strip():
+            errors.append("aggregation.aggregation_scope must be a non-empty string when provided")
+        elif len(aggregation.aggregation_scope) > 256:
+            errors.append("aggregation.aggregation_scope cannot exceed 256 characters")
     if errors:
         raise ValueError("Invalid LightweightPolicy: " + "; ".join(errors))
 
@@ -1363,9 +1369,10 @@ class _AdaptiveController:
             return Path(os.environ.get("CARETAKER_DATA_DIR", "./caretaker-data"))
         return Path(self._state_directory).parent
 
-    def _aggregation_context(self) -> dict[str, str]:
+    def _aggregation_context(self) -> dict[str, str | None]:
         return {
             "target_id": self.target_id,
+            "aggregation_scope": self.policy.aggregation.aggregation_scope,
             # Code identity is the current adaptive generation identity. A code
             # change causes a new hash and therefore a new supervisor aggregate.
             "generation_id": self.code_hash,

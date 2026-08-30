@@ -21,13 +21,23 @@ The ledger rejects batches with missing or stale context. This prevents a worker
 from extending an old generation or policy episode by presenting its own
 metadata as current authority.
 
-Each accepted aggregate is scoped by target, generation, code identity,
+Each accepted aggregate is scoped by target, optional `aggregation_scope`, generation, code identity,
 monitoring fingerprint, policy fingerprint, and authority context. The durable
 record merges counters, retains a bounded recent event-time window, and records
 bounded per-worker sequence and observation provenance. State is content-hash
 protected and checkpointed before the corresponding batch is archived. A batch
 ID is retained in the aggregate for bounded deduplication, and an archived
 resubmission is idempotent.
+
+`aggregation_scope` is an optional policy value for a known population or
+behavior regime, such as a declared input cluster. It is not a clustering
+algorithm and does not infer a relationship from observed values. When present,
+the supervisor addresses the population with the extended target identity
+`<target>::aggregation-scope::<scope>` in its current-generation and policy
+maps. A scoped batch is rejected unless that exact extended identity is
+current; scoped and unscoped batches therefore cannot merge accidentally. The
+durable aggregate retains both the original target and the scope for operator
+display. The scope does not grant authority or alter Repair policy.
 
 Reconciliation also writes a bounded per-batch acknowledgement containing the
 batch ID, batch hash, result (`ACCEPTED`, `DUPLICATE`, or `REJECTED`), and

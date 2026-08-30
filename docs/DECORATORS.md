@@ -95,6 +95,8 @@ policy = LightweightPolicy(
         enabled=True,
         flush_after_observations=64,
         flush_interval_seconds=5,
+        # Optional explicit population/regime identity.
+        aggregation_scope="cluster:blue",
     ),
 )
 

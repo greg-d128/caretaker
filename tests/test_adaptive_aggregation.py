@@ -10,6 +10,7 @@ from caretaker.adaptive_aggregation import (
     AdaptiveAggregationError,
     AdaptiveObservationBatcher,
     SupervisorAdaptiveAggregationStore,
+    extended_aggregation_target_id,
 )
 from caretaker.adaptive import (
     AdaptiveAggregationPolicy,
@@ -91,6 +92,55 @@ def test_supervisor_aggregation_merges_batches_and_retains_worker_provenance(tmp
     assert store.acknowledgement(str(first["batch_id"]))["status"] == "ACCEPTED"
     assert store.acknowledgement(str(second["batch_id"]))["status"] == "ACCEPTED"
     assert store.status()["acknowledgements"] == 2
+
+
+def test_optional_aggregation_scope_requires_extended_context_and_keeps_populations_separate(
+    tmp_path: Path,
+):
+    scoped = _batch(batch_id="00000000-0000-0000-0000-00000000000c")
+    scoped["aggregation_scope"] = "cluster:blue"
+    extended = extended_aggregation_target_id(
+        scoped["target_id"], scoped["aggregation_scope"]
+    )
+
+    rejected_store = SupervisorAdaptiveAggregationStore(tmp_path / "rejected")
+    rejected_store.submit(scoped)
+    rejected = rejected_store.reconcile(**_context())
+    assert rejected["rejected"] == 1
+    assert "GENERATION_CONTEXT_UNAVAILABLE" in next(
+        rejected_store.rejected_directory.glob("*.json")
+    ).read_text(encoding="utf-8")
+
+    store = SupervisorAdaptiveAggregationStore(tmp_path / "accepted")
+    store.submit(scoped)
+    unscoped = _batch(batch_id="00000000-0000-0000-0000-00000000000d")
+    store.submit(unscoped)
+    context = _context()
+    context["current_generations"] = {
+        "example.target": "generation-a",
+        extended: "generation-a",
+    }
+    context["policy_fingerprints"] = {
+        "example.target": "policy-a",
+        extended: "policy-a",
+    }
+    context.pop("policy_fingerprint", None)
+
+    result = store.reconcile(**context)
+
+    assert result["merged"] == 2
+    aggregates = store.list_aggregates()
+    assert len(aggregates) == 2
+    assert {
+        (item["target_id"], item["aggregation_scope"])
+        for item in aggregates
+    } == {
+        ("example.target", None),
+        ("example.target", "cluster:blue"),
+    }
+    assert next(
+        item for item in aggregates if item["aggregation_scope"] == "cluster:blue"
+    )["aggregation_target_id"] == extended
 
 
 def test_supervisor_records_worker_distribution_conflict_without_discarding_evidence(

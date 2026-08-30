@@ -34,6 +34,7 @@ from .adaptive_aggregation import (
     AdaptiveAggregationError,
     AdaptiveObservationBatcher,
     SupervisorAdaptiveAggregationStore,
+    extended_aggregation_target_id,
     normalize_adaptive_observation_batch,
 )
 from .behavior import observed_return_shape
@@ -337,6 +338,7 @@ __all__ = [
     "AdaptiveObservationBatcher",
     "adaptive_aggregation_status",
     "SupervisorAdaptiveAggregationStore",
+    "extended_aggregation_target_id",
     "normalize_adaptive_observation_batch",
     "AuthorityKind",
     "AuthorityLayerSource",
