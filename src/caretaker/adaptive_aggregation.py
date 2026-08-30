@@ -382,6 +382,8 @@ def _promotion_policy(value: Any, *, name: str) -> dict[str, Any]:
     enabled = value.get("enabled", False)
     if not isinstance(enabled, bool):
         raise AdaptiveAggregationError(f"{name}.enabled must be a boolean")
+    if isinstance(value.get("occurrences", 0), bool):
+        raise AdaptiveAggregationError(f"{name}.occurrences must be an integer")
     try:
         occurrences = int(value.get("occurrences", 0))
     except (TypeError, ValueError) as exc:
@@ -407,6 +409,51 @@ def _promotion_policy(value: Any, *, name: str) -> dict[str, Any]:
         "window_seconds": window_seconds,
         "promote_to": promote_to,
     }
+
+
+def _repair_evidence_policy(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise AdaptiveAggregationError("repair_evidence policy must be an object")
+    enabled = value.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise AdaptiveAggregationError("repair_evidence.enabled must be a boolean")
+    integer_fields = (
+        "minimum_behavior_samples",
+        "minimum_observation_calls",
+    )
+    normalized: dict[str, Any] = {"enabled": enabled}
+    for name in integer_fields:
+        if isinstance(value.get(name, 0), bool):
+            raise AdaptiveAggregationError(f"repair_evidence.{name} must be an integer")
+        try:
+            result = int(value.get(name, 0))
+        except (TypeError, ValueError) as exc:
+            raise AdaptiveAggregationError(
+                f"repair_evidence.{name} must be an integer"
+            ) from exc
+        if result < 0 or result > MAX_BATCH_COUNTER:
+            raise AdaptiveAggregationError(
+                f"repair_evidence.{name} must be between 0 and {MAX_BATCH_COUNTER}"
+            )
+        normalized[name] = result
+    try:
+        duration = float(value.get("minimum_duration_seconds", 0))
+    except (TypeError, ValueError) as exc:
+        raise AdaptiveAggregationError(
+            "repair_evidence.minimum_duration_seconds must be a number"
+        ) from exc
+    if duration < 0:
+        raise AdaptiveAggregationError(
+            "repair_evidence.minimum_duration_seconds cannot be negative"
+        )
+    require_reproduction = value.get("require_problem_reproduction", False)
+    if not isinstance(require_reproduction, bool):
+        raise AdaptiveAggregationError(
+            "repair_evidence.require_problem_reproduction must be a boolean"
+        )
+    normalized["minimum_duration_seconds"] = duration
+    normalized["require_problem_reproduction"] = require_reproduction
+    return normalized
 
 
 def _safe_write(path: Path, value: Mapping[str, Any]) -> None:
@@ -889,6 +936,8 @@ class SupervisorAdaptiveAggregationStore:
         request: Mapping[str, Any],
         acknowledgements: tuple[Mapping[str, Any], ...],
     ) -> str:
+        if request.get("request_kind") == "ADAPTIVE_REPAIR_PROPOSAL":
+            return "PROPOSAL_ONLY"
         required = {
             str(item["worker_id"])
             for item in request.get("required_workers", ())
@@ -930,6 +979,7 @@ class SupervisorAdaptiveAggregationStore:
         if maximum <= 0:
             raise ValueError("maximum must be greater than zero")
         created = 0
+        proposals_created = 0
         existing = 0
         skipped = 0
         errors: list[dict[str, str]] = []
@@ -967,6 +1017,17 @@ class SupervisorAdaptiveAggregationStore:
                     skipped += 1
                     continue
                 latest = datetime.fromisoformat(str(aggregate["last_observed_at"]))
+                required_workers = [
+                    {
+                        "worker_id": str(worker_id),
+                        "worker_pid": int(worker.get("worker_pid")),
+                    }
+                    for worker_id, worker in sorted(workers.items())
+                    if isinstance(worker, Mapping)
+                ]
+                if not required_workers:
+                    skipped += 1
+                    continue
                 signals = (
                     ("exception", "exception_events"),
                     ("soft_timing", "timing_events"),
@@ -989,17 +1050,6 @@ class SupervisorAdaptiveAggregationStore:
                     key = (str(aggregate["aggregate_key"]), signal)
                     if key in existing_requests:
                         existing += 1
-                        continue
-                    required_workers = [
-                        {
-                            "worker_id": str(worker_id),
-                            "worker_pid": int(worker.get("worker_pid")),
-                        }
-                        for worker_id, worker in sorted(workers.items())
-                        if isinstance(worker, Mapping)
-                    ]
-                    if not required_workers:
-                        skipped += 1
                         continue
                     request: dict[str, Any] = {
                         "request_id": str(uuid4()),
@@ -1030,6 +1080,93 @@ class SupervisorAdaptiveAggregationStore:
                     _safe_write(self._transition_path(str(request["request_id"])), envelope)
                     existing_requests[key] = request
                     created += 1
+
+                try:
+                    evidence_policy = _repair_evidence_policy(
+                        raw_policy.get("repair_evidence")
+                    )
+                except AdaptiveAggregationError as exc:
+                    errors.append({"target_id": target, "error": str(exc)[:256]})
+                    evidence_policy = None
+                if evidence_policy is not None and evidence_policy["enabled"]:
+                    behavior_applied = any(
+                        candidate.get("aggregate_key") == aggregate["aggregate_key"]
+                        and candidate.get("request_kind") == "ADAPTIVE_PROMOTION"
+                        and self._transition_status(
+                            candidate,
+                            self._load_transition_acknowledgements(
+                                str(candidate["request_id"])
+                            ),
+                        )
+                        == "APPLIED"
+                        for candidate in existing_requests.values()
+                    )
+                    duration_seconds = max(
+                        0.0,
+                        (
+                            latest
+                            - datetime.fromisoformat(str(aggregate["first_observed_at"]))
+                        ).total_seconds(),
+                    )
+                    evidence_sufficient = (
+                        int(aggregate.get("behavior_samples") or 0)
+                        >= evidence_policy["minimum_behavior_samples"]
+                        and int(aggregate.get("behavior_observation_calls") or 0)
+                        >= evidence_policy["minimum_observation_calls"]
+                        and duration_seconds >= evidence_policy["minimum_duration_seconds"]
+                        and (
+                            not evidence_policy["require_problem_reproduction"]
+                            or int(aggregate.get("problem_reproductions") or 0) > 0
+                        )
+                    )
+                    key = (str(aggregate["aggregate_key"]), "repair_evidence")
+                    if behavior_applied and evidence_sufficient:
+                        if key in existing_requests:
+                            existing += 1
+                        else:
+                            proposal: dict[str, Any] = {
+                                "request_id": str(uuid4()),
+                                "request_kind": "ADAPTIVE_REPAIR_PROPOSAL",
+                                "aggregate_key": str(aggregate["aggregate_key"]),
+                                "target_id": target,
+                                "generation_id": str(aggregate["generation_id"]),
+                                "code_hash": str(aggregate["code_hash"]),
+                                "monitoring_fingerprint": str(aggregate["monitoring_fingerprint"]),
+                                "policy_fingerprint": str(aggregate["policy_fingerprint"]),
+                                "authority_policy_generation": str(aggregate["authority_policy_generation"]),
+                                "authority_policy_fingerprint": str(aggregate["authority_policy_fingerprint"]),
+                                "signal": "repair_evidence",
+                                "signal_level": "REPAIR",
+                                "requested_level": "REPAIR",
+                                "reason": (
+                                    "application-wide behavioral evidence satisfies "
+                                    "the configured Repair evidence gate"
+                                ),
+                                "created_at": _utcnow_iso(),
+                                "required_workers": required_workers,
+                                "evidence": {
+                                    "behavior_samples": int(aggregate.get("behavior_samples") or 0),
+                                    "behavior_observation_calls": int(
+                                        aggregate.get("behavior_observation_calls") or 0
+                                    ),
+                                    "problem_reproductions": int(
+                                        aggregate.get("problem_reproductions") or 0
+                                    ),
+                                    "duration_seconds": duration_seconds,
+                                },
+                                "proposal_only": True,
+                            }
+                            _safe_write(
+                                self._transition_path(str(proposal["request_id"])),
+                                {
+                                    "schema_version": ADAPTIVE_AGGREGATION_SCHEMA_VERSION,
+                                    "request": proposal,
+                                    "request_sha256": _content_hash(proposal),
+                                },
+                            )
+                            existing_requests[key] = proposal
+                            created += 1
+                            proposals_created += 1
             except Exception as exc:
                 errors.append({
                     "aggregate_key": path.stem,
@@ -1037,6 +1174,7 @@ class SupervisorAdaptiveAggregationStore:
                 })
         return {
             "created": created,
+            "proposals_created": proposals_created,
             "existing": existing,
             "skipped": skipped,
             "errors": errors[:20],
@@ -1088,6 +1226,8 @@ class SupervisorAdaptiveAggregationStore:
         except (TypeError, ValueError) as exc:
             raise AdaptiveAggregationError("transition request_id must be a UUID") from exc
         stored = self._load_transition_request(self._transition_path(request_id))
+        if stored.get("request_kind") != "ADAPTIVE_PROMOTION":
+            raise PermissionError("only Behavior promotion requests can be acknowledged")
         worker_id = _text(request.get("worker_id"), name="worker_id", limit=MAX_BATCH_TEXT)
         assert worker_id is not None
         required = {

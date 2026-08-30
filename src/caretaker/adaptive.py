@@ -1418,6 +1418,13 @@ class _AdaptiveController:
                 "window_seconds": self.policy.soft_timing.window_seconds,
                 "promote_to": self.policy.soft_timing.promote_to.name,
             },
+            "repair_evidence": {
+                "enabled": self.policy.repair_evidence.enabled,
+                "minimum_behavior_samples": self.policy.repair_evidence.minimum_behavior_samples,
+                "minimum_observation_calls": self.policy.repair_evidence.minimum_observation_calls,
+                "minimum_duration_seconds": self.policy.repair_evidence.minimum_duration_seconds,
+                "require_problem_reproduction": self.policy.repair_evidence.require_problem_reproduction,
+            },
         }
         batcher = self._aggregation_batcher
         if batcher is None:

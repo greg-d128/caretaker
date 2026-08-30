@@ -705,10 +705,11 @@ stale context, records bounded worker provenance with idempotent batch handling,
 reconciles enabled worker contexts during the supervisor health cycle, and
 publishes per-batch delivery acknowledgements.
 
-Adaptive hot-path counters and repair-evidence gates remain process local, but
-the supervisor now evaluates the application-wide exception/timing event window
-and owns the resulting Behavior transition request state. Multiple workers can
-validate, apply, and acknowledge the same exact-context request without each
+Adaptive hot-path counters remain process local. The supervisor now evaluates
+the application-wide exception/timing event window, owns the resulting Behavior
+transition request state, and—after all required Behavior acknowledgements—can
+record a proposal-only Repair evidence decision. Multiple workers can validate,
+apply, and acknowledge the same exact-context request without each
 independently promoting or double-counting the threshold.
 
 Future design should continue moving authoritative adaptive counters and repair

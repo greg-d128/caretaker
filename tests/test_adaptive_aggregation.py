@@ -130,6 +130,13 @@ def test_supervisor_creates_context_bound_promotion_and_tracks_worker_acknowledg
             "window_seconds": 3600,
             "promote_to": "BEHAVIOR",
         },
+        "repair_evidence": {
+            "enabled": True,
+            "minimum_behavior_samples": 1,
+            "minimum_observation_calls": 1,
+            "minimum_duration_seconds": 0,
+            "require_problem_reproduction": True,
+        },
     }
     evaluated = store.evaluate_promotions(
         **context,
@@ -177,6 +184,21 @@ def test_supervisor_creates_context_bound_promotion_and_tracks_worker_acknowledg
             {**ack, "request_id": request["request_id"]},
             peer_pid=202,
         )
+
+    evaluated = store.evaluate_promotions(
+        **context,
+        promotion_policies={"example.target": promotion_policy},
+    )
+    assert evaluated["proposals_created"] == 1
+    proposal = next(
+        item
+        for item in store.list_transition_requests()
+        if item["request_kind"] == "ADAPTIVE_REPAIR_PROPOSAL"
+    )
+    assert proposal["status"] == "PROPOSAL_ONLY"
+    assert proposal["requested_level"] == "REPAIR"
+    with pytest.raises(PermissionError, match="Behavior promotion"):
+        store.acknowledge_transition(ack | {"request_id": proposal["request_id"]}, peer_pid=101)
 
 
 def test_aggregated_exception_threshold_waits_for_supervisor_request(tmp_path: Path):

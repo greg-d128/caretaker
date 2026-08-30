@@ -50,6 +50,13 @@ acknowledgements. No LLM, batch field, aggregate counter, or transition request
 creates authority, changes policy, accepts a Guard baseline, or activates
 Repair.
 
+Once all required Behavior requests are acknowledged, the supervisor can also
+evaluate the application-wide behavioral evidence gate and record an
+`ADAPTIVE_REPAIR_PROPOSAL`. This is a durable, proposal-only record containing
+the evidence counts and observation-window duration. It cannot be acknowledged
+as an applied transition and still requires the ordinary Repair policy,
+validation, approval, and authority gates.
+
 The supervisor exposes `adaptive-aggregation-status`,
 `adaptive-aggregation-reconcile`, `adaptive-aggregation-ack`,
 `adaptive-transition-list`, and `adaptive-transition-ack` through its control
@@ -57,6 +64,6 @@ socket. Its health cycle reconciles enabled worker contexts and evaluates
 thresholds automatically. The worker-side
 `apply_supervisor_transition()` method requires exact target, generation, code,
 monitoring, policy, and authority context before applying Behavior. Dynamic
-console-managed thresholds, supervisor-owned repair-evidence accumulation,
-remote transport, and automatic worker process orchestration remain future
-work.
+console-managed thresholds, supervisor-owned Repair activation/evidence beyond
+the current bounded gate, remote transport, and automatic worker process
+orchestration remain future work.
