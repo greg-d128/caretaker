@@ -1644,6 +1644,46 @@ def main(argv: list[str] | None = None) -> int:
     system_restart_times: list[float] = []
     application_stop_requested = False
     system_failure_handled = False
+    internal_failure_handled: set[UUID] = set()
+
+    def handle_internal_worker_failure(
+        worker: object,
+        *,
+        error_fingerprint: str,
+    ) -> dict[str, object]:
+        """Route an in-process caretaker worker failure through policy.
+
+        These workers are owned by the application-scoped runtime, so this
+        path can record evidence and select the configured failure action but
+        deliberately has no process-spawn callback. Process orchestration
+        remains an application/deployment responsibility.
+        """
+        nonlocal application_stop_requested
+        worker_id = getattr(worker, "worker_id")
+        if worker_id in internal_failure_handled:
+            return {"ok": True, "action": "ALREADY_HANDLED"}
+        failed_worker = supervisor.workers.mark_failed(
+            worker_id,
+            error_fingerprint=error_fingerprint,
+        )
+        result = supervisor.handle_worker_failure(
+            failed_worker,
+            policy=runtime.active_policy.worker_restart,
+            create_incident=record_worker_failure,
+            disable_component=lambda current: {
+                "accepted": True,
+                "component": current.worker_kind.name,
+                "disabled": True,
+                "authority_granted": False,
+            },
+        )
+        internal_failure_handled.add(worker_id)
+        if (
+            result.get("action") == WorkerFailureAction.STOP_APPLICATION.name
+            and not application_stop_requested
+        ):
+            application_stop_requested = True
+        return result
 
     def record_worker_failure(envelope: dict[str, object]) -> dict[str, object]:
         try:
@@ -1859,18 +1899,28 @@ def main(argv: list[str] | None = None) -> int:
                     queue_depth=runtime.sink._queue.qsize(),
                 )
             else:
-                supervisor.workers.mark_failed(
-                    writer_health.worker_id,
-                    error_fingerprint=type(runtime.sink.last_error).__name__ if runtime.sink.last_error else "writer-thread-stopped",
+                handle_internal_worker_failure(
+                    writer_health,
+                    error_fingerprint=(
+                        type(runtime.sink.last_error).__name__
+                        if runtime.sink.last_error
+                        else "writer-thread-stopped"
+                    ),
                 )
             if server_thread.is_alive():
                 supervisor.workers.heartbeat(event_health.worker_id, state=WorkerState.HEALTHY)
             else:
-                supervisor.workers.mark_failed(event_health.worker_id, error_fingerprint="event-server-stopped")
+                handle_internal_worker_failure(
+                    event_health,
+                    error_fingerprint="event-server-stopped",
+                )
             if control_thread.is_alive():
                 supervisor.workers.heartbeat(control_health.worker_id, state=WorkerState.HEALTHY)
             else:
-                supervisor.workers.mark_failed(control_health.worker_id, error_fingerprint="control-server-stopped")
+                handle_internal_worker_failure(
+                    control_health,
+                    error_fingerprint="control-server-stopped",
+                )
             if system_health is not None and collector_thread is not None:
                 if collector_thread.is_alive():
                     system_failure_handled = False

@@ -1035,9 +1035,10 @@ only counts a worker as restarted after a callback-owned replacement reports
 success. Restart exhaustion selects the existing degraded, disable, or stop
 action vocabulary. Process spawning, cross-process replacement packet
 distribution, and general policy-specific incident/shutdown orchestration
-remain future work. The supervised system-collector failure path now creates an
-initial Incident Capsule immediately through the application-owned callback;
-other worker failure paths still need deployment-specific capsule binding.
+remain future work. The supervised writer, event-server, control-server, and
+system-collector failure paths now create an initial Incident Capsule
+immediately through the application-owned callback; process spawning remains a
+deployment-specific future capability.
 Workers may now provide bounded diagnostic context with heartbeat or
 failure state. Standard failure envelopes omit that supplemental context;
 `CARETAKER_DIAGNOSTIC_DEBUG=1` includes it as diagnostic evidence for controlled
