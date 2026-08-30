@@ -89,6 +89,24 @@ def test_randomized_behavior_snapshot_bounds_are_validated():
         )
 
 
+def test_behavior_collection_scheduler_limits_are_validated():
+    policy = GuardPolicy()
+    with pytest.raises(GuardPolicyConfigurationError, match="collection_max_pending"):
+        validate_guard_policy(
+            replace(
+                policy,
+                snapshots=replace(policy.snapshots, collection_max_pending=0),
+            )
+        )
+    with pytest.raises(GuardPolicyConfigurationError, match="collection_max_calls"):
+        validate_guard_policy(
+            replace(
+                policy,
+                snapshots=replace(policy.snapshots, collection_max_calls=1001),
+            )
+        )
+
+
 def test_reserved_setting_catalog_covers_known_deferred_controls():
     expected = {
         "repair.context.previous_incidents",

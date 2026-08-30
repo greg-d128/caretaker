@@ -567,16 +567,18 @@ are evidence only and cannot automatically become an accepted Guard baseline.
 
 ## Operator-directed and coverage-complete behavior collection
 
-**Status: Proposal pending decision.**
+**Status: Implemented in development tree for bounded operator-directed scheduling; coverage-complete backlog orchestration remains future work.**
 
 The console's bounded manual function and module capture records signed
 collection provenance with each saved snapshot: request ID, authenticated
 operator identity, reason, requested scope/subject/call count, effective
 authority generation and fingerprint, observed generation/call count, completion
 time, and capture outcome. This metadata is evidence only; it cannot change the
-behavior generation, policy, authority, baseline, or Repair state. A scheduler,
-resource budget, queued requests, and coverage-complete backlog remain future
-work.
+behavior generation, policy, authority, baseline, or Repair state. The initial
+operator scheduler provides a durable bounded queue, active/pending limits,
+priority/deadline ordering, restart recovery, cancellation state, and explicit
+backpressure. Application-wide measured overhead budgets and a coverage-complete
+backlog remain future work.
 
 Caretaker should let an operator deliberately promote an eligible lightweight
 slot into Behavior collection from the console. This supports investigation of a

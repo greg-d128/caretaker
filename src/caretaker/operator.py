@@ -328,6 +328,57 @@ class OperatorRuntimeRegistry:
         target = engine.registry.get(target_id)
         return {"target_id": target_id, "policy": _jsonable(target.policy)}
 
+    def _module_behavior_capture(self, subject: str, calls: int) -> dict[str, Any]:
+        children = []
+        for guard in self.guard_engines():
+            for candidate_target in guard.registered_target_ids():
+                capture = guard.behavior_capture(candidate_target, calls=calls)
+                if capture.get("subject", {}).get("module_name") == subject:
+                    children.append(capture)
+        identity = identify_module(subject)
+        kind_counts: dict[str, int] = {}
+        network: set[str] = set()
+        filesystem: set[str] = set()
+        subprocesses: set[str] = set()
+        imports: set[str] = set()
+        dynamic: set[str] = set()
+        calls_total = 0
+        events_total = 0
+        for child in children:
+            profile = child.get("profile", {})
+            calls_total += int(profile.get("call_count") or 0)
+            events_total += int(profile.get("event_count") or 0)
+            for key, value in dict(profile.get("event_kind_counts") or {}).items():
+                kind_counts[str(key)] = kind_counts.get(str(key), 0) + int(value)
+            network.update(map(str, profile.get("network_destinations") or ()))
+            filesystem.update(map(str, profile.get("filesystem_roots") or ()))
+            subprocesses.update(map(str, profile.get("subprocesses") or ()))
+            imports.update(map(str, profile.get("imports") or ()))
+            dynamic.update(map(str, profile.get("dynamic_code_operations") or ()))
+        return {
+            "scope": "module",
+            "subject_key": f"module:{subject}",
+            "subject": {
+                "module_name": subject,
+                "qualified_name": None,
+                "source_path": identity.source_path,
+            },
+            "code_hash": identity.source_hash,
+            "code_hash_kind": "module-source-sha256",
+            "profile": {
+                "window_count": 0,
+                "call_count": calls_total,
+                "event_count": events_total,
+                "event_kind_counts": kind_counts,
+                "network_destinations": sorted(network),
+                "filesystem_roots": sorted(filesystem),
+                "subprocesses": sorted(subprocesses),
+                "imports": sorted(imports),
+                "dynamic_code_operations": sorted(dynamic),
+            },
+            "children": children,
+        }
+
     def handle_request(
         self,
         request: dict[str, Any],
@@ -396,63 +447,66 @@ class OperatorRuntimeRegistry:
             scope = str(request.get("scope") or "function").strip().lower()
             subject = str(request.get("subject") or target_id or "").strip()
             calls = max(1, min(int(request.get("calls", 50)), 1000))
+            requested_by = str(request.get("requested_by") or f"uid:{credentials[1]}").strip()
+            reason = str(request.get("reason") or "operator-requested behavior capture").strip()
+            priority = int(request.get("priority", 100))
+            deadline = request.get("deadline")
             if not subject:
                 raise ValueError("behavior-capture requires subject")
             if scope == "function":
                 guard = self._guard_engine_for_target(subject)
-                return {"ok": True, "capture": _jsonable(guard.behavior_capture(subject, calls=calls))}
+                return {
+                    "ok": True,
+                    "capture": _jsonable(
+                        guard.schedule_behavior_collection(
+                            scope=scope,
+                            subject=subject,
+                            calls=calls,
+                            requested_by=requested_by,
+                            reason=reason,
+                            priority=priority,
+                            deadline=deadline,
+                            operation=lambda: guard.behavior_capture(subject, calls=calls),
+                        )
+                    ),
+                }
             if scope != "module":
                 raise ValueError("behavior-capture scope must be function or module")
-            children = []
-            for guard in self.guard_engines():
-                for candidate_target in guard.registered_target_ids():
-                    capture = guard.behavior_capture(candidate_target, calls=calls)
-                    if capture.get("subject", {}).get("module_name") == subject:
-                        children.append(capture)
-            identity = identify_module(subject)
-            kind_counts: dict[str, int] = {}
-            network: set[str] = set()
-            filesystem: set[str] = set()
-            subprocesses: set[str] = set()
-            imports: set[str] = set()
-            dynamic: set[str] = set()
-            calls_total = 0
-            events_total = 0
-            for child in children:
-                profile = child.get("profile", {})
-                calls_total += int(profile.get("call_count") or 0)
-                events_total += int(profile.get("event_count") or 0)
-                for key, value in dict(profile.get("event_kind_counts") or {}).items():
-                    kind_counts[str(key)] = kind_counts.get(str(key), 0) + int(value)
-                network.update(map(str, profile.get("network_destinations") or ()))
-                filesystem.update(map(str, profile.get("filesystem_roots") or ()))
-                subprocesses.update(map(str, profile.get("subprocesses") or ()))
-                imports.update(map(str, profile.get("imports") or ()))
-                dynamic.update(map(str, profile.get("dynamic_code_operations") or ()))
-            capture = {
-                "scope": "module",
-                "subject_key": f"module:{subject}",
-                "subject": {
-                    "module_name": subject,
-                    "qualified_name": None,
-                    "source_path": identity.source_path,
-                },
-                "code_hash": identity.source_hash,
-                "code_hash_kind": "module-source-sha256",
-                "profile": {
-                    "window_count": 0,
-                    "call_count": calls_total,
-                    "event_count": events_total,
-                    "event_kind_counts": kind_counts,
-                    "network_destinations": sorted(network),
-                    "filesystem_roots": sorted(filesystem),
-                    "subprocesses": sorted(subprocesses),
-                    "imports": sorted(imports),
-                    "dynamic_code_operations": sorted(dynamic),
-                },
-                "children": children,
-            }
+            scheduler_guard = next(
+                (
+                    guard
+                    for guard in self.guard_engines()
+                    if guard.behavior_collection_scheduler is not None
+                ),
+                None,
+            )
+            operation = lambda: self._module_behavior_capture(subject, calls)
+            capture = (
+                scheduler_guard.schedule_behavior_collection(
+                    scope=scope,
+                    subject=subject,
+                    calls=calls,
+                    requested_by=requested_by,
+                    reason=reason,
+                    priority=priority,
+                    deadline=deadline,
+                    operation=operation,
+                )
+                if scheduler_guard is not None
+                else operation()
+            )
             return {"ok": True, "capture": _jsonable(capture)}
+
+        if command == "behavior-collection-status":
+            collections = []
+            for guard in self.guard_engines():
+                collections.append(
+                    {
+                        "guard": guard.__class__.__name__,
+                        **guard.behavior_collection_status(),
+                    }
+                )
+            return {"ok": True, "collections": collections}
 
         if command in {
             "guard-summary",

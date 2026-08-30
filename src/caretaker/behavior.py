@@ -16,7 +16,7 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 from uuid import UUID, uuid4
 
 from .domain import ValueSnapshot
@@ -176,6 +176,8 @@ def _collection_request(value: Mapping[str, Any] | None) -> dict[str, Any] | Non
         "completed_at": 64,
         "authority_policy_generation": 128,
         "authority_policy_fingerprint": 128,
+        "deadline": 64,
+        "status": 32,
     }
     result: dict[str, Any] = {}
     for key, limit in string_limits.items():
@@ -188,6 +190,16 @@ def _collection_request(value: Mapping[str, Any] | None) -> dict[str, Any] | Non
             result[key] = max(0, min(int(value[key]), 1000))
         except (TypeError, ValueError):
             continue
+    if value.get("priority") is not None:
+        try:
+            result["priority"] = max(-1000, min(int(value["priority"]), 1000))
+        except (TypeError, ValueError):
+            pass
+    if value.get("attempt") is not None:
+        try:
+            result["attempt"] = max(0, min(int(value["attempt"]), 1000))
+        except (TypeError, ValueError):
+            pass
     return result or None
 
 
@@ -1310,6 +1322,430 @@ def behavior_generation_id(
     return hashlib.sha256(
         f"{subject_key}\0{code_hash or ''}\0{monitoring_fingerprint or ''}\0{statistics_schema_version}".encode("utf-8")
     ).hexdigest()
+
+
+class BehaviorCollectionQueueFull(RuntimeError):
+    """Raised when the policy-governed collection queue applies backpressure."""
+
+
+class BehaviorCollectionScheduler:
+    """Durable scheduler for bounded operator-directed behavior captures.
+
+    The scheduler controls collection requests, not authority. A request can
+    cut an observation window and produce evidence, but it cannot modify Guard
+    policy, an accepted baseline, or Repair state. Requests are kept in a
+    private durable directory so an application restart recovers an interrupted
+    request as queued work instead of silently losing it.
+    """
+
+    _SCHEMA_VERSION = 1
+    _ACTIVE = "ACTIVE"
+    _QUEUED = "QUEUED"
+    _TERMINAL_STATES = frozenset({"CAPTURED", "FAILED", "CANCELLED", "EXPIRED"})
+
+    def __init__(
+        self,
+        root: str | Path,
+        *,
+        maximum_active: int = 1,
+        maximum_pending: int = 256,
+        maximum_calls: int = 1000,
+        clock: Callable[[], datetime] = utcnow,
+    ) -> None:
+        if int(maximum_active) <= 0:
+            raise ValueError("maximum_active must be greater than zero")
+        if int(maximum_pending) <= 0:
+            raise ValueError("maximum_pending must be greater than zero")
+        if int(maximum_calls) <= 0:
+            raise ValueError("maximum_calls must be greater than zero")
+        self.root = Path(root)
+        self.request_directory = self.root / "behavior" / "collection" / "requests"
+        self.request_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            self.request_directory.chmod(0o700)
+        except OSError:
+            pass
+        self.maximum_active = int(maximum_active)
+        self.maximum_pending = int(maximum_pending)
+        self.maximum_calls = int(maximum_calls)
+        self._clock = clock
+        self._lock = threading.RLock()
+        self._recover_active_requests()
+
+    def _now(self) -> datetime:
+        value = self._clock()
+        if value.tzinfo is None:
+            raise ValueError("collection scheduler clock must return an aware datetime")
+        return value.astimezone(timezone.utc)
+
+    @staticmethod
+    def _text(value: Any, *, name: str, limit: int, required: bool = False) -> str | None:
+        if value is None:
+            if required:
+                raise ValueError(f"{name} is required")
+            return None
+        result = str(value).strip()
+        if required and not result:
+            raise ValueError(f"{name} is required")
+        if len(result) > limit:
+            raise ValueError(f"{name} exceeds the {limit} character limit")
+        return result or None
+
+    @staticmethod
+    def _deadline(value: Any) -> str | None:
+        if value in (None, ""):
+            return None
+        raw = str(value).strip()
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("deadline must be an ISO-8601 timestamp") from exc
+        if parsed.tzinfo is None:
+            raise ValueError("deadline must include a timezone")
+        return parsed.astimezone(timezone.utc).isoformat()
+
+    def _path(self, request_id: str | UUID) -> Path:
+        try:
+            identifier = UUID(str(request_id))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("collection request ID is invalid") from exc
+        return self.request_directory / f"{identifier}.json"
+
+    @staticmethod
+    def _read(path: Path) -> dict[str, Any]:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(value, dict):
+            raise ValueError("collection request is not an object")
+        if int(value.get("schema_version") or 0) != BehaviorCollectionScheduler._SCHEMA_VERSION:
+            raise ValueError("unsupported collection request schema")
+        if str(value.get("request_id") or "") != path.stem:
+            raise ValueError("collection request ID does not match its filename")
+        return value
+
+    @staticmethod
+    def _write(path: Path, value: Mapping[str, Any]) -> None:
+        temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+        temporary.write_bytes(canonical_json_bytes(value))
+        try:
+            temporary.chmod(0o600)
+        except OSError:
+            pass
+        temporary.replace(path)
+
+    def _requests(self) -> tuple[dict[str, Any], ...]:
+        requests: list[dict[str, Any]] = []
+        for path in self.request_directory.glob("*.json"):
+            try:
+                requests.append(self._read(path))
+            except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                # A malformed request is never executable. It remains visible
+                # through invalid_request_count for operator diagnosis.
+                continue
+        return tuple(requests)
+
+    def _recover_active_requests(self) -> None:
+        with self._lock:
+            for path in self.request_directory.glob("*.json"):
+                try:
+                    request = self._read(path)
+                except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                if request.get("status") != self._ACTIVE:
+                    continue
+                now = self._now()
+                if request.get("cancel_requested"):
+                    request["status"] = "CANCELLED"
+                    request["outcome"] = "CANCELLED"
+                    request["completed_at"] = now.isoformat()
+                    request["error"] = str(
+                        request.get("cancel_reason") or "operator cancelled collection"
+                    )[:500]
+                else:
+                    request["status"] = self._QUEUED
+                    request["recovered_after_restart"] = True
+                    request["started_at"] = None
+                request["updated_at"] = now.isoformat()
+                self._write(path, request)
+
+    @staticmethod
+    def _priority(value: Any) -> int:
+        if isinstance(value, bool):
+            raise ValueError("priority must be an integer")
+        try:
+            return max(-1000, min(1000, int(value or 0)))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("priority must be an integer") from exc
+
+    def _pending_requests(self) -> tuple[dict[str, Any], ...]:
+        return tuple(
+            request
+            for request in self._requests()
+            if request.get("status") in {self._QUEUED, self._ACTIVE}
+        )
+
+    def enqueue(
+        self,
+        *,
+        scope: str,
+        subject: str,
+        requested_calls: int,
+        requested_by: str,
+        reason: str,
+        priority: int = 0,
+        deadline: str | None = None,
+        requested_generation: str | None = None,
+        authority_policy_generation: str | None = None,
+        authority_policy_fingerprint: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_scope = self._text(scope, name="scope", limit=32, required=True).lower()
+        if normalized_scope not in {"function", "module"}:
+            raise ValueError("scope must be function or module")
+        normalized_subject = self._text(subject, name="subject", limit=500, required=True)
+        normalized_by = self._text(requested_by, name="requested_by", limit=128, required=True)
+        normalized_reason = self._text(reason, name="reason", limit=500, required=True)
+        if isinstance(requested_calls, bool):
+            raise ValueError("requested_calls must be an integer")
+        try:
+            calls = int(requested_calls)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("requested_calls must be an integer") from exc
+        if calls < 1 or calls > self.maximum_calls:
+            raise ValueError(f"requested_calls must be between 1 and {self.maximum_calls}")
+        normalized_deadline = self._deadline(deadline)
+        now = self._now()
+        with self._lock:
+            if len(self._pending_requests()) >= self.maximum_pending:
+                raise BehaviorCollectionQueueFull(
+                    f"behavior collection queue is full ({self.maximum_pending} pending requests)"
+                )
+            request_id = uuid4()
+            request = {
+                "schema_version": self._SCHEMA_VERSION,
+                "request_id": str(request_id),
+                "status": self._QUEUED,
+                "requested_at": now.isoformat(),
+                "updated_at": now.isoformat(),
+                "requested_by": normalized_by,
+                "reason": normalized_reason,
+                "scope": normalized_scope,
+                "subject": normalized_subject,
+                "requested_calls": calls,
+                "priority": self._priority(priority),
+                "deadline": normalized_deadline,
+                "requested_generation": self._text(
+                    requested_generation, name="requested_generation", limit=128
+                ),
+                "authority_policy_generation": self._text(
+                    authority_policy_generation,
+                    name="authority_policy_generation",
+                    limit=128,
+                ),
+                "authority_policy_fingerprint": self._text(
+                    authority_policy_fingerprint,
+                    name="authority_policy_fingerprint",
+                    limit=128,
+                ),
+                "attempt": 0,
+            }
+            path = self._path(request_id)
+            self._write(path, request)
+            return dict(request)
+
+    @staticmethod
+    def _sort_key(request: Mapping[str, Any]) -> tuple[int, str, str, str]:
+        return (
+            -int(request.get("priority") or 0),
+            str(request.get("deadline") or "9999-12-31T23:59:59+00:00"),
+            str(request.get("requested_at") or ""),
+            str(request.get("request_id") or ""),
+        )
+
+    def _expire(self, requests: Iterable[dict[str, Any]], now: datetime) -> None:
+        for request in requests:
+            if request.get("status") != self._QUEUED or not request.get("deadline"):
+                continue
+            try:
+                deadline = datetime.fromisoformat(str(request["deadline"]))
+            except ValueError:
+                request["status"] = "FAILED"
+                request["error"] = "collection request has an invalid deadline"
+            else:
+                if deadline <= now:
+                    request["status"] = "EXPIRED"
+                    request["outcome"] = "EXPIRED"
+                    request["completed_at"] = now.isoformat()
+            if request.get("status") != self._QUEUED:
+                request["updated_at"] = now.isoformat()
+                self._write(self._path(str(request["request_id"])), request)
+
+    def claim_next(self, request_id: str | UUID | None = None) -> dict[str, Any] | None:
+        with self._lock:
+            now = self._now()
+            requests = list(self._requests())
+            self._expire(requests, now)
+            active = [item for item in requests if item.get("status") == self._ACTIVE]
+            if len(active) >= self.maximum_active:
+                return None
+            queued = [item for item in requests if item.get("status") == self._QUEUED]
+            if request_id is not None:
+                queued = [item for item in queued if item.get("request_id") == str(request_id)]
+            if not queued:
+                return None
+            request = sorted(queued, key=self._sort_key)[0]
+            request["status"] = self._ACTIVE
+            request["attempt"] = int(request.get("attempt") or 0) + 1
+            request["started_at"] = now.isoformat()
+            request["updated_at"] = now.isoformat()
+            self._write(self._path(str(request["request_id"])), request)
+            return dict(request)
+
+    def is_cancel_requested(self, request_id: str | UUID) -> bool:
+        with self._lock:
+            request = self._read(self._path(request_id))
+            return bool(request.get("cancel_requested"))
+
+    def complete(
+        self,
+        request_id: str | UUID,
+        *,
+        outcome: str,
+        observed_calls: int = 0,
+        observed_generation: str | None = None,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_outcome = str(outcome).strip().upper()
+        if normalized_outcome not in {"CAPTURED", "FAILED", "CANCELLED", "DEFERRED"}:
+            raise ValueError("collection outcome is invalid")
+        with self._lock:
+            path = self._path(request_id)
+            request = self._read(path)
+            if request.get("status") != self._ACTIVE:
+                raise ValueError("only an active collection request can be completed")
+            if request.get("cancel_requested"):
+                normalized_outcome = "CANCELLED"
+            request["status"] = normalized_outcome
+            request["outcome"] = normalized_outcome
+            request["completed_at"] = self._now().isoformat()
+            request["updated_at"] = request["completed_at"]
+            try:
+                request["observed_calls"] = max(0, min(int(observed_calls), self.maximum_calls))
+            except (TypeError, ValueError):
+                request["observed_calls"] = 0
+            normalized_generation = self._text(
+                observed_generation, name="observed_generation", limit=128
+            )
+            if normalized_generation is not None:
+                request["observed_generation"] = normalized_generation
+            if error:
+                request["error"] = str(error)[:500]
+            self._write(path, request)
+            return dict(request)
+
+    def cancel(self, request_id: str | UUID, *, reason: str = "operator cancelled collection") -> dict[str, Any]:
+        with self._lock:
+            path = self._path(request_id)
+            request = self._read(path)
+            status = str(request.get("status") or "")
+            if status == self._QUEUED:
+                request["status"] = "CANCELLED"
+                request["outcome"] = "CANCELLED"
+                request["completed_at"] = self._now().isoformat()
+                request["updated_at"] = request["completed_at"]
+                request["error"] = self._text(reason, name="reason", limit=500, required=True)
+                self._write(path, request)
+            elif status == self._ACTIVE:
+                request["cancel_requested"] = True
+                request["cancel_reason"] = self._text(reason, name="reason", limit=500, required=True)
+                request["updated_at"] = self._now().isoformat()
+                self._write(path, request)
+            return dict(request)
+
+    def execute(
+        self,
+        *,
+        operation: Callable[[], Mapping[str, Any]],
+        **request_fields: Any,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Run one scheduled capture and return ``(capture, request_record)``."""
+        request = self.enqueue(**request_fields)
+        claimed = self.claim_next(request_id=request["request_id"])
+        if claimed is None:
+            raise BehaviorCollectionQueueFull(
+                "behavior collection active budget is currently exhausted"
+            )
+        try:
+            capture = dict(operation())
+            profile = capture.get("profile")
+            observed_calls = int(profile.get("call_count") or 0) if isinstance(profile, Mapping) else 0
+            completed = self.complete(
+                claimed["request_id"],
+                outcome="CAPTURED",
+                observed_calls=observed_calls,
+                observed_generation=str(capture.get("generation_id") or "") or None,
+            )
+            capture["collection_request"] = {
+                key: value
+                for key, value in completed.items()
+                if key
+                in {
+                    "request_id",
+                    "requested_at",
+                    "requested_by",
+                    "reason",
+                    "scope",
+                    "subject",
+                    "requested_calls",
+                    "priority",
+                    "deadline",
+                    "requested_generation",
+                    "observed_generation",
+                    "observed_calls",
+                    "status",
+                    "outcome",
+                    "completed_at",
+                    "attempt",
+                    "authority_policy_generation",
+                    "authority_policy_fingerprint",
+                }
+            }
+            return capture, completed
+        except BaseException as exc:
+            self.complete(
+                claimed["request_id"],
+                outcome="FAILED",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            raise
+
+    def list_requests(self, *, limit: int = 100) -> tuple[dict[str, Any], ...]:
+        bounded_limit = max(1, min(int(limit), 500))
+        with self._lock:
+            requests = sorted(self._requests(), key=self._sort_key)
+            return tuple(dict(item) for item in requests[:bounded_limit])
+
+    def status(self) -> dict[str, Any]:
+        with self._lock:
+            requests = self._requests()
+            counts = {status.lower(): 0 for status in (self._QUEUED, self._ACTIVE, *self._TERMINAL_STATES)}
+            for request in requests:
+                status = str(request.get("status") or "").lower()
+                counts[status] = counts.get(status, 0) + 1
+            valid_paths = {f"{request['request_id']}.json" for request in requests}
+            invalid_count = sum(
+                1
+                for path in self.request_directory.glob("*.json")
+                if path.name not in valid_paths
+            )
+            return {
+                "maximum_active": self.maximum_active,
+                "maximum_pending": self.maximum_pending,
+                "maximum_calls": self.maximum_calls,
+                "active": counts.get("active", 0),
+                "queued": counts.get("queued", 0),
+                "pending": counts.get("active", 0) + counts.get("queued", 0),
+                "counts": counts,
+                "invalid_request_count": invalid_count,
+            }
 
 
 def _empty_distribution() -> dict[str, Any]:

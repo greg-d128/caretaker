@@ -808,6 +808,10 @@ def main(argv: list[str] | None = None) -> int:
                     "scope": scope,
                     "subject": subject,
                     "calls": requested_calls,
+                    "requested_by": f"uid:{credentials[1]}",
+                    "reason": reason,
+                    "priority": int(request.get("priority", 100)),
+                    "deadline": request.get("deadline"),
                 },
             )
             if response.get("ok") is False:
@@ -819,21 +823,25 @@ def main(argv: list[str] | None = None) -> int:
                 if isinstance(profile, dict)
                 else 0
             )
-            collection_request = {
-                "request_id": request_id,
-                "requested_at": requested_at,
-                "requested_by": f"uid:{credentials[1]}",
-                "reason": reason,
-                "scope": scope,
-                "subject": subject,
-                "requested_calls": requested_calls,
-                "requested_generation": capture.get("generation_id"),
-                "authority_policy_generation": authority.effective.generation,
-                "authority_policy_fingerprint": authority_fingerprint,
-                "observed_calls": observed_calls,
-                "outcome": "CAPTURED",
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-            }
+            collection_request = dict(capture.get("collection_request") or {})
+            collection_request.update(
+                {
+                    "request_id": collection_request.get("request_id") or request_id,
+                    "requested_at": collection_request.get("requested_at") or requested_at,
+                    "requested_by": collection_request.get("requested_by") or f"uid:{credentials[1]}",
+                    "reason": collection_request.get("reason") or reason,
+                    "scope": collection_request.get("scope") or scope,
+                    "subject": collection_request.get("subject") or subject,
+                    "requested_calls": collection_request.get("requested_calls") or requested_calls,
+                    "requested_generation": collection_request.get("requested_generation")
+                    or capture.get("generation_id"),
+                    "authority_policy_generation": authority.effective.generation,
+                    "authority_policy_fingerprint": authority_fingerprint,
+                    "observed_calls": observed_calls,
+                    "outcome": collection_request.get("outcome") or "CAPTURED",
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
             capture["collection_request"] = collection_request
             # Generation identity is derived from observed subject/code/
             # monitoring metadata, not request metadata. Previewing it keeps
@@ -872,6 +880,16 @@ def main(argv: list[str] | None = None) -> int:
                 },
             )
             return {"ok": True, "envelope": envelope}
+
+        if command == "behavior-collection-status":
+            if not unix_socket_exists(runtime_control_socket):
+                return {
+                    "ok": True,
+                    "collections": [],
+                    "available": False,
+                    "reason": "Application runtime is unavailable for collection status",
+                }
+            return control_request(runtime_control_socket, request)
 
         if command in {"behavior-compare", "behavior-previous-compare"}:
             snapshot_a_id = str(request.get("snapshot_a_id") or request.get("snapshot_id") or "").strip()

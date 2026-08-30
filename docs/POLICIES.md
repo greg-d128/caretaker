@@ -51,6 +51,15 @@ When the bound is reached, the snapshot records incomplete category coverage and
 an overflow count. These observations are evidence only and are not used as a
 failure or Repair signal.
 
+`BehaviorSnapshotPolicy.collection_max_active`, `collection_max_pending`, and
+`collection_max_calls` govern operator-directed behavior captures. Requests are
+durable, bounded, ordered by operator priority and deadline, and recover from an
+interrupted active request as queued work after restart. A full queue applies
+explicit backpressure; it does not silently discard a request. Cancellation is
+recorded, and the resulting request provenance is included in the signed behavior
+snapshot when a capture completes. Scheduling is evidence collection only: it
+cannot modify Guard policy, an accepted baseline, or Repair state.
+
 `RepairEvidencePolicy` gates `BEHAVIOR -> REPAIR`:
 
 - `enabled`;

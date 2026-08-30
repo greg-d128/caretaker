@@ -36,6 +36,7 @@ from ..evidence.models import (
 from ..evidence.store import EvidenceStore, InMemoryEvidenceStore
 from ..runtime import snapshot_context
 from ..behavior import (
+    BehaviorCollectionScheduler,
     BehaviorSnapshotStore,
     BehaviorStatisticsRepository,
     monitoring_configuration_fingerprint,
@@ -144,6 +145,16 @@ class GuardEngine(GuardFacade):
             else None
         )
         self.behavior_snapshot_store = (BehaviorSnapshotStore(data_root) if data_root else None)
+        self.behavior_collection_scheduler = (
+            BehaviorCollectionScheduler(
+                data_root,
+                maximum_active=self.policy.snapshots.collection_max_active,
+                maximum_pending=self.policy.snapshots.collection_max_pending,
+                maximum_calls=self.policy.snapshots.collection_max_calls,
+            )
+            if data_root and self.policy.snapshots.enabled
+            else None
+        )
         self._sealed_baseline_ids: set[UUID] = set()
         self.detector = DeviationDetector(self.policy.deviations)
         self.inspector = RuntimeInspector(self.store)
@@ -219,8 +230,15 @@ class GuardEngine(GuardFacade):
                 workload_label=self.policy.baseline.workload_label,
             )
             self.behavior_snapshot_store = BehaviorSnapshotStore(data_root)
+            self.behavior_collection_scheduler = BehaviorCollectionScheduler(
+                data_root,
+                maximum_active=self.policy.snapshots.collection_max_active,
+                maximum_pending=self.policy.snapshots.collection_max_pending,
+                maximum_calls=self.policy.snapshots.collection_max_calls,
+            )
         elif not self.policy.snapshots.enabled:
             self.behavior_statistics = None
+            self.behavior_collection_scheduler = None
         self.detector.policy = self.policy.deviations
         self.audit_collector.collectors = self.policy.collectors
         self.audit_collector.attribution = self.policy.attribution
@@ -855,6 +873,47 @@ class GuardEngine(GuardFacade):
             },
             "children": [],
         }
+
+    def schedule_behavior_collection(
+        self,
+        *,
+        scope: str,
+        subject: str,
+        calls: int,
+        requested_by: str,
+        reason: str,
+        operation: Callable[[], Mapping[str, Any]],
+        priority: int = 0,
+        deadline: str | None = None,
+    ) -> dict[str, Any]:
+        """Run an operator collection through the policy-governed scheduler."""
+        scheduler = self.behavior_collection_scheduler
+        if scheduler is None:
+            return dict(operation())
+        capture, _request = scheduler.execute(
+            scope=scope,
+            subject=subject,
+            requested_calls=calls,
+            requested_by=requested_by,
+            reason=reason,
+            priority=priority,
+            deadline=deadline,
+            authority_policy_generation=str(
+                get_authority_runtime_context().effective.generation
+            ),
+            authority_policy_fingerprint=get_authority_runtime_context().effective.fingerprint,
+            operation=operation,
+        )
+        return capture
+
+    def behavior_collection_status(self) -> dict[str, Any]:
+        scheduler = self.behavior_collection_scheduler
+        if scheduler is None:
+            return {
+                "enabled": False,
+                "reason": "Guard behavior snapshots are disabled or have no data root",
+            }
+        return {"enabled": True, **scheduler.status()}
 
     def evidence_bundle(self, target_id: str, *, calls: int = 20) -> GuardEvidenceBundle | None:
         binding = self._targets.get(target_id)

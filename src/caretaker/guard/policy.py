@@ -65,7 +65,7 @@ class BaselinePolicy:
 
 @dataclass(frozen=True, slots=True)
 class BehaviorSnapshotPolicy:
-    """Bounded online statistics and automatic snapshot materialization."""
+    """Bounded online statistics, snapshots, and operator collection scheduling."""
 
     enabled: bool = True
     statistics_target: int = 1000
@@ -79,6 +79,9 @@ class BehaviorSnapshotPolicy:
     randomized_epoch_min_samples: int = 50
     randomized_epoch_max_samples: int = 200
     randomized_epoch_seed: int | None = None
+    collection_max_active: int = 1
+    collection_max_pending: int = 256
+    collection_max_calls: int = 1000
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,6 +242,14 @@ def validate_guard_policy(policy: GuardPolicy) -> None:
         errors.append("snapshots.randomized_epoch_max_samples must be at least the minimum")
     if isinstance(snapshots.randomized_epoch_seed, bool):
         errors.append("snapshots.randomized_epoch_seed must be an integer or null")
+    if snapshots.collection_max_active <= 0:
+        errors.append("snapshots.collection_max_active must be greater than zero")
+    if snapshots.collection_max_pending <= 0:
+        errors.append("snapshots.collection_max_pending must be greater than zero")
+    if snapshots.collection_max_calls <= 0:
+        errors.append("snapshots.collection_max_calls must be greater than zero")
+    if snapshots.collection_max_calls > 1000:
+        errors.append("snapshots.collection_max_calls must not exceed 1000")
     if policy.retention.raw_event_seconds is not None:
         errors.append("retention.raw_event_seconds is reserved; durable time-based raw-event pruning is not implemented")
     if policy.retention.aggregate_seconds is not None:

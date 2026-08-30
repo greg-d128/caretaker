@@ -151,6 +151,15 @@ POLICY_CAPABILITIES: tuple[PolicyCapability, ...] = (
         ("guard.snapshots.maximum_return_categories",),
     ),
     PolicyCapability(
+        "guard.behavior-collection-scheduler",
+        5,
+        "0.6.1",
+        "Policy-governed operator behavior collection scheduling",
+        "Controls bounded durable operator-directed behavior capture requests, including active and pending limits.",
+        "Review queue backpressure, priority/deadline handling, restart recovery, cancellation, and evidence-only provenance.",
+        ("guard.snapshots.collection_",),
+    ),
+    PolicyCapability(
         "repair.validation-isolation",
         2,
         "0.6.0",

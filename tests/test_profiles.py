@@ -166,6 +166,7 @@ def test_policy_surface_two_requires_review_of_adaptive_instrumentation() -> Non
         "guard.behavior-snapshots",
         "guard.randomized-behavior-regimes",
         "guard.return-behavior-categories",
+        "guard.behavior-collection-scheduler",
         "repair.validation-isolation",
         "logging.signing-identity-journal",
     ]
