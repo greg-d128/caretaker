@@ -1004,9 +1004,11 @@ probation and acceptance counters, with per-target overrides. Authorized
 workers can be initialized in probation, advance one observation at a time, and
 reach `ACCEPTED` or `FAILED` in the in-process registry. The default guideline
 is 1,000 successful executions for each stage with no failures; these states
-never grant authority or replace packet verification. Persisting progress,
-recovering it across restart, and coordinating counters across processes remain
-future lifecycle work.
+never grant authority or replace packet verification. An optional SQLite
+acceptance ledger now checkpoints progress by exact target, generation, code,
+and policy context, deduplicates observation IDs, and restores matching
+progress after restart. Cross-process observation ingestion and broader
+reconciliation remain future lifecycle work.
 
 The supervisor now exposes a policy decision boundary for failed workers. It
 records bounded in-flight evidence immediately, supports incident capture, and

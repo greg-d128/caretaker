@@ -157,6 +157,13 @@ def evaluate_worker_acceptance(
         and successful_executions >= thresholds.acceptance_successful_executions
         and failed_executions <= thresholds.acceptance_failure_budget
     )
+    failed = (
+        failed_executions > thresholds.probation_failure_budget
+        or (
+            successful_executions >= thresholds.acceptance_successful_executions
+            and failed_executions > thresholds.acceptance_failure_budget
+        )
+    )
     override = acceptance_policy.per_target_overrides.get(str(target_id))
     return {
         "target_id": str(target_id),
@@ -164,6 +171,7 @@ def evaluate_worker_acceptance(
         "failed_executions": failed_executions,
         "probation_complete": probation_complete,
         "accepted": accepted,
+        "failed": failed,
         "authority_granted": False,
         "uses_target_override": override is not None,
         "thresholds": {

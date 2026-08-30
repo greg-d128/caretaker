@@ -1518,6 +1518,7 @@ def main(argv: list[str] | None = None) -> int:
         application_pid=child.pid,
         application_process_group_id=os.getpgid(child.pid),
         application_process=child,
+        acceptance_store_path=Path(policy.directory) / "worker-acceptance.sqlite",
     )
     supervisor_holder["supervisor"] = supervisor
     supervisor.start()

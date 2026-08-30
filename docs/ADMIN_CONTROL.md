@@ -67,6 +67,12 @@ failures; a target-specific override may explicitly change those counters.
 Counter evaluation reports status only and does not grant authority or bypass
 packet verification.
 
+When configured with an acceptance store, the supervisor checkpoints those
+counters in `worker-acceptance.sqlite` under the configured Caretaker data
+directory. Observation IDs are idempotent, conflicting reuse is rejected, and
+checkpoint hashes are verified before progress is restored. The store does not
+reactivate a worker or authorize a process after restart.
+
 The `incident-communication-draft` command creates a bounded, policy-governed
 draft for one verified capsule. The console exposes the same operation as
 **Create review draft**, and `caretaker-incident-draft` can write a new

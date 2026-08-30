@@ -1,3 +1,4 @@
+from .acceptance import WorkerAcceptanceStore, WorkerAcceptanceStoreError
 from .attachments import AttachmentStore
 from .baselines import BaselineBuilder, BaselineComparator, BaselineStore
 from .decorators import logged

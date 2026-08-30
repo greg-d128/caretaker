@@ -561,6 +561,9 @@ class WorkerHealth:
     authority_packet_expires_at: datetime | None = None
     replaced_worker_id: UUID | None = None
     target_id: str | None = None
+    generation_id: str | None = None
+    code_hash: str | None = None
+    policy_fingerprint: str | None = None
     acceptance_state: WorkerAcceptanceState = WorkerAcceptanceState.UNTRACKED
     acceptance_successful_executions: int = 0
     acceptance_failed_executions: int = 0

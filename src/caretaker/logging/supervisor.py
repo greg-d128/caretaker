@@ -11,12 +11,14 @@ from typing import Any, Callable, Mapping
 from uuid import UUID, uuid4
 
 from .handler import LoggingRuntime
+from .acceptance import WorkerAcceptanceStore
 from ..repair_recovery import (
     RecoveryAuthorityPacket,
     RepairRecoveryPolicy,
     WorkerAcceptancePolicy,
     WorkerReplacementRequest,
     evaluate_worker_acceptance,
+    validate_worker_acceptance_policy,
     verify_recovery_authority_packet,
 )
 from .models import (
@@ -92,8 +94,14 @@ class WorkRegistry:
 
 
 class WorkerRegistry:
-    def __init__(self, *, heartbeat_timeout_seconds: float = 15.0) -> None:
+    def __init__(
+        self,
+        *,
+        heartbeat_timeout_seconds: float = 15.0,
+        acceptance_store: WorkerAcceptanceStore | None = None,
+    ) -> None:
         self.heartbeat_timeout_seconds = heartbeat_timeout_seconds
+        self.acceptance_store = acceptance_store
         self._workers: dict[UUID, WorkerHealth] = {}
         self._replacement_requests: set[UUID] = set()
         self._lock = threading.RLock()
@@ -145,30 +153,56 @@ class WorkerRegistry:
                 "worker authority packet rejected: "
                 + ", ".join(str(item) for item in verification["failures"])
             )
-        health = self.register(kind, pid)
         resolved_acceptance_policy = acceptance_policy
         if resolved_acceptance_policy is None and policy is not None:
             resolved_acceptance_policy = policy.worker_acceptance
+        persisted = None
+        if resolved_acceptance_policy is not None and self.acceptance_store is not None:
+            persisted = self.acceptance_store.load(
+                target_id=target_id,
+                generation_id=generation_id,
+                code_hash=code_hash,
+                policy_fingerprint=policy_fingerprint,
+            )
+        successful = int(persisted["successful_executions"]) if persisted else 0
+        failed = int(persisted["failed_executions"]) if persisted else 0
         with self._lock:
             acceptance_state = WorkerAcceptanceState.UNTRACKED
+            lifecycle_state = WorkerState.STARTING
+            lifecycle_error = None
             if resolved_acceptance_policy is not None:
                 evaluation = evaluate_worker_acceptance(
                     target_id=target_id,
-                    successful_executions=0,
-                    failed_executions=0,
+                    successful_executions=successful,
+                    failed_executions=failed,
                     policy=resolved_acceptance_policy,
                 )
                 acceptance_state = (
-                    WorkerAcceptanceState.ACCEPTED
-                    if evaluation["accepted"]
-                    else WorkerAcceptanceState.PROBATION
+                    WorkerAcceptanceState.FAILED
+                    if evaluation["failed"]
+                    else (
+                        WorkerAcceptanceState.ACCEPTED
+                        if evaluation["accepted"]
+                        else WorkerAcceptanceState.PROBATION
+                    )
                 )
+                if evaluation["failed"]:
+                    lifecycle_state = WorkerState.FAILED
+                    lifecycle_error = "worker-acceptance-failed"
+            health = self.register(kind, pid)
             admitted = replace(
                 health,
                 authority_packet_id=packet.packet_id,
                 authority_packet_expires_at=packet.expires_at,
                 target_id=str(target_id),
+                generation_id=str(generation_id),
+                code_hash=str(code_hash),
+                policy_fingerprint=str(policy_fingerprint),
+                state=lifecycle_state,
+                last_error_fingerprint=lifecycle_error,
                 acceptance_state=acceptance_state,
+                acceptance_successful_executions=successful,
+                acceptance_failed_executions=failed,
             )
             self._workers[health.worker_id] = admitted
             return admitted
@@ -280,32 +314,46 @@ class WorkerRegistry:
         *,
         success: bool,
         policy: WorkerAcceptancePolicy,
+        observation_id: str | UUID | None = None,
+        observed_at: str | None = None,
     ) -> WorkerHealth:
         """Record exactly one authorized worker observation for acceptance."""
         if not isinstance(success, bool):
             raise TypeError("worker acceptance success must be a boolean")
+        validate_worker_acceptance_policy(policy)
         with self._lock:
             current = self._workers[worker_id]
             if current.target_id is None or current.acceptance_state is WorkerAcceptanceState.UNTRACKED:
                 raise ValueError("worker acceptance is not configured for this worker")
             if current.state in {WorkerState.FAILED, WorkerState.UNAUTHORIZED}:
                 raise PermissionError("failed or unauthorized workers cannot advance acceptance")
-            successful = current.acceptance_successful_executions + (1 if success else 0)
-            failed = current.acceptance_failed_executions + (0 if success else 1)
+            if self.acceptance_store is not None:
+                if observation_id is None:
+                    raise ValueError("observation_id is required for durable worker acceptance")
+                if not all((current.generation_id, current.code_hash, current.policy_fingerprint)):
+                    raise ValueError("worker acceptance context is unavailable for durable recording")
+                persisted = self.acceptance_store.record(
+                    observation_id=str(observation_id),
+                    worker_id=str(worker_id),
+                    target_id=current.target_id,
+                    generation_id=current.generation_id,
+                    code_hash=current.code_hash,
+                    policy_fingerprint=current.policy_fingerprint,
+                    success=success,
+                    observed_at=observed_at,
+                )
+                successful = int(persisted["successful_executions"])
+                failed = int(persisted["failed_executions"])
+            else:
+                successful = current.acceptance_successful_executions + (1 if success else 0)
+                failed = current.acceptance_failed_executions + (0 if success else 1)
             evaluation = evaluate_worker_acceptance(
                 target_id=current.target_id,
                 successful_executions=successful,
                 failed_executions=failed,
                 policy=policy,
             )
-            thresholds = evaluation["thresholds"]
-            acceptance_failed = (
-                failed > thresholds["probation_failure_budget"]
-                or (
-                    successful >= thresholds["acceptance_successful_executions"]
-                    and failed > thresholds["acceptance_failure_budget"]
-                )
-            )
+            acceptance_failed = bool(evaluation["failed"])
             acceptance_state = (
                 WorkerAcceptanceState.FAILED
                 if acceptance_failed
@@ -390,6 +438,9 @@ class WorkerRegistry:
                 authority_packet_id=None,
                 authority_packet_expires_at=None,
                 target_id=None,
+                generation_id=None,
+                code_hash=None,
+                policy_fingerprint=None,
                 acceptance_state=WorkerAcceptanceState.UNTRACKED,
                 acceptance_successful_executions=0,
                 acceptance_failed_executions=0,
@@ -462,13 +513,19 @@ class CaretakerApplicationSupervisor:
         application_pid: int | None = None,
         application_process_group_id: int | None = None,
         application_process=None,
+        acceptance_store: WorkerAcceptanceStore | None = None,
+        acceptance_store_path: str | Path | None = None,
     ) -> None:
         self.runtime = runtime
         self.application_pid = application_pid
         self.application_process_group_id = application_process_group_id
         self.application_process = application_process
+        if acceptance_store is not None and acceptance_store_path is not None:
+            raise ValueError("provide acceptance_store or acceptance_store_path, not both")
+        if acceptance_store is None and acceptance_store_path is not None:
+            acceptance_store = WorkerAcceptanceStore(acceptance_store_path)
         self.work = WorkRegistry()
-        self.workers = WorkerRegistry()
+        self.workers = WorkerRegistry(acceptance_store=acceptance_store)
         self.supervisor_health = self.workers.register(WorkerKind.SUPERVISOR, os.getpid())
         self.watchdog = Watchdog(self.workers, on_unhealthy=self._worker_unhealthy)
         self._stop = threading.Event()
@@ -503,6 +560,9 @@ class CaretakerApplicationSupervisor:
             "acceptance_state": worker.acceptance_state.name,
             "acceptance_successful_executions": worker.acceptance_successful_executions,
             "acceptance_failed_executions": worker.acceptance_failed_executions,
+            "generation_id": worker.generation_id,
+            "code_hash": worker.code_hash,
+            "policy_fingerprint": worker.policy_fingerprint,
             "authority_packet_id": (
                 str(worker.authority_packet_id)
                 if worker.authority_packet_id is not None
