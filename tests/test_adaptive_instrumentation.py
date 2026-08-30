@@ -184,15 +184,36 @@ def test_operator_behavior_promotion_is_fixed_to_behavior(tmp_path) -> None:
 
     controller = get_adaptive_controller("test.adaptive.operator-promotion")
     assert controller is wrapped.__caretaker_adaptive__
-    assert controller.request_behavior_promotion("operator investigation") is True
+    assert controller.request_behavior_promotion(
+        "operator investigation",
+        requested_by="operator:unit-test",
+    ) is True
 
     state = get_adaptive_state("test.adaptive.operator-promotion")
     assert state["level"] == "BEHAVIOR"
     assert state["stage"] == AdaptiveLifecycleStage.PRE_REPAIR_BEHAVIOR.value
     assert state["promotion_reason"] == "operator investigation"
+    assert state["promotion_requested_by"] == "operator:unit-test"
+    assert state["promotion_authority_generation"] == "0"
+    assert state["promotion_authority_fingerprint"] == "unconfigured"
     assert state["repair_requested"] is False
     assert controller.request_behavior_promotion("duplicate request") is False
     assert get_adaptive_state("test.adaptive.operator-promotion")["level"] == "BEHAVIOR"
+
+    restored = lightweight(
+        policy=LightweightPolicy(
+            exception=ExceptionPromotionPolicy(enabled=False),
+            soft_timing=SoftTimingPromotionPolicy(enabled=False),
+        ),
+        engine=_FakeEngine(guard),
+        behavior_binding=GuardBinding(enabled=True),
+        target_id="test.adaptive.operator-promotion",
+        state_directory=tmp_path,
+    )(sample)
+    restored_state = restored.__caretaker_adaptive__.state.public_dict()
+    assert restored_state["promotion_requested_by"] == "operator:unit-test"
+    assert restored_state["promotion_authority_generation"] == "0"
+    assert restored_state["promotion_authority_fingerprint"] == "unconfigured"
 
 
 def test_soft_timing_promotes_to_behavior_and_guard_begins_on_next_call(tmp_path) -> None:

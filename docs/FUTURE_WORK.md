@@ -588,7 +588,8 @@ cannot authorize Repair or alter policy.
 The initial operator-directed promotion slice is implemented for one registered
 adaptive target at a time. It supports investigation of a suspicious function
 and records the target, reason, requesting operator, and effective authority
-generation in the returned operation record. Promotion is an
+generation in the returned operation record and persists that provenance with
+the adaptive state for restart inspection. Promotion is an
 evidence-collection request, not acceptance of the resulting behavior as a
 trusted Guard baseline. Generation-aware promotion requests, requested
 evidence targets or durations, and durable eventual outcomes remain part of

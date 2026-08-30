@@ -320,6 +320,8 @@ def test_automatic_collection_cycle_promotes_one_adaptive_backlog_target(
     ]
     assert first["active_automatic"] == 1
     assert first["promoted"][0]["state"]["level"] == "BEHAVIOR"
+    assert first["promoted"][0]["state"]["promotion_requested_by"] == "caretaker:auto"
+    assert first["promoted"][0]["state"]["promotion_authority_generation"] == "0"
 
     second = guard.automatic_behavior_collection_cycle()
     assert second["promoted"] == []

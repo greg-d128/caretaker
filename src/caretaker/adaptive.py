@@ -181,6 +181,9 @@ class AdaptiveInstrumentationState:
     acceptance: AcceptanceState = AcceptanceState.NONE
     promoted_at: str | None = None
     promotion_reason: str | None = None
+    promotion_requested_by: str | None = None
+    promotion_authority_generation: str | None = None
+    promotion_authority_fingerprint: str | None = None
     short_term_accepted_at: str | None = None
     long_term_accepted_at: str | None = None
     successful_executions: int = 0
@@ -213,6 +216,9 @@ class AdaptiveInstrumentationState:
             "acceptance": self.acceptance.value,
             "promoted_at": self.promoted_at,
             "promotion_reason": self.promotion_reason,
+            "promotion_requested_by": self.promotion_requested_by,
+            "promotion_authority_generation": self.promotion_authority_generation,
+            "promotion_authority_fingerprint": self.promotion_authority_fingerprint,
             "short_term_accepted_at": self.short_term_accepted_at,
             "long_term_accepted_at": self.long_term_accepted_at,
             "successful_executions": self.successful_executions,
@@ -824,7 +830,12 @@ class _AdaptiveController:
             self._publish_state()
         return False
 
-    def request_behavior_promotion(self, reason: str) -> bool:
+    def request_behavior_promotion(
+        self,
+        reason: str,
+        *,
+        requested_by: str | None = None,
+    ) -> bool:
         """Promote this target to pre-repair Behavior on an authorized request.
 
         This is intentionally narrower than the signal path: it never accepts a
@@ -839,6 +850,10 @@ class _AdaptiveController:
                 return False
             if self.state.level is not InstrumentationLevel.LIGHTWEIGHT:
                 return False
+            authority = _authority_context().effective
+            self.state.promotion_requested_by = requested_by
+            self.state.promotion_authority_generation = str(authority.generation)
+            self.state.promotion_authority_fingerprint = authority.fingerprint
             return self._promote(
                 InstrumentationLevel.BEHAVIOR,
                 reason,
@@ -1243,6 +1258,9 @@ class _AdaptiveController:
                 acceptance=AcceptanceState(str(data.get("acceptance", "none"))),
                 promoted_at=data.get("promoted_at"),
                 promotion_reason=data.get("promotion_reason"),
+                promotion_requested_by=data.get("promotion_requested_by"),
+                promotion_authority_generation=data.get("promotion_authority_generation"),
+                promotion_authority_fingerprint=data.get("promotion_authority_fingerprint"),
                 short_term_accepted_at=data.get("short_term_accepted_at"),
                 long_term_accepted_at=data.get("long_term_accepted_at"),
                 successful_executions=int(data.get("successful_executions", 0)),

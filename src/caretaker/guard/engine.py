@@ -1070,7 +1070,10 @@ class GuardEngine(GuardFacade):
                     "automatic coverage backlog promotion "
                     f"for generation {item.get('generation_id') or 'unknown'}"
                 )
-                if not controller.request_behavior_promotion(reason):
+                if not controller.request_behavior_promotion(
+                    reason,
+                    requested_by="caretaker:auto",
+                ):
                     continue
                 promoted.append(
                     {
@@ -1194,7 +1197,12 @@ class GuardEngine(GuardFacade):
         if len(normalized_requester) > 200:
             raise ValueError("behavior promotion requested_by exceeds 200 characters")
 
-        promoted = bool(controller.request_behavior_promotion(normalized_reason))
+        promoted = bool(
+            controller.request_behavior_promotion(
+                normalized_reason,
+                requested_by=normalized_requester,
+            )
+        )
         authority = get_authority_runtime_context().effective
         return {
             "target_id": target_id,
