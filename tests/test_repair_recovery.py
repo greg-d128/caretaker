@@ -12,9 +12,12 @@ from caretaker import (
     RecoveryAction,
     RepairRecoveryPolicy,
     SQLiteRepairStore,
+    WorkerAcceptanceOverride,
+    WorkerAcceptancePolicy,
     apply_repair_recovery_plan,
     build_repair_recovery_plan,
     create_recovery_authority_packet,
+    evaluate_worker_acceptance,
     validate_authority_expiry,
     validate_supervisor_time,
     verify_recovery_authority_packet,
@@ -116,6 +119,8 @@ def test_recovery_policy_surfaces_packet_skew_and_failure_actions() -> None:
     assert plan["policy"]["approval_packet_ttl_seconds"] == 1800
     assert plan["policy"]["suggested_change_packet_ttl_seconds"] == 30
     assert plan["policy"]["clock_skew_tolerance_seconds"] == 15.0
+    assert plan["policy"]["worker_acceptance"]["probation_successful_executions"] == 1000
+    assert plan["policy"]["worker_acceptance"]["acceptance_successful_executions"] == 1000
 
     with pytest.raises(ValueError, match="reactivation"):
         build_repair_recovery_plan(
@@ -129,6 +134,66 @@ def test_recovery_policy_surfaces_packet_skew_and_failure_actions() -> None:
                     allow_candidate_reactivation_after_restart=True,
                 )
             )
+        )
+
+
+def test_worker_acceptance_uses_defaults_and_target_override_without_granting_authority() -> None:
+    policy = WorkerAcceptancePolicy(
+        per_target_overrides={
+            "app:fast": WorkerAcceptanceOverride(
+                probation_successful_executions=2,
+                probation_failure_budget=1,
+                acceptance_successful_executions=5,
+                acceptance_failure_budget=1,
+            )
+        }
+    )
+
+    probation = evaluate_worker_acceptance(
+        target_id="app:fast",
+        successful_executions=2,
+        failed_executions=1,
+        policy=policy,
+    )
+    assert probation["probation_complete"] is True
+    assert probation["accepted"] is False
+    assert probation["uses_target_override"] is True
+    assert probation["authority_granted"] is False
+
+    accepted = evaluate_worker_acceptance(
+        target_id="app:fast",
+        successful_executions=5,
+        failed_executions=1,
+        policy=policy,
+    )
+    assert accepted["accepted"] is True
+    assert accepted["thresholds"]["acceptance_successful_executions"] == 5
+
+    default_target = evaluate_worker_acceptance(
+        target_id="app:ordinary",
+        successful_executions=999,
+        failed_executions=0,
+        policy=policy,
+    )
+    assert default_target["probation_complete"] is False
+    assert default_target["uses_target_override"] is False
+
+
+def test_worker_acceptance_rejects_invalid_override_ordering() -> None:
+    policy = WorkerAcceptancePolicy(
+        per_target_overrides={
+            "app:invalid": WorkerAcceptanceOverride(
+                probation_successful_executions=10,
+                acceptance_successful_executions=9,
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="lowers acceptance below probation"):
+        evaluate_worker_acceptance(
+            target_id="app:invalid",
+            successful_executions=10,
+            failed_executions=0,
+            policy=policy,
         )
 
 

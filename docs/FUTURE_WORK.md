@@ -999,6 +999,14 @@ provenance. This is lifecycle enforcement inside the existing registry; OS
 process spawning, cross-process packet transport, and replacement orchestration
 remain future work.
 
+`WorkerAcceptancePolicy` now resolves conservative replacement-worker
+probation and acceptance counters, with per-target overrides, and exposes a
+read-only evaluation result. The default guideline is 1,000 successful
+executions for each stage with no failures; evaluation never grants authority
+or replaces packet verification. Applying these counters to live worker
+heartbeats, persisting progress, and coordinating them across processes remain
+future lifecycle work.
+
 The supervisor now exposes a policy decision boundary for failed workers. It
 records bounded in-flight evidence immediately, supports incident capture, and
 only counts a worker as restarted after a callback-owned replacement reports

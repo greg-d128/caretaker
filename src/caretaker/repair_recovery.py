@@ -9,7 +9,7 @@ an interrupted transaction as successful work.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import Enum, auto
 import hashlib
@@ -34,6 +34,148 @@ class RecoveryAction(Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class WorkerAcceptanceOverride:
+    """Optional replacement-worker counter overrides for one target."""
+
+    probation_successful_executions: int | None = None
+    probation_failure_budget: int | None = None
+    acceptance_successful_executions: int | None = None
+    acceptance_failure_budget: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerAcceptanceThresholds:
+    """Resolved counters used for one replacement-worker target."""
+
+    probation_successful_executions: int
+    probation_failure_budget: int
+    acceptance_successful_executions: int
+    acceptance_failure_budget: int
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerAcceptancePolicy:
+    """Policy defaults and target-specific overrides for worker acceptance.
+
+    The defaults are an intentionally conservative guideline: a replacement
+    must complete 1,000 successful executions in probation and 1,000 successful
+    executions before acceptance, with no failures unless a policy explicitly
+    permits them. These counters are observations, not authority; packet
+    verification and policy approval remain independent gates.
+    """
+
+    probation_successful_executions: int = 1_000
+    probation_failure_budget: int = 0
+    acceptance_successful_executions: int = 1_000
+    acceptance_failure_budget: int = 0
+    per_target_overrides: Mapping[str, WorkerAcceptanceOverride] = field(default_factory=dict)
+
+    def thresholds_for(self, target_id: str | None) -> WorkerAcceptanceThresholds:
+        override = self.per_target_overrides.get(str(target_id)) if target_id is not None else None
+        return WorkerAcceptanceThresholds(
+            probation_successful_executions=(
+                self.probation_successful_executions
+                if override is None or override.probation_successful_executions is None
+                else override.probation_successful_executions
+            ),
+            probation_failure_budget=(
+                self.probation_failure_budget
+                if override is None or override.probation_failure_budget is None
+                else override.probation_failure_budget
+            ),
+            acceptance_successful_executions=(
+                self.acceptance_successful_executions
+                if override is None or override.acceptance_successful_executions is None
+                else override.acceptance_successful_executions
+            ),
+            acceptance_failure_budget=(
+                self.acceptance_failure_budget
+                if override is None or override.acceptance_failure_budget is None
+                else override.acceptance_failure_budget
+            ),
+        )
+
+
+def validate_worker_acceptance_policy(policy: WorkerAcceptancePolicy) -> None:
+    """Reject counters that could silently accept a replacement too early."""
+    defaults = (
+        ("probation_successful_executions", policy.probation_successful_executions),
+        ("probation_failure_budget", policy.probation_failure_budget),
+        ("acceptance_successful_executions", policy.acceptance_successful_executions),
+        ("acceptance_failure_budget", policy.acceptance_failure_budget),
+    )
+    for name, value in defaults:
+        if value < 0:
+            raise ValueError(f"worker acceptance {name} cannot be negative")
+    if policy.acceptance_successful_executions < policy.probation_successful_executions:
+        raise ValueError(
+            "worker acceptance_successful_executions cannot be lower than "
+            "probation_successful_executions"
+        )
+    for target_id, override in policy.per_target_overrides.items():
+        if not str(target_id):
+            raise ValueError("worker acceptance override target IDs cannot be empty")
+        if not isinstance(override, WorkerAcceptanceOverride):
+            raise ValueError(
+                f"worker acceptance override for {target_id!s} has an unsupported type"
+            )
+        values = (
+            ("probation_successful_executions", override.probation_successful_executions),
+            ("probation_failure_budget", override.probation_failure_budget),
+            ("acceptance_successful_executions", override.acceptance_successful_executions),
+            ("acceptance_failure_budget", override.acceptance_failure_budget),
+        )
+        for name, value in values:
+            if value is not None and value < 0:
+                raise ValueError(f"worker acceptance override {name} cannot be negative")
+        thresholds = policy.thresholds_for(str(target_id))
+        if thresholds.acceptance_successful_executions < thresholds.probation_successful_executions:
+            raise ValueError(
+                f"worker acceptance override for {target_id!s} lowers acceptance below probation"
+            )
+
+
+def evaluate_worker_acceptance(
+    *,
+    target_id: str,
+    successful_executions: int,
+    failed_executions: int,
+    policy: WorkerAcceptancePolicy | None = None,
+) -> dict[str, Any]:
+    """Evaluate counters without mutating state or granting worker authority."""
+    if successful_executions < 0 or failed_executions < 0:
+        raise ValueError("worker acceptance counters cannot be negative")
+    acceptance_policy = policy or WorkerAcceptancePolicy()
+    validate_worker_acceptance_policy(acceptance_policy)
+    thresholds = acceptance_policy.thresholds_for(target_id)
+    probation_complete = (
+        successful_executions >= thresholds.probation_successful_executions
+        and failed_executions <= thresholds.probation_failure_budget
+    )
+    accepted = (
+        probation_complete
+        and successful_executions >= thresholds.acceptance_successful_executions
+        and failed_executions <= thresholds.acceptance_failure_budget
+    )
+    override = acceptance_policy.per_target_overrides.get(str(target_id))
+    return {
+        "target_id": str(target_id),
+        "successful_executions": successful_executions,
+        "failed_executions": failed_executions,
+        "probation_complete": probation_complete,
+        "accepted": accepted,
+        "authority_granted": False,
+        "uses_target_override": override is not None,
+        "thresholds": {
+            "probation_successful_executions": thresholds.probation_successful_executions,
+            "probation_failure_budget": thresholds.probation_failure_budget,
+            "acceptance_successful_executions": thresholds.acceptance_successful_executions,
+            "acceptance_failure_budget": thresholds.acceptance_failure_budget,
+        },
+    }
+
+
+@dataclass(frozen=True, slots=True)
 class RepairRecoveryPolicy:
     """Policy controls for restart and failed-worker recovery.
 
@@ -51,6 +193,7 @@ class RepairRecoveryPolicy:
     clock_skew_tolerance_seconds: float = 30.0
     require_full_worker_postmortem_for_critical_evidence: bool = True
     allow_candidate_reactivation_after_restart: bool = False
+    worker_acceptance: WorkerAcceptancePolicy = field(default_factory=WorkerAcceptancePolicy)
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,6 +486,7 @@ def build_repair_recovery_plan(
         raise ValueError("suggested_change_packet_ttl_seconds must be greater than zero")
     if recovery_policy.clock_skew_tolerance_seconds <= 0:
         raise ValueError("clock_skew_tolerance_seconds must be greater than zero")
+    validate_worker_acceptance_policy(recovery_policy.worker_acceptance)
     observed_at = (now or utcnow()).isoformat()
     decisions: list[dict[str, Any]] = []
     recovered_attempt_ids = _recovered_attempt_ids(store)
@@ -394,6 +538,29 @@ def build_repair_recovery_plan(
             "require_full_worker_postmortem_for_critical_evidence": (
                 recovery_policy.require_full_worker_postmortem_for_critical_evidence
             ),
+            "worker_acceptance": {
+                "probation_successful_executions": (
+                    recovery_policy.worker_acceptance.probation_successful_executions
+                ),
+                "probation_failure_budget": (
+                    recovery_policy.worker_acceptance.probation_failure_budget
+                ),
+                "acceptance_successful_executions": (
+                    recovery_policy.worker_acceptance.acceptance_successful_executions
+                ),
+                "acceptance_failure_budget": (
+                    recovery_policy.worker_acceptance.acceptance_failure_budget
+                ),
+                "per_target_overrides": {
+                    str(target): {
+                        "probation_successful_executions": override.probation_successful_executions,
+                        "probation_failure_budget": override.probation_failure_budget,
+                        "acceptance_successful_executions": override.acceptance_successful_executions,
+                        "acceptance_failure_budget": override.acceptance_failure_budget,
+                    }
+                    for target, override in recovery_policy.worker_acceptance.per_target_overrides.items()
+                },
+            },
         },
         "incomplete_attempt_count": len(decisions),
         "decisions": decisions,

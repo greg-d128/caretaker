@@ -55,11 +55,17 @@ Caretaker does not create arbitrary worker processes from this boundary.
 
 Recovery time and expiry checks use supervisor time. The recovery API reports
 clock skew explicitly and rejects timestamps outside the configured tolerance;
-authority is invalid at its expiry instant. Packet distribution and worker
-transport remain future supervisor capabilities. Where the lifecycle registry is
-used, authorized admission requires exact packet context; an expired worker is
-marked unauthorized and a restart clears its packet so it must be admitted
-again.
+authority is invalid at its expiry instant. The lifecycle registry can prepare a
+single-use, packet-verified replacement handoff and admit the replacement only
+after exact context verification; an expired worker is marked unauthorized and
+a restart clears its packet so it must be admitted again. OS process spawning
+and cross-process packet transport remain future supervisor capabilities.
+
+Replacement probation and acceptance counters are policy resolved. The default
+guideline is 1,000 successful executions for each stage with no permitted
+failures; a target-specific override may explicitly change those counters.
+Counter evaluation reports status only and does not grant authority or bypass
+packet verification.
 
 The `incident-communication-draft` command creates a bounded, policy-governed
 draft for one verified capsule. The console exposes the same operation as

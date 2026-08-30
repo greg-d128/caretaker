@@ -14,7 +14,7 @@ from .contracts import Comparator, Validator
 from .guard.policy import CandidateGuardPolicy, GuardBinding
 from .logging.policy import LoggingBinding
 from .logging.models import RepairAuthority
-from .repair_recovery import RepairRecoveryPolicy
+from .repair_recovery import RepairRecoveryPolicy, validate_worker_acceptance_policy
 from .domain import (
     CandidateSelectionMode,
     DifferentialExecutionMode,
@@ -290,6 +290,10 @@ def validate_policy(policy: RepairPolicy) -> None:
         errors.append("recovery.suggested_change_packet_ttl_seconds must be greater than zero")
     if recovery.clock_skew_tolerance_seconds <= 0:
         errors.append("recovery.clock_skew_tolerance_seconds must be greater than zero")
+    try:
+        validate_worker_acceptance_policy(recovery.worker_acceptance)
+    except ValueError as exc:
+        errors.append(str(exc))
     if recovery.allow_candidate_reactivation_after_restart:
         errors.append(
             "recovery.allow_candidate_reactivation_after_restart is not implemented"
