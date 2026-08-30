@@ -102,6 +102,15 @@ generation, policy fingerprint, and authority context before accepting a
 worker acknowledgement; if that context cannot be read or no longer matches,
 the acknowledgement is rejected and no transition state is changed.
 
+Worker submission loss and backpressure are policy controlled. The local
+batcher defaults to `RETAIN`, which keeps a failed batch bounded for a later
+flush; `DROP` explicitly discards that failed batch and records the dropped
+count; and `REDUCE` retries once with event timestamps, duration samples, and
+resource samples removed while preserving bounded counters. All three actions
+are evidence handling only and cannot change application results, policy, or
+authority. Incident callbacks, parallel stores, and transport-level throttling
+remain future integrations.
+
 The supervisor exposes `adaptive-aggregation-status`,
 `adaptive-aggregation-reconcile`, `adaptive-aggregation-ack`,
 `adaptive-transition-list`, and `adaptive-transition-ack` through its control

@@ -33,7 +33,11 @@ from typing import Any, TypeVar, overload
 from uuid import uuid4
 
 from .acceptance import AcceptanceCriteria, long_term_accepted, short_term_accepted
-from .adaptive_aggregation import AdaptiveObservationBatcher, SupervisorAdaptiveAggregationStore
+from .adaptive_aggregation import (
+    AdaptiveAggregationBackpressureAction,
+    AdaptiveObservationBatcher,
+    SupervisorAdaptiveAggregationStore,
+)
 from .domain import CandidateState
 from .runtime import set_runtime_context
 
@@ -171,6 +175,9 @@ class AdaptiveAggregationPolicy:
     flush_interval_seconds: float = 5.0
     aggregation_scope: str | None = None
     transition_timeout_seconds: float = 60.0
+    backpressure_action: AdaptiveAggregationBackpressureAction = (
+        AdaptiveAggregationBackpressureAction.RETAIN
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -386,6 +393,13 @@ def validate_lightweight_policy(policy: LightweightPolicy) -> None:
         errors.append(
             "aggregation.transition_timeout_seconds must be greater than zero "
             "and no more than 86400"
+        )
+    if not isinstance(
+        aggregation.backpressure_action,
+        AdaptiveAggregationBackpressureAction,
+    ):
+        errors.append(
+            "aggregation.backpressure_action must be RETAIN, DROP, or REDUCE"
         )
     if aggregation.aggregation_scope is not None:
         if not isinstance(aggregation.aggregation_scope, str) or not aggregation.aggregation_scope.strip():
@@ -1404,6 +1418,7 @@ class _AdaptiveController:
             worker_pid=os.getpid(),
             flush_after_observations=self.policy.aggregation.flush_after_observations,
             flush_interval_seconds=self.policy.aggregation.flush_interval_seconds,
+            backpressure_action=self.policy.aggregation.backpressure_action,
             **context,
         )
 
@@ -1419,6 +1434,9 @@ class _AdaptiveController:
         elif self._aggregation_batcher is None:
             self._configure_aggregation_batcher()
         else:
+            self._aggregation_batcher.set_backpressure_action(
+                self.policy.aggregation.backpressure_action
+            )
             self._rebind_aggregation_batcher()
 
     def aggregation_status(self) -> dict[str, Any]:
@@ -1443,6 +1461,7 @@ class _AdaptiveController:
                 "require_problem_reproduction": self.policy.repair_evidence.require_problem_reproduction,
             },
             "transition_timeout_seconds": self.policy.aggregation.transition_timeout_seconds,
+            "backpressure_action": self.policy.aggregation.backpressure_action.name,
         }
         batcher = self._aggregation_batcher
         if batcher is None:
@@ -1458,6 +1477,7 @@ class _AdaptiveController:
                 "authority_policy_fingerprint": self._authority_fingerprint,
                 "promotion_policy": promotion_policy,
                 "transition_timeout_seconds": self.policy.aggregation.transition_timeout_seconds,
+                "backpressure_action": self.policy.aggregation.backpressure_action.name,
             }
         return {
             "enabled": True,

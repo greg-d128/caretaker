@@ -31,6 +31,7 @@ from .adaptive import (
     validate_lightweight_policy,
 )
 from .adaptive_aggregation import (
+    AdaptiveAggregationBackpressureAction,
     AdaptiveAggregationError,
     AdaptiveObservationBatcher,
     SupervisorAdaptiveAggregationStore,
@@ -338,6 +339,7 @@ __all__ = [
     "validate_lightweight_policy",
     "AdaptiveAggregationError",
     "AdaptiveAggregationPolicy",
+    "AdaptiveAggregationBackpressureAction",
     "AdaptiveObservationBatcher",
     "adaptive_aggregation_status",
     "SupervisorAdaptiveAggregationStore",

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from caretaker.adaptive_aggregation import (
+    AdaptiveAggregationBackpressureAction,
     AdaptiveAggregationError,
     AdaptiveObservationBatcher,
     SupervisorAdaptiveAggregationStore,
@@ -208,6 +209,103 @@ def test_adaptive_transition_timeout_policy_is_bounded() -> None:
                 aggregation=AdaptiveAggregationPolicy(
                     transition_timeout_seconds=0,
                 )
+            )
+        )
+
+
+class _BackpressureStore:
+    def __init__(self, *, fail_count: int = 0) -> None:
+        self.fail_count = fail_count
+        self.batches: list[dict[str, object]] = []
+
+    def submit(self, batch):
+        if self.fail_count:
+            self.fail_count -= 1
+            raise RuntimeError("aggregation queue is full")
+        self.batches.append(dict(batch))
+        return {"status": "QUEUED", "batch_id": batch["batch_id"]}
+
+
+def _backpressure_batcher(store, action: AdaptiveAggregationBackpressureAction):
+    return AdaptiveObservationBatcher(
+        store,
+        worker_id="worker-a",
+        worker_pid=101,
+        target_id="example.target",
+        generation_id="generation-a",
+        code_hash="code-a",
+        monitoring_fingerprint="monitoring-a",
+        policy_fingerprint="policy-a",
+        authority_policy_generation="7",
+        authority_policy_fingerprint="authority-a",
+        flush_after_observations=1,
+        flush_interval_seconds=0,
+        backpressure_action=action,
+    )
+
+
+def test_adaptive_backpressure_retain_preserves_pending_evidence() -> None:
+    batcher = _backpressure_batcher(
+        _BackpressureStore(fail_count=1),
+        AdaptiveAggregationBackpressureAction.RETAIN,
+    )
+
+    result = batcher.record(behavior_samples=1)
+
+    assert result is not None
+    assert result["status"] == "DEFERRED"
+    assert batcher.status()["pending_records"] == 1
+    assert batcher.status()["dropped_records"] == 0
+
+
+def test_adaptive_backpressure_drop_discards_only_the_failed_batch() -> None:
+    batcher = _backpressure_batcher(
+        _BackpressureStore(fail_count=1),
+        AdaptiveAggregationBackpressureAction.DROP,
+    )
+
+    result = batcher.record(behavior_samples=1)
+
+    assert result is not None
+    assert result["status"] == "DROPPED"
+    assert result["dropped_records"] == 1
+    assert batcher.status()["pending_records"] == 0
+    assert batcher.status()["dropped_records"] == 1
+
+
+def test_adaptive_backpressure_reduce_retries_without_detail_samples() -> None:
+    store = _BackpressureStore(fail_count=1)
+    batcher = _backpressure_batcher(
+        store,
+        AdaptiveAggregationBackpressureAction.REDUCE,
+    )
+
+    result = batcher.record(
+        event_kind="timing",
+        duration_seconds=2.5,
+        resource_values={"cpu_seconds": 0.5},
+        timing_breach_count=1,
+        behavior_samples=1,
+    )
+
+    assert result is not None
+    assert result["status"] == "REDUCED"
+    assert result["dropped_detail"] is True
+    assert len(store.batches) == 1
+    reduced = store.batches[0]
+    assert reduced["timing_breach_count"] == 1
+    assert reduced["timing_events"] == []
+    assert reduced["duration_samples"] == []
+    assert reduced["duration_samples_truncated"] is True
+    assert reduced["resource_samples"] == {}
+    assert batcher.status()["pending_records"] == 0
+
+
+def test_lightweight_policy_rejects_unknown_adaptive_backpressure_action() -> None:
+    with pytest.raises(ValueError, match="backpressure_action"):
+        validate_lightweight_policy(
+            LightweightPolicy(
+                aggregation=AdaptiveAggregationPolicy(backpressure_action="INVALID")
             )
         )
 

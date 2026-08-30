@@ -16,6 +16,7 @@ import os
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping
 from uuid import UUID, uuid4
@@ -64,6 +65,14 @@ class AdaptiveAggregationError(ValueError):
     """Raised when an adaptive observation batch is malformed or unsafe."""
 
 
+class AdaptiveAggregationBackpressureAction(Enum):
+    """Policy response when a worker cannot submit its evidence batch."""
+
+    RETAIN = "RETAIN"
+    DROP = "DROP"
+    REDUCE = "REDUCE"
+
+
 class AdaptiveObservationBatcher:
     """Collect bounded worker observations and periodically submit one batch.
 
@@ -88,6 +97,9 @@ class AdaptiveObservationBatcher:
         aggregation_scope: str | None = None,
         flush_after_observations: int = 64,
         flush_interval_seconds: float = 5.0,
+        backpressure_action: AdaptiveAggregationBackpressureAction = (
+            AdaptiveAggregationBackpressureAction.RETAIN
+        ),
     ) -> None:
         if not 0 < int(flush_after_observations) <= MAX_BATCH_COUNTER:
             raise ValueError(
@@ -95,12 +107,17 @@ class AdaptiveObservationBatcher:
             )
         if float(flush_interval_seconds) < 0:
             raise ValueError("flush_interval_seconds cannot be negative")
+        if not isinstance(backpressure_action, AdaptiveAggregationBackpressureAction):
+            raise ValueError(
+                "backpressure_action must be an AdaptiveAggregationBackpressureAction"
+            )
         extended_aggregation_target_id(str(target_id), aggregation_scope)
         self.store = store
         self.worker_id = str(worker_id)
         self.worker_pid = int(worker_pid)
         self.flush_after_observations = int(flush_after_observations)
         self.flush_interval_seconds = float(flush_interval_seconds)
+        self.backpressure_action = backpressure_action
         self._lock = threading.RLock()
         self._sequence = 0
         self._records = 0
@@ -202,9 +219,17 @@ class AdaptiveObservationBatcher:
                     raise ValueError(f"{name} exceeds {MAX_BATCH_COUNTER}")
             if self._records >= MAX_BATCH_COUNTER:
                 result = self._flush_locked()
-                if result is not None and result.get("status") == "ERROR":
+                if result is not None and result.get("status") in {
+                    "ERROR",
+                    "DEFERRED",
+                }:
                     self._dropped_records += 1
-                    return result
+                    return {
+                        "status": "DROPPED",
+                        "dropped_records": 1,
+                        "reason": "local_batch_capacity",
+                        "flush": result,
+                    }
             timestamp = observed_at or _utcnow_iso()
             self._records += 1
             self._sequence += 1
@@ -277,7 +302,20 @@ class AdaptiveObservationBatcher:
                 "next_sequence": self._sequence + 1,
                 "dropped_records": self._dropped_records,
                 "last_error": self._last_error,
+                "backpressure_action": self.backpressure_action.name,
             }
+
+    def set_backpressure_action(
+        self,
+        action: AdaptiveAggregationBackpressureAction,
+    ) -> None:
+        """Apply a validated policy change to the process-local batcher."""
+        if not isinstance(action, AdaptiveAggregationBackpressureAction):
+            raise ValueError(
+                "backpressure_action must be an AdaptiveAggregationBackpressureAction"
+            )
+        with self._lock:
+            self.backpressure_action = action
 
     def _snapshot_locked(self) -> dict[str, Any]:
         assert self._first_observed_at is not None
@@ -324,7 +362,40 @@ class AdaptiveObservationBatcher:
             result = self.store.submit(batch)
         except Exception as exc:
             self._last_error = f"{type(exc).__name__}: {exc}"[:256]
-            return {"status": "ERROR", "error": self._last_error}
+            if self.backpressure_action is AdaptiveAggregationBackpressureAction.DROP:
+                dropped_records = self._records
+                self._dropped_records += dropped_records
+                self._reset_locked()
+                return {
+                    "status": "DROPPED",
+                    "batch_id": batch["batch_id"],
+                    "dropped_records": dropped_records,
+                    "error": self._last_error,
+                }
+            if self.backpressure_action is AdaptiveAggregationBackpressureAction.REDUCE:
+                reduced = dict(batch)
+                reduced["exception_events"] = []
+                reduced["timing_events"] = []
+                reduced["duration_samples"] = []
+                reduced["duration_samples_truncated"] = True
+                reduced["resource_samples"] = {}
+                reduced["resource_samples_truncated"] = {}
+                try:
+                    result = self.store.submit(reduced)
+                except Exception as reduced_exc:
+                    self._last_error = (
+                        f"{type(reduced_exc).__name__}: {reduced_exc}"[:256]
+                    )
+                    return {"status": "ERROR", "error": self._last_error}
+                self._last_error = None
+                self._reset_locked()
+                return {
+                    **dict(result),
+                    "status": "REDUCED",
+                    "batch_id": batch["batch_id"],
+                    "dropped_detail": True,
+                }
+            return {"status": "DEFERRED", "error": self._last_error}
         self._last_error = None
         self._reset_locked()
         return dict(result)
