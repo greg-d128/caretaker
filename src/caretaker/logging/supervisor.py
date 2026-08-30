@@ -17,6 +17,7 @@ from ..repair_recovery import (
     RepairRecoveryPolicy,
     WorkerAcceptancePolicy,
     WorkerReplacementRequest,
+    create_worker_failure_record,
     evaluate_worker_acceptance,
     validate_worker_acceptance_policy,
     verify_recovery_authority_packet,
@@ -547,6 +548,7 @@ class CaretakerApplicationSupervisor:
         application_process=None,
         acceptance_store: WorkerAcceptanceStore | None = None,
         acceptance_store_path: str | Path | None = None,
+        failure_store: Any | None = None,
     ) -> None:
         self.runtime = runtime
         self.application_pid = application_pid
@@ -557,6 +559,7 @@ class CaretakerApplicationSupervisor:
         if acceptance_store is None and acceptance_store_path is not None:
             acceptance_store = WorkerAcceptanceStore(acceptance_store_path)
         self.work = WorkRegistry()
+        self.failure_store = failure_store
         self.workers = WorkerRegistry(acceptance_store=acceptance_store)
         self.supervisor_health = self.workers.register(WorkerKind.SUPERVISOR, os.getpid())
         self.watchdog = Watchdog(self.workers, on_unhealthy=self._worker_unhealthy)
@@ -691,6 +694,17 @@ class CaretakerApplicationSupervisor:
             worker,
             diagnostic_debug=diagnostic_debug,
         )
+        failure_persistence_error = None
+        if self.failure_store is not None:
+            try:
+                failure_record = create_worker_failure_record(envelope)
+                self.failure_store.record_worker_failure(failure_record)
+                failure_persistence_status = "PERSISTED"
+            except Exception as exc:
+                failure_persistence_status = "FAILED"
+                failure_persistence_error = f"{type(exc).__name__}: {exc}"[:256]
+        else:
+            failure_persistence_status = "NOT_CONFIGURED"
         incident_error = None
         if create_incident is not None:
             try:
@@ -735,6 +749,8 @@ class CaretakerApplicationSupervisor:
                     "action": "RESTARTED",
                     "incident_status": incident_status,
                     "incident_error": incident_error,
+                    "failure_persistence_status": failure_persistence_status,
+                    "failure_persistence_error": failure_persistence_error,
                     "restart": {
                         **restart_result,
                     },
@@ -757,6 +773,8 @@ class CaretakerApplicationSupervisor:
             "action": exhaustion.name,
             "incident_status": incident_status,
             "incident_error": incident_error,
+            "failure_persistence_status": failure_persistence_status,
+            "failure_persistence_error": failure_persistence_error,
             "restart": restart_result,
             "failure_envelope": envelope,
         }

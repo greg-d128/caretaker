@@ -49,7 +49,10 @@ fingerprint without copying the diagnostic context. Context is size- and
 depth-bounded, treated as evidence, and never authorizes a replacement or
 other recovery action. A worker can continue supplying context with
 `WorkerRegistry.heartbeat(..., diagnostic_context={...})` or preserve/replace
-it when marked failed.
+it when marked failed. The supervised runtime also stores the bounded envelope
+in `<policy.directory>/repair.sqlite` before applying its configured worker
+failure action. This record is available for restart reconciliation but does
+not itself authorize a replacement or claim complete post-mortem coverage.
 
 
 ## Storage-unavailable default

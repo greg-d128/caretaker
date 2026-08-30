@@ -60,6 +60,7 @@ from .replay import (
 from .integrity import SignatureVerificationMode, verify_release_publication
 from .builtin_profiles import builtin_profile_names, load_builtin_profile_supervisor
 from .system import SystemCollectionPolicy, SystemDataCollector, SystemOutputPolicy, load_system_policy
+from .store import SQLiteRepairStore
 
 
 def _load_external_signer(specification: str | None):
@@ -1562,12 +1563,14 @@ def main(argv: list[str] | None = None) -> int:
         start_new_session=True,
     )
     child_holder["child"] = child
+    failure_store = SQLiteRepairStore(Path(policy.directory) / "repair.sqlite")
     supervisor = CaretakerApplicationSupervisor(
         runtime,
         application_pid=child.pid,
         application_process_group_id=os.getpgid(child.pid),
         application_process=child,
         acceptance_store_path=Path(policy.directory) / "worker-acceptance.sqlite",
+        failure_store=failure_store,
     )
     supervisor_holder["supervisor"] = supervisor
     supervisor.start()

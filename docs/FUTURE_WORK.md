@@ -1032,7 +1032,12 @@ failure state. Standard failure envelopes omit that supplemental context;
 diagnosis, including the last milestone, partial queue, and policy-state
 snapshot when supplied. This does not persist a complete post-mortem packet or
 authorize recovery, and the critical-evidence and durable recovery workflows
-remain future work.
+remain future work. The supervisor can now persist each handled failure
+envelope as a data-only `WorkerFailureRecord`; the supervised runtime stores
+these records in `<policy.directory>/repair.sqlite` before selecting a restart,
+degraded, disable, or stop action. This is durable failure evidence, not a
+complete individual post-mortem packet, and a persistence error is surfaced in
+the action result rather than silently treated as success.
 
 ### Recovery decisions recorded for the next implementation slice
 

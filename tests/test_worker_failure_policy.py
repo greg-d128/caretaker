@@ -6,6 +6,7 @@ from caretaker.logging import (
     WorkerKind,
     WorkerRestartPolicy,
 )
+from caretaker import InMemoryRepairStore, SQLiteRepairStore
 
 
 class FakeRuntime:
@@ -141,3 +142,45 @@ def test_worker_failure_envelope_uses_diagnostic_debug_environment(monkeypatch) 
 
     assert envelope["detail_level"] == "DIAGNOSTIC"
     assert envelope["diagnostic_context"] == {"milestone": "ACTIVATION"}
+
+
+def test_worker_failure_is_persisted_before_recovery_action_is_selected() -> None:
+    runtime = FakeRuntime()
+    store = InMemoryRepairStore()
+    supervisor = CaretakerApplicationSupervisor(runtime, failure_store=store)
+    worker = supervisor.workers.register(WorkerKind.REPAIR_ANALYZER, 1234)
+    failed = supervisor.workers.mark_failed(worker.worker_id, error_fingerprint="worker-crash")
+
+    result = supervisor.handle_worker_failure(
+        failed,
+        policy=WorkerRestartPolicy(enabled=False),
+    )
+
+    assert result["failure_persistence_status"] == "PERSISTED"
+    records = store.all_worker_failures()
+    assert len(records) == 1
+    assert records[0].worker_id == str(worker.worker_id)
+    assert records[0].transaction_state == "ROLLED_BACK"
+    assert records[0].envelope["last_error_fingerprint"] == "worker-crash"
+
+
+def test_sqlite_worker_failure_record_survives_store_reopen(tmp_path) -> None:
+    path = tmp_path / "worker-failures.sqlite"
+    first = SQLiteRepairStore(path)
+    supervisor = CaretakerApplicationSupervisor(FakeRuntime(), failure_store=first)
+    worker = supervisor.workers.register(WorkerKind.WRITER, 1234)
+    failed = supervisor.workers.mark_failed(worker.worker_id, error_fingerprint="writer-stopped")
+
+    result = supervisor.handle_worker_failure(
+        failed,
+        policy=WorkerRestartPolicy(enabled=False),
+        diagnostic_debug=True,
+    )
+
+    assert result["failure_persistence_status"] == "PERSISTED"
+    reopened = SQLiteRepairStore(path)
+    records = reopened.all_worker_failures()
+    assert len(records) == 1
+    assert records[0]["worker_id"] == str(worker.worker_id)
+    assert records[0]["detail_level"] == "DIAGNOSTIC"
+    assert records[0]["envelope"]["transaction_state"] == "ROLLED_BACK"

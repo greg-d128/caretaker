@@ -27,7 +27,7 @@ from .domain import (
     RepairEpisode,
     RepairEvent,
 )
-from .repair_recovery import RepairRecoveryRecord
+from .repair_recovery import RepairRecoveryRecord, WorkerFailureRecord
 
 
 class RepairStore(Protocol):
@@ -51,6 +51,8 @@ class RepairStore(Protocol):
     def all_candidates(self) -> tuple[Any, ...]: ...
     def record_recovery(self, record: RepairRecoveryRecord) -> None: ...
     def all_recoveries(self) -> tuple[Any, ...]: ...
+    def record_worker_failure(self, record: WorkerFailureRecord) -> None: ...
+    def all_worker_failures(self) -> tuple[Any, ...]: ...
 
 
 class InMemoryRepairStore:
@@ -62,6 +64,7 @@ class InMemoryRepairStore:
         self.candidates: dict[UUID, RepairCandidate] = {}
         self.attempts: dict[UUID, RepairAttempt] = {}
         self.recoveries: dict[str, RepairRecoveryRecord] = {}
+        self.worker_failures: dict[UUID, WorkerFailureRecord] = {}
         self.observations: dict[UUID, ObservationRecord] = {}
         self.internal_incidents: dict[UUID, InternalIncident] = {}
         self.integrity_verifications: dict[UUID, IntegrityVerification] = {}
@@ -158,6 +161,14 @@ class InMemoryRepairStore:
         with self._lock:
             return tuple(sorted(self.recoveries.values(), key=lambda record: record.observed_at))
 
+    def record_worker_failure(self, record: WorkerFailureRecord) -> None:
+        with self._lock:
+            self.worker_failures[record.failure_id] = record
+
+    def all_worker_failures(self) -> tuple[WorkerFailureRecord, ...]:
+        with self._lock:
+            return tuple(sorted(self.worker_failures.values(), key=lambda record: record.observed_at))
+
 
 class SQLiteRepairStore:
     """Small JSON-backed event store with one logical stream per table."""
@@ -170,6 +181,7 @@ class SQLiteRepairStore:
         "candidates": "candidate_id",
         "attempts": "attempt_id",
         "recovery_records": "recovery_id",
+        "worker_failure_records": "failure_id",
         "events": "event_id",
         "observations": "observation_id",
         "internal_incidents": "internal_incident_id",
@@ -303,6 +315,12 @@ class SQLiteRepairStore:
     def all_recoveries(self) -> tuple[Mapping[str, Any], ...]:
         return tuple(self.query_records("recovery_records", limit=10000))
 
+    def record_worker_failure(self, record: WorkerFailureRecord) -> None:
+        self._write("worker_failure_records", record, target_id=None)
+
+    def all_worker_failures(self) -> tuple[Mapping[str, Any], ...]:
+        return tuple(self.query_records("worker_failure_records", limit=10000))
+
     def query_records(
         self,
         table: str,
@@ -333,7 +351,7 @@ class SQLiteRepairStore:
 
 
 def _record_time(record: object) -> datetime:
-    for name in ("timestamp", "occurred_at", "created_at", "calculated_at"):
+    for name in ("timestamp", "occurred_at", "created_at", "calculated_at", "observed_at"):
         value = getattr(record, name, None)
         if isinstance(value, datetime):
             return value

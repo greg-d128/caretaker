@@ -441,6 +441,42 @@ class RepairRecoveryRecord:
     incomplete_records: tuple[Mapping[str, Any], ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class WorkerFailureRecord:
+    """Durable evidence record for one failed application-scoped worker."""
+
+    failure_id: UUID
+    worker_id: str
+    worker_kind: str
+    observed_at: datetime
+    detail_level: str
+    transaction_state: str
+    envelope: Mapping[str, Any]
+
+
+def create_worker_failure_record(
+    envelope: Mapping[str, Any],
+    *,
+    observed_at: datetime | None = None,
+) -> WorkerFailureRecord:
+    """Create a data-only durable record from a bounded failure envelope."""
+    if not isinstance(envelope, Mapping):
+        raise TypeError("worker failure envelope must be a mapping")
+    worker_id = str(envelope.get("worker_id") or "")
+    worker_kind = str(envelope.get("worker_kind") or "")
+    if not worker_id or not worker_kind:
+        raise ValueError("worker failure envelope requires worker identity")
+    return WorkerFailureRecord(
+        failure_id=uuid4(),
+        worker_id=worker_id,
+        worker_kind=worker_kind,
+        observed_at=observed_at or utcnow(),
+        detail_level=str(envelope.get("detail_level") or "STANDARD"),
+        transaction_state=str(envelope.get("transaction_state") or "ROLLED_BACK"),
+        envelope=dict(envelope),
+    )
+
+
 def _recovered_attempt_ids(store: Any) -> set[str]:
     if not hasattr(store, "all_recoveries"):
         return set()
