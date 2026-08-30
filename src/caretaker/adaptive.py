@@ -562,6 +562,7 @@ class _AdaptiveController:
                 candidate_id=None,
                 succeeded=succeeded,
                 elapsed_seconds=time.perf_counter() - started,
+                result=result if succeeded else None,
             )
             tokens.reset()
 

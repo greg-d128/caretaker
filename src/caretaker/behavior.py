@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .adaptive import lightweight_dependency
+from collections.abc import Iterator
 import hashlib
 import io
 import json
@@ -9,6 +10,7 @@ import os
 import random
 import threading
 import tarfile
+import types
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -17,6 +19,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 from uuid import UUID, uuid4
 
+from .domain import ValueSnapshot
 from .provider_security import validate_provider_endpoint
 from .logging.models import RuntimeRecordIntegrityMode, RuntimeSignedArtifact
 from .logging.signing import (
@@ -44,6 +47,74 @@ def canonical_json_bytes(value: Any) -> bytes:
 
 def content_hash(value: Any) -> str:
     return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+
+
+def observed_return_category(value: Any) -> str:
+    """Return a bounded, non-value description of one successful return.
+
+    The classifier uses only the value's concrete type and builtin family. It
+    never calls ``repr``, iterates a container, or advances an iterator. Exact
+    values and object contents therefore remain outside behavior statistics.
+    """
+
+    value_type = type(value)
+    try:
+        type_name = f"{value_type.__module__}.{value_type.__qualname__}"[:192]
+    except Exception:
+        type_name = "unknown"
+    if value is None:
+        family = "none"
+    elif value_type is bool:
+        family = "boolean"
+    elif value_type is int:
+        family = "integer"
+    elif value_type is float:
+        family = "float"
+    elif value_type is complex:
+        family = "complex"
+    elif value_type is str:
+        family = "text"
+    elif value_type is bytes:
+        family = "bytes"
+    elif value_type is bytearray:
+        family = "bytearray"
+    elif value_type is list:
+        family = "list"
+    elif value_type is tuple:
+        family = "tuple"
+    elif value_type is dict:
+        family = "mapping"
+    elif value_type is set:
+        family = "set"
+    elif value_type is frozenset:
+        family = "frozenset"
+    elif isinstance(value, types.GeneratorType):
+        family = "iterator-generator"
+    elif isinstance(value, Iterator):
+        family = "iterator"
+    elif issubclass(value_type, list):
+        family = "list-subclass"
+    elif issubclass(value_type, tuple):
+        family = "tuple-subclass"
+    elif issubclass(value_type, dict):
+        family = "mapping-subclass"
+    elif issubclass(value_type, (set, frozenset)):
+        family = "set-subclass"
+    else:
+        family = "object"
+    return f"{family}:{type_name}"
+
+
+def _return_category_attribute(value: Any) -> str | None:
+    if isinstance(value, str):
+        return value[:256] or None
+    if isinstance(value, ValueSnapshot):
+        candidate = value.representation
+        return candidate[:256] or None
+    if isinstance(value, Mapping):
+        candidate = value.get("category") or value.get("representation")
+        return candidate[:256] if isinstance(candidate, str) and candidate else None
+    return None
 
 
 def _profile(value: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -75,6 +146,16 @@ def _profile(value: Mapping[str, Any] | None) -> dict[str, Any]:
         },
         "success_count": int(source.get("success_count") or 0),
         "failure_count": int(source.get("failure_count") or 0),
+        "return_categories": {
+            str(key): int(item)
+            for key, item in dict(source.get("return_categories") or {}).items()
+        },
+        "return_category_coverage_complete": bool(
+            source.get("return_category_coverage_complete", True)
+        ),
+        "return_category_overflow_count": int(
+            source.get("return_category_overflow_count") or 0
+        ),
     }
 
 
@@ -1324,6 +1405,7 @@ class BehaviorStatisticsRepository:
         *,
         statistics_target: int = 1000,
         maximum_resources: int = 1000,
+        maximum_return_categories: int = 32,
         checkpoint_every_samples: int = 25,
         materialize_after_samples: int = 100,
         maximum_snapshot_age_seconds: float = 3600.0,
@@ -1347,6 +1429,9 @@ class BehaviorStatisticsRepository:
                 pass
         self.statistics_target = max(1, int(statistics_target))
         self.maximum_resources = max(1, int(maximum_resources))
+        self.maximum_return_categories = int(maximum_return_categories)
+        if self.maximum_return_categories <= 0:
+            raise ValueError("maximum_return_categories must be greater than zero")
         self.checkpoint_every_samples = max(1, int(checkpoint_every_samples))
         self.materialize_after_samples = max(1, int(materialize_after_samples))
         self.maximum_snapshot_age_seconds = max(0.0, float(maximum_snapshot_age_seconds))
@@ -1383,6 +1468,7 @@ class BehaviorStatisticsRepository:
             root,
             statistics_target=policy.statistics_target,
             maximum_resources=policy.maximum_resources,
+            maximum_return_categories=policy.maximum_return_categories,
             checkpoint_every_samples=policy.checkpoint_every_samples,
             materialize_after_samples=policy.materialize_after_samples,
             maximum_snapshot_age_seconds=policy.maximum_snapshot_age_seconds,
@@ -1447,6 +1533,9 @@ class BehaviorStatisticsRepository:
             "event_count": 0,
             "success_count": 0,
             "failure_count": 0,
+            "return_category_counts": {},
+            "return_category_coverage_complete": True,
+            "return_category_overflow_count": 0,
             "event_kind_counts": {},
             "resource_counts": {},
             "resource_coverage_complete": True,
@@ -1568,6 +1657,7 @@ class BehaviorStatisticsRepository:
                 "event_count": int(item.get("event_count") or 0),
                 "success_count": int(item.get("success_count") or 0),
                 "failure_count": int(item.get("failure_count") or 0),
+                "return_categories": dict(item.get("return_category_counts") or {}),
                 "duration_seconds": _distribution_summary(item.get("duration_seconds") or {}),
             }
         profile = {
@@ -1576,6 +1666,16 @@ class BehaviorStatisticsRepository:
             "event_count": int(state.get("event_count") or 0),
             "success_count": int(state.get("success_count") or 0),
             "failure_count": int(state.get("failure_count") or 0),
+            "return_categories": {
+                str(key): int(value)
+                for key, value in dict(state.get("return_category_counts") or {}).items()
+            },
+            "return_category_coverage_complete": bool(
+                state.get("return_category_coverage_complete", True)
+            ),
+            "return_category_overflow_count": int(
+                state.get("return_category_overflow_count") or 0
+            ),
             "event_kind_counts": dict(state.get("event_kind_counts") or {}),
             "resource_counts": resources,
             "resource_coverage_complete": bool(state.get("resource_coverage_complete", True)),
@@ -1732,6 +1832,27 @@ class BehaviorStatisticsRepository:
                 if outcome == "SUCCEEDED":
                     state["success_count"] = int(state.get("success_count") or 0) + 1
                     stratum["success_count"] = int(stratum.get("success_count") or 0) + 1
+                    category = _return_category_attribute(
+                        event_attributes.get("return_category")
+                    )
+                    if category is not None:
+                        categories = state.setdefault("return_category_counts", {})
+                        if category in categories:
+                            categories[category] = int(categories[category]) + 1
+                        elif len(categories) < self.maximum_return_categories:
+                            categories[category] = 1
+                        else:
+                            state["return_category_coverage_complete"] = False
+                            state["return_category_overflow_count"] = int(
+                                state.get("return_category_overflow_count") or 0
+                            ) + 1
+                        stratum_categories = stratum.setdefault(
+                            "return_category_counts", {}
+                        )
+                        if category in stratum_categories:
+                            stratum_categories[category] = int(stratum_categories[category]) + 1
+                        elif len(stratum_categories) < self.maximum_return_categories:
+                            stratum_categories[category] = 1
                 elif outcome == "FAILED":
                     state["failure_count"] = int(state.get("failure_count") or 0) + 1
                     stratum["failure_count"] = int(stratum.get("failure_count") or 0) + 1

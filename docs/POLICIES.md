@@ -42,6 +42,15 @@ for controlled testing; leaving it unset uses a system random source. These
 epochs change evidence partitioning only: they never automatically accept a
 Guard baseline or grant Repair authority.
 
+`BehaviorSnapshotPolicy.maximum_return_categories` bounds the number of
+successful-return categories retained per generation and per observation
+stratum. Categories contain only the concrete runtime type and a coarse
+builtin family such as `none`, `text`, `mapping`, or `iterator`; Caretaker does
+not retain exact values, call `repr`, consume containers, or advance iterators.
+When the bound is reached, the snapshot records incomplete category coverage and
+an overflow count. These observations are evidence only and are not used as a
+failure or Repair signal.
+
 `RepairEvidencePolicy` gates `BEHAVIOR -> REPAIR`:
 
 - `enabled`;

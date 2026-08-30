@@ -142,6 +142,15 @@ POLICY_CAPABILITIES: tuple[PolicyCapability, ...] = (
         ("guard.snapshots.randomized_epoch_",),
     ),
     PolicyCapability(
+        "guard.return-behavior-categories",
+        4,
+        "0.6.1",
+        "Bounded return behavior categories",
+        "Controls bounded, type-only categories observed from successful Behavior-stage returns.",
+        "Review category cardinality, type-name disclosure, generation provenance, and overflow handling.",
+        ("guard.snapshots.maximum_return_categories",),
+    ),
+    PolicyCapability(
         "repair.validation-isolation",
         2,
         "0.6.0",

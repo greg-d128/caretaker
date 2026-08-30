@@ -6,7 +6,11 @@ from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
-from caretaker.behavior import BehaviorSnapshotStore, BehaviorStatisticsRepository
+from caretaker.behavior import (
+    BehaviorSnapshotStore,
+    BehaviorStatisticsRepository,
+    observed_return_category,
+)
 from caretaker.evidence import (
     BehaviorEvent,
     BehaviorEventKind,
@@ -32,7 +36,16 @@ from caretaker.logging import (
 from tests.guard_targets import failing
 
 
-def _completed(target_id: str, duration: float, *, stage: str = "LIGHTWEIGHT") -> BehaviorEvent:
+def _completed(
+    target_id: str,
+    duration: float,
+    *,
+    stage: str = "LIGHTWEIGHT",
+    return_category: str | None = None,
+) -> BehaviorEvent:
+    attributes = {"observation_stage": stage}
+    if return_category is not None:
+        attributes["return_category"] = return_category
     return BehaviorEvent.create(
         event_kind=BehaviorEventKind.FUNCTION_CALL,
         operation="function.call.completed",
@@ -43,7 +56,7 @@ def _completed(target_id: str, duration: float, *, stage: str = "LIGHTWEIGHT") -
         process_id=os.getpid(),
         thread_id=threading.get_ident(),
         duration_seconds=duration,
-        attributes={"observation_stage": stage},
+        attributes=attributes,
         outcome=EventOutcome.SUCCEEDED,
     )
 
@@ -91,6 +104,98 @@ def test_online_behavior_statistics_are_bounded_and_include_quantiles(tmp_path: 
     assert statistics["histogram_bounds"] == sorted(statistics["histogram_bounds"])
     provenance = capture["profile"]["sampling_provenance"]
     assert provenance["strata"]["LIGHTWEIGHT"]["sample_count"] == 100
+
+
+def test_return_category_observation_is_type_only_and_does_not_consume_iterators() -> None:
+    values = [
+        None,
+        True,
+        1,
+        1.5,
+        "text",
+        [1, 2],
+        {"key": "value"},
+    ]
+    categories = [observed_return_category(value) for value in values]
+    iterator = iter((1, 2))
+    iterator_category = observed_return_category(iterator)
+
+    assert categories[0].startswith("none:")
+    assert categories[1].startswith("boolean:")
+    assert categories[2].startswith("integer:")
+    assert categories[3].startswith("float:")
+    assert categories[4].startswith("text:")
+    assert categories[5].startswith("list:")
+    assert categories[6].startswith("mapping:")
+    assert iterator_category.startswith("iterator:")
+    assert next(iterator) == 1
+
+
+def test_return_categories_are_bounded_and_restart_safe(tmp_path: Path) -> None:
+    repository = BehaviorStatisticsRepository(
+        tmp_path,
+        maximum_return_categories=2,
+        materialize_after_samples=10_000,
+        checkpoint_every_samples=1,
+        automatic_materialization=False,
+    )
+    target_id = "return.target"
+    configuration = {"sampling": {"every": 1}}
+    categories = (
+        observed_return_category(None),
+        observed_return_category(1),
+        observed_return_category("overflow"),
+    )
+    for category in categories:
+        repository.observe_event(
+            _completed(target_id, 0.1, return_category=category),
+            monitoring_configuration=configuration,
+        )
+
+    capture = repository.current_capture(target_id)
+    assert capture is not None
+    profile = capture["profile"]
+    assert profile["return_categories"] == {categories[0]: 1, categories[1]: 1}
+    assert profile["return_category_coverage_complete"] is False
+    assert profile["return_category_overflow_count"] == 1
+    assert sum(profile["return_categories"].values()) == 2
+
+    restarted = BehaviorStatisticsRepository(
+        tmp_path,
+        maximum_return_categories=2,
+        materialize_after_samples=10_000,
+        checkpoint_every_samples=1,
+        automatic_materialization=False,
+    )
+    restarted.observe_event(
+        _completed(target_id, 0.1, return_category=categories[0]),
+        monitoring_configuration=configuration,
+    )
+    restarted_capture = restarted.current_capture(target_id)
+    assert restarted_capture is not None
+    assert restarted_capture["profile"]["return_categories"][categories[0]] == 2
+    assert restarted_capture["profile"]["return_category_overflow_count"] == 1
+
+
+def test_failed_call_does_not_create_a_return_category_observation(tmp_path: Path) -> None:
+    repository = BehaviorStatisticsRepository(
+        tmp_path,
+        materialize_after_samples=10_000,
+        automatic_materialization=False,
+    )
+    target_id = "failed-return.target"
+    event = replace(
+        _completed(
+            target_id,
+            0.1,
+            return_category=observed_return_category("not-a-return"),
+        ),
+        outcome=EventOutcome.FAILED,
+    )
+    repository.observe_event(event, monitoring_configuration={"sampling": {"every": 1}})
+    capture = repository.current_capture(target_id)
+    assert capture is not None
+    assert capture["profile"]["return_categories"] == {}
 
 
 def test_attributed_resource_identity_does_not_reset_function_generation(tmp_path: Path) -> None:

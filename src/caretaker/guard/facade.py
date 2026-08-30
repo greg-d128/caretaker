@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Mapping, Protocol
+from typing import Any, Mapping, Protocol
 from uuid import UUID
 
 from .models import (
@@ -45,6 +45,7 @@ class GuardFacade(Protocol):
         candidate_id: UUID | None,
         succeeded: bool,
         elapsed_seconds: float,
+        result: Any = None,
     ) -> None: ...
 
     def recent_summary(self, target_id: str, *, calls: int = 20) -> BehaviorProfileSummary | None: ...

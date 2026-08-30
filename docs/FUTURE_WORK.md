@@ -621,8 +621,8 @@ belong only in promoted Behavior collection.
 
 ### Return-type and return-shape learning review
 
-**Status: Contract reviewed; return learning and novelty detection remain
-unimplemented.**
+**Status: Implemented in development tree for bounded type/category evidence;
+novelty detection and return-shape inference remain unimplemented.**
 
 The current contract is intentionally narrower than return learning:
 
@@ -635,25 +635,24 @@ The current contract is intentionally narrower than return learning:
   flags, and shallow object size. It records successful selected outputs only;
   an exception is represented by failure evidence, not by a fabricated result.
 - Behavior statistics persist call counts, success/failure counts, durations,
-  resource observations, and event counts. They do not currently persist
-  observed return types, structural shapes, exact values, or return categories.
+  resource observations, event counts, and bounded categories for successful
+  returns observed during Behavior collection. A category contains the concrete
+  runtime type and a coarse builtin family; it never contains an exact value.
 - Annotations describe a declared contract and validators perform explicit
   policy checks. Neither is treated as an observed runtime distribution or as
   proof that a return is representative.
 
 Consequently, `None`, unions, subclasses, iterators/generators, containers, and
-application-defined objects are currently represented only by the bounded result
-evidence path when enabled; containers are not recursively normalized and
-iterators are not consumed. No return novelty detector currently distinguishes a
-rare legitimate result from a failure. Any future return learning must define
-bounded shape categories, sample-size/freshness/generation provenance, and
-redaction behavior before it is used for Guard deviations or Repair decisions.
+application-defined objects can be represented by bounded type/family
+categories. Containers are not recursively normalized and iterators are not
+consumed. The category bound and overflow indicator are retained with the
+generation and sample counts, while no return novelty detector currently
+distinguishes a rare legitimate return from a failure. Categories remain
+evidence only and do not affect Guard deviations or Repair decisions.
 
-Review the current implementation and document exactly how Caretaker learns and
-persists expected function returns and how it detects unusual returns. The review
-should distinguish declared annotations and validators from observed runtime
-types, structural shapes, bounded categorical summaries, and exact values. It
-should also determine:
+Remaining novelty-design review must distinguish declared annotations and
+validators from observed runtime types, structural shapes, bounded categorical
+summaries, and exact values. It should determine:
 
 - what is currently collected in LIGHTWEIGHT and BEHAVIOR modes;
 - how `None`, unions, subclasses, iterators/generators, containers, large values,
@@ -666,8 +665,9 @@ should also determine:
   and
 - which return signals can be collected within the lightweight overhead budget.
 
-The result should be an explicit tested return-behavior contract before unusual
-return detection is described as an implemented guarantee.
+The bounded category contract is tested and is not an unusual-return detector;
+that detector must not be described as implemented until its false-positive,
+freshness, generation, and policy semantics are defined and tested.
 
 ## Supervisor-owned multiprocess adaptive aggregation
 

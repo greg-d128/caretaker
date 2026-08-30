@@ -60,6 +60,7 @@ class _FakeGuard:
         candidate_id,
         succeeded,
         elapsed_seconds,
+        result=None,
     ):
         self.after.append((target_id, succeeded))
 

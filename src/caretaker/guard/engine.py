@@ -10,9 +10,11 @@ from enum import Enum
 from collections import OrderedDict, defaultdict, deque
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, replace
+from typing import Any
 from uuid import UUID, uuid4
 
 from ..authority import get_authority_runtime_context
+from ..domain import ValueSnapshot
 from ..control_plane import (
     RuntimeAction,
     RuntimeActionKind,
@@ -37,6 +39,7 @@ from ..behavior import (
     BehaviorSnapshotStore,
     BehaviorStatisticsRepository,
     monitoring_configuration_fingerprint,
+    observed_return_category,
 )
 from ..logging.models import LoggingCapability, LoggingMode, RequiredCapabilityFailureAction
 from ..logging.policy import mode_requirements
@@ -75,6 +78,7 @@ _GUARD_EVENT_CACHE_LIMIT = 10_000
 _GUARD_DEVIATION_CACHE_LIMIT = 2_000
 _GUARD_ASSESSMENT_CACHE_LIMIT = 1_000
 _GUARD_DECISION_CACHE_LIMIT = 1_000
+_NO_RETURN_OBSERVATION = object()
 
 
 def _tail(items, limit: int):
@@ -581,6 +585,7 @@ class GuardEngine(GuardFacade):
         candidate_id: UUID | None,
         succeeded: bool,
         elapsed_seconds: float,
+        result: Any = _NO_RETURN_OBSERVATION,
     ) -> None:
         if self.policy.mode is GuardMode.DISABLED:
             return
@@ -588,6 +593,15 @@ class GuardEngine(GuardFacade):
         if binding is None or not binding.binding.enabled:
             return
         identity = identify_function(function)
+        attributes = {
+            "observation_stage": snapshot_context().get("observation_stage") or ("POST_REPAIR_BEHAVIOR" if candidate_id else "GUARD"),
+            "monitoring_fingerprint": snapshot_context().get("monitoring_fingerprint"),
+        }
+        if succeeded and result is not _NO_RETURN_OBSERVATION:
+            attributes["return_category"] = ValueSnapshot(
+                type_name="caretaker.return-category",
+                representation=observed_return_category(result),
+            )
         event = BehaviorEvent.create(
             event_kind=BehaviorEventKind.FUNCTION_CALL,
             operation="function.call.completed",
@@ -599,10 +613,7 @@ class GuardEngine(GuardFacade):
             thread_id=threading.get_ident(),
             duration_seconds=elapsed_seconds,
             outcome=EventOutcome.SUCCEEDED if succeeded else EventOutcome.FAILED,
-            attributes={
-                "observation_stage": snapshot_context().get("observation_stage") or ("POST_REPAIR_BEHAVIOR" if candidate_id else "GUARD"),
-                "monitoring_fingerprint": snapshot_context().get("monitoring_fingerprint"),
-            },
+            attributes=attributes,
         )
         self.record_event(event)
         inspection = self.inspector.inspect_function(

@@ -70,6 +70,7 @@ class BehaviorSnapshotPolicy:
     enabled: bool = True
     statistics_target: int = 1000
     maximum_resources: int = 1000
+    maximum_return_categories: int = 32
     checkpoint_every_samples: int = 25
     materialize_after_samples: int = 100
     maximum_snapshot_age_seconds: float = 3600.0
@@ -230,6 +231,8 @@ def validate_guard_policy(policy: GuardPolicy) -> None:
         errors.append("snapshots.statistics_target must be greater than zero")
     if snapshots.maximum_resources <= 0:
         errors.append("snapshots.maximum_resources must be greater than zero")
+    if snapshots.maximum_return_categories <= 0:
+        errors.append("snapshots.maximum_return_categories must be greater than zero")
     if snapshots.randomized_epoch_min_samples <= 0:
         errors.append("snapshots.randomized_epoch_min_samples must be greater than zero")
     if snapshots.randomized_epoch_max_samples < snapshots.randomized_epoch_min_samples:
