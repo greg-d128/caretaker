@@ -316,6 +316,67 @@ def test_supervisor_reconciles_bounded_timing_duration_distributions(
     assert all(item["z_score"] > 3 for item in aggregate["distribution_conflicts"])
 
 
+def test_supervisor_reconciles_bounded_resource_distributions(tmp_path: Path):
+    store = SupervisorAdaptiveAggregationStore(
+        tmp_path,
+        distribution_minimum_observations=2,
+    )
+    first = _batch(batch_id="00000000-0000-0000-0000-000000000011")
+    first.update(
+        observation_count=30,
+        sequence_end=30,
+        timing_breach_count=0,
+        exception_count=0,
+        behavior_observation_calls=30,
+        behavior_samples=30,
+        repair_evidence_samples=0,
+        problem_reproductions=0,
+        successful_executions=30,
+        failed_executions=0,
+        exception_events=[],
+        timing_events=[],
+        resource_samples={"cpu_seconds": [1.0] * 30},
+        resource_samples_truncated={"cpu_seconds": False},
+    )
+    second = _batch(
+        batch_id="00000000-0000-0000-0000-000000000012",
+        worker_id="worker-b",
+    )
+    second.update(
+        observation_count=30,
+        sequence_end=30,
+        timing_breach_count=0,
+        exception_count=0,
+        behavior_observation_calls=30,
+        behavior_samples=30,
+        repair_evidence_samples=0,
+        problem_reproductions=0,
+        successful_executions=30,
+        failed_executions=0,
+        exception_events=[],
+        timing_events=[],
+        resource_samples={"cpu_seconds": [10.0] * 30},
+        resource_samples_truncated={"cpu_seconds": False},
+    )
+    store.submit(first)
+    store.submit(second)
+
+    result = store.reconcile(**_context())
+
+    assert result["merged"] == 2
+    assert result["conflicts"] == 2
+    aggregate = store.list_aggregates()[0]
+    resource = aggregate["resource_statistics"]["cpu_seconds"]
+    assert resource["count"] == 60
+    assert resource["mean"] == 5.5
+    assert resource["minimum"] == 1.0
+    assert resource["maximum"] == 10.0
+    assert {
+        item["metric"] for item in aggregate["distribution_conflicts"]
+    } == {"resource:cpu_seconds"}
+    assert all(item["z_score"] > 3 for item in aggregate["distribution_conflicts"])
+
+
 def test_supervisor_aggregation_is_idempotent_for_resubmitted_batch(tmp_path: Path):
     store = SupervisorAdaptiveAggregationStore(tmp_path)
     batch = _batch(batch_id="00000000-0000-0000-0000-000000000003")
@@ -601,8 +662,14 @@ def test_worker_batcher_flushes_bounded_records_with_sequence_provenance(tmp_pat
         flush_interval_seconds=0,
     )
 
-    assert batcher.record(behavior_observation_calls=1) is None
-    result = batcher.record(behavior_samples=1)
+    assert batcher.record(
+        behavior_observation_calls=1,
+        resource_values={"cpu_seconds": 0.25},
+    ) is None
+    result = batcher.record(
+        behavior_samples=1,
+        resource_values={"cpu_seconds": 0.75},
+    )
 
     assert result is not None
     assert result["status"] == "QUEUED"
@@ -613,6 +680,9 @@ def test_worker_batcher_flushes_bounded_records_with_sequence_provenance(tmp_pat
     assert aggregate["total_observations"] == 2
     assert aggregate["workers"]["worker-a"]["first_sequence"] == 1
     assert aggregate["workers"]["worker-a"]["last_sequence"] == 2
+    resource = aggregate["workers"]["worker-a"]["resource_statistics"]["cpu_seconds"]
+    assert resource["count"] == 2
+    assert resource["mean"] == 0.5
 
 
 def test_enabled_adaptive_policy_emits_live_controller_counters(tmp_path: Path):

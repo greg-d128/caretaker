@@ -735,9 +735,10 @@ repair-evidence evaluation, dynamic threshold administration, remote transport,
 process lifecycle orchestration, and additional resource-aware distribution
 reconciliation without double-counting the existing single-process lifecycle.
 The current slice also carries bounded timing-breach duration samples and
-produces three-standard-deviation evidence conflicts for materially different
-worker duration distributions; broader resource and return-shape distributions
-remain future work.
+worker-supplied numeric resource samples, producing three-standard-deviation
+evidence conflicts for materially different worker distributions. Automatic
+host-resource collection and broader return-shape distributions remain future
+work.
 Transition deadlines are now policy-defined and stale-worker identities are
 reported fail-closed; automatic replacement or unauthorized-worker lifecycle
 orchestration remains future work.

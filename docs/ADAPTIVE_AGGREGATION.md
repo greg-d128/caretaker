@@ -62,6 +62,16 @@ deviations as evidence. Missing legacy samples and truncated samples are not
 treated as comparable distributions, so incomplete coverage cannot become an
 absence or equivalence claim.
 
+Workers may also attach a bounded mapping of numeric resource samples, such as
+`cpu_seconds` or `memory_bytes`, to an observation batch. Metric names, values,
+metric count, and samples per metric are bounded and finite; the supervisor
+retains only mergeable count/mean/variance/minimum/maximum summaries. A metric
+is compared between workers only when both sides have enough non-truncated
+samples, using the same three-standard-deviation evidence threshold. These
+values are worker-supplied evidence: the current lightweight path does not
+automatically collect host metrics, and a resource conflict does not veto a
+merge, change policy, or authorize a repair.
+
 ## Current boundary
 
 This first slice establishes durable ownership, batching, generation scope,

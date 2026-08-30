@@ -37,6 +37,9 @@ DEFAULT_TRANSITION_TIMEOUT_SECONDS = 60.0
 MAX_TRANSITION_TIMEOUT_SECONDS = 86_400.0
 MAX_DURATION_SECONDS = 86_400.0
 MAX_DURATION_SAMPLES = MAX_BATCH_EVENTS
+MAX_RESOURCE_METRICS = 32
+MAX_RESOURCE_VALUE = 1.0e18
+MAX_RESOURCE_SAMPLES = MAX_BATCH_EVENTS
 _DISTRIBUTION_COUNTER_NAMES = (
     "exception_count",
     "timing_breach_count",
@@ -107,6 +110,8 @@ class AdaptiveObservationBatcher:
         self._events = {"exception_events": [], "timing_events": []}
         self._duration_samples: list[float] = []
         self._duration_samples_truncated = False
+        self._resource_samples: dict[str, list[float]] = {}
+        self._resource_samples_truncated: dict[str, bool] = {}
         self._last_flush_monotonic = time.monotonic()
         self._last_error: str | None = None
         self._dropped_records = 0
@@ -134,6 +139,7 @@ class AdaptiveObservationBatcher:
         observed_at: str | None = None,
         event_kind: str | None = None,
         duration_seconds: float | None = None,
+        resource_values: Mapping[str, float] | None = None,
         **increments: int,
     ) -> dict[str, Any] | None:
         """Record one observation and flush when the bounded policy requires it."""
@@ -155,6 +161,38 @@ class AdaptiveObservationBatcher:
                     )
                 if event_kind != "timing":
                     raise ValueError("duration_seconds requires a timing event")
+            normalized_resources: dict[str, float] = {}
+            if resource_values is not None:
+                if not isinstance(resource_values, Mapping):
+                    raise ValueError("resource_values must be a mapping")
+                if len(resource_values) > MAX_RESOURCE_METRICS:
+                    raise ValueError(
+                        f"resource_values exceeds {MAX_RESOURCE_METRICS} metrics"
+                    )
+                for raw_name, raw_value in resource_values.items():
+                    name = str(raw_name).strip()
+                    if not name or len(name) > MAX_BATCH_TEXT:
+                        raise ValueError(
+                            f"resource metric names must be 1..{MAX_BATCH_TEXT} characters"
+                        )
+                    if isinstance(raw_value, bool):
+                        raise ValueError(f"resource_values[{name!r}] must be a number")
+                    try:
+                        numeric = float(raw_value)
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(
+                            f"resource_values[{name!r}] must be a number"
+                        ) from exc
+                    if not math.isfinite(numeric) or not 0 <= numeric <= MAX_RESOURCE_VALUE:
+                        raise ValueError(
+                            f"resource_values[{name!r}] must be finite and between 0 and "
+                            f"{MAX_RESOURCE_VALUE:g}"
+                        )
+                    normalized_resources[name] = numeric
+                if len(set(self._resource_samples).union(normalized_resources)) > MAX_RESOURCE_METRICS:
+                    raise ValueError(
+                        f"resource metrics exceed {MAX_RESOURCE_METRICS} per batch"
+                    )
             for name, value in increments.items():
                 if name not in _BATCH_COUNTER_NAMES:
                     raise ValueError(f"unknown adaptive aggregation counter: {name}")
@@ -177,6 +215,12 @@ class AdaptiveObservationBatcher:
                     self._duration_samples.append(normalized_duration)
                 else:
                     self._duration_samples_truncated = True
+            for name, numeric in normalized_resources.items():
+                samples = self._resource_samples.setdefault(name, [])
+                if len(samples) < MAX_RESOURCE_SAMPLES:
+                    samples.append(numeric)
+                else:
+                    self._resource_samples_truncated[name] = True
             for name, value in increments.items():
                 self._counters[name] += int(value)
             if event_kind is not None:
@@ -253,6 +297,11 @@ class AdaptiveObservationBatcher:
             **self._events,
             "duration_samples": list(self._duration_samples),
             "duration_samples_truncated": self._duration_samples_truncated,
+            "resource_samples": {
+                name: list(samples)
+                for name, samples in sorted(self._resource_samples.items())
+            },
+            "resource_samples_truncated": dict(self._resource_samples_truncated),
         }
 
     def _reset_locked(self) -> None:
@@ -263,6 +312,8 @@ class AdaptiveObservationBatcher:
         self._events = {"exception_events": [], "timing_events": []}
         self._duration_samples = []
         self._duration_samples_truncated = False
+        self._resource_samples = {}
+        self._resource_samples_truncated = {}
         self._last_flush_monotonic = time.monotonic()
 
     def _flush_locked(self) -> dict[str, Any] | None:
@@ -374,6 +425,76 @@ def _duration_samples(value: Any, *, name: str) -> list[float]:
     return samples
 
 
+def _resource_samples(value: Any, *, name: str) -> dict[str, list[float]]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise AdaptiveAggregationError(f"{name} must be an object")
+    if len(value) > MAX_RESOURCE_METRICS:
+        raise AdaptiveAggregationError(
+            f"{name} exceeds {MAX_RESOURCE_METRICS} metrics"
+        )
+    result: dict[str, list[float]] = {}
+    for raw_metric, raw_values in value.items():
+        metric = _text(
+            raw_metric,
+            name=f"{name} metric",
+            limit=MAX_BATCH_TEXT,
+        )
+        assert metric is not None
+        if not isinstance(raw_values, (list, tuple)):
+            raise AdaptiveAggregationError(f"{name}[{metric!r}] must be a list")
+        if len(raw_values) > MAX_RESOURCE_SAMPLES:
+            raise AdaptiveAggregationError(
+                f"{name}[{metric!r}] exceeds {MAX_RESOURCE_SAMPLES} entries"
+            )
+        samples: list[float] = []
+        for raw_value in raw_values:
+            if isinstance(raw_value, bool):
+                raise AdaptiveAggregationError(
+                    f"{name}[{metric!r}][] must be a number"
+                )
+            try:
+                numeric = float(raw_value)
+            except (TypeError, ValueError) as exc:
+                raise AdaptiveAggregationError(
+                    f"{name}[{metric!r}][] must be a number"
+                ) from exc
+            if not math.isfinite(numeric) or not 0 <= numeric <= MAX_RESOURCE_VALUE:
+                raise AdaptiveAggregationError(
+                    f"{name}[{metric!r}][] must be finite and between 0 and "
+                    f"{MAX_RESOURCE_VALUE:g}"
+                )
+            samples.append(numeric)
+        result[metric] = samples
+    return result
+
+
+def _resource_samples_truncated(value: Any, *, name: str) -> dict[str, bool]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise AdaptiveAggregationError(f"{name} must be an object")
+    if len(value) > MAX_RESOURCE_METRICS:
+        raise AdaptiveAggregationError(
+            f"{name} exceeds {MAX_RESOURCE_METRICS} metrics"
+        )
+    result: dict[str, bool] = {}
+    for raw_metric, raw_truncated in value.items():
+        metric = _text(
+            raw_metric,
+            name=f"{name} metric",
+            limit=MAX_BATCH_TEXT,
+        )
+        assert metric is not None
+        if not isinstance(raw_truncated, bool):
+            raise AdaptiveAggregationError(
+                f"{name}[{metric!r}] must be a boolean"
+            )
+        result[metric] = raw_truncated
+    return result
+
+
 def normalize_adaptive_observation_batch(value: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize one worker batch into the signed-context-independent protocol."""
     if not isinstance(value, Mapping):
@@ -468,9 +589,21 @@ def normalize_adaptive_observation_batch(value: Mapping[str, Any]) -> dict[str, 
             "duration_samples_truncated",
             not duration_samples_present,
         ),
+        "resource_samples": _resource_samples(
+            value.get("resource_samples"), name="resource_samples"
+        ),
+        "resource_samples_truncated": _resource_samples_truncated(
+            value.get("resource_samples_truncated"),
+            name="resource_samples_truncated",
+        ),
     }
     if not isinstance(normalized["duration_samples_truncated"], bool):
         raise AdaptiveAggregationError("duration_samples_truncated must be a boolean")
+    for metric in normalized["resource_samples_truncated"]:
+        if metric not in normalized["resource_samples"]:
+            raise AdaptiveAggregationError(
+                f"resource_samples_truncated contains unknown metric {metric!r}"
+            )
     if normalized["last_observed_at"] < normalized["first_observed_at"]:
         raise AdaptiveAggregationError("last_observed_at must not precede first_observed_at")
     if sum(
@@ -951,6 +1084,7 @@ class SupervisorAdaptiveAggregationStore:
             "exception_events": [],
             "timing_events": [],
             "timing_duration_statistics": _duration_statistics(()),
+            "resource_statistics": {},
             "workers": {},
             "worker_overflow_count": 0,
             "processed_batch_ids": [],
@@ -1075,6 +1209,75 @@ class SupervisorAdaptiveAggregationStore:
                     "worker_observations": worker_count,
                     "comparison_observations": other_count,
                 })
+        resource_metrics = sorted({
+            str(metric)
+            for _worker_id, worker in workers.items()
+            if isinstance(worker, Mapping)
+            for metric in (worker.get("resource_statistics") or {})
+        })
+        for metric in resource_metrics:
+            resource_eligible = [
+                (str(worker_id), worker)
+                for worker_id, worker in workers.items()
+                if isinstance(worker, Mapping)
+                and isinstance((worker.get("resource_statistics") or {}).get(metric), Mapping)
+                and not bool(
+                    (worker.get("resource_samples_truncated") or {}).get(metric, False)
+                )
+                and int(
+                    ((worker.get("resource_statistics") or {}).get(metric) or {}).get("count")
+                    or 0
+                ) >= self.distribution_minimum_observations
+            ]
+            if len(resource_eligible) < 2:
+                continue
+            for worker_id, worker in resource_eligible:
+                worker_stats = (worker.get("resource_statistics") or {})[metric]
+                worker_count = int(worker_stats.get("count") or 0)
+                other_stats = _duration_statistics(())
+                for other_id, other in resource_eligible:
+                    if other_id == worker_id:
+                        continue
+                    other_stats = _merge_duration_statistics(
+                        other_stats,
+                        (other.get("resource_statistics") or {})[metric],
+                    )
+                other_count = int(other_stats["count"])
+                if other_count < self.distribution_minimum_observations:
+                    continue
+                worker_mean = float(worker_stats.get("mean") or 0.0)
+                other_mean = float(other_stats.get("mean") or 0.0)
+                worker_variance = (
+                    float(worker_stats.get("m2") or 0.0) / (worker_count - 1)
+                    if worker_count > 1
+                    else 0.0
+                )
+                other_variance = (
+                    float(other_stats.get("m2") or 0.0) / (other_count - 1)
+                    if other_count > 1
+                    else 0.0
+                )
+                standard_error = (
+                    worker_variance / worker_count
+                    + other_variance / other_count
+                ) ** 0.5
+                difference = abs(worker_mean - other_mean)
+                z_score = difference / max(standard_error, 1e-12)
+                if z_score <= self.distribution_z_threshold:
+                    continue
+                conflicts.append({
+                    "worker_id": worker_id,
+                    "metric": f"resource:{metric}",
+                    "resource_metric": metric,
+                    "worker_mean": worker_mean,
+                    "comparison_mean": other_mean,
+                    "worker_standard_deviation": worker_variance ** 0.5,
+                    "comparison_standard_deviation": other_variance ** 0.5,
+                    "z_score": z_score,
+                    "z_threshold": self.distribution_z_threshold,
+                    "worker_observations": worker_count,
+                    "comparison_observations": other_count,
+                })
         return conflicts[:MAX_DISTRIBUTION_CONFLICTS]
 
     def _write_conflict_reports(
@@ -1123,6 +1326,13 @@ class SupervisorAdaptiveAggregationStore:
             aggregate.get("timing_duration_statistics"),
             _duration_statistics(batch.get("duration_samples") or ()),
         )
+        resource_statistics = dict(aggregate.get("resource_statistics") or {})
+        for metric, samples in (batch.get("resource_samples") or {}).items():
+            resource_statistics[metric] = _merge_duration_statistics(
+                resource_statistics.get(metric),
+                _duration_statistics(samples),
+            )
+        aggregate["resource_statistics"] = resource_statistics
         counter_names = (
             "exception_count",
             "timing_breach_count",
@@ -1190,7 +1400,18 @@ class SupervisorAdaptiveAggregationStore:
                     bool(worker.get("timing_duration_complete", True))
                     and not bool(batch.get("duration_samples_truncated"))
                 ),
+                "resource_statistics": dict(worker.get("resource_statistics") or {}),
+                "resource_samples_truncated": dict(
+                    worker.get("resource_samples_truncated") or {}
+                ),
             })
+            for metric, samples in (batch.get("resource_samples") or {}).items():
+                worker["resource_statistics"][metric] = _merge_duration_statistics(
+                    worker["resource_statistics"].get(metric),
+                    _duration_statistics(samples),
+                )
+                if bool((batch.get("resource_samples_truncated") or {}).get(metric, False)):
+                    worker["resource_samples_truncated"][metric] = True
             workers[worker_id] = worker
             aggregate["workers"] = workers
         processed = list(aggregate.get("processed_batch_ids") or ())
