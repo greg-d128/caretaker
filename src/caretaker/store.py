@@ -27,6 +27,7 @@ from .domain import (
     RepairEpisode,
     RepairEvent,
 )
+from .repair_recovery import RepairRecoveryRecord
 
 
 class RepairStore(Protocol):
@@ -44,6 +45,8 @@ class RepairStore(Protocol):
     def recent_events(self, target_id: str | None, limit: int = 50) -> tuple[RepairEvent, ...]: ...
     def attempts_for_target(self, target_id: str) -> tuple[Any, ...]: ...
     def all_attempts(self) -> tuple[Any, ...]: ...
+    def record_recovery(self, record: RepairRecoveryRecord) -> None: ...
+    def all_recoveries(self) -> tuple[Any, ...]: ...
 
 
 class InMemoryRepairStore:
@@ -54,6 +57,7 @@ class InMemoryRepairStore:
         self.generations: dict[UUID, CandidateGeneration] = {}
         self.candidates: dict[UUID, RepairCandidate] = {}
         self.attempts: dict[UUID, RepairAttempt] = {}
+        self.recoveries: dict[str, RepairRecoveryRecord] = {}
         self.observations: dict[UUID, ObservationRecord] = {}
         self.internal_incidents: dict[UUID, InternalIncident] = {}
         self.integrity_verifications: dict[UUID, IntegrityVerification] = {}
@@ -126,6 +130,14 @@ class InMemoryRepairStore:
         with self._lock:
             return tuple(sorted(self.attempts.values(), key=lambda attempt: attempt.created_at))
 
+    def record_recovery(self, record: RepairRecoveryRecord) -> None:
+        with self._lock:
+            self.recoveries.setdefault(record.attempt_id, record)
+
+    def all_recoveries(self) -> tuple[RepairRecoveryRecord, ...]:
+        with self._lock:
+            return tuple(sorted(self.recoveries.values(), key=lambda record: record.observed_at))
+
 
 class SQLiteRepairStore:
     """Small JSON-backed event store with one logical stream per table."""
@@ -137,6 +149,7 @@ class SQLiteRepairStore:
         "generations": "generation_id",
         "candidates": "candidate_id",
         "attempts": "attempt_id",
+        "recovery_records": "recovery_id",
         "events": "event_id",
         "observations": "observation_id",
         "internal_incidents": "internal_incident_id",
@@ -251,6 +264,12 @@ class SQLiteRepairStore:
 
     def all_attempts(self) -> tuple[Mapping[str, Any], ...]:
         return tuple(self.query_records("attempts", limit=10000))
+
+    def record_recovery(self, record: RepairRecoveryRecord) -> None:
+        self._write("recovery_records", record, target_id=record.target_id)
+
+    def all_recoveries(self) -> tuple[Mapping[str, Any], ...]:
+        return tuple(self.query_records("recovery_records", limit=10000))
 
     def query_records(
         self,

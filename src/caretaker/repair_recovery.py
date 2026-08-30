@@ -9,13 +9,42 @@ an interrupted transaction as successful work.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from uuid import UUID, uuid4
 
 from .domain import RepairAttemptOutcome, RepairAttemptStage, utcnow
 
 
 RECOVERY_PLAN_SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True, slots=True)
+class RepairRecoveryRecord:
+    """Durable acknowledgement that one interrupted attempt was reconciled."""
+
+    recovery_id: UUID
+    attempt_id: str
+    episode_id: str
+    incident_id: str
+    target_id: str
+    observed_at: datetime
+    last_milestone: str
+    persisted_outcome: str
+    recovery_action: str
+    authority_action: str
+    reason: str
+
+
+def _recovered_attempt_ids(store: Any) -> set[str]:
+    if not hasattr(store, "all_recoveries"):
+        return set()
+    return {
+        str(_field(item, "attempt_id", ""))
+        for item in store.all_recoveries()
+        if _field(item, "attempt_id")
+    }
 
 
 def _field(record: Any, name: str, default: Any = None) -> Any:
@@ -52,14 +81,18 @@ def build_repair_recovery_plan(
     """
     observed_at = (now or utcnow()).isoformat()
     decisions: list[dict[str, Any]] = []
+    recovered_attempt_ids = _recovered_attempt_ids(store)
     for attempt in _attempts(store, target_id):
+        attempt_id = str(_field(attempt, "attempt_id", ""))
+        if attempt_id in recovered_attempt_ids:
+            continue
         completed_at = _field(attempt, "completed_at")
         outcome = _enum_name(_field(attempt, "outcome"))
         stage = _enum_name(_field(attempt, "stage"))
         if completed_at is not None and outcome != RepairAttemptOutcome.PENDING.name:
             continue
         decisions.append({
-            "attempt_id": str(_field(attempt, "attempt_id", "")),
+            "attempt_id": attempt_id,
             "episode_id": str(_field(attempt, "episode_id", "")),
             "incident_id": str(_field(attempt, "incident_id", "")),
             "target_id": str(_field(attempt, "target_id", "")),
@@ -86,4 +119,65 @@ def build_repair_recovery_plan(
         "automatic_reactivation": False,
         "incomplete_attempt_count": len(decisions),
         "decisions": decisions,
+    }
+
+
+def apply_repair_recovery_plan(
+    store: Any,
+    plan: Mapping[str, Any],
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Durably acknowledge rollback decisions without rewriting source evidence.
+
+    This operation does not activate, delete, or rewrite a candidate, attempt,
+    incident, or policy record. Reapplying the same plan is idempotent by
+    ``attempt_id``. A future policy-aware recovery controller can use these
+    records when deciding whether to replace workers or create an incident.
+    """
+    if plan.get("schema_version") != RECOVERY_PLAN_SCHEMA_VERSION:
+        raise ValueError("unsupported Repair recovery plan schema version")
+    if not bool(plan.get("read_only")):
+        raise ValueError("Repair recovery plan must be a read-only inspection plan")
+    decisions = plan.get("decisions")
+    if not isinstance(decisions, list):
+        raise ValueError("Repair recovery plan decisions must be a list")
+    existing = _recovered_attempt_ids(store)
+    observed_at = now or utcnow()
+    applied = 0
+    skipped = 0
+    for decision in decisions:
+        if not isinstance(decision, Mapping):
+            raise ValueError("Repair recovery decision must be an object")
+        attempt_id = str(decision.get("attempt_id") or "")
+        if not attempt_id:
+            raise ValueError("Repair recovery decision requires attempt_id")
+        if attempt_id in existing:
+            skipped += 1
+            continue
+        record = RepairRecoveryRecord(
+            recovery_id=uuid4(),
+            attempt_id=attempt_id,
+            episode_id=str(decision.get("episode_id") or ""),
+            incident_id=str(decision.get("incident_id") or ""),
+            target_id=str(decision.get("target_id") or ""),
+            observed_at=observed_at,
+            last_milestone=str(decision.get("last_milestone") or "CREATED"),
+            persisted_outcome=str(decision.get("persisted_outcome") or "PENDING"),
+            recovery_action=str(decision.get("recovery_action") or "ROLLBACK_TO_DEPLOYED_CODE"),
+            authority_action=str(
+                decision.get("authority_action") or "REVALIDATE_BEFORE_ANY_CONTINUATION"
+            ),
+            reason=str(decision.get("reason") or "interrupted Repair transaction"),
+        )
+        store.record_recovery(record)
+        existing.add(attempt_id)
+        applied += 1
+    return {
+        "schema_version": RECOVERY_PLAN_SCHEMA_VERSION,
+        "applied_count": applied,
+        "already_recorded_count": skipped,
+        "read_only": False,
+        "source_evidence_modified": False,
+        "automatic_reactivation": False,
     }

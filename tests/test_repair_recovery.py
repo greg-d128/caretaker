@@ -7,6 +7,7 @@ from uuid import uuid4
 from caretaker import (
     InMemoryRepairStore,
     SQLiteRepairStore,
+    apply_repair_recovery_plan,
     build_repair_recovery_plan,
 )
 from caretaker.domain import RepairAttempt, RepairAttemptOutcome, RepairAttemptStage
@@ -60,8 +61,15 @@ def test_recovery_plan_marks_incomplete_attempt_as_rollback_without_reactivation
     assert decision["candidate_reactivation_allowed"] is False
     assert decision["approval_survives_restart"] is False
 
+    applied = apply_repair_recovery_plan(store, plan)
+    repeated = apply_repair_recovery_plan(store, plan)
+    assert applied["applied_count"] == 1
+    assert repeated["applied_count"] == 0
+    assert repeated["already_recorded_count"] == 1
+    assert build_repair_recovery_plan(store, target_id="app:charge")["incomplete_attempt_count"] == 0
 
-def test_sqlite_recovery_plan_reads_all_targets_without_mutating_attempts(tmp_path: Path) -> None:
+
+def test_sqlite_recovery_plan_and_acknowledgement_preserve_attempt_evidence(tmp_path: Path) -> None:
     store = SQLiteRepairStore(tmp_path / "caretaker.sqlite")
     interrupted = _attempt(
         target_id="app:charge",
@@ -74,5 +82,10 @@ def test_sqlite_recovery_plan_reads_all_targets_without_mutating_attempts(tmp_pa
 
     assert plan["incomplete_attempt_count"] == 1
     assert plan["decisions"][0]["persisted_outcome"] == "PROVIDER_FAILED"
+    assert apply_repair_recovery_plan(store, plan)["applied_count"] == 1
     assert len(store.all_attempts()) == 1
     assert store.all_attempts()[0]["attempt_id"] == str(interrupted.attempt_id)
+    recoveries = store.all_recoveries()
+    assert len(recoveries) == 1
+    assert recoveries[0]["attempt_id"] == str(interrupted.attempt_id)
+    assert recoveries[0]["recovery_action"] == "ROLLBACK_TO_DEPLOYED_CODE"

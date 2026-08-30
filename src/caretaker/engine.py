@@ -60,7 +60,7 @@ from .observation import ObservationManager
 from .policy import OutputValidationTrigger, RepairPolicy, TimeoutTrigger
 from .postmortem import PostMortemRecorder
 from .provider import CandidateBatch, CandidateProposal, RepairProvider, RepairRequest
-from .repair_recovery import build_repair_recovery_plan
+from .repair_recovery import apply_repair_recovery_plan, build_repair_recovery_plan
 from .registry import RepairTarget, TargetRegistry, build_target
 from .regression import RegressionCorpus, RegressionFixtureStore
 from .runtime import current_episode_id, repair_depth, set_runtime_context
@@ -278,6 +278,10 @@ class RepairEngine:
     def recovery_plan(self, *, target_id: str | None = None) -> dict[str, Any]:
         """Inspect interrupted persisted Repair work without reactivating it."""
         return build_repair_recovery_plan(self.store, target_id=target_id)
+
+    def apply_recovery_plan(self, plan: dict[str, Any]) -> dict[str, Any]:
+        """Record fail-safe recovery decisions without reactivating candidates."""
+        return apply_repair_recovery_plan(self.store, plan)
 
     def record_candidate_observation_success(
         self,
