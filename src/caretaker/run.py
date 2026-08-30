@@ -1263,9 +1263,18 @@ def main(argv: list[str] | None = None) -> int:
     })
     if args.policy:
         env["CARETAKER_LOGGING_POLICY"] = str(Path(args.policy).resolve())
-    child = subprocess.Popen([sys.executable, "-m", "caretaker.bootstrap", args.module, *args.module_args], env=env)
+    child = subprocess.Popen(
+        [sys.executable, "-m", "caretaker.bootstrap", args.module, *args.module_args],
+        env=env,
+        start_new_session=True,
+    )
     child_holder["child"] = child
-    supervisor = CaretakerApplicationSupervisor(runtime, application_pid=child.pid)
+    supervisor = CaretakerApplicationSupervisor(
+        runtime,
+        application_pid=child.pid,
+        application_process_group_id=os.getpgid(child.pid),
+        application_process=child,
+    )
     supervisor_holder["supervisor"] = supervisor
     supervisor.start()
     writer_health = supervisor.workers.register(WorkerKind.WRITER, os.getpid())
@@ -1294,9 +1303,10 @@ def main(argv: list[str] | None = None) -> int:
 
     health_stop = threading.Event()
     system_restart_times: list[float] = []
+    application_stop_requested = False
 
     def health_loop() -> None:
-        nonlocal collector, collector_thread
+        nonlocal application_stop_requested, collector, collector_thread
         while not health_stop.wait(1.0):
             effective_authority = authority.effective
             materialize_behavior_snapshots(maximum=100)
@@ -1443,15 +1453,23 @@ def main(argv: list[str] | None = None) -> int:
                                 "backoff_seconds": delay,
                             },
                         )
-                    elif restart_policy.exhaustion_action is WorkerFailureAction.STOP_APPLICATION:
+                    elif (
+                        restart_policy.exhaustion_action is WorkerFailureAction.STOP_APPLICATION
+                        and not application_stop_requested
+                    ):
+                        application_stop_requested = True
+                        shutdown = supervisor.stop_application()
                         runtime.event(
                             logger_name="caretaker.watchdog",
                             severity=50,
                             channel=LogChannel.EMERGENCY,
-                            message="System collector restart policy exhausted; stopping application",
-                            fields={"worker_id": str(system_health.worker_id)},
+                            message="System collector restart policy exhausted; stopping application boundary",
+                            fields={
+                                "worker_id": str(system_health.worker_id),
+                                "shutdown_reason": "system_collector_restart_exhausted",
+                                "shutdown": shutdown,
+                            },
                         )
-                        child.terminate()
 
     health_thread = threading.Thread(target=health_loop, name="caretaker-health-monitor", daemon=True)
     health_thread.start()

@@ -101,7 +101,7 @@ for the documented backward-compatible signer contract where applicable.
   production-readiness wording should not imply polished diagnostic behavior
   until this entry is resolved.
 
-## Open: restart exhaustion can orphan application descendants
+## Resolved in source: restart exhaustion can orphan application descendants
 
 ### Classification
 
@@ -109,8 +109,10 @@ for the documented backward-compatible signer contract where applicable.
 - Severity: high operational assurance failure
 - Authority impact: application work can survive outside Caretaker's active
   control and evidence boundary
-- Current implementation status: open in the validated 0.6.1 wheel
-- Release-blocking status: blocks Caretaker Validation Phase 3 acceptance
+- Current implementation status: resolved in source; the validated 0.6.1 wheel
+  still requires downstream revalidation
+- Release-blocking status: downstream Caretaker Validation Phase 3 acceptance
+  remains pending until `RUN-002` passes against the rebuilt wheel
 
 ### Reproduction
 
@@ -137,14 +139,17 @@ unavailable_source_action = "stop_application"
 failure_action = "stop_application"
 ```
 
-The supervisor exposes the collector restart count. When the second failure
-exhausts the restart budget, `caretaker-run` exits nonzero and removes its
-control socket. The supervised application root exits, but its descendant
-remains alive.
+The supervisor exposes the collector restart count. Before this fix, when the
+second failure exhausted the restart budget, `caretaker-run` exited nonzero and
+removed its control socket. The supervised application root exited, but its
+descendant remained alive.
 
 Caretaker Validation reproduces this independently in `RUN-002` using installed
 commands, process IDs, `/proc` liveness, exit status, and socket state. The
-validator terminates the orphan during fixture cleanup.
+source-level regression now establishes a dedicated process group and verifies
+that both graceful and forced group shutdown stop the descendant while an
+unrelated same-UID process survives. The validator must still rerun the
+installed-runtime scenario before this release finding is closed.
 
 ### Required behavior
 

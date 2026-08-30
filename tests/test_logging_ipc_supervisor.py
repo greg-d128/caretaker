@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import os
+import select
+import signal
+import subprocess
+import sys
 import threading
+import time
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -14,7 +19,97 @@ from caretaker.logging import (
     SocketLogServer,
     WorkRegistry,
     CaretakerComponent,
+    CaretakerApplicationSupervisor,
 )
+
+
+def test_application_shutdown_terminates_only_the_dedicated_process_group():
+    unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    application = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import subprocess, sys, time; "
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); "
+            "print(child.pid, flush=True); time.sleep(30)",
+        ],
+        start_new_session=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        descendant_pid = int(application.stdout.readline().strip())
+        supervisor = CaretakerApplicationSupervisor(
+            object(),
+            application_pid=application.pid,
+            application_process_group_id=os.getpgid(application.pid),
+            application_process=application,
+        )
+        outcome = supervisor.stop_application(timeout_seconds=0.5)
+        application.wait(timeout=2)
+        assert outcome["boundary"] == "process_group"
+        assert outcome["process_group_id"] == application.pid
+        assert application.poll() is not None
+        assert unrelated.poll() is None
+        ready, _, _ = select.select([application.stdout], [], [], 2)
+        assert ready == [application.stdout]
+        assert application.stdout.read() == ""
+        for _ in range(20):
+            try:
+                os.kill(descendant_pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            pytest.fail("application descendant survived process-group shutdown")
+    finally:
+        if application.poll() is None:
+            os.killpg(os.getpgid(application.pid), signal.SIGKILL)
+            application.wait(timeout=2)
+        if unrelated.poll() is None:
+            unrelated.terminate()
+            unrelated.wait(timeout=2)
+
+
+def test_application_shutdown_escalates_only_within_the_dedicated_process_group():
+    application = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import signal, subprocess, sys, time; "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "child = subprocess.Popen([sys.executable, '-c', "
+            "'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)']); "
+            "print(child.pid, flush=True); time.sleep(30)",
+        ],
+        start_new_session=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        descendant_pid = int(application.stdout.readline().strip())
+        supervisor = CaretakerApplicationSupervisor(
+            object(),
+            application_pid=application.pid,
+            application_process_group_id=os.getpgid(application.pid),
+            application_process=application,
+        )
+        outcome = supervisor.stop_application(timeout_seconds=0.1)
+        application.wait(timeout=2)
+        assert outcome["forced"] is True
+        assert outcome["boundary_alive"] is False
+        for _ in range(20):
+            try:
+                os.kill(descendant_pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            pytest.fail("ignored application descendant survived forced shutdown")
+    finally:
+        if application.poll() is None:
+            os.killpg(os.getpgid(application.pid), signal.SIGKILL)
+            application.wait(timeout=2)
 
 
 def test_unix_socket_logging_supports_multiple_emitters(tmp_path):

@@ -30,7 +30,12 @@ Each application process uses a lightweight emitter. One supervised service owns
 
 Caretaker treats `<data-directory>/run/*.sock` as logical socket paths. If the absolute pathname would exceed the platform Unix-domain socket limit, only the ephemeral socket is mapped to a deterministic private per-user runtime directory under `$XDG_RUNTIME_DIR` or the system temporary directory. Persistent logs, evidence, indexes, and attachments remain in the configured data directory. Caretaker clients and consoles perform the same mapping automatically.
 
-The application lifecycle controls Caretaker's lifecycle. The supervised process exits after the application and flushes complete records where possible.
+The application lifecycle controls Caretaker's lifecycle. A supervised
+application is launched in a dedicated session/process group. Normal lifecycle
+completion follows the application root; policy-directed `STOP_APPLICATION`
+shutdown signals and, after a bounded grace period, force-stops that complete
+application group without signalling Caretaker or unrelated same-user
+processes. Caretaker then exits after flushing complete records where possible.
 
 ## Channels
 
@@ -74,3 +79,9 @@ Guard and Repair receive capability-health information. They may continue in deg
 ## Worker restart exhaustion
 
 After the configured restart budget is exhausted, the default action is now `DISABLE_COMPONENT` rather than silently continuing in a degraded state. Deployments that prefer availability over evidence completeness can explicitly select `CONTINUE_DEGRADED`.
+
+When `STOP_APPLICATION` is selected, the supervisor records the exhaustion
+reason and shutdown outcome, and terminates the dedicated application process
+group. This boundary covers descendants that remain in the application's
+session; daemonization or double-forking that deliberately escapes the session
+requires a stronger isolation backend.

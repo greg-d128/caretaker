@@ -202,9 +202,18 @@ class CaretakerApplicationSupervisor:
     terminates. It does not attempt to become a machine-wide service manager.
     """
 
-    def __init__(self, runtime: LoggingRuntime, *, application_pid: int | None = None) -> None:
+    def __init__(
+        self,
+        runtime: LoggingRuntime,
+        *,
+        application_pid: int | None = None,
+        application_process_group_id: int | None = None,
+        application_process=None,
+    ) -> None:
         self.runtime = runtime
         self.application_pid = application_pid
+        self.application_process_group_id = application_process_group_id
+        self.application_process = application_process
         self.work = WorkRegistry()
         self.workers = WorkerRegistry()
         self.supervisor_health = self.workers.register(WorkerKind.SUPERVISOR, os.getpid())
@@ -230,18 +239,65 @@ class CaretakerApplicationSupervisor:
                 self.stop()
                 return
 
-    def stop_application(self, *, graceful_signal: int = signal.SIGTERM, timeout_seconds: float = 10.0) -> None:
+    def stop_application(
+        self,
+        *,
+        graceful_signal: int = signal.SIGTERM,
+        timeout_seconds: float = 10.0,
+    ) -> dict[str, object]:
+        """Stop the supervised application boundary and report the outcome.
+
+        The launcher creates a dedicated session/process group for the
+        application. Signalling that group keeps application descendants in
+        Caretaker's application-scoped authority boundary without signalling
+        the supervisor or unrelated same-UID processes.
+        """
         if self.application_pid is None:
-            return
+            return {"boundary": "none", "application_alive": False, "forced": False}
+
+        process_group_id = self.application_process_group_id
+        boundary = "process_group" if process_group_id is not None else "process"
+        send = (
+            (lambda sig: os.killpg(process_group_id, sig))
+            if process_group_id is not None
+            else (lambda sig: os.kill(self.application_pid, sig))
+        )
         try:
-            os.kill(self.application_pid, graceful_signal)
+            send(graceful_signal)
         except ProcessLookupError:
-            return
+            return {
+                "boundary": boundary,
+                "process_group_id": process_group_id,
+                "application_alive": False,
+                "forced": False,
+            }
         deadline = time.monotonic() + timeout_seconds
-        while time.monotonic() < deadline and _pid_alive(self.application_pid):
+        while time.monotonic() < deadline and _boundary_alive(self.application_pid, process_group_id):
+            if self.application_process is not None:
+                self.application_process.poll()
             time.sleep(0.1)
-        if _pid_alive(self.application_pid):
-            os.kill(self.application_pid, signal.SIGKILL)
+        forced = _boundary_alive(self.application_pid, process_group_id)
+        if forced:
+            try:
+                send(signal.SIGKILL)
+            except ProcessLookupError:
+                forced = False
+            forced_deadline = time.monotonic() + min(max(timeout_seconds, 0.0), 1.0)
+            while time.monotonic() < forced_deadline and _boundary_alive(self.application_pid, process_group_id):
+                if self.application_process is not None:
+                    self.application_process.poll()
+                time.sleep(0.05)
+        return {
+            "boundary": boundary,
+            "process_group_id": process_group_id,
+            "application_alive": (
+                self.application_process.poll() is None
+                if self.application_process is not None
+                else _pid_alive(self.application_pid)
+            ),
+            "boundary_alive": _boundary_alive(self.application_pid, process_group_id),
+            "forced": forced,
+        }
 
     def stop(self) -> None:
         self._stop.set()
@@ -252,6 +308,18 @@ class CaretakerApplicationSupervisor:
 def _pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def _boundary_alive(pid: int, process_group_id: int | None) -> bool:
+    if process_group_id is None:
+        return _pid_alive(pid)
+    try:
+        os.killpg(process_group_id, 0)
         return True
     except ProcessLookupError:
         return False
