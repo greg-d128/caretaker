@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -13,8 +14,10 @@ from caretaker import (
     SQLiteRepairStore,
     apply_repair_recovery_plan,
     build_repair_recovery_plan,
+    create_recovery_authority_packet,
     validate_authority_expiry,
     validate_supervisor_time,
+    verify_recovery_authority_packet,
 )
 from caretaker.domain import RepairAttempt, RepairAttemptOutcome, RepairAttemptStage
 from caretaker.policy import PolicyConfigurationError, RepairPolicy, validate_policy
@@ -156,3 +159,76 @@ def test_supervisor_time_and_authority_expiry_fail_closed() -> None:
     assert valid["valid"] is True
     assert expired["valid"] is False
     assert expired["failure"] == "AUTHORITY_EXPIRED"
+
+
+def test_recovery_authority_packet_binds_state_and_never_grants_authority() -> None:
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    packet = create_recovery_authority_packet(
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        capabilities=("observe", "restart-worker"),
+        policy_state={"recovery": "reviewed"},
+        approvals={"incident": "approved"},
+        supervisor_time=supervisor_time,
+    )
+
+    verified = verify_recovery_authority_packet(
+        packet,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe", "restart-worker"},
+    )
+    assert verified["valid"] is True
+    assert verified["authority_granted_by_packet"] is False
+
+    mismatch = verify_recovery_authority_packet(
+        packet,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-8",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe", "restart-worker"},
+    )
+    assert mismatch["valid"] is False
+    assert "CONTEXT_MISMATCH:generation_id" in mismatch["failures"]
+
+    tampered = replace(packet, approvals={"incident": "forged"})
+    tampered_result = verify_recovery_authority_packet(
+        tampered,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe", "restart-worker"},
+    )
+    assert tampered_result["valid"] is False
+    assert "PACKET_CONTENT_HASH_MISMATCH" in tampered_result["failures"]
+
+    expired = verify_recovery_authority_packet(
+        packet,
+        supervisor_time=supervisor_time + timedelta(seconds=3601),
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe", "restart-worker"},
+    )
+    assert expired["valid"] is False
+    assert "AUTHORITY_EXPIRED" in expired["failures"]

@@ -199,12 +199,15 @@ from .postmortem import ExceptionHookManager, PostMortemRecorder
 from .provider import CandidateProposal, OllamaRepairProvider, StaticRepairProvider
 from .repair_recovery import (
     RecoveryAction,
+    RecoveryAuthorityPacket,
     RepairRecoveryPolicy,
     RepairRecoveryRecord,
     apply_repair_recovery_plan,
     build_repair_recovery_plan,
+    create_recovery_authority_packet,
     validate_authority_expiry,
     validate_supervisor_time,
+    verify_recovery_authority_packet,
 )
 from .regression import (
     DATA_ONLY_NOT_EXECUTABLE,
@@ -496,10 +499,13 @@ __all__ = [
     "build_repair_recovery_plan",
     "RepairRecoveryRecord",
     "RecoveryAction",
+    "RecoveryAuthorityPacket",
     "RepairRecoveryPolicy",
     "apply_repair_recovery_plan",
+    "create_recovery_authority_packet",
     "validate_authority_expiry",
     "validate_supervisor_time",
+    "verify_recovery_authority_packet",
     "ReplaySafety",
     "SnapshotStrategy",
     "TimeoutMode",
