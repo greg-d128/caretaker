@@ -579,8 +579,12 @@ operator scheduler provides a durable bounded queue, active/pending limits,
 priority/deadline ordering, restart recovery, cancellation state, and explicit
 backpressure. Read-only generation-aware coverage-backlog discovery and console
 visibility are now implemented; opt-in bounded automatic backlog promotion is
-implemented, while application-wide measured overhead budgets and fairness
-across hot and rare functions remain future work. The console and operator control plane can also promote one
+implemented, while application-wide measured overhead budgets remain future
+work. Automatic promotion now separates bounded no-call waiting targets from
+targets that have begun collecting calls, so a rare function does not consume
+the same automatic collection slot as a hot function. The console reports both
+counts. Fairness across hot and rare functions remains future work. The console
+and operator control plane can also promote one
 registered adaptive lightweight target into pre-repair Behavior. This request
 is fixed to Behavior, records the operator reason and authority generation, and
 cannot authorize Repair or alter policy.

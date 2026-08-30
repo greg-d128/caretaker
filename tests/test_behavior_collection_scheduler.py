@@ -349,6 +349,52 @@ def test_automatic_collection_cycle_promotes_one_adaptive_backlog_target(
     assert wrapped.__caretaker_adaptive__.state.promotion_outcome == "CAPTURED"
 
 
+def test_automatic_collection_allows_bounded_waiting_targets_without_blocking_collectors(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("CARETAKER_DATA_DIR", str(tmp_path))
+    guard = GuardEngine(
+        policy=GuardPolicy(
+            snapshots=BehaviorSnapshotPolicy(
+                collection_auto_promote=True,
+                collection_auto_max_promoted=1,
+                collection_auto_max_waiting=2,
+            )
+        )
+    )
+
+    def sample(value: int) -> int:
+        return value
+
+    wrapped = []
+    for target_id in (
+        "example.automatic-waiting-a",
+        "example.automatic-waiting-b",
+        "example.automatic-waiting-c",
+    ):
+        current = lightweight(
+            policy=LightweightPolicy(),
+            engine=type("Engine", (), {"guard": guard})(),
+            behavior_binding=GuardBinding(enabled=True),
+            target_id=target_id,
+            state_directory=tmp_path / "adaptive",
+        )(sample)
+        current.__caretaker_adaptive__.prepare_guard_registration()
+        wrapped.append(current)
+
+    first = guard.automatic_behavior_collection_cycle()
+    assert len(first["promoted"]) == 2
+    assert first["active_automatic"] == 2
+    assert first["collecting_automatic"] == 0
+    assert first["waiting_automatic"] == 2
+
+    wrapped[0](1)
+    second = guard.automatic_behavior_collection_cycle()
+    assert len(second["promoted"]) == 1
+    assert second["collecting_automatic"] == 1
+    assert second["waiting_automatic"] == 2
+
+
 def test_guard_backlog_reports_waiting_and_queued_current_generations(
     tmp_path: Path, monkeypatch
 ) -> None:

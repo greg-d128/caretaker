@@ -925,6 +925,7 @@ class GuardEngine(GuardFacade):
             "enabled": True,
             "automatic_promotion": self.policy.snapshots.collection_auto_promote,
             "automatic_max_promoted": self.policy.snapshots.collection_auto_max_promoted,
+            "automatic_max_waiting": self.policy.snapshots.collection_auto_max_waiting,
             **scheduler.status(),
         }
 
@@ -1088,8 +1089,8 @@ class GuardEngine(GuardFacade):
                     "state": controller.state.public_dict(),
                 }
             )
-        active_automatic = sum(
-            1
+        automatic_controllers = tuple(
+            controller
             for controller in controllers.values()
             if controller is not None
             and str(controller.state.level.name) == "BEHAVIOR"
@@ -1098,11 +1099,20 @@ class GuardEngine(GuardFacade):
             )
             and controller.state.promotion_outcome in {None, "ACTIVE"}
         )
-        available = max(0, snapshots.collection_auto_max_promoted - active_automatic)
+        active_automatic = len(automatic_controllers)
+        collecting_automatic = sum(
+            1
+            for controller in automatic_controllers
+            if int(controller.state.behavior_observation_calls or 0) > 0
+        )
+        waiting_automatic = max(0, active_automatic - collecting_automatic)
+        waiting_available = max(
+            0, snapshots.collection_auto_max_waiting - waiting_automatic
+        )
         promoted: list[dict[str, Any]] = []
-        if available:
+        if waiting_available:
             for item in backlog.get("items", ()):
-                if available <= 0 or item.get("status") != "armed_waiting":
+                if waiting_available <= 0 or item.get("status") != "armed_waiting":
                     continue
                 target_id = str(item.get("target_id") or "")
                 controller = controllers.get(target_id)
@@ -1126,13 +1136,18 @@ class GuardEngine(GuardFacade):
                         "state": controller.state.public_dict(),
                     }
                 )
-                available -= 1
+                waiting_available -= 1
+        active_after = active_automatic + len(promoted)
+        waiting_after = waiting_automatic + len(promoted)
         return {
             "enabled": True,
             "promoted": promoted,
             "outcomes": outcomes,
-            "active_automatic": active_automatic + len(promoted),
+            "active_automatic": active_after,
+            "collecting_automatic": collecting_automatic,
+            "waiting_automatic": waiting_after,
             "maximum_automatic": snapshots.collection_auto_max_promoted,
+            "maximum_automatic_waiting": snapshots.collection_auto_max_waiting,
             "backlog_counts": dict(backlog.get("counts") or {}),
         }
 

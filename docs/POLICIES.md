@@ -71,7 +71,11 @@ cannot modify Guard policy, an accepted baseline, or Repair state.
 `BehaviorSnapshotPolicy.collection_auto_promote` is disabled by default. When
 enabled, the supervisor health cycle may promote only current-generation,
 adaptive `armed_waiting` targets into pre-repair Behavior. The
-`collection_auto_max_promoted` limit bounds concurrent automatic promotions;
+`collection_auto_max_promoted` limit bounds automatic targets that have begun
+collecting calls, while `collection_auto_max_waiting` separately bounds
+automatic targets that have not yet received a call. This keeps a rare,
+low-cost waiting target from consuming the same collection slot as a hot
+target, while still bounding waiting state. The console reports both counts;
 automatic promotion never requests Repair and does not accept a baseline.
 
 `RepairEvidencePolicy` gates `BEHAVIOR -> REPAIR`:
