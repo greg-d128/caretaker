@@ -86,6 +86,9 @@ def test_supervisor_aggregation_merges_batches_and_retains_worker_provenance(tmp
     assert sorted(aggregate["workers"]) == ["worker-a", "worker-b"]
     assert aggregate["worker_overflow_count"] == 0
     assert aggregate["processed_batch_count"] == 2
+    assert store.acknowledgement(str(first["batch_id"]))["status"] == "ACCEPTED"
+    assert store.acknowledgement(str(second["batch_id"]))["status"] == "ACCEPTED"
+    assert store.status()["acknowledgements"] == 2
 
 
 def test_supervisor_aggregation_is_idempotent_for_resubmitted_batch(tmp_path: Path):
@@ -124,6 +127,7 @@ def test_supervisor_aggregation_rejects_stale_worker_context(
     rejected = list(store.rejected_directory.glob("*.json"))
     assert len(rejected) == 1
     assert reason in rejected[0].read_text(encoding="utf-8")
+    assert store.acknowledgement(str(batch["batch_id"]))["status"] == "REJECTED"
 
 
 def test_supervisor_aggregation_requires_current_generation_context(tmp_path: Path):

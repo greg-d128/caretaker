@@ -433,11 +433,13 @@ class SupervisorAdaptiveAggregationStore:
         self.pending_directory = self.root / "adaptive" / "aggregation" / "pending"
         self.archive_directory = self.root / "adaptive" / "aggregation" / "archive"
         self.rejected_directory = self.root / "adaptive" / "aggregation" / "rejected"
+        self.acknowledgement_directory = self.root / "adaptive" / "aggregation" / "acknowledgements"
         self.state_directory = self.root / "adaptive" / "aggregation" / "state"
         for directory in (
             self.pending_directory,
             self.archive_directory,
             self.rejected_directory,
+            self.acknowledgement_directory,
             self.state_directory,
         ):
             directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -513,6 +515,48 @@ class SupervisorAdaptiveAggregationStore:
 
     def _state_path(self, key: str) -> Path:
         return self.state_directory / f"{key}.json"
+
+    def _acknowledgement_path(self, batch_id: str) -> Path:
+        return self.acknowledgement_directory / f"{batch_id}.json"
+
+    def _write_acknowledgement(
+        self,
+        batch: Mapping[str, Any],
+        *,
+        status: str,
+        aggregate_key: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "schema_version": ADAPTIVE_AGGREGATION_SCHEMA_VERSION,
+            "batch_id": str(batch["batch_id"]),
+            "batch_sha256": _content_hash(batch),
+            "status": status,
+            "acknowledged_at": _utcnow_iso(),
+        }
+        if aggregate_key is not None:
+            payload["aggregate_key"] = aggregate_key
+        if reason is not None:
+            payload["reason"] = str(reason)[:256]
+        _safe_write(self._acknowledgement_path(str(batch["batch_id"])), payload)
+
+    def acknowledgement(self, batch_id: str) -> dict[str, Any] | None:
+        """Read one supervisor acknowledgement without exposing worker payloads."""
+        try:
+            normalized_id = str(UUID(str(batch_id)))
+        except (TypeError, ValueError) as exc:
+            raise AdaptiveAggregationError("batch_id must be a UUID") from exc
+        path = self._acknowledgement_path(normalized_id)
+        if not path.exists():
+            return None
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(value, Mapping):
+            raise AdaptiveAggregationError("adaptive acknowledgement must be an object")
+        if str(value.get("batch_id") or "") != normalized_id:
+            raise AdaptiveAggregationError("adaptive acknowledgement batch ID is invalid")
+        if int(value.get("schema_version") or 0) != ADAPTIVE_AGGREGATION_SCHEMA_VERSION:
+            raise AdaptiveAggregationError("unsupported adaptive acknowledgement schema")
+        return dict(value)
 
     def _load_state(self, key: str) -> dict[str, Any] | None:
         path = self._state_path(key)
@@ -677,6 +721,8 @@ class SupervisorAdaptiveAggregationStore:
         if destination.exists():
             destination = self.rejected_directory / f"{path.stem}-{uuid4().hex}.json"
         _safe_write(destination, envelope)
+        if batch is not None:
+            self._write_acknowledgement(batch, status="REJECTED", reason=reason)
         path.unlink(missing_ok=True)
 
     def reconcile(
@@ -725,11 +771,21 @@ class SupervisorAdaptiveAggregationStore:
                 })
                 continue
             if str(batch["batch_id"]) in set(aggregate.get("processed_batch_ids") or ()):
+                self._write_acknowledgement(
+                    batch,
+                    status="DUPLICATE",
+                    aggregate_key=key,
+                )
                 path.replace(self._batch_path(self.archive_directory, str(batch["batch_id"])))
                 duplicates += 1
                 continue
             self._merge(aggregate, batch)
             self._write_state(aggregate)
+            self._write_acknowledgement(
+                batch,
+                status="ACCEPTED",
+                aggregate_key=key,
+            )
             path.replace(self._batch_path(self.archive_directory, str(batch["batch_id"])))
             merged += 1
         return {
@@ -767,5 +823,8 @@ class SupervisorAdaptiveAggregationStore:
             "maximum_retained_events": self.maximum_retained_events,
             "pending": sum(1 for _ in self.pending_directory.glob("*.json")),
             "rejected": sum(1 for _ in self.rejected_directory.glob("*.json")),
+            "acknowledgements": sum(
+                1 for _ in self.acknowledgement_directory.glob("*.json")
+            ),
             "aggregates": sum(1 for _ in self.state_directory.glob("*.json")),
         }

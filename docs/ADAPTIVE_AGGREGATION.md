@@ -29,6 +29,11 @@ protected and checkpointed before the corresponding batch is archived. A batch
 ID is retained in the aggregate for bounded deduplication, and an archived
 resubmission is idempotent.
 
+Reconciliation also writes a bounded per-batch acknowledgement containing the
+batch ID, batch hash, result (`ACCEPTED`, `DUPLICATE`, or `REJECTED`), and
+aggregate key/rejection reason where applicable. This is delivery provenance
+only: an acknowledgement cannot authorize a transition or change policy.
+
 ## Current boundary
 
 This first slice establishes durable ownership, batching, generation scope,
@@ -41,9 +46,10 @@ transition requests and worker acknowledgements. No LLM, batch field, or
 aggregate counter creates authority, changes policy, accepts a Guard baseline,
 or activates Repair.
 
-The supervisor now exposes `adaptive-aggregation-status` and
-`adaptive-aggregation-reconcile` through its control socket, and its health
-cycle reconciles enabled worker contexts automatically. The next implementation
-slice must move threshold evaluation and promotion state to the supervisor
-without double-counting the existing process-local lifecycle, then add explicit
-transition requests and worker acknowledgements.
+The supervisor now exposes `adaptive-aggregation-status`,
+`adaptive-aggregation-reconcile`, and `adaptive-aggregation-ack` through its
+control socket, and its health cycle reconciles enabled worker contexts
+automatically. The next implementation slice must move threshold evaluation
+and promotion state to the supervisor without double-counting the existing
+process-local lifecycle, then use the acknowledgement stream for explicit
+transition requests.

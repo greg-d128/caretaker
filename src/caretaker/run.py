@@ -509,6 +509,14 @@ def main(argv: list[str] | None = None) -> int:
                 maximum=max(1, min(int(request.get("maximum", 100)), 1000))
             )
             return {"ok": True, "result": result}
+        if command == "adaptive-aggregation-ack":
+            batch_id = str(request.get("batch_id") or "").strip()
+            if not batch_id:
+                raise ValueError("adaptive-aggregation-ack requires batch_id")
+            return {
+                "ok": True,
+                "acknowledgement": adaptive_aggregation_store.acknowledgement(batch_id),
+            }
         if command == "incident-capsule-list":
             raw_incident_id = str(request.get("incident_id") or "").strip() or None
             incident_id = UUID(raw_incident_id) if raw_incident_id else None

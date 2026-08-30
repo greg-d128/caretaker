@@ -701,7 +701,8 @@ batches only when the supervisor supplies matching target-generation, policy,
 and authority context. It merges application-wide counters, retains a bounded
 threshold-event window, protects aggregate state with a content hash, rejects
 stale context, records bounded worker provenance with idempotent batch handling,
-and reconciles enabled worker contexts during the supervisor health cycle.
+reconciles enabled worker contexts during the supervisor health cycle, and
+publishes per-batch delivery acknowledgements.
 
 Adaptive exception/timing counters and repair-evidence gates are still process
 local for live decisions. Multiple application workers therefore do not yet
@@ -719,8 +720,9 @@ Future design should move authoritative adaptive counters to the supervisor whil
 
 The remaining implementation must explicitly define and enforce whether each
 threshold is process-local, application-wide, or workload/population scoped. It
-must add worker acknowledgements and move threshold evaluation and promotion
-state without double-counting the existing single-process lifecycle.
+must consume worker acknowledgements where needed and move threshold evaluation
+and promotion state without double-counting the existing single-process
+lifecycle.
 
 ## Import-hook dependency instrumentation
 
