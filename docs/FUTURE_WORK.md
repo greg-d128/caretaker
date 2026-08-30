@@ -1050,7 +1050,12 @@ owned handler map for those actions. A handler must return
 `{"accepted": true}` before its action is recorded as executed; missing,
 rejected, or failed handlers remain visible in the durable recovery record.
 The default call supplies no handlers and therefore performs no application
-orchestration.
+orchestration. The supervisor now provides a replacement-handler factory that
+routes replacement admission through `WorkerRegistry.prepare_replacement()`
+and `register_replacement()`. The application still owns process creation;
+packet verification, expiry, exact context, and acceptance-state checks occur
+before the handler can satisfy the recovery gate. Cross-process spawning and
+fleet coordination remain future work.
 
 ### Recovery decisions recorded for the next implementation slice
 

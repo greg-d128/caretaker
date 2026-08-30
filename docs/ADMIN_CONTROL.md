@@ -370,7 +370,11 @@ Recovery action callbacks are not exposed as arbitrary control-socket commands.
 An embedding application must explicitly provide its own handler map to
 `RepairEngine.apply_recovery_plan()`. Caretaker records whether each callback
 was absent, rejected, failed, or accepted; the recovery plan itself never
-grants the callback authority.
+grants the callback authority. For worker replacement, the application should
+use `CaretakerApplicationSupervisor.build_replacement_action_handler()` so the
+new process is admitted only through the supervisor-issued packet and
+`WorkerRegistry` acceptance checks. Process creation remains application-owned
+and cross-process orchestration is not provided by this API.
 
 If diagnostic logging itself fails, Caretaker does not recursively send another
 logging event. The control response reports `diagnostic_persisted=false` and a

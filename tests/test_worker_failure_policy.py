@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from caretaker.logging import (
     CaretakerApplicationSupervisor,
     WorkerFailureAction,
     WorkerKind,
     WorkerRestartPolicy,
 )
-from caretaker import InMemoryRepairStore, SQLiteRepairStore
+from caretaker import (
+    InMemoryRepairStore,
+    SQLiteRepairStore,
+    RepairRecoveryPolicy,
+    WorkerAcceptancePolicy,
+    create_recovery_authority_packet,
+    dispatch_recovery_action,
+)
 
 
 class FakeRuntime:
@@ -184,3 +193,97 @@ def test_sqlite_worker_failure_record_survives_store_reopen(tmp_path) -> None:
     assert records[0]["worker_id"] == str(worker.worker_id)
     assert records[0]["detail_level"] == "DIAGNOSTIC"
     assert records[0]["envelope"]["transaction_state"] == "ROLLED_BACK"
+
+
+def test_replacement_action_handler_uses_packet_admission_and_acceptance() -> None:
+    runtime = FakeRuntime()
+    supervisor = CaretakerApplicationSupervisor(runtime)
+    original = supervisor.workers.register(WorkerKind.REPAIR_ANALYZER, 1234)
+    supervisor.workers.mark_failed(original.worker_id, error_fingerprint="worker-crash")
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    packet = create_recovery_authority_packet(
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        capabilities=("observe",),
+        supervisor_time=supervisor_time,
+    )
+    spawned = []
+    handler = supervisor.build_replacement_action_handler(
+        failed_worker_id=original.worker_id,
+        packet=packet,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+        policy=RepairRecoveryPolicy(
+            worker_acceptance=WorkerAcceptancePolicy(
+                probation_successful_executions=2,
+                acceptance_successful_executions=3,
+            )
+        ),
+        acceptance_policy=WorkerAcceptancePolicy(
+            probation_successful_executions=2,
+            acceptance_successful_executions=3,
+        ),
+        spawn_worker=lambda request: spawned.append(request) or {"started": True, "pid": 5678},
+    )
+
+    result = dispatch_recovery_action(
+        {
+            "target_id": "app:charge",
+            "policy_action": {
+                "requested_action": "REPLACE_WORKER",
+                "selected_action": "REPLACE_WORKER",
+                "policy_enabled": True,
+            },
+        },
+        handlers={"REPLACE_WORKER": handler},
+    )
+
+    assert result["status"] == "EXECUTED"
+    assert result["handler_result"]["authority_packet_verified"] is True
+    assert result["handler_result"]["acceptance_state"] == "PROBATION"
+    assert len(spawned) == 1
+
+
+def test_replacement_action_handler_rejects_expired_packet() -> None:
+    runtime = FakeRuntime()
+    supervisor = CaretakerApplicationSupervisor(runtime)
+    original = supervisor.workers.register(WorkerKind.REPAIR_ANALYZER, 1234)
+    supervisor.workers.mark_failed(original.worker_id, error_fingerprint="worker-crash")
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    packet = create_recovery_authority_packet(
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        supervisor_time=supervisor_time,
+        policy=RepairRecoveryPolicy(approval_packet_ttl_seconds=1),
+    )
+    handler = supervisor.build_replacement_action_handler(
+        failed_worker_id=original.worker_id,
+        packet=packet,
+        supervisor_time=packet.expires_at,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        spawn_worker=lambda _request: {"started": True, "pid": 5678},
+    )
+
+    result = handler({"target_id": "app:charge"})
+
+    assert result["accepted"] is False
+    assert "AUTHORITY_EXPIRED" in result["reason"]

@@ -794,6 +794,101 @@ class CaretakerApplicationSupervisor:
         )
         return result
 
+    def build_replacement_action_handler(
+        self,
+        *,
+        failed_worker_id: UUID,
+        packet: RecoveryAuthorityPacket,
+        supervisor_time: datetime,
+        target_id: str,
+        generation_id: str,
+        code_hash: str,
+        policy_fingerprint: str,
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        spawn_worker: Callable[[WorkerReplacementRequest], Any],
+        allowed_capabilities: set[str] | frozenset[str] = frozenset(),
+        policy: RepairRecoveryPolicy | None = None,
+        acceptance_policy: WorkerAcceptancePolicy | None = None,
+    ) -> Callable[[Mapping[str, Any]], dict[str, Any]]:
+        """Build a recovery handler backed by packet-verified admission.
+
+        The application owns ``spawn_worker``. Caretaker never starts an OS
+        process here; it only admits the returned process through the existing
+        packet, expiry, context, and acceptance checks.
+        """
+        def handler(decision: Mapping[str, Any]) -> dict[str, Any]:
+            if decision.get("target_id") not in {None, target_id}:
+                return {
+                    "accepted": False,
+                    "reason": "recovery target does not match replacement context",
+                }
+            try:
+                request = self.workers.prepare_replacement(
+                    failed_worker_id,
+                    packet,
+                    supervisor_time=supervisor_time,
+                    target_id=target_id,
+                    generation_id=generation_id,
+                    code_hash=code_hash,
+                    policy_fingerprint=policy_fingerprint,
+                    authority_policy_generation=authority_policy_generation,
+                    authority_policy_fingerprint=authority_policy_fingerprint,
+                    allowed_capabilities=allowed_capabilities,
+                    policy=policy,
+                )
+                started = spawn_worker(request)
+                if not isinstance(started, Mapping) or not bool(started.get("started")):
+                    return {
+                        "accepted": False,
+                        "reason": "application did not start replacement worker",
+                    }
+                pid = started.get("pid")
+                if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+                    return {
+                        "accepted": False,
+                        "reason": "replacement worker callback did not return a valid pid",
+                    }
+                replacement = self.workers.register_replacement(
+                    request,
+                    WorkerKind[request.worker_kind],
+                    pid,
+                    supervisor_time=supervisor_time,
+                    target_id=target_id,
+                    generation_id=generation_id,
+                    code_hash=code_hash,
+                    policy_fingerprint=policy_fingerprint,
+                    authority_policy_generation=authority_policy_generation,
+                    authority_policy_fingerprint=authority_policy_fingerprint,
+                    allowed_capabilities=allowed_capabilities,
+                    policy=policy,
+                    acceptance_policy=acceptance_policy,
+                )
+            except Exception as exc:
+                return {
+                    "accepted": False,
+                    "reason": f"replacement admission failed: {type(exc).__name__}: {exc}"[:256],
+                }
+            if replacement.acceptance_state.name not in {"PROBATION", "ACCEPTED"}:
+                return {
+                    "accepted": False,
+                    "reason": "replacement did not enter probation or accepted state",
+                    "replacement_worker_id": str(replacement.worker_id),
+                    "acceptance_state": replacement.acceptance_state.name,
+                }
+            return {
+                "accepted": True,
+                "failed_worker_id": str(failed_worker_id),
+                "replacement_worker_id": str(replacement.worker_id),
+                "authority_packet_id": str(packet.packet_id),
+                "authority_packet_verified": True,
+                "authority_packet_expires_at": packet.expires_at.isoformat(),
+                "acceptance_state": replacement.acceptance_state.name,
+                "request_id": str(request.request_id),
+            }
+
+        return handler
+
     def handle_worker_acceptance_observation(
         self,
         request: Mapping[str, Any],
