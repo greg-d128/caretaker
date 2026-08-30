@@ -278,11 +278,24 @@ class RepairEngine:
     def recovery_plan(self, *, target_id: str | None = None) -> dict[str, Any]:
         """Inspect interrupted persisted Repair work without reactivating it."""
         policy = None
+        live_context_by_target: dict[str, dict[str, Any]] = {}
         if target_id:
             target = self.registry.find(target_id)
             if target is not None:
                 policy = target.policy.recovery
-        return build_repair_recovery_plan(self.store, target_id=target_id, policy=policy)
+                authority = get_authority_runtime_context().effective
+                live_context_by_target[target_id] = {
+                    "target_id": target_id,
+                    "code_hash": target.slot.load().source_hash,
+                    "authority_policy_generation": authority.generation,
+                    "authority_policy_fingerprint": authority.fingerprint,
+                }
+        return build_repair_recovery_plan(
+            self.store,
+            target_id=target_id,
+            policy=policy,
+            live_context_by_target=live_context_by_target,
+        )
 
     def apply_recovery_plan(self, plan: dict[str, Any]) -> dict[str, Any]:
         """Record fail-safe recovery decisions without reactivating candidates."""

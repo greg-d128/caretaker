@@ -1084,6 +1084,12 @@ states without rewriting the interrupted attempt or its partial evidence. The
 projection is deliberately not a mutation of the source records, and it does
 not yet perform policy-selected replacement or shutdown actions.
 
+For a target-scoped `RepairEngine.recovery_plan(target_id=...)`, the engine now
+adds the currently registered source hash and supervisor authority generation
+and fingerprint to the projection. A missing or changed policy snapshot still
+keeps execution invalid; all live context must be revalidated before any
+future continuation.
+
 - mark interrupted incidents, generations, attempts, and validations incomplete;
 - reconstruct or deliberately stale pending approvals;
 - verify the current candidate source and policy/authority bindings again after restart;

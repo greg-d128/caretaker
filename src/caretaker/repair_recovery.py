@@ -485,6 +485,7 @@ def validate_recovery_candidate_binding(
     *,
     current_target_id: str | None = None,
     current_code_hash: str | None = None,
+    current_policy_snapshot_id: str | UUID | None = None,
     current_authority_policy_generation: int | str | None = None,
     current_authority_policy_fingerprint: str | None = None,
 ) -> dict[str, Any]:
@@ -516,6 +517,7 @@ def validate_recovery_candidate_binding(
     required_live_context = {
         "target_id": current_target_id,
         "code_hash": current_code_hash,
+        "policy_snapshot_id": current_policy_snapshot_id,
         "authority_policy_generation": current_authority_policy_generation,
         "authority_policy_fingerprint": current_authority_policy_fingerprint,
     }
@@ -525,6 +527,12 @@ def validate_recovery_candidate_binding(
         live_failures.append("LIVE_CONTEXT_MISMATCH:target_id")
     if current_code_hash is not None and current_code_hash != _field(attempt, "base_source_hash"):
         live_failures.append("LIVE_CONTEXT_MISMATCH:code_hash")
+    if (
+        current_policy_snapshot_id is not None
+        and str(current_policy_snapshot_id)
+        != str(_field(attempt, "policy_snapshot_id", ""))
+    ):
+        live_failures.append("LIVE_CONTEXT_MISMATCH:policy_snapshot_id")
     if (
         current_authority_policy_generation is not None
         and str(current_authority_policy_generation)
@@ -549,11 +557,25 @@ def validate_recovery_candidate_binding(
     }
 
 
-def _candidate_binding_for_attempt(store: Any, attempt: Any) -> dict[str, Any]:
+def _candidate_binding_for_attempt(
+    store: Any,
+    attempt: Any,
+    *,
+    live_context: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     candidates = _records_by_id(store, "all_candidates", "candidate_id")
     candidate = candidates.get(str(_field(attempt, "candidate_id", "")))
     if candidate is not None:
-        return validate_recovery_candidate_binding(attempt, candidate)
+        context = dict(live_context or {})
+        return validate_recovery_candidate_binding(
+            attempt,
+            candidate,
+            current_target_id=context.get("target_id"),
+            current_code_hash=context.get("code_hash"),
+            current_policy_snapshot_id=context.get("policy_snapshot_id"),
+            current_authority_policy_generation=context.get("authority_policy_generation"),
+            current_authority_policy_fingerprint=context.get("authority_policy_fingerprint"),
+        )
     return {
         "persisted_binding_valid": False,
         "live_context_valid": False,
@@ -562,6 +584,7 @@ def _candidate_binding_for_attempt(store: Any, attempt: Any) -> dict[str, Any]:
         "missing_live_context": [
             "target_id",
             "code_hash",
+            "policy_snapshot_id",
             "authority_policy_generation",
             "authority_policy_fingerprint",
         ],
@@ -642,6 +665,7 @@ def build_repair_recovery_plan(
     target_id: str | None = None,
     now: datetime | None = None,
     policy: RepairRecoveryPolicy | None = None,
+    live_context_by_target: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Return a fail-safe plan for attempts interrupted by process loss.
 
@@ -676,7 +700,13 @@ def build_repair_recovery_plan(
         if completed_at is not None and outcome != RepairAttemptOutcome.PENDING.name:
             continue
         incomplete_records = _incomplete_lifecycle_records(store, attempt)
-        candidate_binding = _candidate_binding_for_attempt(store, attempt)
+        candidate_binding = _candidate_binding_for_attempt(
+            store,
+            attempt,
+            live_context=(
+                live_context_by_target or {}
+            ).get(str(_field(attempt, "target_id", ""))),
+        )
         decisions.append({
             "attempt_id": attempt_id,
             "episode_id": str(_field(attempt, "episode_id", "")),

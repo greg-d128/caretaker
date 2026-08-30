@@ -63,6 +63,35 @@ def test_operator_runtime_exposes_fail_safe_repair_recovery_plan():
     assert response["plans"][0]["automatic_reactivation"] is False
 
 
+def test_recovery_plan_supplies_registered_target_context_for_revalidation(monkeypatch):
+    engine = RepairEngine()
+
+    def sample(value):
+        return value
+
+    target = build_target(
+        sample,
+        target_id="test.recovery.sample",
+        policy=RepairPolicy(mode=RepairMode.DIAGNOSE, authority=RepairAuthority.ANALYZE_ONLY),
+    )
+    engine.register(target)
+    captured = {}
+
+    def fake_plan(store, **kwargs):
+        captured.update(kwargs)
+        return {"decisions": []}
+
+    monkeypatch.setattr("caretaker.engine.build_repair_recovery_plan", fake_plan)
+
+    engine.recovery_plan(target_id=target.target_id)
+
+    context = captured["live_context_by_target"][target.target_id]
+    assert context["target_id"] == target.target_id
+    assert context["code_hash"] == target.slot.load().source_hash
+    assert context["authority_policy_generation"] is not None
+    assert context["authority_policy_fingerprint"]
+
+
 def test_operator_registry_attaches_adaptive_state_to_guard_dependency(monkeypatch):
     registry = OperatorRuntimeRegistry()
     guard = GuardEngine()
