@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -90,6 +91,62 @@ def test_supervisor_aggregation_merges_batches_and_retains_worker_provenance(tmp
     assert store.acknowledgement(str(first["batch_id"]))["status"] == "ACCEPTED"
     assert store.acknowledgement(str(second["batch_id"]))["status"] == "ACCEPTED"
     assert store.status()["acknowledgements"] == 2
+
+
+def test_supervisor_records_worker_distribution_conflict_without_discarding_evidence(
+    tmp_path: Path,
+):
+    store = SupervisorAdaptiveAggregationStore(
+        tmp_path,
+        distribution_minimum_observations=2,
+    )
+    first = _batch(batch_id="00000000-0000-0000-0000-00000000000a")
+    first.update(
+        observation_count=100,
+        sequence_end=100,
+        exception_count=0,
+        timing_breach_count=0,
+        behavior_observation_calls=100,
+        behavior_samples=100,
+        repair_evidence_samples=0,
+        problem_reproductions=0,
+        exception_events=[],
+        timing_events=[],
+    )
+    second = _batch(
+        batch_id="00000000-0000-0000-0000-00000000000b",
+        worker_id="worker-b",
+    )
+    second.update(
+        observation_count=100,
+        sequence_end=100,
+        exception_count=100,
+        timing_breach_count=0,
+        behavior_observation_calls=100,
+        behavior_samples=100,
+        repair_evidence_samples=0,
+        problem_reproductions=0,
+        exception_events=[],
+        timing_events=[],
+    )
+    store.submit(first)
+    store.submit(second)
+
+    result = store.reconcile(**_context())
+
+    assert result["merged"] == 2
+    assert result["conflicts"] == 2
+    assert result["conflict_reports"] == 2
+    aggregate = store.list_aggregates()[0]
+    assert aggregate["exception_count"] == 100
+    assert len(aggregate["distribution_conflicts"]) == 2
+    assert all(item["z_score"] > 3 for item in aggregate["distribution_conflicts"])
+    reports = sorted(store.conflict_directory.glob("*.json"))
+    assert len(reports) == 2
+    assert all(
+        json.loads(path.read_text(encoding="utf-8"))["evidence_retained"] is True
+        for path in reports
+    )
 
 
 def test_supervisor_aggregation_is_idempotent_for_resubmitted_batch(tmp_path: Path):

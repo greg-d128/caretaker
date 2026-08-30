@@ -703,7 +703,9 @@ and authority context. It merges application-wide counters, retains a bounded
 threshold-event window, protects aggregate state with a content hash, rejects
 stale context, records bounded worker provenance with idempotent batch handling,
 reconciles enabled worker contexts during the supervisor health cycle, and
-publishes per-batch delivery acknowledgements.
+publishes per-batch delivery acknowledgements. It also retains complete
+per-worker event-rate counters and emits bounded three-standard-deviation
+distribution conflict reports when worker behavior materially differs.
 
 Adaptive hot-path counters remain process local. The supervisor now evaluates
 the application-wide exception/timing event window, owns the resulting Behavior
@@ -727,8 +729,8 @@ Workers should batch threshold observations to the supervisor, which owns:
 The remaining implementation must explicitly define and enforce whether each
 threshold is process-local, application-wide, or workload/population scoped. It
 must move repair-evidence evaluation, dynamic threshold administration, remote
-transport, and process lifecycle orchestration without double-counting the
-existing single-process lifecycle.
+transport, process lifecycle orchestration, and richer non-rate distribution
+reconciliation without double-counting the existing single-process lifecycle.
 
 ## Import-hook dependency instrumentation
 

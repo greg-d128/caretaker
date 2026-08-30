@@ -28,6 +28,13 @@ MAX_WORKER_PROVENANCE = 128
 MAX_PROCESSED_BATCH_IDS = 4096
 MAX_RETAINED_EVENTS = 512
 MAX_TRANSITION_REASON = 512
+MAX_DISTRIBUTION_CONFLICTS = 128
+DEFAULT_DISTRIBUTION_Z_THRESHOLD = 3.0
+DEFAULT_DISTRIBUTION_MINIMUM_OBSERVATIONS = 30
+_DISTRIBUTION_COUNTER_NAMES = (
+    "exception_count",
+    "timing_breach_count",
+)
 _BATCH_COUNTER_NAMES = (
     "exception_count",
     "timing_breach_count",
@@ -503,6 +510,8 @@ class SupervisorAdaptiveAggregationStore:
         maximum_pending: int = 4096,
         maximum_workers: int = MAX_WORKER_PROVENANCE,
         maximum_retained_events: int = MAX_RETAINED_EVENTS,
+        distribution_z_threshold: float = DEFAULT_DISTRIBUTION_Z_THRESHOLD,
+        distribution_minimum_observations: int = DEFAULT_DISTRIBUTION_MINIMUM_OBSERVATIONS,
     ) -> None:
         if int(maximum_pending) <= 0:
             raise ValueError("maximum_pending must be greater than zero")
@@ -510,6 +519,10 @@ class SupervisorAdaptiveAggregationStore:
             raise ValueError("maximum_workers must be greater than zero")
         if int(maximum_retained_events) <= 0:
             raise ValueError("maximum_retained_events must be greater than zero")
+        if float(distribution_z_threshold) <= 0:
+            raise ValueError("distribution_z_threshold must be greater than zero")
+        if int(distribution_minimum_observations) <= 1:
+            raise ValueError("distribution_minimum_observations must be greater than one")
         self.root = Path(root)
         self.pending_directory = self.root / "adaptive" / "aggregation" / "pending"
         self.archive_directory = self.root / "adaptive" / "aggregation" / "archive"
@@ -520,6 +533,7 @@ class SupervisorAdaptiveAggregationStore:
         self.transition_acknowledgement_directory = (
             self.root / "adaptive" / "aggregation" / "transition-acknowledgements"
         )
+        self.conflict_directory = self.root / "adaptive" / "aggregation" / "conflicts"
         for directory in (
             self.pending_directory,
             self.archive_directory,
@@ -528,6 +542,7 @@ class SupervisorAdaptiveAggregationStore:
             self.state_directory,
             self.transition_directory,
             self.transition_acknowledgement_directory,
+            self.conflict_directory,
         ):
             directory.mkdir(parents=True, exist_ok=True, mode=0o700)
             try:
@@ -537,6 +552,8 @@ class SupervisorAdaptiveAggregationStore:
         self.maximum_pending = int(maximum_pending)
         self.maximum_workers = int(maximum_workers)
         self.maximum_retained_events = int(maximum_retained_events)
+        self.distribution_z_threshold = float(distribution_z_threshold)
+        self.distribution_minimum_observations = int(distribution_minimum_observations)
 
     @staticmethod
     def _batch_path(directory: Path, batch_id: str) -> Path:
@@ -705,7 +722,104 @@ class SupervisorAdaptiveAggregationStore:
             "workers": {},
             "worker_overflow_count": 0,
             "processed_batch_ids": [],
+            "distribution_conflicts": [],
         }
+
+    def _distribution_conflicts(
+        self,
+        aggregate: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        workers = aggregate.get("workers")
+        if not isinstance(workers, Mapping):
+            return []
+        eligible = [
+            (str(worker_id), worker)
+            for worker_id, worker in workers.items()
+            if isinstance(worker, Mapping)
+            and bool(worker.get("distribution_complete"))
+            and int(worker.get("observations") or 0)
+            >= self.distribution_minimum_observations
+        ]
+        if len(eligible) < 2:
+            return []
+        conflicts: list[dict[str, Any]] = []
+        for metric in _DISTRIBUTION_COUNTER_NAMES:
+            for worker_id, worker in eligible:
+                worker_observations = int(worker["observations"])
+                worker_count = int(
+                    (worker.get("distribution_counters") or {}).get(metric) or 0
+                )
+                other_observations = sum(
+                    int(other["observations"])
+                    for other_id, other in eligible
+                    if other_id != worker_id
+                )
+                if other_observations < self.distribution_minimum_observations:
+                    continue
+                other_count = sum(
+                    int((other.get("distribution_counters") or {}).get(metric) or 0)
+                    for other_id, other in eligible
+                    if other_id != worker_id
+                )
+                worker_rate = worker_count / worker_observations
+                other_rate = other_count / other_observations
+                baseline_rate = (worker_count + other_count) / (
+                    worker_observations + other_observations
+                )
+                standard_error = (
+                    max(baseline_rate, 1e-9)
+                    * (1 / worker_observations + 1 / other_observations)
+                ) ** 0.5
+                z_score = abs(worker_rate - other_rate) / standard_error
+                if z_score <= self.distribution_z_threshold:
+                    continue
+                conflicts.append({
+                    "worker_id": worker_id,
+                    "metric": metric,
+                    "worker_rate": worker_rate,
+                    "comparison_rate": other_rate,
+                    "baseline_rate": baseline_rate,
+                    "z_score": z_score,
+                    "z_threshold": self.distribution_z_threshold,
+                    "worker_observations": worker_observations,
+                    "comparison_observations": other_observations,
+                    "worker_count": worker_count,
+                    "comparison_count": other_count,
+                })
+        return conflicts[:MAX_DISTRIBUTION_CONFLICTS]
+
+    def _write_conflict_reports(
+        self,
+        aggregate: Mapping[str, Any],
+    ) -> int:
+        conflicts = aggregate.get("distribution_conflicts") or ()
+        written = 0
+        for conflict in conflicts:
+            report_key = _content_hash({
+                "aggregate_key": aggregate["aggregate_key"],
+                "conflict": conflict,
+            })
+            path = self.conflict_directory / f"{report_key}.json"
+            if path.exists():
+                continue
+            _safe_write(
+                path,
+                {
+                    "schema_version": ADAPTIVE_AGGREGATION_SCHEMA_VERSION,
+                    "report_kind": "ADAPTIVE_DISTRIBUTION_CONFLICT",
+                    "aggregate_key": aggregate["aggregate_key"],
+                    "target_id": aggregate["target_id"],
+                    "generation_id": aggregate["generation_id"],
+                    "code_hash": aggregate["code_hash"],
+                    "policy_fingerprint": aggregate["policy_fingerprint"],
+                    "authority_policy_generation": aggregate["authority_policy_generation"],
+                    "authority_policy_fingerprint": aggregate["authority_policy_fingerprint"],
+                    "conflict": dict(conflict),
+                    "evidence_retained": True,
+                },
+            )
+            written += 1
+        return written
 
     def _merge(self, aggregate: dict[str, Any], batch: Mapping[str, Any]) -> None:
         aggregate["first_observed_at"] = min(
@@ -739,10 +853,16 @@ class SupervisorAdaptiveAggregationStore:
         aggregate["total_observations"] = int(aggregate.get("total_observations") or 0) + observations
         workers = dict(aggregate.get("workers") or {})
         worker_id = str(batch["worker_id"])
+        is_new_worker = worker_id not in workers
         worker = dict(workers.get(worker_id) or {})
         if worker_id not in workers and len(workers) >= self.maximum_workers:
             aggregate["worker_overflow_count"] = int(aggregate.get("worker_overflow_count") or 0) + 1
         else:
+            distribution_counters = dict(worker.get("distribution_counters") or {})
+            for name in _DISTRIBUTION_COUNTER_NAMES:
+                distribution_counters[name] = int(distribution_counters.get(name) or 0) + int(
+                    batch.get(name) or 0
+                )
             worker.update({
                 "worker_id": worker_id,
                 "worker_pid": int(batch["worker_pid"]),
@@ -764,12 +884,16 @@ class SupervisorAdaptiveAggregationStore:
                     str(worker.get("last_seen_at") or batch["created_at"]),
                     str(batch["created_at"]),
                 ),
+                "distribution_counters": distribution_counters,
+                "distribution_complete": is_new_worker
+                or bool(worker.get("distribution_complete")),
             })
             workers[worker_id] = worker
             aggregate["workers"] = workers
         processed = list(aggregate.get("processed_batch_ids") or ())
         processed.append(str(batch["batch_id"]))
         aggregate["processed_batch_ids"] = processed[-MAX_PROCESSED_BATCH_IDS:]
+        aggregate["distribution_conflicts"] = self._distribution_conflicts(aggregate)
 
     def _context_error(
         self,
@@ -835,6 +959,8 @@ class SupervisorAdaptiveAggregationStore:
         merged = 0
         duplicates = 0
         rejected = 0
+        conflicts = 0
+        conflict_reports = 0
         errors: list[dict[str, str]] = []
         for path in sorted(self.pending_directory.glob("*.json"))[:maximum_batches]:
             try:
@@ -875,6 +1001,8 @@ class SupervisorAdaptiveAggregationStore:
                 continue
             self._merge(aggregate, batch)
             self._write_state(aggregate)
+            conflicts += len(aggregate.get("distribution_conflicts") or ())
+            conflict_reports += self._write_conflict_reports(aggregate)
             self._write_acknowledgement(
                 batch,
                 status="ACCEPTED",
@@ -887,6 +1015,8 @@ class SupervisorAdaptiveAggregationStore:
             "merged": merged,
             "duplicates": duplicates,
             "rejected": rejected,
+            "conflicts": conflicts,
+            "conflict_reports": conflict_reports,
             "errors": errors[:20],
             "pending": sum(1 for _ in self.pending_directory.glob("*.json")),
         }
@@ -1313,6 +1443,8 @@ class SupervisorAdaptiveAggregationStore:
             "maximum_pending": self.maximum_pending,
             "maximum_workers": self.maximum_workers,
             "maximum_retained_events": self.maximum_retained_events,
+            "distribution_z_threshold": self.distribution_z_threshold,
+            "distribution_minimum_observations": self.distribution_minimum_observations,
             "pending": sum(1 for _ in self.pending_directory.glob("*.json")),
             "rejected": sum(1 for _ in self.rejected_directory.glob("*.json")),
             "acknowledgements": sum(
@@ -1325,4 +1457,5 @@ class SupervisorAdaptiveAggregationStore:
             "transition_acknowledgements": sum(
                 1 for _ in self.transition_acknowledgement_directory.glob("*.json")
             ),
+            "conflict_reports": sum(1 for _ in self.conflict_directory.glob("*.json")),
         }

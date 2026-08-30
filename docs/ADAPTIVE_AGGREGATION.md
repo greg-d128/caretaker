@@ -34,6 +34,13 @@ batch ID, batch hash, result (`ACCEPTED`, `DUPLICATE`, or `REJECTED`), and
 aggregate key/rejection reason where applicable. This is delivery provenance
 only: an acknowledgement cannot authorize a transition or change policy.
 
+For sufficiently large complete worker samples, the aggregate also tracks
+per-worker exception and timing-breach rates. A worker whose rate differs from
+the other eligible workers by more than three standard deviations produces a
+bounded `ADAPTIVE_DISTRIBUTION_CONFLICT` report. Both the worker and comparison
+counts remain in the aggregate; conflict detection is investigation evidence,
+not a merge veto or a claim that the workers are equivalent.
+
 ## Current boundary
 
 This first slice establishes durable ownership, batching, generation scope,
