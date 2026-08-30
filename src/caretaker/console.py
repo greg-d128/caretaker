@@ -218,6 +218,13 @@ class CaretakerConsoleApp(App):
         align-vertical: middle;
     }
     #adaptive-aggregation-toolbar Button { width: auto; min-width: 12; }
+    #adaptive-threshold-review-actions {
+        height: 5;
+        padding: 0 1;
+        align-vertical: middle;
+    }
+    #adaptive-threshold-review-actions Input { width: 1fr; min-width: 20; }
+    #adaptive-threshold-review-actions Button { width: auto; min-width: 18; margin-left: 1; }
     #adaptive-aggregation-table { height: 1fr; }
     #adaptive-aggregation-policy-status {
         height: auto;
@@ -571,6 +578,7 @@ class CaretakerConsoleApp(App):
         self._worker_failure_recovery_plan_records: list[dict[str, Any]] = []
         self._adaptive_aggregation_status: dict[str, Any] = {}
         self._adaptive_aggregation_records: list[dict[str, Any]] = []
+        self._selected_adaptive_threshold_request_id: str | None = None
         self._selected_target: str | None = None
         self._attention_records: list[dict[str, Any]] = []
         self._selected_attention_record: dict[str, Any] | None = None
@@ -843,11 +851,33 @@ class CaretakerConsoleApp(App):
             with TabPane("Adaptive", id="adaptive"):
                 yield Static(
                     "Supervisor-owned adaptive aggregation and Behavior transition requests. "
-                    "Inspection is read-only; transition application remains worker- and policy-gated.",
+                    "Inspection is read-only; threshold review records are advisory, and transition application remains worker- and policy-gated.",
                     id="adaptive-aggregation-help",
                 )
                 with Horizontal(id="adaptive-aggregation-toolbar"):
                     yield Button("Refresh", id="adaptive-aggregation-refresh", variant="primary")
+                with Horizontal(id="adaptive-threshold-review-actions"):
+                    yield Input(
+                        placeholder="Reason for reviewing selected threshold proposal",
+                        id="adaptive-threshold-review-reason",
+                        max_length=512,
+                    )
+                    yield Checkbox(
+                        "Confirm review",
+                        id="adaptive-threshold-review-confirm",
+                        disabled=True,
+                    )
+                    yield Button(
+                        "Approve for staged review",
+                        id="adaptive-threshold-review-approve",
+                        disabled=True,
+                    )
+                    yield Button(
+                        "Reject proposal",
+                        id="adaptive-threshold-review-reject",
+                        disabled=True,
+                        variant="warning",
+                    )
                 yield Static(
                     "Adaptive aggregation status not loaded",
                     id="adaptive-aggregation-status",
@@ -1927,6 +1957,19 @@ class CaretakerConsoleApp(App):
                 "#adaptive-aggregation-output",
                 record.get("payload") or record,
             )
+            if record.get("kind") == "THRESHOLD":
+                payload = record.get("payload") or {}
+                review_status = str(payload.get("review_status") or "UNREVIEWED").upper()
+                context_status = str(payload.get("context_status") or "").upper()
+                self._selected_adaptive_threshold_request_id = (
+                    str(payload.get("request_id") or "").strip()
+                    if review_status == "UNREVIEWED" and not context_status.startswith("STALE_")
+                    else None
+                )
+                self._refresh_adaptive_threshold_review_actions()
+            else:
+                self._selected_adaptive_threshold_request_id = None
+                self._refresh_adaptive_threshold_review_actions()
             return
 
         if event.data_table.id == "attention-table":
@@ -2960,6 +3003,9 @@ class CaretakerConsoleApp(App):
         elif event.input.id == "behavior-archive-reason":
             self.query_one("#behavior-manage-confirm", Checkbox).value = False
             self._refresh_behavior_actions()
+        elif event.input.id == "adaptive-threshold-review-reason":
+            self.query_one("#adaptive-threshold-review-confirm", Checkbox).value = False
+            self._refresh_adaptive_threshold_review_actions()
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         if event.checkbox.id == "guard-baseline-confirm":
@@ -3000,6 +3046,8 @@ class CaretakerConsoleApp(App):
             self.query_one("#policy-preview-output", Static).update(
                 "Override choice changed; preview the guarantee impact again."
             )
+        elif event.checkbox.id == "adaptive-threshold-review-confirm":
+            self._refresh_adaptive_threshold_review_actions()
 
     @staticmethod
     def _log_level(severity: Any) -> str:
@@ -3582,6 +3630,8 @@ class CaretakerConsoleApp(App):
         table.clear()
         output = self.query_one("#adaptive-aggregation-output", RichLog)
         output.clear()
+        self._selected_adaptive_threshold_request_id = None
+        self._refresh_adaptive_threshold_review_actions()
         try:
             response = await self._request("adaptive-aggregation-status")
         except Exception as exc:
@@ -3715,6 +3765,8 @@ class CaretakerConsoleApp(App):
                 if request_kind == "ADAPTIVE_THRESHOLD_PROPOSAL"
                 else "TRANSITION"
             )
+            if row_kind == "THRESHOLD" and displayed_status != "STALE_CONTEXT":
+                displayed_status = str(item.get("review_status") or "UNREVIEWED")
             rows.append({
                 "kind": row_kind,
                 "target_id": item.get("aggregation_target_id") or item.get("target_id") or "-",
@@ -3723,7 +3775,8 @@ class CaretakerConsoleApp(App):
                 "status": displayed_status,
                 "workers_or_acks": (
                     (
-                        f"{len(item.get('changes') or {})} fields"
+                        f"{len(item.get('changes') or {})} fields / "
+                        f"{item.get('review_status') or 'UNREVIEWED'}"
                         if row_kind == "THRESHOLD"
                         else f"{item.get('acknowledgement_count', 0)}/{required_count} acks"
                     )
@@ -3751,15 +3804,34 @@ class CaretakerConsoleApp(App):
         self.query_one("#adaptive-aggregation-status", Static).update(
             f"Aggregates {len(aggregates)} | "
             f"Transitions {len(transitions)} | "
+            f"Proposal reviews {sum(1 for item in transitions if isinstance(item, Mapping) and item.get('review_status') not in {None, 'UNREVIEWED'})} | "
             f"Expired {expired} | "
             f"Distribution conflicts {sum(1 for item in rows if item['kind'] == 'CONFLICT')} | "
             "Read-only; no transitions applied"
         )
         output.write(
             "Select a row for bounded details. The console does not acknowledge, "
-            "apply, expire, or otherwise mutate adaptive state."
+            "apply, or expire adaptive transitions. Threshold review is an "
+            "advisory, reasoned record and never changes policy or authority."
         )
         self._refresh_attention()
+
+    def _refresh_adaptive_threshold_review_actions(self) -> None:
+        """Enable review actions only for a selected live threshold proposal."""
+        selected = bool(self._selected_adaptive_threshold_request_id)
+        confirm = self.query_one("#adaptive-threshold-review-confirm", Checkbox)
+        reason = self.query_one("#adaptive-threshold-review-reason", Input)
+        confirm.disabled = not selected
+        if not selected:
+            confirm.value = False
+        enabled = bool(
+            selected
+            and self._application_running is True
+            and confirm.value
+            and reason.value.strip()
+        )
+        self.query_one("#adaptive-threshold-review-approve", Button).disabled = not enabled
+        self.query_one("#adaptive-threshold-review-reject", Button).disabled = not enabled
 
     async def _select_incident_capsule(
         self,
@@ -4436,6 +4508,34 @@ class CaretakerConsoleApp(App):
                 await self.refresh_repair_recovery_plan()
                 return
             if button == "adaptive-aggregation-refresh":
+                await self.refresh_adaptive_aggregation()
+                return
+            if button in {
+                "adaptive-threshold-review-approve",
+                "adaptive-threshold-review-reject",
+            }:
+                request_id = self._selected_adaptive_threshold_request_id
+                if not request_id:
+                    raise ValueError("Select a threshold proposal before reviewing it")
+                if self._application_running is not True:
+                    raise RuntimeError("Threshold proposal review requires a live runtime")
+                if not self.query_one("#adaptive-threshold-review-confirm", Checkbox).value:
+                    raise ValueError("Confirm the threshold proposal review first")
+                reason = self.query_one("#adaptive-threshold-review-reason", Input).value.strip()
+                if not reason:
+                    raise ValueError("Threshold proposal review requires an operator reason")
+                decision = (
+                    "APPROVE"
+                    if button == "adaptive-threshold-review-approve"
+                    else "REJECT"
+                )
+                response = await self._request(
+                    "adaptive-threshold-review",
+                    request_id=request_id,
+                    decision=decision,
+                    reason=reason,
+                )
+                self._write_json("#adaptive-aggregation-output", response)
                 await self.refresh_adaptive_aggregation()
                 return
             if button == "incident-capsule-load":

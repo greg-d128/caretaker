@@ -1243,6 +1243,66 @@ def test_console_displays_read_only_adaptive_transition_deadlines(tmp_path):
     asyncio.run(exercise())
 
 
+def test_console_reviews_selected_threshold_proposal_without_applying_policy(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            requests = []
+
+            async def request(command: str, **payload):
+                requests.append((command, payload))
+                if command == "adaptive-threshold-review":
+                    return {
+                        "ok": True,
+                        "review": {
+                            "request_id": "request-1",
+                            "review_status": "APPROVED_FOR_STAGED_POLICY_REVIEW",
+                            "policy_applied": False,
+                            "authority_granted": False,
+                        },
+                    }
+                if command == "adaptive-aggregation-status":
+                    return {
+                        "ok": True,
+                        "aggregates": [],
+                        "transitions": [],
+                        "policy_context_available": True,
+                        "policy_contexts": [],
+                    }
+                raise AssertionError(command)
+
+            app._request = request  # type: ignore[method-assign]
+            app._application_running = True
+            app._selected_adaptive_threshold_request_id = "request-1"
+            reason = app.query_one("#adaptive-threshold-review-reason", Input)
+            reason.value = "reviewed evidence supports staged policy review"
+            confirm = app.query_one("#adaptive-threshold-review-confirm", Checkbox)
+            confirm.disabled = False
+            confirm.value = True
+            app._refresh_adaptive_threshold_review_actions()
+            approve = app.query_one("#adaptive-threshold-review-approve", Button)
+            assert approve.disabled is False
+
+            await app.on_button_pressed(Button.Pressed(approve))
+
+            assert requests[0] == (
+                "adaptive-threshold-review",
+                {
+                    "request_id": "request-1",
+                    "decision": "APPROVE",
+                    "reason": "reviewed evidence supports staged policy review",
+                },
+            )
+            assert requests[1][0] == "adaptive-aggregation-status"
+            assert app._selected_adaptive_threshold_request_id is None
+            assert "Read-only" in str(
+                app.query_one("#adaptive-aggregation-status", Static).render()
+            )
+
+    asyncio.run(exercise())
+
+
 def test_consequential_console_actions_fail_closed(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 
