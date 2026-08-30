@@ -1114,6 +1114,28 @@ def test_guard_operator_state_distinguishes_no_evidence_learning_and_findings():
     ]) == "HIGH"
 
 
+def test_behavior_title_exposes_collection_queue_state(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            app._behavior_collection_status = {
+                "collections": [{
+                    "enabled": True,
+                    "active": 1,
+                    "maximum_active": 2,
+                    "queued": 3,
+                    "maximum_pending": 10,
+                }]
+            }
+            app._behavior_records = []
+            app._apply_behavior_filter()
+            title = str(app.query_one("#behavior-list-title", Static).render())
+            assert "collection queue active 1/2, queued 3/10" in title
+
+    asyncio.run(exercise())
+
+
 def test_policy_change_requires_preview_and_acknowledgement(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 

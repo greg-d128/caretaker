@@ -509,6 +509,7 @@ class CaretakerConsoleApp(App):
         self._displayed_behavior_records: list[dict[str, Any]] = []
         self._behavior_collection_id: str | None = None
         self._behavior_loaded_revision: int | None = None
+        self._behavior_collection_status: dict[str, Any] = {}
         self._selected_behavior_snapshot: str | None = None
         self._behavior_references: dict[str, str] = {}
         self._behavior_last_comparison: dict[str, Any] | None = None
@@ -2055,6 +2056,10 @@ class CaretakerConsoleApp(App):
             self._behavior_view_mode = "detail"
         self._behavior_collection_id = collection_id
         self._behavior_loaded_revision = int(response.get("revision") or 0)
+        collection_status = response.get("collection_status")
+        self._behavior_collection_status = (
+            dict(collection_status) if isinstance(collection_status, dict) else {}
+        )
         self._behavior_records = [
             dict(item) for item in response.get("snapshots", ()) if isinstance(item, dict)
         ]
@@ -2200,11 +2205,28 @@ class CaretakerConsoleApp(App):
                 integrity,
             )
         subjects = len({str(item.get("subject_key")) for item in self._behavior_records})
+        collection_summary = self._behavior_collection_summary()
         self.query_one("#behavior-list-title", Static).update(
             f"Behavior generations: showing {len(self._displayed_behavior_records)}/{len(self._behavior_records)} "
             f"across {subjects} subject{'s' if subjects != 1 else ''}; cumulative evidence preferred per generation; "
             f"{hidden_zero_calls} zero-call generation{'s' if hidden_zero_calls != 1 else ''} hidden; "
             f"{hidden_older} older generation{'s' if hidden_older != 1 else ''} hidden"
+            f"{'; ' + collection_summary if collection_summary else ''}"
+        )
+
+    def _behavior_collection_summary(self) -> str:
+        collections = self._behavior_collection_status.get("collections")
+        if not isinstance(collections, list) or not collections:
+            return ""
+        enabled = [item for item in collections if isinstance(item, dict) and item.get("enabled")]
+        if not enabled:
+            return "collection scheduler unavailable"
+        active = sum(int(item.get("active") or 0) for item in enabled)
+        queued = sum(int(item.get("queued") or 0) for item in enabled)
+        pending_limit = sum(int(item.get("maximum_pending") or 0) for item in enabled)
+        active_limit = sum(int(item.get("maximum_active") or 0) for item in enabled)
+        return (
+            f"collection queue active {active}/{active_limit}, queued {queued}/{pending_limit}"
         )
 
     @staticmethod

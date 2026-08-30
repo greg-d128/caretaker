@@ -771,11 +771,21 @@ def main(argv: list[str] | None = None) -> int:
             # Generation summaries are compact. Use the full bounded allowance so
             # the console can retain three generations across many subjects.
             limit = max(1, min(int(request.get("limit", 500)), 500))
+            collection_status: dict[str, object] = {}
+            if unix_socket_exists(runtime_control_socket):
+                try:
+                    collection_status = control_request(
+                        runtime_control_socket,
+                        {"command": "behavior-collection-status"},
+                    )
+                except OSError:
+                    collection_status = {"available": False}
             return {
                 "ok": True,
                 "collection_id": behavior_collection_id,
                 "revision": behavior_revision["value"],
                 "snapshots": list(behavior_store.list_summaries(limit=limit)),
+                "collection_status": collection_status,
             }
 
         if command == "behavior-get":
