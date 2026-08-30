@@ -210,6 +210,13 @@ class WorkerState(Enum):
     UNAUTHORIZED = auto()
 
 
+class WorkerAcceptanceState(Enum):
+    UNTRACKED = auto()
+    PROBATION = auto()
+    ACCEPTED = auto()
+    FAILED = auto()
+
+
 class WorkerFailureAction(Enum):
     CONTINUE_DEGRADED = auto()
     DISABLE_COMPONENT = auto()
@@ -553,6 +560,10 @@ class WorkerHealth:
     authority_packet_id: UUID | None = None
     authority_packet_expires_at: datetime | None = None
     replaced_worker_id: UUID | None = None
+    target_id: str | None = None
+    acceptance_state: WorkerAcceptanceState = WorkerAcceptanceState.UNTRACKED
+    acceptance_successful_executions: int = 0
+    acceptance_failed_executions: int = 0
 
 
 @dataclass(frozen=True, slots=True)

@@ -14,7 +14,9 @@ from .handler import LoggingRuntime
 from ..repair_recovery import (
     RecoveryAuthorityPacket,
     RepairRecoveryPolicy,
+    WorkerAcceptancePolicy,
     WorkerReplacementRequest,
+    evaluate_worker_acceptance,
     verify_recovery_authority_packet,
 )
 from .models import (
@@ -24,6 +26,7 @@ from .models import (
     WorkState,
     WorkerFailureAction,
     WorkerHealth,
+    WorkerAcceptanceState,
     WorkerKind,
     WorkerState,
 )
@@ -122,6 +125,7 @@ class WorkerRegistry:
         authority_policy_fingerprint: str,
         allowed_capabilities: set[str] | frozenset[str] = frozenset(),
         policy: RepairRecoveryPolicy | None = None,
+        acceptance_policy: WorkerAcceptancePolicy | None = None,
     ) -> WorkerHealth:
         """Admit a worker only after exact packet/context verification."""
         verification = verify_recovery_authority_packet(
@@ -142,11 +146,29 @@ class WorkerRegistry:
                 + ", ".join(str(item) for item in verification["failures"])
             )
         health = self.register(kind, pid)
+        resolved_acceptance_policy = acceptance_policy
+        if resolved_acceptance_policy is None and policy is not None:
+            resolved_acceptance_policy = policy.worker_acceptance
         with self._lock:
+            acceptance_state = WorkerAcceptanceState.UNTRACKED
+            if resolved_acceptance_policy is not None:
+                evaluation = evaluate_worker_acceptance(
+                    target_id=target_id,
+                    successful_executions=0,
+                    failed_executions=0,
+                    policy=resolved_acceptance_policy,
+                )
+                acceptance_state = (
+                    WorkerAcceptanceState.ACCEPTED
+                    if evaluation["accepted"]
+                    else WorkerAcceptanceState.PROBATION
+                )
             admitted = replace(
                 health,
                 authority_packet_id=packet.packet_id,
                 authority_packet_expires_at=packet.expires_at,
+                target_id=str(target_id),
+                acceptance_state=acceptance_state,
             )
             self._workers[health.worker_id] = admitted
             return admitted
@@ -213,6 +235,7 @@ class WorkerRegistry:
         authority_policy_fingerprint: str,
         allowed_capabilities: set[str] | frozenset[str] = frozenset(),
         policy: RepairRecoveryPolicy | None = None,
+        acceptance_policy: WorkerAcceptancePolicy | None = None,
     ) -> WorkerHealth:
         """Admit a replacement only after packet and failed-worker checks."""
         if request.worker_kind != kind.name:
@@ -240,6 +263,7 @@ class WorkerRegistry:
                 authority_policy_fingerprint=authority_policy_fingerprint,
                 allowed_capabilities=allowed_capabilities,
                 policy=policy,
+                acceptance_policy=acceptance_policy,
             )
         except Exception:
             with self._lock:
@@ -249,6 +273,62 @@ class WorkerRegistry:
             replacement = replace(admitted, replaced_worker_id=request.failed_worker_id)
             self._workers[replacement.worker_id] = replacement
             return replacement
+
+    def record_acceptance_observation(
+        self,
+        worker_id: UUID,
+        *,
+        success: bool,
+        policy: WorkerAcceptancePolicy,
+    ) -> WorkerHealth:
+        """Record exactly one authorized worker observation for acceptance."""
+        if not isinstance(success, bool):
+            raise TypeError("worker acceptance success must be a boolean")
+        with self._lock:
+            current = self._workers[worker_id]
+            if current.target_id is None or current.acceptance_state is WorkerAcceptanceState.UNTRACKED:
+                raise ValueError("worker acceptance is not configured for this worker")
+            if current.state in {WorkerState.FAILED, WorkerState.UNAUTHORIZED}:
+                raise PermissionError("failed or unauthorized workers cannot advance acceptance")
+            successful = current.acceptance_successful_executions + (1 if success else 0)
+            failed = current.acceptance_failed_executions + (0 if success else 1)
+            evaluation = evaluate_worker_acceptance(
+                target_id=current.target_id,
+                successful_executions=successful,
+                failed_executions=failed,
+                policy=policy,
+            )
+            thresholds = evaluation["thresholds"]
+            acceptance_failed = (
+                failed > thresholds["probation_failure_budget"]
+                or (
+                    successful >= thresholds["acceptance_successful_executions"]
+                    and failed > thresholds["acceptance_failure_budget"]
+                )
+            )
+            acceptance_state = (
+                WorkerAcceptanceState.FAILED
+                if acceptance_failed
+                else (
+                    WorkerAcceptanceState.ACCEPTED
+                    if evaluation["accepted"]
+                    else WorkerAcceptanceState.PROBATION
+                )
+            )
+            updated = replace(
+                current,
+                state=WorkerState.FAILED if acceptance_failed else current.state,
+                last_error_fingerprint=(
+                    "worker-acceptance-failed"
+                    if acceptance_failed
+                    else current.last_error_fingerprint
+                ),
+                acceptance_state=acceptance_state,
+                acceptance_successful_executions=successful,
+                acceptance_failed_executions=failed,
+            )
+            self._workers[worker_id] = updated
+            return updated
 
     def heartbeat(
         self,
@@ -309,6 +389,10 @@ class WorkerRegistry:
                 last_error_fingerprint=None,
                 authority_packet_id=None,
                 authority_packet_expires_at=None,
+                target_id=None,
+                acceptance_state=WorkerAcceptanceState.UNTRACKED,
+                acceptance_successful_executions=0,
+                acceptance_failed_executions=0,
             )
             self._workers[worker_id] = updated
             return updated
@@ -415,6 +499,10 @@ class CaretakerApplicationSupervisor:
             "last_completed_sequence": worker.last_completed_sequence,
             "restart_count": worker.restart_count,
             "last_error_fingerprint": worker.last_error_fingerprint,
+            "target_id": worker.target_id,
+            "acceptance_state": worker.acceptance_state.name,
+            "acceptance_successful_executions": worker.acceptance_successful_executions,
+            "acceptance_failed_executions": worker.acceptance_failed_executions,
             "authority_packet_id": (
                 str(worker.authority_packet_id)
                 if worker.authority_packet_id is not None

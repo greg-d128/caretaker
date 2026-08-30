@@ -5,7 +5,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from caretaker import create_recovery_authority_packet
-from caretaker.logging import WorkerKind, WorkerRegistry, WorkerState
+from caretaker import WorkerAcceptancePolicy
+from caretaker.logging import WorkerAcceptanceState, WorkerKind, WorkerRegistry, WorkerState
 
 
 def _packet(*, supervisor_time: datetime):
@@ -126,10 +127,44 @@ def test_replacement_handoff_requires_packet_and_records_provenance() -> None:
         authority_policy_generation="authority-8",
         authority_policy_fingerprint="authority-hash",
         allowed_capabilities={"observe"},
+        acceptance_policy=WorkerAcceptancePolicy(
+            probation_successful_executions=2,
+            acceptance_successful_executions=3,
+        ),
     )
     assert replacement.authority_packet_id == packet.packet_id
     assert replacement.replaced_worker_id == original.worker_id
     assert replacement.state is WorkerState.STARTING
+    assert replacement.target_id == "app:charge"
+    assert replacement.acceptance_state is WorkerAcceptanceState.PROBATION
+
+    replacement = registry.record_acceptance_observation(
+        replacement.worker_id,
+        success=True,
+        policy=WorkerAcceptancePolicy(
+            probation_successful_executions=2,
+            acceptance_successful_executions=3,
+        ),
+    )
+    replacement = registry.record_acceptance_observation(
+        replacement.worker_id,
+        success=True,
+        policy=WorkerAcceptancePolicy(
+            probation_successful_executions=2,
+            acceptance_successful_executions=3,
+        ),
+    )
+    assert replacement.acceptance_state is WorkerAcceptanceState.PROBATION
+    replacement = registry.record_acceptance_observation(
+        replacement.worker_id,
+        success=True,
+        policy=WorkerAcceptancePolicy(
+            probation_successful_executions=2,
+            acceptance_successful_executions=3,
+        ),
+    )
+    assert replacement.acceptance_state is WorkerAcceptanceState.ACCEPTED
+    assert replacement.acceptance_successful_executions == 3
 
     with pytest.raises(PermissionError, match="already been consumed"):
         registry.register_replacement(
@@ -181,3 +216,65 @@ def test_replacement_handoff_rejects_expired_packet_without_registering_worker()
             allowed_capabilities={"observe"},
         )
     assert len(registry.all()) == 1
+
+
+def test_worker_acceptance_budget_failure_marks_worker_failed() -> None:
+    registry = WorkerRegistry()
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    original = registry.register(WorkerKind.REPAIR_ANALYZER, 1234)
+    registry.mark_failed(original.worker_id, error_fingerprint="worker-crash")
+    packet = _packet(supervisor_time=supervisor_time)
+    request = registry.prepare_replacement(
+        original.worker_id,
+        packet,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+    )
+    replacement = registry.register_replacement(
+        request,
+        WorkerKind.REPAIR_ANALYZER,
+        5678,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+        acceptance_policy=WorkerAcceptancePolicy(
+            probation_successful_executions=2,
+            acceptance_successful_executions=2,
+            probation_failure_budget=0,
+        ),
+    )
+
+    failed = registry.record_acceptance_observation(
+        replacement.worker_id,
+        success=False,
+        policy=WorkerAcceptancePolicy(
+            probation_successful_executions=2,
+            acceptance_successful_executions=2,
+            probation_failure_budget=0,
+        ),
+    )
+    assert failed.acceptance_state is WorkerAcceptanceState.FAILED
+    assert failed.state is WorkerState.FAILED
+    assert failed.last_error_fingerprint == "worker-acceptance-failed"
+    assert failed.authority_packet_id == packet.packet_id
+
+    with pytest.raises(PermissionError, match="failed or unauthorized"):
+        registry.record_acceptance_observation(
+            replacement.worker_id,
+            success=True,
+            policy=WorkerAcceptancePolicy(
+                probation_successful_executions=2,
+                acceptance_successful_executions=2,
+            ),
+        )
