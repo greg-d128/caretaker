@@ -184,6 +184,9 @@ class AdaptiveInstrumentationState:
     promotion_requested_by: str | None = None
     promotion_authority_generation: str | None = None
     promotion_authority_fingerprint: str | None = None
+    promotion_outcome: str | None = None
+    promotion_outcome_at: str | None = None
+    promotion_snapshot_id: str | None = None
     short_term_accepted_at: str | None = None
     long_term_accepted_at: str | None = None
     successful_executions: int = 0
@@ -219,6 +222,9 @@ class AdaptiveInstrumentationState:
             "promotion_requested_by": self.promotion_requested_by,
             "promotion_authority_generation": self.promotion_authority_generation,
             "promotion_authority_fingerprint": self.promotion_authority_fingerprint,
+            "promotion_outcome": self.promotion_outcome,
+            "promotion_outcome_at": self.promotion_outcome_at,
+            "promotion_snapshot_id": self.promotion_snapshot_id,
             "short_term_accepted_at": self.short_term_accepted_at,
             "long_term_accepted_at": self.long_term_accepted_at,
             "successful_executions": self.successful_executions,
@@ -854,10 +860,40 @@ class _AdaptiveController:
             self.state.promotion_requested_by = requested_by
             self.state.promotion_authority_generation = str(authority.generation)
             self.state.promotion_authority_fingerprint = authority.fingerprint
+            self.state.promotion_outcome = "ACTIVE"
+            self.state.promotion_outcome_at = None
+            self.state.promotion_snapshot_id = None
             return self._promote(
                 InstrumentationLevel.BEHAVIOR,
                 reason,
             )
+
+    def record_behavior_promotion_outcome(
+        self,
+        outcome: str,
+        *,
+        snapshot_id: str | None = None,
+    ) -> bool:
+        """Persist the bounded collection outcome for an explicit promotion."""
+        normalized = str(outcome).strip().upper()
+        if normalized not in {"ACTIVE", "CAPTURED", "DEFERRED", "FAILED", "SUPERSEDED"}:
+            raise ValueError("behavior promotion outcome is invalid")
+        with self._lock:
+            if self.state.promotion_requested_by is None:
+                return False
+            changed = (
+                self.state.promotion_outcome != normalized
+                or (snapshot_id is not None and self.state.promotion_snapshot_id != snapshot_id)
+            )
+            if not changed:
+                return False
+            self.state.promotion_outcome = normalized
+            self.state.promotion_outcome_at = utcnow_iso()
+            if snapshot_id is not None:
+                self.state.promotion_snapshot_id = str(snapshot_id)[:128]
+            self._persist()
+            self._publish_state()
+            return True
 
     def _maybe_promote_repair(self) -> bool:
         with self._lock:
@@ -1261,6 +1297,9 @@ class _AdaptiveController:
                 promotion_requested_by=data.get("promotion_requested_by"),
                 promotion_authority_generation=data.get("promotion_authority_generation"),
                 promotion_authority_fingerprint=data.get("promotion_authority_fingerprint"),
+                promotion_outcome=data.get("promotion_outcome"),
+                promotion_outcome_at=data.get("promotion_outcome_at"),
+                promotion_snapshot_id=data.get("promotion_snapshot_id"),
                 short_term_accepted_at=data.get("short_term_accepted_at"),
                 long_term_accepted_at=data.get("long_term_accepted_at"),
                 successful_executions=int(data.get("successful_executions", 0)),

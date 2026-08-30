@@ -327,6 +327,27 @@ def test_automatic_collection_cycle_promotes_one_adaptive_backlog_target(
     assert second["promoted"] == []
     assert second["active_automatic"] == 1
 
+    monkeypatch.setattr(
+        guard,
+        "behavior_collection_backlog",
+        lambda **_: {
+            "enabled": True,
+            "items": [{
+                "target_id": "example.automatic-promotion",
+                "generation_id": first["promoted"][0]["generation_id"],
+                "status": "sufficiently_covered",
+                "snapshot_id": "snapshot-automatic",
+            }],
+            "counts": {"sufficiently_covered": 1},
+        },
+    )
+    reconciled = guard.automatic_behavior_collection_cycle()
+    assert reconciled["promoted"] == []
+    assert reconciled["outcomes"][0]["outcome"] == "CAPTURED"
+    assert reconciled["outcomes"][0]["snapshot_id"] == "snapshot-automatic"
+    assert reconciled["active_automatic"] == 0
+    assert wrapped.__caretaker_adaptive__.state.promotion_outcome == "CAPTURED"
+
 
 def test_guard_backlog_reports_waiting_and_queued_current_generations(
     tmp_path: Path, monkeypatch

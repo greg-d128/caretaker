@@ -1047,6 +1047,40 @@ class GuardEngine(GuardFacade):
                 target_id: get_adaptive_controller(target_id)
                 for target_id in self._targets
             }
+        outcomes: list[dict[str, Any]] = []
+        for item in backlog.get("items", ()):
+            target_id = str(item.get("target_id") or "")
+            controller = controllers.get(target_id)
+            if controller is None:
+                continue
+            state = controller.state
+            if (
+                state.promotion_requested_by != "caretaker:auto"
+                or state.promotion_outcome not in {None, "ACTIVE"}
+            ):
+                continue
+            backlog_status = str(item.get("status") or "")
+            outcome = {
+                "sufficiently_covered": "CAPTURED",
+                "failed": "FAILED",
+                "deferred": "DEFERRED",
+            }.get(backlog_status)
+            if outcome is None:
+                continue
+            if not controller.record_behavior_promotion_outcome(
+                outcome,
+                snapshot_id=str(item.get("snapshot_id") or "") or None,
+            ):
+                continue
+            outcomes.append(
+                {
+                    "target_id": target_id,
+                    "generation_id": item.get("generation_id"),
+                    "outcome": outcome,
+                    "snapshot_id": item.get("snapshot_id"),
+                    "state": controller.state.public_dict(),
+                }
+            )
         active_automatic = sum(
             1
             for controller in controllers.values()
@@ -1055,6 +1089,7 @@ class GuardEngine(GuardFacade):
             and str(controller.state.promotion_reason or "").startswith(
                 "automatic coverage backlog promotion"
             )
+            and controller.state.promotion_outcome in {None, "ACTIVE"}
         )
         available = max(0, snapshots.collection_auto_max_promoted - active_automatic)
         promoted: list[dict[str, Any]] = []
@@ -1088,6 +1123,7 @@ class GuardEngine(GuardFacade):
         return {
             "enabled": True,
             "promoted": promoted,
+            "outcomes": outcomes,
             "active_automatic": active_automatic + len(promoted),
             "maximum_automatic": snapshots.collection_auto_max_promoted,
             "backlog_counts": dict(backlog.get("counts") or {}),
