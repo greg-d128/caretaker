@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -12,6 +13,7 @@ import struct
 import threading
 import time
 import select
+import secrets
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
@@ -27,6 +29,147 @@ _PEERCRED = struct.Struct("3i")
 _UNIX_SOCKET_PATH_LIMIT = 100
 _CONTROL_REQUEST_LIMIT = 64 * 1024
 _CONTROL_RESPONSE_LIMIT = 16 * 1024 * 1024
+
+
+def _canonical_control_authorization_payload(request: dict[str, Any]) -> bytes:
+    authorization = request.get("authorization")
+    if not isinstance(authorization, dict):
+        raise ValueError("control request authorization envelope is required")
+    unsigned_authorization = {
+        key: value for key, value in authorization.items() if key != "signature"
+    }
+    unsigned_request = {
+        key: value for key, value in request.items() if key != "authorization"
+    }
+    return json.dumps(
+        {"authorization": unsigned_authorization, "request": unsigned_request},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def sign_control_request(
+    request: dict[str, Any],
+    secret: bytes,
+    *,
+    key_id: str,
+    scope: str,
+    policy_generation: int,
+    nonce: str | None = None,
+    issued_at: int | None = None,
+) -> dict[str, Any]:
+    """Add an independent operator authorization envelope to a request."""
+    if not isinstance(secret, bytes) or len(secret) < 32:
+        raise ValueError("control authorization secret must contain at least 32 bytes")
+    if not key_id.strip() or not scope.strip():
+        raise ValueError("control authorization key_id and scope cannot be empty")
+    signed = dict(request)
+    signed["authorization"] = {
+        "key_id": key_id,
+        "scope": scope,
+        "policy_generation": policy_generation,
+        "issued_at": int(time.time()) if issued_at is None else issued_at,
+        "nonce": nonce or secrets.token_urlsafe(18),
+    }
+    signed["authorization"]["signature"] = hmac.new(
+        secret,
+        _canonical_control_authorization_payload(signed),
+        hashlib.sha256,
+    ).hexdigest()
+    return signed
+
+
+class HMACControlAuthorizer:
+    """Verify independent, replay-protected operator command envelopes."""
+
+    def __init__(
+        self,
+        secret: bytes,
+        *,
+        key_id: str,
+        allowed_scopes: set[str] | frozenset[str] = frozenset({"*"}),
+        policy_generation: int | None = None,
+        maximum_clock_skew_seconds: int = 30,
+        nonce_retention_seconds: int = 300,
+    ) -> None:
+        if not isinstance(secret, bytes) or len(secret) < 32:
+            raise ValueError("control authorization secret must contain at least 32 bytes")
+        if not key_id.strip():
+            raise ValueError("control authorization key_id cannot be empty")
+        if maximum_clock_skew_seconds <= 0 or nonce_retention_seconds <= 0:
+            raise ValueError("authorization time windows must be positive")
+        self.secret = secret
+        self.key_id = key_id
+        self.allowed_scopes = frozenset(allowed_scopes)
+        self.policy_generation = policy_generation
+        self.maximum_clock_skew_seconds = maximum_clock_skew_seconds
+        self.nonce_retention_seconds = nonce_retention_seconds
+        self._seen_nonces: dict[str, int] = {}
+        self._lock = threading.Lock()
+
+    def __call__(self, request: dict[str, Any], _credentials: tuple[int, int, int]) -> bool:
+        if not isinstance(request, dict):
+            return False
+        authorization = request.get("authorization")
+        if not isinstance(authorization, dict):
+            return False
+        required = {"key_id", "scope", "policy_generation", "issued_at", "nonce", "signature"}
+        if set(authorization) != required:
+            return False
+        if authorization["key_id"] != self.key_id:
+            return False
+        scope = authorization["scope"]
+        command = request.get("command")
+        if not isinstance(scope, str) or not isinstance(command, str):
+            return False
+        if scope not in self.allowed_scopes and "*" not in self.allowed_scopes:
+            return False
+        if scope != "*" and scope != command:
+            return False
+        if self.policy_generation is not None and authorization["policy_generation"] != self.policy_generation:
+            return False
+        policy_generation = authorization["policy_generation"]
+        if isinstance(policy_generation, bool) or not isinstance(policy_generation, int):
+            return False
+        issued_at = authorization["issued_at"]
+        nonce = authorization["nonce"]
+        signature = authorization["signature"]
+        if isinstance(issued_at, bool) or not isinstance(issued_at, int):
+            return False
+        if not isinstance(nonce, str) or not nonce or len(nonce) > 256:
+            return False
+        if not isinstance(signature, str) or len(signature) != 64:
+            return False
+        try:
+            provided = bytes.fromhex(signature)
+        except ValueError:
+            return False
+        now = int(time.time())
+        if abs(now - issued_at) > self.maximum_clock_skew_seconds:
+            return False
+        try:
+            expected = hmac.new(
+                self.secret,
+                _canonical_control_authorization_payload(request),
+                hashlib.sha256,
+            ).digest()
+        except (TypeError, ValueError, OverflowError):
+            return False
+        if not hmac.compare_digest(provided, expected):
+            return False
+        with self._lock:
+            cutoff = now - self.nonce_retention_seconds
+            self._seen_nonces = {
+                value: timestamp
+                for value, timestamp in self._seen_nonces.items()
+                if timestamp >= cutoff
+            }
+            if nonce in self._seen_nonces:
+                return False
+            self._seen_nonces[nonce] = now
+        return True
 
 
 def unix_socket_path(path: str | Path) -> Path:
@@ -360,8 +503,9 @@ class SocketLogServer:
 class ControlSocketServer:
     """Declarative local administrative protocol.
 
-    Authentication is delegated to Unix socket permissions and peer credentials.
-    The protocol never accepts shell commands, Python source, or arbitrary paths.
+    Authentication defaults to Unix socket permissions and peer credentials, or
+    can be extended with an independent authorization verifier. The protocol
+    never accepts shell commands, Python source, or arbitrary paths.
     """
 
     def __init__(
@@ -371,11 +515,13 @@ class ControlSocketServer:
         *,
         allowed_uids: set[int] | None = None,
         allowed_gids: set[int] | None = None,
+        authorization_verifier: Callable[[dict[str, Any], tuple[int, int, int]], bool] | None = None,
     ) -> None:
         self.path = unix_socket_path(path)
         self.handler = handler
         self.allowed_uids = allowed_uids
         self.allowed_gids = allowed_gids
+        self.authorization_verifier = authorization_verifier
         self._stop = threading.Event()
         self._socket: socket.socket | None = None
         self._threads: list[threading.Thread] = []
@@ -449,6 +595,10 @@ class ControlSocketServer:
                 request = json.loads(
                     _recv_control_payload(connection, maximum=_CONTROL_REQUEST_LIMIT)
                 )
+                if self.authorization_verifier is not None and not self.authorization_verifier(
+                    request, credentials
+                ):
+                    raise PermissionError("control request authorization failed")
                 response = self.handler(request, credentials)
             except Exception as exc:
                 response = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -30,7 +31,11 @@ from caretaker.domain import (
     RepairCandidate,
     utcnow,
 )
-from caretaker.logging import ControlSocketServer
+from caretaker.logging import (
+    ControlSocketServer,
+    HMACControlAuthorizer,
+    sign_control_request,
+)
 from caretaker.validation import (
     SubprocessValidationBackend,
     _write_worker_request,
@@ -181,14 +186,6 @@ def boundary_target(total: float, count: int) -> float:
     assert assessment.hard_disqualifications
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known trust-boundary gap: local administrative control currently authenticates "
-        "Unix peers by UID/GID only, which does not distinguish the supervised application "
-        "from an independent operator when both use the same account."
-    ),
-)
 def test_admin_control_supports_authorization_independent_of_application_uid() -> None:
     parameters = inspect.signature(ControlSocketServer.__init__).parameters
     independent_authorizers = {
@@ -198,3 +195,29 @@ def test_admin_control_supports_authorization_independent_of_application_uid() -
         "authorization_verifier",
     }
     assert independent_authorizers.intersection(parameters)
+
+
+def test_hmac_control_authorization_binds_scope_policy_and_nonce() -> None:
+    secret = b"operator-secret-that-is-at-least-32-bytes"
+    authorizer = HMACControlAuthorizer(
+        secret,
+        key_id="operator-1",
+        allowed_scopes={"status"},
+        policy_generation=7,
+    )
+    request = sign_control_request(
+        {"command": "status"},
+        secret,
+        key_id="operator-1",
+        scope="status",
+        policy_generation=7,
+        nonce="nonce-1",
+        issued_at=int(time.time()),
+    )
+
+    assert authorizer(request, (123, 1000, 1000)) is True
+    assert authorizer(request, (123, 1000, 1000)) is False
+
+    tampered = dict(request)
+    tampered["command"] = "health"
+    assert authorizer(tampered, (123, 1000, 1000)) is False

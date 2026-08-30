@@ -4,7 +4,7 @@
 
 The control interface uses a Unix-domain socket, filesystem permissions, and peer PID/UID/GID. The application account should not have administrative socket access unless the operator deliberately grants it.
 
-Peer credentials do not provide authorization independent of the operating-system account. When the application and operator share a UID, current control-socket checks cannot reliably distinguish application code from the operator. Use a separately controlled account and filesystem permissions where that distinction matters; Caretaker does not currently provide a separate credential verifier or application-layer authentication mechanism.
+Peer credentials do not provide authorization independent of the operating-system account. When the application and operator share a UID, configure `ControlSocketServer(authorization_verifier=...)` with an independent verifier such as `HMACControlAuthorizer`, and do not rely on same-UID authorization as the sole control. Signed envelopes bind the command scope, policy generation, timestamp, and nonce; replayed, expired, or tampered requests are rejected. The existing UID/GID-only mode remains the least-friction compatibility default.
 
 No network listener, password database, arbitrary Python, shell command, or unrestricted path execution is provided.
 

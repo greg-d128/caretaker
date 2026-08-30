@@ -231,7 +231,6 @@ resource exhaustion.
 
 An "implemented" label in this document means that a usable research path exists; it does not mean that every assurance property around that path is complete. Strict expected-failure regression tests preserve the following known debts:
 
-- same-UID Unix peer credentials do not distinguish application code from an independent operator.
 
 These debts are also executable documentation in `tests/test_validation_trust_boundary.py` and `tests/test_security_assurance_regressions.py`. They should remain strict expected failures until the corresponding boundary is implemented and the test passes normally.
 
@@ -251,7 +250,12 @@ Registered cases that require domain types need explicit trusted codecs or fixtu
 
 ### Independent operator authorization
 
-Administrative commands currently rely on filesystem permissions and Unix PID/UID/GID credentials. A same-account application can therefore be indistinguishable from its operator. Future work should support a separate operator agent/account or authenticated command envelopes with replay protection, explicit action scope, expiry, and policy-generation binding.
+Administrative commands support an optional independent authorization verifier.
+`HMACControlAuthorizer` provides signed command envelopes with replay
+protection, explicit action scope, expiry, and policy-generation binding. The
+least-friction UID/GID mode remains available for local development; deployments
+where application code and operators share an account should configure the
+independent verifier or a separately controlled operator account.
 
 ### Non-overridable isolation
 

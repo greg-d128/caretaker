@@ -21,9 +21,11 @@ from .interrogation import (
 )
 from .ipc import (
     ControlSocketServer,
+    HMACControlAuthorizer,
     SocketLogClient,
     SocketLogServer,
     control_request,
+    sign_control_request,
     peer_credentials,
     unix_socket_exists,
     unix_socket_path,
