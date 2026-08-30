@@ -364,6 +364,84 @@ def test_supervisor_records_delayed_threshold_proposal_without_applying_policy(
         )
 
 
+def test_threshold_proposal_review_is_context_bound_idempotent_and_non_mutating(
+    tmp_path: Path,
+):
+    store = SupervisorAdaptiveAggregationStore(tmp_path)
+    proposal = store.create_threshold_proposal(
+        target_id="example.target",
+        generation_id="generation-a",
+        code_hash="code-a",
+        monitoring_fingerprint="monitoring-a",
+        policy_fingerprint="policy-a",
+        authority_policy_generation="7",
+        authority_policy_fingerprint="authority-a",
+        changes={"exception.occurrences": 4},
+        requested_by="operator:test",
+        reason="review threshold evidence",
+        expires_in_seconds=3600,
+    )
+    created = datetime.fromisoformat(proposal["created_at"])
+    context = {
+        "current_generations": {"example.target": "generation-a"},
+        "policy_fingerprints": {"example.target": "policy-a"},
+        "authority_policy_generation": "7",
+        "authority_policy_fingerprint": "authority-a",
+    }
+
+    reviewed = store.review_threshold_proposal(
+        proposal["request_id"],
+        decision="approve",
+        reviewed_by="uid:1001",
+        reason="evidence is sufficient for staged review",
+        now=created + timedelta(seconds=1),
+        **context,
+    )
+
+    assert reviewed["status"] == "RECORDED"
+    assert reviewed["review_status"] == "APPROVED_FOR_STAGED_POLICY_REVIEW"
+    assert reviewed["policy_applied"] is False
+    assert reviewed["authority_granted"] is False
+    listed = store.list_transition_requests(**context)
+    assert listed[0]["status"] == "PROPOSAL_ONLY"
+    assert listed[0]["review_status"] == "APPROVED_FOR_STAGED_POLICY_REVIEW"
+    assert listed[0]["review"]["reviewed_by"] == "uid:1001"
+
+    duplicate = store.review_threshold_proposal(
+        proposal["request_id"],
+        decision="APPROVE",
+        reviewed_by="uid:1001",
+        reason="evidence is sufficient for staged review",
+        now=created + timedelta(seconds=2),
+        **context,
+    )
+    assert duplicate["status"] == "DUPLICATE"
+    assert store.status()["proposal_reviews"] == 1
+
+    with pytest.raises(AdaptiveAggregationError, match="conflicting"):
+        store.review_threshold_proposal(
+            proposal["request_id"],
+            decision="REJECT",
+            reviewed_by="uid:1001",
+            reason="different decision",
+            now=created + timedelta(seconds=3),
+            **context,
+        )
+
+    with pytest.raises(PermissionError, match="STALE_POLICY"):
+        store.review_threshold_proposal(
+            proposal["request_id"],
+            decision="REJECT",
+            reviewed_by="uid:1002",
+            reason="stale context must fail closed",
+            now=created + timedelta(seconds=4),
+            **{
+                **context,
+                "policy_fingerprints": {"example.target": "policy-b"},
+            },
+        )
+
+
 def test_threshold_proposal_rejects_non_threshold_fields(tmp_path: Path) -> None:
     store = SupervisorAdaptiveAggregationStore(tmp_path)
     with pytest.raises(AdaptiveAggregationError, match="unsupported adaptive threshold"):

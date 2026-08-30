@@ -1032,6 +1032,7 @@ class SupervisorAdaptiveAggregationStore:
         self.transition_acknowledgement_directory = (
             self.root / "adaptive" / "aggregation" / "transition-acknowledgements"
         )
+        self.proposal_review_directory = self.root / "adaptive" / "aggregation" / "proposal-reviews"
         self.conflict_directory = self.root / "adaptive" / "aggregation" / "conflicts"
         for directory in (
             self.pending_directory,
@@ -1041,6 +1042,7 @@ class SupervisorAdaptiveAggregationStore:
             self.state_directory,
             self.transition_directory,
             self.transition_acknowledgement_directory,
+            self.proposal_review_directory,
             self.conflict_directory,
         ):
             directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1053,6 +1055,7 @@ class SupervisorAdaptiveAggregationStore:
         self.maximum_retained_events = int(maximum_retained_events)
         self.distribution_z_threshold = float(distribution_z_threshold)
         self.distribution_minimum_observations = int(distribution_minimum_observations)
+        self._lock = threading.RLock()
 
     @staticmethod
     def _batch_path(directory: Path, batch_id: str) -> Path:
@@ -1129,6 +1132,9 @@ class SupervisorAdaptiveAggregationStore:
     def _transition_acknowledgement_path(self, request_id: str, worker_id: str) -> Path:
         worker_key = hashlib.sha256(worker_id.encode("utf-8")).hexdigest()[:32]
         return self.transition_acknowledgement_directory / f"{request_id}-{worker_key}.json"
+
+    def _proposal_review_path(self, request_id: str) -> Path:
+        return self.proposal_review_directory / f"{request_id}.json"
 
     def _write_acknowledgement(
         self,
@@ -1730,6 +1736,25 @@ class SupervisorAdaptiveAggregationStore:
                 continue
         return tuple(result)
 
+    def _load_proposal_review(self, request_id: str) -> dict[str, Any] | None:
+        path = self._proposal_review_path(request_id)
+        if not path.exists():
+            return None
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(envelope, Mapping):
+            raise AdaptiveAggregationError("adaptive proposal review must be an object")
+        if int(envelope.get("schema_version") or 0) != ADAPTIVE_AGGREGATION_SCHEMA_VERSION:
+            raise AdaptiveAggregationError("unsupported adaptive proposal review schema")
+        review = envelope.get("review")
+        if not isinstance(review, Mapping):
+            raise AdaptiveAggregationError("adaptive proposal review is missing its review")
+        normalized_id = str(UUID(str(review.get("request_id"))))
+        if normalized_id != request_id or path.stem != request_id:
+            raise AdaptiveAggregationError("adaptive proposal review ID is invalid")
+        if str(envelope.get("review_sha256") or "") != _content_hash(review):
+            raise AdaptiveAggregationError("adaptive proposal review hash is invalid")
+        return dict(review)
+
     @staticmethod
     def _transition_expiry(request: Mapping[str, Any]) -> datetime | None:
         raw = request.get("expires_at")
@@ -2135,9 +2160,129 @@ class SupervisorAdaptiveAggregationStore:
             "context_status": "UNVERIFIED",
         }
 
+    def review_threshold_proposal(
+        self,
+        request_id: str,
+        *,
+        decision: str,
+        reviewed_by: str,
+        reason: str,
+        current_generations: Mapping[str, str],
+        policy_fingerprints: Mapping[str, str],
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Record a context-checked review without applying a threshold change.
+
+        An approval only makes a proposal eligible for a future staged policy
+        workflow.  It never changes a policy, grants authority, or causes a
+        worker to reload thresholds.
+        """
+        try:
+            normalized_id = str(UUID(str(request_id)))
+        except (TypeError, ValueError) as exc:
+            raise AdaptiveAggregationError("proposal request_id must be a UUID") from exc
+        if not all(
+            value is not None
+            for value in (
+                current_generations,
+                policy_fingerprints,
+                authority_policy_generation,
+                authority_policy_fingerprint,
+            )
+        ):
+            raise ValueError(
+                "threshold proposal review requires generation, policy, and authority context"
+            )
+        request = self._load_transition_request(self._transition_path(normalized_id))
+        if request.get("request_kind") != "ADAPTIVE_THRESHOLD_PROPOSAL":
+            raise PermissionError("only adaptive threshold proposals can be reviewed")
+        context_error = self._context_error(
+            request,
+            current_generations=current_generations,
+            policy_fingerprints=policy_fingerprints,
+            policy_fingerprint=None,
+            authority_policy_generation=str(authority_policy_generation),
+            authority_policy_fingerprint=str(authority_policy_fingerprint),
+        )
+        if context_error is not None:
+            raise PermissionError(f"adaptive threshold proposal context is stale: {context_error}")
+        observed_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        expiry = self._transition_expiry(request)
+        if expiry is not None and observed_at >= expiry:
+            raise PermissionError("adaptive threshold proposal has expired")
+        normalized_decision = str(decision).strip().upper()
+        if normalized_decision not in {"APPROVE", "REJECT"}:
+            raise AdaptiveAggregationError("threshold proposal decision must be APPROVE or REJECT")
+        reviewer = _text(reviewed_by, name="reviewed_by", limit=MAX_BATCH_TEXT)
+        review_reason = _text(reason, name="reason", limit=MAX_TRANSITION_REASON)
+        assert reviewer is not None and review_reason is not None
+        review_status = (
+            "APPROVED_FOR_STAGED_POLICY_REVIEW"
+            if normalized_decision == "APPROVE"
+            else "REJECTED"
+        )
+        review = {
+            "request_id": normalized_id,
+            "request_sha256": _content_hash(request),
+            "review_decision": normalized_decision,
+            "review_status": review_status,
+            "reviewed_by": reviewer,
+            "reason": review_reason,
+            "reviewed_at": observed_at.isoformat(),
+            "target_id": str(request["target_id"]),
+            "aggregation_scope": request.get("aggregation_scope"),
+            "generation_id": str(request["generation_id"]),
+            "code_hash": str(request["code_hash"]),
+            "monitoring_fingerprint": str(request["monitoring_fingerprint"]),
+            "policy_fingerprint": str(request["policy_fingerprint"]),
+            "authority_policy_generation": str(request["authority_policy_generation"]),
+            "authority_policy_fingerprint": str(request["authority_policy_fingerprint"]),
+            "policy_applied": False,
+            "authority_granted": False,
+        }
+        with self._lock:
+            existing = self._load_proposal_review(normalized_id)
+            if existing is not None:
+                comparable = {
+                    key: existing.get(key)
+                    for key in (
+                        "request_id",
+                        "request_sha256",
+                        "review_decision",
+                        "reviewed_by",
+                        "reason",
+                    )
+                }
+                if comparable != {
+                    key: review.get(key)
+                    for key in comparable
+                }:
+                    raise AdaptiveAggregationError("conflicting adaptive proposal review")
+                return {
+                    **existing,
+                    "status": "DUPLICATE",
+                    "proposal_only": True,
+                }
+            _safe_write(
+                self._proposal_review_path(normalized_id),
+                {
+                    "schema_version": ADAPTIVE_AGGREGATION_SCHEMA_VERSION,
+                    "review": review,
+                    "review_sha256": _content_hash(review),
+                },
+            )
+        return {
+            **review,
+            "status": "RECORDED",
+            "proposal_only": True,
+        }
+
     def list_transition_requests(
         self,
         *,
+        request_id: str | None = None,
         target_id: str | None = None,
         aggregation_scope: str | None = None,
         worker_id: str | None = None,
@@ -2168,6 +2313,8 @@ class SupervisorAdaptiveAggregationStore:
             try:
                 request = self._load_transition_request(path)
             except Exception:
+                continue
+            if request_id is not None and str(request.get("request_id")) != str(request_id):
                 continue
             if target_id is not None and str(request.get("target_id")) != str(target_id):
                 continue
@@ -2237,6 +2384,19 @@ class SupervisorAdaptiveAggregationStore:
                     authority_policy_fingerprint=str(authority_policy_fingerprint),
                 )
                 visible["context_status"] = context_error or "CURRENT"
+            if request.get("request_kind") == "ADAPTIVE_THRESHOLD_PROPOSAL":
+                try:
+                    review = self._load_proposal_review(str(request["request_id"]))
+                except Exception as exc:
+                    visible["review_status"] = "INVALID"
+                    visible["review_error"] = f"{type(exc).__name__}: {exc}"[:256]
+                else:
+                    visible["review"] = review
+                    visible["review_status"] = (
+                        str(review.get("review_status"))
+                        if review is not None
+                        else "UNREVIEWED"
+                    )
             result.append(visible)
         return tuple(result)
 
@@ -2385,6 +2545,9 @@ class SupervisorAdaptiveAggregationStore:
             ),
             "transition_acknowledgements": sum(
                 1 for _ in self.transition_acknowledgement_directory.glob("*.json")
+            ),
+            "proposal_reviews": sum(
+                1 for _ in self.proposal_review_directory.glob("*.json")
             ),
             "conflict_reports": sum(1 for _ in self.conflict_directory.glob("*.json")),
         }

@@ -116,14 +116,20 @@ bounded set of threshold fields. The proposal records the requested changes,
 requester, reason, effective time, expiry, and full context binding. It is
 listed as `PROPOSAL_ONLY` and becomes visibly stale when generation, policy, or
 authority context changes. Recording or displaying it never applies a policy
-change; an authorized policy workflow must perform any later update.
+change; an authorized policy workflow must perform any later update. An
+authenticated operator can record one context-checked `APPROVE` or `REJECT`
+review for the proposal. `APPROVE` means only that the proposal is eligible for
+later staged policy review; it does not apply thresholds, reload workers, grant
+authority, or replace the policy. Conflicting review reuse is rejected and a
+stale or expired proposal cannot be reviewed.
 
 The supervisor exposes `adaptive-aggregation-status`,
 `adaptive-aggregation-reconcile`, `adaptive-aggregation-ack`,
-`adaptive-transition-list`, `adaptive-transition-ack`, and
-`adaptive-threshold-proposal` through its control socket. The threshold proposal
-command derives the selected worker's live context and the caller's local UID;
-it cannot accept arbitrary context supplied by the caller. Its health cycle
+`adaptive-transition-list`, `adaptive-transition-ack`,
+`adaptive-threshold-proposal`, and `adaptive-threshold-review` through its
+control socket. Both threshold commands derive the live context and the
+caller's local UID; they cannot accept arbitrary context supplied by the
+caller. Its health cycle
 reconciles enabled worker contexts and evaluates
 thresholds automatically. The worker-side
 `apply_supervisor_transition()` method requires exact target, generation, code,

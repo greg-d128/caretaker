@@ -743,6 +743,53 @@ def main(argv: list[str] | None = None) -> int:
                     ),
                 ),
             }
+        if command == "adaptive-threshold-review":
+            request_id = str(request.get("request_id") or "").strip()
+            if not request_id:
+                raise ValueError("adaptive-threshold-review requires request_id")
+            adaptive_context = current_adaptive_context()
+            if adaptive_context is None:
+                raise PermissionError(
+                    "adaptive threshold review requires current worker context"
+                )
+            current_generations, policy_fingerprints, _ = adaptive_context
+            effective_authority = authority.effective
+            reviews = adaptive_aggregation_store.list_transition_requests(
+                request_id=request_id,
+                current_generations=current_generations,
+                policy_fingerprints=policy_fingerprints,
+                authority_policy_generation=str(effective_authority.generation),
+                authority_policy_fingerprint=effective_authority.fingerprint,
+            )
+            if len(reviews) != 1:
+                raise KeyError(f"No adaptive threshold proposal found for {request_id}")
+            proposal = reviews[0]
+            review = adaptive_aggregation_store.review_threshold_proposal(
+                request_id,
+                decision=str(request.get("decision") or ""),
+                reviewed_by=f"uid:{credentials[1]}",
+                reason=str(request.get("reason") or ""),
+                current_generations=current_generations,
+                policy_fingerprints=policy_fingerprints,
+                authority_policy_generation=str(effective_authority.generation),
+                authority_policy_fingerprint=effective_authority.fingerprint,
+            )
+            runtime.event(
+                logger_name="caretaker.adaptive",
+                severity=20,
+                channel=LogChannel.AUDIT,
+                message="Adaptive threshold proposal reviewed",
+                fields={
+                    "request_id": request_id,
+                    "target_id": proposal.get("target_id"),
+                    "review_decision": review.get("review_decision"),
+                    "review_status": review.get("review_status"),
+                    "policy_applied": False,
+                    "authority_granted": False,
+                },
+                origin="caretaker",
+            )
+            return {"ok": True, "review": review}
         if command == "adaptive-transition-ack":
             adaptive_context = current_adaptive_context()
             if adaptive_context is None:

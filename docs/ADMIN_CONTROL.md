@@ -86,6 +86,10 @@ not grant Repair or policy authority.
 `adaptive-threshold-proposal` records a delayed, context-bound threshold
 proposal from the caller's local UID. It derives the target's current context
 from the worker control socket and never applies the proposed policy change.
+`adaptive-threshold-review` records one context-checked operator approval or
+rejection for such a proposal. Approval only makes it eligible for a later
+staged policy workflow; it does not apply policy, reload workers, or grant
+authority.
 
 Replacement probation and acceptance counters are policy resolved. The default
 guideline is 1,000 successful executions for each stage with no permitted
