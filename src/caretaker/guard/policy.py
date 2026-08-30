@@ -82,6 +82,8 @@ class BehaviorSnapshotPolicy:
     collection_max_active: int = 1
     collection_max_pending: int = 256
     collection_max_calls: int = 1000
+    collection_auto_promote: bool = False
+    collection_auto_max_promoted: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,6 +252,10 @@ def validate_guard_policy(policy: GuardPolicy) -> None:
         errors.append("snapshots.collection_max_calls must be greater than zero")
     if snapshots.collection_max_calls > 1000:
         errors.append("snapshots.collection_max_calls must not exceed 1000")
+    if not isinstance(snapshots.collection_auto_promote, bool):
+        errors.append("snapshots.collection_auto_promote must be a boolean")
+    if snapshots.collection_auto_max_promoted <= 0:
+        errors.append("snapshots.collection_auto_max_promoted must be greater than zero")
     if policy.retention.raw_event_seconds is not None:
         errors.append("retention.raw_event_seconds is reserved; durable time-based raw-event pruning is not implemented")
     if policy.retention.aggregate_seconds is not None:

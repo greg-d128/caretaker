@@ -895,6 +895,7 @@ def main(argv: list[str] | None = None) -> int:
             "behavior-collection-status",
             "behavior-collection-cancel",
             "behavior-collection-promote",
+            "behavior-collection-auto-cycle",
         }:
             if not unix_socket_exists(runtime_control_socket):
                 return {
@@ -1427,6 +1428,14 @@ def main(argv: list[str] | None = None) -> int:
         while not health_stop.wait(1.0):
             effective_authority = authority.effective
             materialize_behavior_snapshots(maximum=100)
+            if unix_socket_exists(runtime_control_socket):
+                try:
+                    control_request(
+                        runtime_control_socket,
+                        {"command": "behavior-collection-auto-cycle"},
+                    )
+                except OSError:
+                    pass
             current_leases = {
                 str(lease.lease_id): lease for lease in effective_authority.runtime_leases
             }

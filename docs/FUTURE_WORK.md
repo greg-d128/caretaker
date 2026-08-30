@@ -2,7 +2,7 @@
 
 This document records intentionally incomplete, deferred, or proposed Caretaker capabilities. An item listed here is not an implicit security guarantee and must not be treated as implemented until it has code, policy semantics, tests, and documentation.
 
-Last reviewed: 2026-08-29
+Last reviewed: 2026-08-30
 
 ## Long-term roadmap and multi-scope research
 
@@ -578,9 +578,9 @@ behavior generation, policy, authority, baseline, or Repair state. The initial
 operator scheduler provides a durable bounded queue, active/pending limits,
 priority/deadline ordering, restart recovery, cancellation state, and explicit
 backpressure. Read-only generation-aware coverage-backlog discovery and console
-visibility are now implemented; automatic backlog promotion, application-wide
-measured overhead budgets, and fairness across hot and rare functions remain
-future work. The console and operator control plane can also promote one
+visibility are now implemented; opt-in bounded automatic backlog promotion is
+implemented, while application-wide measured overhead budgets and fairness
+across hot and rare functions remain future work. The console and operator control plane can also promote one
 registered adaptive lightweight target into pre-repair Behavior. This request
 is fixed to Behavior, records the operator reason and authority generation, and
 cannot authorize Repair or alter policy.
@@ -605,14 +605,13 @@ fairness, cancellation, and backpressure should be explicit and visible in the
 console.
 
 Every eligible function generation that has never produced a useful behavioral
-snapshot is now represented in a bounded, read-only coverage backlog. Caretaker
-should gradually work through this backlog instead of promoting all functions at
-startup. Automatic scheduling should favor missing, stale, suspicious,
-repair-relevant, or operator-requested coverage while respecting the collection
-budget. The console distinguishes queued, armed/waiting, actively collecting,
-sufficiently covered, deferred, and failed collection states and explains why a
-subject is in that state; automatic promotion and resource-aware fairness remain
-future work.
+snapshot is now represented in a bounded, read-only coverage backlog. When
+`collection_auto_promote` is enabled, the supervisor health cycle promotes a
+bounded number of adaptive `armed_waiting` targets rather than promoting all
+functions at startup. The console distinguishes queued, armed/waiting, actively
+collecting, sufficiently covered, deferred, and failed collection states and
+explains why a subject is in that state; stale/suspicious prioritization,
+measured resource budgets, and fairness remain future work.
 
 Sealed behavioral snapshots should inform later lightweight anomaly triggers.
 Candidate signals include expected duration ranges, failure/return categories,

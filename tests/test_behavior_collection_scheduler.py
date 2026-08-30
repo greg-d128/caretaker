@@ -283,6 +283,49 @@ def test_operator_promotion_rejects_non_adaptive_guard_target() -> None:
         )
 
 
+def test_automatic_collection_cycle_promotes_one_adaptive_backlog_target(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("CARETAKER_DATA_DIR", str(tmp_path))
+    guard = GuardEngine(
+        policy=GuardPolicy(
+            snapshots=BehaviorSnapshotPolicy(
+                collection_auto_promote=True,
+                collection_auto_max_promoted=1,
+            )
+        )
+    )
+
+    def sample(value: int) -> int:
+        return value
+
+    wrapped = lightweight(
+        policy=LightweightPolicy(),
+        engine=type("Engine", (), {"guard": guard})(),
+        behavior_binding=GuardBinding(enabled=True),
+        target_id="example.automatic-promotion",
+        state_directory=tmp_path / "adaptive",
+    )(sample)
+    wrapped.__caretaker_adaptive__.prepare_guard_registration()
+
+    registry = OperatorRuntimeRegistry()
+    registry.register_guard_engine(guard)
+    first = registry.handle_request(
+        {"command": "behavior-collection-auto-cycle"},
+        (1234, 1001, 1001),
+    )["cycles"][0]
+    assert first["enabled"] is True
+    assert [item["target_id"] for item in first["promoted"]] == [
+        "example.automatic-promotion"
+    ]
+    assert first["active_automatic"] == 1
+    assert first["promoted"][0]["state"]["level"] == "BEHAVIOR"
+
+    second = guard.automatic_behavior_collection_cycle()
+    assert second["promoted"] == []
+    assert second["active_automatic"] == 1
+
+
 def test_guard_backlog_reports_waiting_and_queued_current_generations(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -511,6 +511,10 @@ class OperatorRuntimeRegistry:
                 )
             return {"ok": True, "collections": collections}
 
+        if command == "behavior-collection-auto-cycle":
+            cycles = [guard.automatic_behavior_collection_cycle() for guard in self.guard_engines()]
+            return {"ok": True, "cycles": [_jsonable(item) for item in cycles]}
+
         if command == "behavior-collection-cancel":
             request_id = str(request.get("request_id") or "").strip()
             if not request_id:

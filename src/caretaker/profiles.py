@@ -155,8 +155,8 @@ POLICY_CAPABILITIES: tuple[PolicyCapability, ...] = (
         5,
         "0.6.1",
         "Policy-governed operator behavior collection scheduling",
-        "Controls bounded durable operator-directed behavior capture requests, including active and pending limits.",
-        "Review queue backpressure, priority/deadline handling, restart recovery, cancellation, and evidence-only provenance.",
+        "Controls bounded durable operator-directed behavior capture requests and opt-in automatic backlog promotion.",
+        "Review queue backpressure, priority/deadline handling, restart recovery, cancellation, automatic-promotion limits, and evidence-only provenance.",
         ("guard.snapshots.collection_",),
     ),
     PolicyCapability(

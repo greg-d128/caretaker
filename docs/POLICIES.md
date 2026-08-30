@@ -60,6 +60,12 @@ recorded, and the resulting request provenance is included in the signed behavio
 snapshot when a capture completes. Scheduling is evidence collection only: it
 cannot modify Guard policy, an accepted baseline, or Repair state.
 
+`BehaviorSnapshotPolicy.collection_auto_promote` is disabled by default. When
+enabled, the supervisor health cycle may promote only current-generation,
+adaptive `armed_waiting` targets into pre-repair Behavior. The
+`collection_auto_max_promoted` limit bounds concurrent automatic promotions;
+automatic promotion never requests Repair and does not accept a baseline.
+
 `RepairEvidencePolicy` gates `BEHAVIOR -> REPAIR`:
 
 - `enabled`;

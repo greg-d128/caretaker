@@ -914,7 +914,12 @@ class GuardEngine(GuardFacade):
                 "enabled": False,
                 "reason": "Guard behavior snapshots are disabled or have no data root",
             }
-        return {"enabled": True, **scheduler.status()}
+        return {
+            "enabled": True,
+            "automatic_promotion": self.policy.snapshots.collection_auto_promote,
+            "automatic_max_promoted": self.policy.snapshots.collection_auto_max_promoted,
+            **scheduler.status(),
+        }
 
     def behavior_collection_backlog(self, *, limit: int = 500) -> dict[str, Any]:
         """Describe current-generation behavior coverage without scheduling work."""
@@ -1011,6 +1016,78 @@ class GuardEngine(GuardFacade):
         if scheduler is None:
             return ()
         return scheduler.list_requests(limit=limit)
+
+    def automatic_behavior_collection_cycle(self) -> dict[str, Any]:
+        """Promote a bounded number of missing adaptive generations.
+
+        The cycle is intentionally separate from application calls and is
+        disabled by default. It only promotes current-generation targets that
+        the read-only backlog classifies as ``armed_waiting``; existing adaptive
+        policies continue to govern Behavior sampling and any later repair gate.
+        """
+        snapshots = self.policy.snapshots
+        if not snapshots.collection_auto_promote:
+            return {
+                "enabled": False,
+                "promoted": [],
+                "reason": "automatic behavior collection promotion is disabled by policy",
+            }
+        if self.behavior_collection_scheduler is None:
+            return {
+                "enabled": False,
+                "promoted": [],
+                "reason": "Guard behavior collection scheduling is unavailable",
+            }
+
+        from ..adaptive import get_adaptive_controller
+
+        backlog = self.behavior_collection_backlog(limit=500)
+        with self._lock:
+            controllers = {
+                target_id: get_adaptive_controller(target_id)
+                for target_id in self._targets
+            }
+        active_automatic = sum(
+            1
+            for controller in controllers.values()
+            if controller is not None
+            and str(controller.state.level.name) == "BEHAVIOR"
+            and str(controller.state.promotion_reason or "").startswith(
+                "automatic coverage backlog promotion"
+            )
+        )
+        available = max(0, snapshots.collection_auto_max_promoted - active_automatic)
+        promoted: list[dict[str, Any]] = []
+        if available:
+            for item in backlog.get("items", ()):
+                if available <= 0 or item.get("status") != "armed_waiting":
+                    continue
+                target_id = str(item.get("target_id") or "")
+                controller = controllers.get(target_id)
+                if controller is None:
+                    continue
+                reason = (
+                    "automatic coverage backlog promotion "
+                    f"for generation {item.get('generation_id') or 'unknown'}"
+                )
+                if not controller.request_behavior_promotion(reason):
+                    continue
+                promoted.append(
+                    {
+                        "target_id": target_id,
+                        "generation_id": item.get("generation_id"),
+                        "reason": reason,
+                        "state": controller.state.public_dict(),
+                    }
+                )
+                available -= 1
+        return {
+            "enabled": True,
+            "promoted": promoted,
+            "active_automatic": active_automatic + len(promoted),
+            "maximum_automatic": snapshots.collection_auto_max_promoted,
+            "backlog_counts": dict(backlog.get("counts") or {}),
+        }
 
     def cancel_behavior_collection(
         self,
