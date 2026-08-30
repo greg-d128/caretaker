@@ -142,13 +142,23 @@ bounded persisted timeline; direct offline mode analyzes capsule data without
 claiming that absent log records did not occur.
 
 The Incident Explorer can also request isolated replay of an incident-linked
-persistent regression fixture with `caretaker-capsule-replay`. The supervisor
-verifies the selected capsule revision and requires the fixture's recorded
-incident identity to match it before dispatch. Replay requires the regression
-and replay policy opt-ins, matching source identity by default, and a
-configured backend meeting the policy's minimum isolation. The result is
+persistent regression fixture with `caretaker-capsule-replay`. The default
+`--scope selected` mode verifies the selected capsule revision and requires the
+fixture's recorded incident identity to match it before dispatch. The
+non-interactive `--scope incident` and `--scope all` modes submit a bounded
+batch through the supervisor and return an independent result for every
+fixture. An invalid fixture, missing capsule, or failed replay is reported for
+that fixture without aborting the rest of the batch. Replay requires the
+regression and replay policy opt-ins, matching source identity by default, and
+a configured backend meeting the policy's minimum isolation. The result is
 returned as separate evidence and explicitly reports that the capsule was not
 modified; replay never creates a capsule revision or changes Repair state.
+
+Batch replay still requires the operator to provide the subject source and
+entrypoint. Historical fixtures whose recorded source hash does not match that
+source are rejected by the same policy check as selected replay; the batch
+reports that rejection per fixture rather than treating it as a successful
+historical comparison.
 
 ## Remaining work
 

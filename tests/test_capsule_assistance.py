@@ -93,3 +93,38 @@ def test_noninteractive_cli_submits_batch_query_to_control_plane(tmp_path: Path,
     assert captured["request"]["command"] == "incident-capsule-assist"
     assert captured["request"]["query"] == "Compare historical failure patterns"
     assert captured["timeout"] == 360.0
+
+
+def test_noninteractive_replay_cli_submits_historical_batch_to_control_plane(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    from caretaker import capsule_replay_cli
+
+    socket_path = tmp_path / "control.sock"
+    captured = {}
+    monkeypatch.setattr(capsule_replay_cli, "discover_control_socket", lambda directory: socket_path)
+
+    def fake_control_request(path, request, timeout):
+        captured.update({"path": path, "request": request, "timeout": timeout})
+        return {"ok": True, "scope": "all", "fixture_count": 0, "results": []}
+
+    monkeypatch.setattr(capsule_replay_cli, "control_request", fake_control_request)
+    assert capsule_replay_cli.main([
+        "--data-directory", str(tmp_path),
+        "--entrypoint", "charge",
+        "--source", "def charge(value):\n    return value + 1\n",
+        "--scope", "all",
+        "--target-id", "app:charge",
+        "--limit", "10",
+    ]) == 0
+
+    output = capsys.readouterr().out
+    assert '"fixture_count": 0' in output
+    assert captured["path"] == socket_path
+    assert captured["request"]["command"] == "incident-capsule-replay-batch"
+    assert captured["request"]["scope"] == "all"
+    assert captured["request"]["target_id"] == "app:charge"
+    assert captured["request"]["limit"] == 10
+    assert captured["timeout"] == 360.0

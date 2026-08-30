@@ -55,6 +55,7 @@ from .replay import (
     IsolatedReplayCoordinator,
     RootlessPodmanReplayBackend,
     execute_capsule_replay,
+    execute_historical_capsule_replays,
 )
 from .integrity import SignatureVerificationMode, verify_release_publication
 from .builtin_profiles import builtin_profile_names, load_builtin_profile_supervisor
@@ -606,6 +607,62 @@ def main(argv: list[str] | None = None) -> int:
                 origin="caretaker",
             )
             return {"ok": True, **result}
+        if command == "incident-capsule-replay-batch":
+            if replay_coordinator is None or regression_fixture_store is None:
+                raise PermissionError(
+                    "persistent regression fixtures are disabled; capsule replay is unavailable"
+                )
+            scope = str(request.get("scope") or "all").strip().lower()
+            if scope not in {"incident", "all"}:
+                raise ValueError(
+                    "incident-capsule-replay-batch scope must be incident or all"
+                )
+            entrypoint = str(request.get("entrypoint") or "").strip()
+            source = request.get("source")
+            if not entrypoint:
+                raise ValueError("incident-capsule-replay-batch requires entrypoint")
+            if not isinstance(source, str) or not source:
+                raise ValueError("incident-capsule-replay-batch requires source text")
+            raw_incident_id = str(request.get("incident_id") or "").strip()
+            if scope == "incident" and not raw_incident_id:
+                raise ValueError(
+                    "incident-capsule-replay-batch incident scope requires incident_id"
+                )
+            incident_id = UUID(raw_incident_id) if raw_incident_id else None
+            target_id = str(request.get("target_id") or "").strip() or None
+            limit = max(1, min(int(request.get("limit", 50)), 200))
+            summaries = regression_fixture_store.list_summaries(
+                target_id=target_id,
+                limit=500,
+            )
+            if incident_id is not None:
+                summaries = tuple(
+                    summary for summary in summaries
+                    if str(summary.get("source_incident_id") or "") == str(incident_id)
+                )
+            result = execute_historical_capsule_replays(
+                replay_coordinator,
+                capsule_store,
+                summaries,
+                entrypoint=entrypoint,
+                source=source,
+                limit=limit,
+            )
+            runtime.event(
+                logger_name="caretaker.capsule",
+                severity=20,
+                channel=LogChannel.AUDIT,
+                message="Historical Incident Capsule fixture replay batch completed",
+                fields={
+                    "scope": scope,
+                    "fixture_count": result["fixture_count"],
+                    "completed_count": result["completed_count"],
+                    "dispatched_count": result["dispatched_count"],
+                    "capsule_modified": False,
+                },
+                origin="caretaker",
+            )
+            return {"ok": True, "scope": scope, "non_interactive": True, **result}
         if command == "incident-capsule-artifact":
             raw_artifact_id = str(request.get("artifact_id") or "").strip()
             if not raw_artifact_id:

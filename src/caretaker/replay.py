@@ -14,7 +14,8 @@ import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Protocol
+from typing import Any, Iterable, Mapping, Protocol
+from uuid import UUID
 
 from .domain import ValidationIsolationLevel
 from .regression import (
@@ -115,6 +116,94 @@ def execute_capsule_replay(
         "capsule_modified": False,
         "integrity_verified": True,
         "replay_status": "ISOLATED_RESULT_NOT_CAPSULE_DATA",
+    }
+
+
+def execute_historical_capsule_replays(
+    coordinator: "IsolatedReplayCoordinator",
+    capsule_store: Any,
+    fixture_summaries: Iterable[Mapping[str, Any]],
+    *,
+    entrypoint: str,
+    source: str,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Replay bounded incident-linked fixtures independently.
+
+    This is the non-interactive Explorer path. Each fixture gets its own
+    capsule binding and isolated backend invocation. Invalid, missing, or
+    failed entries are returned as per-fixture evidence instead of preventing
+    other historical incidents from being examined.
+    """
+    bounded_limit = max(1, min(int(limit), 200))
+    results: list[dict[str, Any]] = []
+    for summary in list(fixture_summaries)[:bounded_limit]:
+        fixture_id = str(summary.get("fixture_id") or "")
+        base: dict[str, Any] = {
+            "fixture_id": fixture_id,
+            "target_id": summary.get("target_id"),
+            "source_incident_id": summary.get("source_incident_id"),
+            "capsule_modified": False,
+        }
+        if not bool(summary.get("integrity_verified")):
+            results.append({
+                **base,
+                "status": "SKIPPED_INVALID_FIXTURE",
+                "error": summary.get("error") or "fixture integrity is not verified",
+                "replay_status": "NOT_DISPATCHED",
+            })
+            continue
+        incident_id = str(summary.get("source_incident_id") or "").strip()
+        if not incident_id:
+            results.append({
+                **base,
+                "status": "SKIPPED_UNLINKED_FIXTURE",
+                "error": "historical fixture has no source incident",
+                "replay_status": "NOT_DISPATCHED",
+            })
+            continue
+        try:
+            capsule = capsule_store.latest_for_incident(UUID(incident_id))
+            if capsule is None:
+                results.append({
+                    **base,
+                    "status": "SKIPPED_NO_CAPSULE",
+                    "error": "no verified Incident Capsule was found for the fixture incident",
+                    "replay_status": "NOT_DISPATCHED",
+                })
+                continue
+            capsule_payload = capsule.get("capsule") if isinstance(capsule, Mapping) else None
+            capsule_id = str(capsule_payload.get("capsule_id") or "") if isinstance(capsule_payload, Mapping) else ""
+            if not capsule_id:
+                raise ReplayExecutionError("incident capsule has no capsule identity")
+            replay = execute_capsule_replay(
+                coordinator,
+                capsule_store,
+                capsule_id=capsule_id,
+                fixture_id=fixture_id,
+                entrypoint=entrypoint,
+                source=source,
+            )
+            results.append({**base, **replay, "status": "COMPLETED"})
+        except Exception as exc:
+            results.append({
+                **base,
+                "status": "FAILED",
+                "error": f"{type(exc).__name__}: {exc}",
+                "advisory_only": True,
+                "replay_status": "NOT_DISPATCHED_OR_FAILED",
+            })
+    return {
+        "entrypoint": entrypoint,
+        "fixture_count": len(results),
+        "completed_count": sum(item.get("status") == "COMPLETED" for item in results),
+        "dispatched_count": sum(
+            item.get("status") == "COMPLETED" and item.get("replay_status") == "ISOLATED_RESULT_NOT_CAPSULE_DATA"
+            for item in results
+        ),
+        "results": results,
+        "capsule_modified": False,
+        "replay_scope": "historical-incident-linked",
     }
 
 

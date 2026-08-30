@@ -15,8 +15,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="caretaker-capsule-replay",
         description=(
-            "Replay one incident-linked historical fixture through the supervisor's "
-            "configured isolated backend."
+            "Replay one or a bounded set of incident-linked historical fixtures "
+            "through the supervisor's configured isolated backend."
         ),
     )
     parser.add_argument("--socket", type=Path, help="explicit caretaker-run control socket")
@@ -26,13 +26,32 @@ def main(argv: list[str] | None = None) -> int:
         default=Path("./caretaker-data"),
         help="Caretaker data directory or parent containing one active run",
     )
-    parser.add_argument("--capsule-id", required=True, help="selected Incident Capsule UUID")
-    parser.add_argument("--fixture-id", required=True, help="persistent regression fixture UUID")
+    parser.add_argument(
+        "--scope",
+        choices=("selected", "incident", "all"),
+        default="selected",
+        help="selected fixture, fixtures from one incident, or all historical fixtures",
+    )
+    parser.add_argument("--capsule-id", help="selected Incident Capsule UUID")
+    parser.add_argument("--fixture-id", help="persistent regression fixture UUID")
+    parser.add_argument("--incident-id", help="incident UUID for --scope incident")
+    parser.add_argument("--target-id", help="limit --scope all to one target")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="maximum fixtures for incident/all scope (bounded by the supervisor)",
+    )
     parser.add_argument("--entrypoint", required=True, help="fixture function entrypoint")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--source", help="subject function source text")
     source.add_argument("--source-file", type=Path, help="file containing subject function source")
     args = parser.parse_args(argv)
+
+    if args.scope == "selected" and (not args.capsule_id or not args.fixture_id):
+        parser.error("--scope selected requires --capsule-id and --fixture-id")
+    if args.scope == "incident" and not args.incident_id:
+        parser.error("--scope incident requires --incident-id")
 
     if args.source is not None:
         source_text = args.source
@@ -53,17 +72,27 @@ def main(argv: list[str] | None = None) -> int:
             "Incident Capsule replay requires an active caretaker-run supervisor "
             "with an explicitly configured isolated backend"
         )
-    result = control_request(
-        socket_path,
-        {
+    if args.scope == "selected":
+        request = {
             "command": "incident-capsule-replay",
             "capsule_id": args.capsule_id,
             "fixture_id": args.fixture_id,
             "entrypoint": args.entrypoint,
             "source": source_text,
-        },
-        timeout=360.0,
-    )
+        }
+    else:
+        request = {
+            "command": "incident-capsule-replay-batch",
+            "scope": args.scope,
+            "entrypoint": args.entrypoint,
+            "source": source_text,
+            "limit": args.limit,
+        }
+        if args.incident_id:
+            request["incident_id"] = args.incident_id
+        if args.target_id:
+            request["target_id"] = args.target_id
+    result = control_request(socket_path, request, timeout=360.0)
     json.dump(result, sys.stdout, indent=2, sort_keys=True, default=str)
     sys.stdout.write("\n")
     return 0

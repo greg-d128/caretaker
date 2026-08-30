@@ -57,7 +57,12 @@ supervisor control commands `regression-fixture-list` and
 `regression-fixture-get`. Incident-linked fixtures can be replayed through the
 supervisor's `incident-capsule-replay` command or the
 `caretaker-capsule-replay` CLI. The selected capsule and fixture must belong to
-the same incident, and the result is separate from the immutable capsule.
+the same incident, and the result is separate from the immutable capsule. The
+CLI also supports bounded, non-interactive `--scope incident` and `--scope all`
+replay. The supervisor evaluates each fixture independently and returns
+per-fixture outcomes, so missing capsules and failed policy or backend checks
+do not discard other historical results. Batch replay remains subject to the
+same source-hash, replay-safety, and isolation policy as selected replay.
 
 The first replay contract is now explicit in the API. `IsolatedReplayCoordinator`
 requires policy opt-in, a PURE or IDEMPOTENT fixture, a verified subject source,

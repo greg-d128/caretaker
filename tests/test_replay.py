@@ -15,6 +15,7 @@ from caretaker import (
     RootlessPodmanReplayBackend,
     ValidationIsolationLevel,
     execute_capsule_replay,
+    execute_historical_capsule_replays,
 )
 from caretaker.validation import ValidationBackendCapabilities
 from caretaker.replay_worker import run_payload
@@ -257,6 +258,54 @@ def test_capsule_replay_rejects_fixture_from_another_incident(tmp_path: Path) ->
             entrypoint="charge",
             source=SOURCE,
         )
+
+
+def test_historical_capsule_replay_isolates_each_fixture_and_skips_missing_capsules(
+    tmp_path: Path,
+) -> None:
+    regression_policy = RegressionFixturePolicy(enabled=True, replay_enabled=True)
+    store = RegressionFixtureStore(tmp_path, policy=regression_policy)
+    capsule_store = IncidentCapsuleStore(tmp_path)
+    first_incident = "00000000-0000-0000-0000-000000000001"
+    second_incident = "00000000-0000-0000-0000-000000000002"
+    capsule_store.create_placeholder(first_incident)
+    for incident_id in (first_incident, second_incident):
+        fixture = store.record(
+            target_id="app:charge",
+            name=f"incident-{incident_id[-1]}",
+            args=(1,),
+            kwargs={},
+            expected=2,
+            incident_id=incident_id,
+            candidate_id=None,
+            source_function_version=2,
+            source_function_hash=hashlib.sha256(SOURCE.encode()).hexdigest(),
+            replay_safety="PURE",
+        )
+        assert fixture is not None
+    backend = FakeVMReplayBackend()
+    coordinator = IsolatedReplayCoordinator(
+        store,
+        policy=regression_policy,
+        backend=backend,
+    )
+
+    result = execute_historical_capsule_replays(
+        coordinator,
+        capsule_store,
+        store.list_summaries(limit=10),
+        entrypoint="charge",
+        source=SOURCE,
+    )
+
+    statuses = {item["source_incident_id"]: item["status"] for item in result["results"]}
+    assert statuses[first_incident] == "COMPLETED"
+    assert statuses[second_incident] == "SKIPPED_NO_CAPSULE"
+    assert result["fixture_count"] == 2
+    assert result["completed_count"] == 1
+    assert result["dispatched_count"] == 1
+    assert result["capsule_modified"] is False
+    assert len(backend.requests) == 1
 
 
 def test_replay_backend_registry_rejects_conflicting_configuration(tmp_path: Path) -> None:

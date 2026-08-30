@@ -29,11 +29,16 @@ modify a capsule or authorize any Caretaker action. The
 interactive console and can submit a query independently to all historical
 capsules.
 
-`caretaker-capsule-replay` requests one incident-linked historical fixture
-through the same authenticated supervisor socket. It requires an active
-`caretaker-run`; the supervisor enforces the effective regression policy,
-source-hash check, capsule/fixture incident binding, and configured isolated
-backend. It does not modify the selected capsule.
+`caretaker-capsule-replay` requests an incident-linked historical fixture
+through the same authenticated supervisor socket. Its default `selected`
+scope requires a capsule and fixture ID. The `incident` scope replays fixtures
+linked to one incident, while `all` replays a bounded set of historical
+fixtures, optionally filtered by target. Batch results are independent, so an
+invalid fixture, missing capsule, or failed isolated execution does not prevent
+other fixtures from being examined. It requires an active `caretaker-run`; the
+supervisor enforces the effective regression policy, source-hash check,
+capsule/fixture incident binding, and configured isolated backend. Replay is
+read-only with respect to capsules and Repair state.
 
 The `incident-communication-draft` command creates a bounded, policy-governed
 draft for one verified capsule. The console exposes the same operation as
