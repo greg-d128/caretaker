@@ -1158,11 +1158,13 @@ A first recovery inspection slice now exists as `RepairEngine.recovery_plan()`
 and the runtime command `runtime-repair-recovery-plan`. It inventories durably
 persisted incomplete attempts, reports their last milestone, and projects the
 linked incident, episode, candidate generation, and validation states that must
-be treated as incomplete or not started. An explicit `apply_recovery_plan()`
-operation can idempotently record that rollback decision and those lifecycle
-states without rewriting the interrupted attempt or its partial evidence. The
-projection is deliberately not a mutation of the source records, and it does
-not yet perform policy-selected replacement or shutdown actions.
+be treated as incomplete or not started. The console's Recovery tab can now
+load this projection explicitly as bounded, read-only plan rows alongside
+worker-failure evidence. An explicit `apply_recovery_plan()` operation can
+idempotently record that rollback decision and those lifecycle states without
+rewriting the interrupted attempt or its partial evidence. The projection is
+deliberately not a mutation of the source records, and it does not yet perform
+policy-selected replacement or shutdown actions.
 
 For a target-scoped `RepairEngine.recovery_plan(target_id=...)`, the engine now
 adds the currently registered source hash and supervisor authority generation

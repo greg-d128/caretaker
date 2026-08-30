@@ -44,7 +44,10 @@ The runtime command `runtime-repair-recovery-plan` exposes a read-only plan for
 persisted Repair attempts that did not durably complete before process loss.
 The plan reports the last milestone and recommends rollback to deployed code;
 it requires authority revalidation and never reactivates a candidate or treats
-an approval as surviving restart.
+an approval as surviving restart. The console's **Recovery** tab can load this
+plan explicitly alongside worker-failure evidence. Plan rows are inspection
+evidence only: the console does not acknowledge the plan, reactivate a
+candidate, retry work, or dispatch a recovery action.
 
 The application supervisor's worker-failure boundary emits a bounded failure
 envelope immediately, including in-flight work and queue context. It can record

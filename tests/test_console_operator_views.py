@@ -1093,6 +1093,65 @@ def test_console_displays_read_only_worker_failure_recovery_status(tmp_path):
     asyncio.run(exercise())
 
 
+def test_console_displays_read_only_repair_recovery_plan(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(160, 55)):
+            requests = []
+
+            async def request(command: str, **payload):
+                requests.append((command, payload))
+                assert command == "runtime-repair-recovery-plan"
+                return {
+                    "ok": True,
+                    "plans": [{
+                        "target_id": None,
+                        "observed_at": "2026-08-30T12:00:00+00:00",
+                        "restart_policy": "DEPLOYED_CODE_ONLY",
+                        "read_only": True,
+                        "automatic_reactivation": False,
+                        "incomplete_attempt_count": 1,
+                        "decisions": [{
+                            "attempt_id": "attempt-1",
+                            "incident_id": "incident-1",
+                            "target_id": "app:charge",
+                            "last_milestone": "VALIDATING",
+                            "transaction_state": "INTERRUPTED",
+                            "recovery_action": "ROLLBACK_TO_DEPLOYED_CODE",
+                            "candidate_reactivation_allowed": False,
+                            "approval_survives_restart": False,
+                        }],
+                    }, {
+                        "target_id": "app:healthy",
+                        "observed_at": "2026-08-30T12:00:01+00:00",
+                        "restart_policy": "DEPLOYED_CODE_ONLY",
+                        "read_only": True,
+                        "automatic_reactivation": False,
+                        "incomplete_attempt_count": 0,
+                        "decisions": [],
+                    }],
+                }
+
+            app._request = request  # type: ignore[method-assign]
+            await app.refresh_repair_recovery_plan()
+
+            assert requests == [("runtime-repair-recovery-plan", {})]
+            assert app.query_one("#worker-failure-recovery-table", DataTable).row_count == 2
+            assert [
+                item["worker_or_action"]
+                for item in app._worker_failure_recovery_plan_records
+            ] == ["ROLLBACK_TO_DEPLOYED_CODE", "NO INCOMPLETE ATTEMPTS"]
+            status = str(
+                app.query_one("#worker-failure-recovery-plan-status", Static).render()
+            )
+            assert "Restart plans 2" in status
+            assert "Incomplete attempts 1" in status
+            assert "read-only" in status
+
+    asyncio.run(exercise())
+
+
 def test_console_displays_read_only_adaptive_transition_deadlines(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 

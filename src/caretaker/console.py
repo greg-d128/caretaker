@@ -196,6 +196,12 @@ class CaretakerConsoleApp(App):
         align-vertical: middle;
     }
     #worker-failure-recovery-toolbar Button { width: auto; min-width: 12; }
+    #worker-failure-recovery-plan { margin-left: 1; }
+    #worker-failure-recovery-plan-status {
+        height: auto;
+        padding: 0 2;
+        color: $text-muted;
+    }
     #worker-failure-recovery-table { height: 1fr; }
     #worker-failure-recovery-output {
         height: 12;
@@ -557,6 +563,7 @@ class CaretakerConsoleApp(App):
         self._incident_timeline_records: list[dict[str, Any]] = []
         self._worker_failure_recovery_status: dict[str, Any] = {}
         self._worker_failure_recovery_records: list[dict[str, Any]] = []
+        self._worker_failure_recovery_plan_records: list[dict[str, Any]] = []
         self._adaptive_aggregation_status: dict[str, Any] = {}
         self._adaptive_aggregation_records: list[dict[str, Any]] = []
         self._selected_target: str | None = None
@@ -682,9 +689,14 @@ class CaretakerConsoleApp(App):
                 )
                 with Horizontal(id="worker-failure-recovery-toolbar"):
                     yield Button("Refresh", id="worker-failure-recovery-refresh", variant="primary")
+                    yield Button("Inspect restart plan", id="worker-failure-recovery-plan")
                 yield Static(
                     "Worker recovery status not loaded",
                     id="worker-failure-recovery-status",
+                )
+                yield Static(
+                    "Restart recovery plan not loaded",
+                    id="worker-failure-recovery-plan-status",
                 )
                 table = DataTable(id="worker-failure-recovery-table")
                 table.cursor_type = "row"
@@ -1806,7 +1818,10 @@ class CaretakerConsoleApp(App):
             if not row:
                 return
             try:
-                record = self._worker_failure_recovery_records[int(row[0]) - 1]
+                record = [
+                    *self._worker_failure_recovery_records,
+                    *self._worker_failure_recovery_plan_records,
+                ][int(row[0]) - 1]
             except (TypeError, ValueError, IndexError):
                 return
             self._write_json(
@@ -3316,8 +3331,13 @@ class CaretakerConsoleApp(App):
         except Exception as exc:
             self._worker_failure_recovery_status = {}
             self._worker_failure_recovery_records = []
+            self._worker_failure_recovery_plan_records = []
+            self._render_worker_failure_recovery_records()
             self.query_one("#worker-failure-recovery-status", Static).update(
                 f"Worker recovery status unavailable: {type(exc).__name__}: {exc}"
+            )
+            self.query_one("#worker-failure-recovery-plan-status", Static).update(
+                "Restart recovery plan not loaded"
             )
             output.write(str(exc))
             return
@@ -3325,6 +3345,8 @@ class CaretakerConsoleApp(App):
         self._worker_failure_recovery_status = dict(response)
         if not response.get("available", True):
             self._worker_failure_recovery_records = []
+            self._worker_failure_recovery_plan_records = []
+            self._render_worker_failure_recovery_records()
             self.query_one("#worker-failure-recovery-status", Static).update(
                 f"Worker recovery status unavailable: {response.get('reason', 'unknown reason')}"
             )
@@ -3373,6 +3395,28 @@ class CaretakerConsoleApp(App):
                 "payload": dict(item),
             })
         self._worker_failure_recovery_records = rows
+        self._render_worker_failure_recovery_records()
+        self.query_one("#worker-failure-recovery-status", Static).update(
+            f"Failures {response.get('failure_count', 0)} | "
+            f"Checkpoints {response.get('recovery_count', 0)} | "
+            f"Conflicts {response.get('conflict_count', 0)} | "
+            "Read-only; no actions dispatched"
+        )
+        self.query_one("#worker-failure-recovery-plan-status", Static).update(
+            "Restart recovery plan not loaded; inspect it explicitly to revalidate persisted Repair state"
+        )
+        output.write(
+            "Select a row for bounded details. Raw failure envelopes, post-mortem packets, "
+            "and handler results are intentionally omitted."
+        )
+
+    def _render_worker_failure_recovery_records(self) -> None:
+        table = self.query_one("#worker-failure-recovery-table", DataTable)
+        table.clear()
+        rows = [
+            *self._worker_failure_recovery_records,
+            *self._worker_failure_recovery_plan_records,
+        ]
         for index, item in enumerate(rows, start=1):
             table.add_row(
                 index,
@@ -3384,15 +3428,66 @@ class CaretakerConsoleApp(App):
                 item["critical"],
                 self._compact_log_text(item["observed_at"], limit=19) or "-",
             )
-        self.query_one("#worker-failure-recovery-status", Static).update(
-            f"Failures {response.get('failure_count', 0)} | "
-            f"Checkpoints {response.get('recovery_count', 0)} | "
-            f"Conflicts {response.get('conflict_count', 0)} | "
-            "Read-only; no actions dispatched"
+
+    async def refresh_repair_recovery_plan(self) -> None:
+        """Load the read-only restart plan exposed by the live runtime."""
+        output = self.query_one("#worker-failure-recovery-output", RichLog)
+        try:
+            response = await self._request("runtime-repair-recovery-plan")
+        except Exception as exc:
+            self._worker_failure_recovery_plan_records = []
+            self._render_worker_failure_recovery_records()
+            self.query_one("#worker-failure-recovery-plan-status", Static).update(
+                f"Restart recovery plan unavailable: {type(exc).__name__}: {exc}"
+            )
+            output.write(str(exc))
+            return
+
+        plans = response.get("plans")
+        plans = plans if isinstance(plans, (list, tuple)) else ()
+        rows: list[dict[str, Any]] = []
+        total_attempts = 0
+        for plan in plans:
+            if not isinstance(plan, Mapping):
+                continue
+            observed_at = plan.get("observed_at") or "-"
+            decisions = plan.get("decisions")
+            decisions = decisions if isinstance(decisions, (list, tuple)) else ()
+            total_attempts += int(plan.get("incomplete_attempt_count") or 0)
+            if not decisions:
+                rows.append({
+                    "kind": "PLAN",
+                    "scope": plan.get("target_id") or "all targets",
+                    "target_id": plan.get("target_id") or "-",
+                    "worker_or_action": "NO INCOMPLETE ATTEMPTS",
+                    "status": "CLEAR",
+                    "critical": "-",
+                    "observed_at": observed_at,
+                    "payload": dict(plan),
+                })
+                continue
+            for decision in decisions:
+                if not isinstance(decision, Mapping):
+                    continue
+                rows.append({
+                    "kind": "PLAN",
+                    "scope": decision.get("incident_id") or decision.get("episode_id") or "-",
+                    "target_id": decision.get("target_id") or plan.get("target_id") or "-",
+                    "worker_or_action": decision.get("recovery_action") or "-",
+                    "status": decision.get("transaction_state") or "INTERRUPTED",
+                    "critical": "-",
+                    "observed_at": observed_at,
+                    "payload": dict(decision),
+                })
+        self._worker_failure_recovery_plan_records = rows
+        self._render_worker_failure_recovery_records()
+        self.query_one("#worker-failure-recovery-plan-status", Static).update(
+            f"Restart plans {len(plans)} | Incomplete attempts {total_attempts} | "
+            "Rollback is projected to deployed code; read-only, no candidates reactivated"
         )
         output.write(
-            "Select a row for bounded details. Raw failure envelopes, post-mortem packets, "
-            "and handler results are intentionally omitted."
+            "Restart plans are inspection evidence only. They revalidate persisted state "
+            "and never reactivate candidates or dispatch recovery actions."
         )
 
     async def refresh_adaptive_aggregation(self) -> None:
@@ -4151,6 +4246,9 @@ class CaretakerConsoleApp(App):
                 return
             if button == "worker-failure-recovery-refresh":
                 await self.refresh_worker_failure_recovery()
+                return
+            if button == "worker-failure-recovery-plan":
+                await self.refresh_repair_recovery_plan()
                 return
             if button == "adaptive-aggregation-refresh":
                 await self.refresh_adaptive_aggregation()
