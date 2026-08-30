@@ -143,6 +143,13 @@ RepairEngine and GuardEngine instances register themselves with a process-local
 operator registry. The supervisor proxies declarative `runtime-*` requests to
 that child socket.
 
+The runtime `repair-recovery-apply` command requires an explicit
+`confirm=true` request and records freshly revalidated, interrupted Repair
+decisions in the recovery ledger. It does not rewrite source evidence,
+reactivate candidates, dispatch callbacks, replace workers, or shut down the
+application; deployment-specific recovery orchestration remains outside this
+command.
+
 This makes the operator interface able to inspect live application state rather
 than only supervisor/logging state. Exposed information includes:
 

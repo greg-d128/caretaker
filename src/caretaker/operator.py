@@ -655,6 +655,34 @@ class OperatorRuntimeRegistry:
                 ],
             }
 
+        if command == "repair-recovery-apply":
+            if request.get("confirm") is not True:
+                raise ValueError(
+                    "repair-recovery-apply requires confirm=true; it records rollback decisions only"
+                )
+            engines = (
+                (self._repair_engine_for_target(target_id),)
+                if target_id
+                else self.repair_engines()
+            )
+            results = []
+            for engine in engines:
+                plan = engine.recovery_plan(target_id=target_id)
+                result = engine.apply_recovery_plan(plan)
+                results.append({
+                    "target": target_id,
+                    "plan": plan,
+                    "result": result,
+                })
+            return {
+                "ok": True,
+                "target": target_id,
+                "plans": results,
+                "actions_dispatched": False,
+                "automatic_reactivation": False,
+                "source_evidence_modified": False,
+            }
+
         if command in {"repair-approve", "repair-reject"}:
             episode_id = UUID(str(request["episode_id"]))
             engine = next(

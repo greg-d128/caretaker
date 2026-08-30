@@ -1188,6 +1188,13 @@ rewriting the interrupted attempt or its partial evidence. The projection is
 deliberately not a mutation of the source records, and it does not yet perform
 policy-selected replacement or shutdown actions.
 
+The runtime command `runtime-repair-recovery-apply` now exposes that
+acknowledgement operation with an explicit confirmation gate. It builds a fresh
+target-scoped plan and records the result with no application-owned handlers,
+so the command cannot reactivate candidates or dispatch replacement, incident,
+or shutdown actions. The Recovery console remains read-only; operators must
+use the authenticated control plane for this deliberate ledger mutation.
+
 For a target-scoped `RepairEngine.recovery_plan(target_id=...)`, the engine now
 adds the currently registered source hash and supervisor authority generation
 and fingerprint to the projection. A missing or changed policy snapshot still

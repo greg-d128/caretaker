@@ -63,6 +63,41 @@ def test_operator_runtime_exposes_fail_safe_repair_recovery_plan():
     assert response["plans"][0]["automatic_reactivation"] is False
 
 
+def test_operator_runtime_requires_confirmation_to_record_recovery_plan(monkeypatch):
+    import pytest
+
+    registry = OperatorRuntimeRegistry()
+    engine = RepairEngine()
+    registry.register_repair_engine(engine)
+    plan = {
+        "schema_version": 1,
+        "read_only": True,
+        "decisions": [],
+    }
+    applied = []
+    monkeypatch.setattr(engine, "recovery_plan", lambda *, target_id=None: plan)
+    monkeypatch.setattr(
+        engine,
+        "apply_recovery_plan",
+        lambda value: applied.append(value) or {"applied_count": 0},
+    )
+
+    with pytest.raises(ValueError, match="confirm=true"):
+        registry.handle_request(
+            {"command": "repair-recovery-apply"},
+            (123, 1000, 1000),
+        )
+
+    response = registry.handle_request(
+        {"command": "repair-recovery-apply", "confirm": True},
+        (123, 1000, 1000),
+    )
+    assert response["ok"] is True
+    assert response["actions_dispatched"] is False
+    assert response["automatic_reactivation"] is False
+    assert applied == [plan]
+
+
 def test_recovery_plan_supplies_registered_target_context_for_revalidation(monkeypatch):
     engine = RepairEngine()
 
