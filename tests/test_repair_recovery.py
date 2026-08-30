@@ -298,7 +298,9 @@ def test_recovery_action_selection_is_explicit_and_disabled_policy_fails_safe() 
 def test_recovery_action_dispatch_requires_application_callback_acknowledgement() -> None:
     decision = {
         "policy_action": {
+            "requested_action": "GENERATE_INCIDENT",
             "selected_action": "GENERATE_INCIDENT",
+            "policy_enabled": True,
         },
     }
     missing = dispatch_recovery_action(decision)
@@ -324,6 +326,36 @@ def test_recovery_action_dispatch_requires_application_callback_acknowledgement(
     assert executed["status"] == "EXECUTED"
     assert executed["authority_granted"] is False
     assert received == [decision]
+
+
+def test_apply_recovery_plan_persists_callback_execution_result() -> None:
+    store = InMemoryRepairStore()
+    interrupted = _attempt(
+        target_id="app:charge",
+        completed=False,
+        outcome=RepairAttemptOutcome.PENDING,
+    )
+    store.record_attempt(interrupted)
+    plan = build_repair_recovery_plan(
+        store,
+        policy=RepairRecoveryPolicy(
+            interrupted_transaction_action=RecoveryAction.GENERATE_INCIDENT,
+        ),
+    )
+    seen = []
+
+    applied = apply_repair_recovery_plan(
+        store,
+        plan,
+        handlers={
+            "GENERATE_INCIDENT": lambda decision: seen.append(decision["attempt_id"])
+            or {"accepted": True, "incident_recorded": True},
+        },
+    )
+
+    assert applied["action_results"][0]["status"] == "EXECUTED"
+    assert seen == [str(interrupted.attempt_id)]
+    assert store.all_recoveries()[0].action_execution["status"] == "EXECUTED"
 
 
 def test_worker_acceptance_uses_defaults_and_target_override_without_granting_authority() -> None:

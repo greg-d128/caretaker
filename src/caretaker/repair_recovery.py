@@ -508,6 +508,23 @@ def dispatch_recovery_action(
             "authority_granted": False,
         }
     selected = str(selected)
+    requested = str(policy_action.get("requested_action") or "")
+    try:
+        selected_action = RecoveryAction[selected]
+    except KeyError:
+        return {
+            "status": "INVALID_PLAN",
+            "action": selected,
+            "authority_granted": False,
+            "reason": "recovery decision names an unsupported action",
+        }
+    if requested != selected_action.name or not bool(policy_action.get("policy_enabled")):
+        return {
+            "status": "INVALID_PLAN",
+            "action": selected_action.name,
+            "authority_granted": False,
+            "reason": "recovery action is inconsistent with its policy decision",
+        }
     if selected in {
         RecoveryAction.ROLLBACK_TO_DEPLOYED_CODE.name,
         RecoveryAction.CONTINUE_DEGRADED.name,
