@@ -1026,7 +1026,13 @@ only counts a worker as restarted after a callback-owned replacement reports
 success. Restart exhaustion selects the existing degraded, disable, or stop
 action vocabulary. Process spawning, cross-process replacement packet
 distribution, and policy-specific incident/shutdown orchestration remain future
-work.
+work. Workers may now provide bounded diagnostic context with heartbeat or
+failure state. Standard failure envelopes omit that supplemental context;
+`CARETAKER_DIAGNOSTIC_DEBUG=1` includes it as diagnostic evidence for controlled
+diagnosis, including the last milestone, partial queue, and policy-state
+snapshot when supplied. This does not persist a complete post-mortem packet or
+authorize recovery, and the critical-evidence and durable recovery workflows
+remain future work.
 
 ### Recovery decisions recorded for the next implementation slice
 
@@ -1080,7 +1086,7 @@ yet perform policy-selected replacement or shutdown actions.
 - reconstruct or deliberately stale pending approvals;
 - verify candidate source and policy/authority bindings again after restart;
 - recover probation and long-term observation state without double counting;
-- persist milestone and failed-worker envelopes with policy-controlled detail;
+- persist complete milestone and failed-worker envelopes with policy-controlled detail;
 - reconcile duplicate evidence and emit conflict reports;
 - apply policy-selected degraded, incident, replacement, or shutdown actions;
 - coordinate the same target across multiple application workers;

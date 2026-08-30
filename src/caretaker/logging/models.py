@@ -567,6 +567,9 @@ class WorkerHealth:
     acceptance_state: WorkerAcceptanceState = WorkerAcceptanceState.UNTRACKED
     acceptance_successful_executions: int = 0
     acceptance_failed_executions: int = 0
+    # Optional bounded context supplied by the worker while it is running.
+    # It is diagnostic evidence, never authority or a recovery instruction.
+    diagnostic_context: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

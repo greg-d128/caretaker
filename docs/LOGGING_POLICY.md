@@ -39,6 +39,18 @@ The supervised runtime maintains heartbeats for its writer, event server, contro
 
 Restart exhaustion may continue degraded, disable the affected component, or stop the supervised application. Caretaker workers do not elect a replacement supervisor; they remain subordinate to the application-scoped supervisor.
 
+When a worker reports bounded diagnostic context with its heartbeat, the
+supervisor carries that context into the failed-worker envelope only when
+`CARETAKER_DIAGNOSTIC_DEBUG=1` is explicitly enabled. This is intended for
+controlled diagnosis and may include the last milestone, partial queue, and
+policy-state snapshot supplied by the worker. Standard envelopes retain
+identity, queue counters, active work IDs, authority context, and the failure
+fingerprint without copying the diagnostic context. Context is size- and
+depth-bounded, treated as evidence, and never authorizes a replacement or
+other recovery action. A worker can continue supplying context with
+`WorkerRegistry.heartbeat(..., diagnostic_context={...})` or preserve/replace
+it when marked failed.
+
 
 ## Storage-unavailable default
 

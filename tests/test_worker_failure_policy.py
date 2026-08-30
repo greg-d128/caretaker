@@ -95,3 +95,49 @@ def test_worker_failure_stop_action_is_selected_when_restart_is_exhausted() -> N
     assert result["action"] == "STOP_APPLICATION"
     assert result["action_result"]["boundary"] == "none"
     assert result["incident_status"] == "NOT_CONFIGURED"
+
+
+def test_worker_failure_envelope_keeps_diagnostic_context_opt_in_and_bounded() -> None:
+    runtime = FakeRuntime()
+    supervisor = CaretakerApplicationSupervisor(runtime)
+    worker = supervisor.workers.register(WorkerKind.REPAIR_ANALYZER, 1234)
+    supervisor.workers.heartbeat(
+        worker.worker_id,
+        current_work_ids=(),
+        queue_depth=3,
+        diagnostic_context={
+            "milestone": "VALIDATION",
+            "partial_queue": ["item-1", "item-2"],
+            "policy_state": {"repair": "reviewed"},
+            "nested": {"a": {"b": {"c": {"d": "too deep"}}}},
+            "large": "x" * 1000,
+        },
+    )
+    failed = supervisor.workers.mark_failed(worker.worker_id, error_fingerprint="worker-crash")
+
+    standard = supervisor.worker_failure_envelope(failed, diagnostic_debug=False)
+    assert standard["detail_level"] == "STANDARD"
+    assert "diagnostic_context" not in standard
+
+    diagnostic = supervisor.worker_failure_envelope(failed, diagnostic_debug=True)
+    assert diagnostic["detail_level"] == "DIAGNOSTIC"
+    assert diagnostic["diagnostic_context"]["milestone"] == "VALIDATION"
+    assert diagnostic["diagnostic_context"]["partial_queue"] == ["item-1", "item-2"]
+    assert diagnostic["diagnostic_context"]["nested"]["a"]["b"]["c"] == "<depth-limit>"
+    assert len(diagnostic["diagnostic_context"]["large"]) == 512
+
+
+def test_worker_failure_envelope_uses_diagnostic_debug_environment(monkeypatch) -> None:
+    runtime = FakeRuntime()
+    supervisor = CaretakerApplicationSupervisor(runtime)
+    worker = supervisor.workers.register(WorkerKind.REPAIR_ANALYZER, 1234)
+    worker = supervisor.workers.mark_failed(
+        worker.worker_id,
+        diagnostic_context={"milestone": "ACTIVATION"},
+    )
+
+    monkeypatch.setenv("CARETAKER_DIAGNOSTIC_DEBUG", "1")
+    envelope = supervisor.worker_failure_envelope(worker)
+
+    assert envelope["detail_level"] == "DIAGNOSTIC"
+    assert envelope["diagnostic_context"] == {"milestone": "ACTIVATION"}

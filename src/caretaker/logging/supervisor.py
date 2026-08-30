@@ -396,6 +396,7 @@ class WorkerRegistry:
         current_work_ids: tuple[UUID, ...] = (),
         queue_depth: int = 0,
         last_completed_sequence: int | None = None,
+        diagnostic_context: Mapping[str, Any] | None = None,
         supervisor_time: datetime | None = None,
     ) -> WorkerHealth:
         with self._lock:
@@ -409,6 +410,11 @@ class WorkerRegistry:
                 current, last_heartbeat_at=datetime.now(timezone.utc), state=state,
                 current_work_ids=current_work_ids, queue_depth=queue_depth,
                 last_completed_sequence=last_completed_sequence,
+                diagnostic_context=(
+                    current.diagnostic_context
+                    if diagnostic_context is None
+                    else dict(diagnostic_context)
+                ),
             )
             if expired:
                 updated = replace(
@@ -419,7 +425,13 @@ class WorkerRegistry:
             self._workers[worker_id] = updated
             return updated
 
-    def mark_failed(self, worker_id: UUID, *, error_fingerprint: str | None = None) -> WorkerHealth:
+    def mark_failed(
+        self,
+        worker_id: UUID,
+        *,
+        error_fingerprint: str | None = None,
+        diagnostic_context: Mapping[str, Any] | None = None,
+    ) -> WorkerHealth:
         with self._lock:
             current = self._workers[worker_id]
             updated = replace(
@@ -427,6 +439,11 @@ class WorkerRegistry:
                 state=WorkerState.FAILED,
                 last_heartbeat_at=datetime.now(timezone.utc),
                 last_error_fingerprint=error_fingerprint,
+                diagnostic_context=(
+                    current.diagnostic_context
+                    if diagnostic_context is None
+                    else dict(diagnostic_context)
+                ),
             )
             self._workers[worker_id] = updated
             return updated
@@ -558,9 +575,59 @@ class CaretakerApplicationSupervisor:
         )
 
     @staticmethod
-    def worker_failure_envelope(worker: WorkerHealth) -> dict[str, Any]:
-        """Return bounded evidence needed to reconcile one failed worker."""
-        return {
+    def _diagnostic_debug_enabled() -> bool:
+        """Return whether controlled diagnostic detail is explicitly enabled."""
+        return os.environ.get("CARETAKER_DIAGNOSTIC_DEBUG", "").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+
+    @staticmethod
+    def _bounded_diagnostic_value(value: Any, *, depth: int = 0) -> Any:
+        """Keep worker-supplied diagnostic context finite and JSON-shaped."""
+        if depth >= 4:
+            return "<depth-limit>"
+        if value is None or isinstance(value, (bool, int, float)):
+            return value
+        if isinstance(value, str):
+            return value[:512]
+        if isinstance(value, Mapping):
+            return {
+                str(key)[:128]: CaretakerApplicationSupervisor._bounded_diagnostic_value(
+                    item, depth=depth + 1
+                )
+                for key, item in list(value.items())[:64]
+            }
+        if isinstance(value, (list, tuple, set, frozenset)):
+            return [
+                CaretakerApplicationSupervisor._bounded_diagnostic_value(
+                    item, depth=depth + 1
+                )
+                for item in list(value)[:64]
+            ]
+        return str(value)[:512]
+
+    @staticmethod
+    def worker_failure_envelope(
+        worker: WorkerHealth,
+        *,
+        diagnostic_debug: bool | None = None,
+    ) -> dict[str, Any]:
+        """Return bounded evidence needed to reconcile one failed worker.
+
+        Standard envelopes retain worker identity, queue counters, active work
+        IDs, authority context, and the failure fingerprint. The explicit
+        ``CARETAKER_DIAGNOSTIC_DEBUG`` setting (or the argument used by tests
+        and embedding applications) additionally includes worker-supplied
+        milestone, partial-queue, and policy-state context. Diagnostic detail
+        is evidence only and cannot authorize recovery.
+        """
+        include_diagnostic = (
+            CaretakerApplicationSupervisor._diagnostic_debug_enabled()
+            if diagnostic_debug is None
+            else diagnostic_debug
+        )
+        envelope = {
+            "detail_level": "DIAGNOSTIC" if include_diagnostic else "STANDARD",
             "worker_id": str(worker.worker_id),
             "worker_kind": worker.worker_kind.name,
             "process_id": worker.process_id,
@@ -595,6 +662,13 @@ class CaretakerApplicationSupervisor:
             ),
             "transaction_state": "ROLLED_BACK",
         }
+        if include_diagnostic:
+            envelope["diagnostic_context"] = (
+                CaretakerApplicationSupervisor._bounded_diagnostic_value(
+                    worker.diagnostic_context
+                )
+            )
+        return envelope
 
     def handle_worker_failure(
         self,
@@ -604,6 +678,7 @@ class CaretakerApplicationSupervisor:
         create_incident: Callable[[Mapping[str, Any]], Any] | None = None,
         restart_worker: Callable[[WorkerHealth], Any] | None = None,
         disable_component: Callable[[WorkerHealth], Any] | None = None,
+        diagnostic_debug: bool | None = None,
     ) -> dict[str, Any]:
         """Apply the policy boundary for one failed worker.
 
@@ -612,7 +687,10 @@ class CaretakerApplicationSupervisor:
         by the application boundary. A callback must report success before the
         registry treats a worker as restarted.
         """
-        envelope = self.worker_failure_envelope(worker)
+        envelope = self.worker_failure_envelope(
+            worker,
+            diagnostic_debug=diagnostic_debug,
+        )
         incident_error = None
         if create_incident is not None:
             try:
