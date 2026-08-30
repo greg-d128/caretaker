@@ -111,6 +111,13 @@ are evidence handling only and cannot change application results, policy, or
 authority. Incident callbacks, parallel stores, and transport-level throttling
 remain future integrations.
 
+The supervisor can also persist a delayed `ADAPTIVE_THRESHOLD_PROPOSAL` for a
+bounded set of threshold fields. The proposal records the requested changes,
+requester, reason, effective time, expiry, and full context binding. It is
+listed as `PROPOSAL_ONLY` and becomes visibly stale when generation, policy, or
+authority context changes. Recording or displaying it never applies a policy
+change; an authorized policy workflow must perform any later update.
+
 The supervisor exposes `adaptive-aggregation-status`,
 `adaptive-aggregation-reconcile`, `adaptive-aggregation-ack`,
 `adaptive-transition-list`, and `adaptive-transition-ack` through its control

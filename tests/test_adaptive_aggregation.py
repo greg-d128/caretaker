@@ -310,6 +310,77 @@ def test_lightweight_policy_rejects_unknown_adaptive_backpressure_action() -> No
         )
 
 
+def test_supervisor_records_delayed_threshold_proposal_without_applying_policy(
+    tmp_path: Path,
+):
+    store = SupervisorAdaptiveAggregationStore(tmp_path)
+
+    proposal = store.create_threshold_proposal(
+        target_id="example.target",
+        generation_id="generation-a",
+        code_hash="code-a",
+        monitoring_fingerprint="monitoring-a",
+        policy_fingerprint="policy-a",
+        authority_policy_generation="7",
+        authority_policy_fingerprint="authority-a",
+        changes={
+            "exception.occurrences": 4,
+            "exception.window_seconds": 900,
+        },
+        requested_by="operator:test",
+        reason="reduce false positives after reviewed evidence",
+        effective_after_seconds=60,
+    )
+
+    assert proposal["status"] == "PROPOSAL_ONLY"
+    assert proposal["proposal_only"] is True
+    assert proposal["changes"] == {
+        "exception.occurrences": 4,
+        "exception.window_seconds": 900.0,
+    }
+    assert proposal["effective_at"] != proposal["created_at"]
+    context = {
+        "current_generations": {"example.target": "generation-a"},
+        "policy_fingerprints": {"example.target": "policy-a"},
+        "authority_policy_generation": "7",
+        "authority_policy_fingerprint": "authority-a",
+    }
+    listed = store.list_transition_requests(**context)
+    assert listed[0]["request_kind"] == "ADAPTIVE_THRESHOLD_PROPOSAL"
+    assert listed[0]["status"] == "PROPOSAL_ONLY"
+    assert listed[0]["context_status"] == "CURRENT"
+
+    stale = store.list_transition_requests(
+        **{
+            **context,
+            "policy_fingerprints": {"example.target": "policy-b"},
+        }
+    )
+    assert stale[0]["context_status"] == "STALE_POLICY"
+    with pytest.raises(PermissionError, match="Behavior promotion"):
+        store.acknowledge_transition(
+            {"request_id": proposal["request_id"], "worker_id": "worker-a"},
+            peer_pid=101,
+        )
+
+
+def test_threshold_proposal_rejects_non_threshold_fields(tmp_path: Path) -> None:
+    store = SupervisorAdaptiveAggregationStore(tmp_path)
+    with pytest.raises(AdaptiveAggregationError, match="unsupported adaptive threshold"):
+        store.create_threshold_proposal(
+            target_id="example.target",
+            generation_id="generation-a",
+            code_hash="code-a",
+            monitoring_fingerprint="monitoring-a",
+            policy_fingerprint="policy-a",
+            authority_policy_generation="7",
+            authority_policy_fingerprint="authority-a",
+            changes={"exception.promote_to": "REPAIR"},
+            requested_by="operator:test",
+            reason="not a threshold change",
+        )
+
+
 def test_supervisor_records_worker_distribution_conflict_without_discarding_evidence(
     tmp_path: Path,
 ):

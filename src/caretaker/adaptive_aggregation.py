@@ -41,6 +41,9 @@ MAX_DURATION_SAMPLES = MAX_BATCH_EVENTS
 MAX_RESOURCE_METRICS = 32
 MAX_RESOURCE_VALUE = 1.0e18
 MAX_RESOURCE_SAMPLES = MAX_BATCH_EVENTS
+MAX_THRESHOLD_CHANGES = 16
+MAX_THRESHOLD_DELAY_SECONDS = 86_400.0
+MAX_THRESHOLD_PROPOSAL_TTL_SECONDS = 86_400.0
 _DISTRIBUTION_COUNTER_NAMES = (
     "exception_count",
     "timing_breach_count",
@@ -892,6 +895,73 @@ def _repair_evidence_policy(value: Any) -> dict[str, Any]:
     return normalized
 
 
+def _threshold_changes(value: Any) -> dict[str, Any]:
+    """Validate the bounded threshold-only portion of a proposal."""
+    if not isinstance(value, Mapping) or not value:
+        raise AdaptiveAggregationError("threshold changes must be a non-empty object")
+    if len(value) > MAX_THRESHOLD_CHANGES:
+        raise AdaptiveAggregationError(
+            f"threshold changes exceed {MAX_THRESHOLD_CHANGES} fields"
+        )
+    integer_fields = {
+        "exception.occurrences",
+        "soft_timing.occurrences",
+        "repair_evidence.minimum_behavior_samples",
+        "repair_evidence.minimum_observation_calls",
+    }
+    duration_fields = {
+        "exception.window_seconds",
+        "soft_timing.window_seconds",
+        "repair_evidence.minimum_duration_seconds",
+        "transition_timeout_seconds",
+    }
+    boolean_fields = {"repair_evidence.require_problem_reproduction"}
+    allowed = integer_fields | duration_fields | boolean_fields
+    normalized: dict[str, Any] = {}
+    for raw_name, raw_value in value.items():
+        name = str(raw_name).strip()
+        if name not in allowed:
+            raise AdaptiveAggregationError(
+                f"unsupported adaptive threshold field {name!r}"
+            )
+        if name in integer_fields:
+            if isinstance(raw_value, bool):
+                raise AdaptiveAggregationError(f"{name} must be an integer")
+            try:
+                integer = int(raw_value)
+            except (TypeError, ValueError) as exc:
+                raise AdaptiveAggregationError(f"{name} must be an integer") from exc
+            if integer <= 0 and name.endswith("occurrences"):
+                raise AdaptiveAggregationError(f"{name} must be greater than zero")
+            if integer < 0 or integer > MAX_BATCH_COUNTER:
+                raise AdaptiveAggregationError(
+                    f"{name} must be between 0 and {MAX_BATCH_COUNTER}"
+                )
+            normalized[name] = integer
+        elif name in duration_fields:
+            if isinstance(raw_value, bool):
+                raise AdaptiveAggregationError(f"{name} must be a number")
+            try:
+                duration = float(raw_value)
+            except (TypeError, ValueError) as exc:
+                raise AdaptiveAggregationError(f"{name} must be a number") from exc
+            if (
+                not math.isfinite(duration)
+                or duration < 0
+                or duration > MAX_THRESHOLD_PROPOSAL_TTL_SECONDS
+                or (name == "transition_timeout_seconds" and duration <= 0)
+            ):
+                raise AdaptiveAggregationError(
+                    f"{name} must be within the supported bounded range"
+                )
+            normalized[name] = duration
+        else:
+            if not isinstance(raw_value, bool):
+                raise AdaptiveAggregationError(f"{name} must be a boolean")
+            normalized[name] = raw_value
+    return {name: normalized[name] for name in sorted(normalized)}
+
+
 def _safe_write(path: Path, value: Mapping[str, Any]) -> None:
     temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
     payload = json.dumps(
@@ -1681,7 +1751,10 @@ class SupervisorAdaptiveAggregationStore:
         *,
         now: datetime | None = None,
     ) -> str:
-        if request.get("request_kind") == "ADAPTIVE_REPAIR_PROPOSAL":
+        if request.get("request_kind") in {
+            "ADAPTIVE_REPAIR_PROPOSAL",
+            "ADAPTIVE_THRESHOLD_PROPOSAL",
+        }:
             return "PROPOSAL_ONLY"
         required = {
             str(item["worker_id"])
@@ -1957,6 +2030,109 @@ class SupervisorAdaptiveAggregationStore:
             "existing": existing,
             "skipped": skipped,
             "errors": errors[:20],
+        }
+
+    def create_threshold_proposal(
+        self,
+        *,
+        target_id: str,
+        aggregation_scope: str | None = None,
+        generation_id: str,
+        code_hash: str,
+        monitoring_fingerprint: str,
+        policy_fingerprint: str,
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        changes: Mapping[str, Any],
+        requested_by: str,
+        reason: str,
+        effective_after_seconds: float = 60.0,
+        expires_in_seconds: float = 3_600.0,
+    ) -> dict[str, Any]:
+        """Persist a delayed, threshold-only proposal without applying it.
+
+        A proposal is evidence and operator input, not a policy mutation. The
+        caller must provide the supervisor's current context so later status
+        reads can identify a stale proposal before a future policy workflow
+        considers it.
+        """
+        normalized_target = _text(
+            target_id, name="target_id", limit=MAX_BATCH_TEXT
+        )
+        assert normalized_target is not None
+        normalized_scope = _text(
+            aggregation_scope,
+            name="aggregation_scope",
+            limit=MAX_AGGREGATION_SCOPE_TEXT,
+            required=False,
+        )
+        aggregation_target = extended_aggregation_target_id(
+            normalized_target,
+            normalized_scope,
+        )
+        context_values = {
+            "generation_id": generation_id,
+            "code_hash": code_hash,
+            "monitoring_fingerprint": monitoring_fingerprint,
+            "policy_fingerprint": policy_fingerprint,
+            "authority_policy_generation": authority_policy_generation,
+            "authority_policy_fingerprint": authority_policy_fingerprint,
+        }
+        normalized_context = {
+            name: _text(value, name=name, limit=MAX_BATCH_TEXT)
+            for name, value in context_values.items()
+        }
+        if not 0 <= float(effective_after_seconds) <= MAX_THRESHOLD_DELAY_SECONDS:
+            raise AdaptiveAggregationError(
+                "effective_after_seconds must be between 0 and 86400"
+            )
+        if not 0 < float(expires_in_seconds) <= MAX_THRESHOLD_PROPOSAL_TTL_SECONDS:
+            raise AdaptiveAggregationError(
+                "expires_in_seconds must be greater than zero and no more than 86400"
+            )
+        normalized_changes = _threshold_changes(changes)
+        proposer = _text(
+            requested_by, name="requested_by", limit=MAX_BATCH_TEXT
+        )
+        proposal_reason = _text(
+            reason, name="reason", limit=MAX_TRANSITION_REASON
+        )
+        assert proposer is not None and proposal_reason is not None
+        created_at = _utcnow_iso()
+        created = datetime.fromisoformat(created_at)
+        request = {
+            "request_id": str(uuid4()),
+            "request_kind": "ADAPTIVE_THRESHOLD_PROPOSAL",
+            "target_id": normalized_target,
+            "aggregation_scope": normalized_scope,
+            "aggregation_target_id": aggregation_target,
+            **normalized_context,
+            "changes": normalized_changes,
+            "requested_by": proposer,
+            "reason": proposal_reason,
+            "created_at": created_at,
+            "effective_after_seconds": float(effective_after_seconds),
+            "effective_at": (
+                created + timedelta(seconds=float(effective_after_seconds))
+            ).isoformat(),
+            "expires_at": (
+                created + timedelta(seconds=float(expires_in_seconds))
+            ).isoformat(),
+            "proposal_only": True,
+            "required_workers": [],
+        }
+        _safe_write(
+            self._transition_path(str(request["request_id"])),
+            {
+                "schema_version": ADAPTIVE_AGGREGATION_SCHEMA_VERSION,
+                "request": request,
+                "request_sha256": _content_hash(request),
+            },
+        )
+        return {
+            **request,
+            "status": "PROPOSAL_ONLY",
+            "context_status": "UNVERIFIED",
         }
 
     def list_transition_requests(

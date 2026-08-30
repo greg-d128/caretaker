@@ -1409,7 +1409,7 @@ class CaretakerConsoleApp(App):
         ):
             return "Repair review"
         for item in self._adaptive_aggregation_records:
-            if item.get("kind") not in {"CONFLICT", "TRANSITION"}:
+            if item.get("kind") not in {"CONFLICT", "TRANSITION", "THRESHOLD"}:
                 continue
             if item.get("kind") != "CONFLICT" and str(item.get("status") or "").upper() not in {
                 "EXPIRED",
@@ -1782,7 +1782,7 @@ class CaretakerConsoleApp(App):
                     "related_tab": "adaptive",
                     "payload": payload,
                 })
-            elif kind == "TRANSITION" and str(adaptive_record.get("status") or "").upper() in {
+            elif kind in {"TRANSITION", "THRESHOLD"} and str(adaptive_record.get("status") or "").upper() in {
                 "EXPIRED",
                 "STALE_CONTEXT",
             }:
@@ -3639,10 +3639,11 @@ class CaretakerConsoleApp(App):
                     if evidence.get("enabled")
                     else "disabled"
                 )
+                backpressure = str(promotion.get("backpressure_action") or "RETAIN")
                 policy_lines.append(
                     f"{self._compact_log_text(target, limit=42) or '-'} | "
                     f"exception={exception_text}; timing={timing_text}; "
-                    f"repair evidence={evidence_text}"
+                    f"repair evidence={evidence_text}; backpressure={backpressure}"
                 )
         self.query_one("#adaptive-aggregation-policy-status", Static).update(
             "\n".join(policy_lines)
@@ -3708,17 +3709,27 @@ class CaretakerConsoleApp(App):
                 if context_status.startswith("STALE_")
                 else item.get("status") or "UNKNOWN"
             )
+            request_kind = str(item.get("request_kind") or "")
+            row_kind = (
+                "THRESHOLD"
+                if request_kind == "ADAPTIVE_THRESHOLD_PROPOSAL"
+                else "TRANSITION"
+            )
             rows.append({
-                "kind": "TRANSITION",
+                "kind": row_kind,
                 "target_id": item.get("aggregation_target_id") or item.get("target_id") or "-",
                 "scope": item.get("aggregation_scope") or "-",
                 "generation": item.get("generation_id") or "-",
                 "status": displayed_status,
                 "workers_or_acks": (
-                    f"{item.get('acknowledgement_count', 0)}/{required_count} acks"
+                    (
+                        f"{len(item.get('changes') or {})} fields"
+                        if row_kind == "THRESHOLD"
+                        else f"{item.get('acknowledgement_count', 0)}/{required_count} acks"
+                    )
                     + (
                         f" / {len(item.get('stale_worker_ids') or ())} stale"
-                        if deadline_status == "EXPIRED"
+                        if deadline_status == "EXPIRED" and row_kind == "TRANSITION"
                         else ""
                     )
                 ),

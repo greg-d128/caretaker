@@ -739,6 +739,9 @@ Worker submission loss is now policy controlled locally: `RETAIN` is the
 least-loss default, while `DROP` and `REDUCE` are explicit bounded choices;
 incident callbacks, parallel stores, and transport-level throttling remain
 future integrations.
+The supervisor also records delayed, context-bound threshold proposals as
+proposal-only evidence; applying them, verifying them through a staged policy
+transition, and exposing an operator edit workflow remain future work.
 The current slice also carries bounded timing-breach duration samples and
 worker-supplied numeric resource samples, producing three-standard-deviation
 evidence conflicts for materially different worker distributions. Automatic

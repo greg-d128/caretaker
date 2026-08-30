@@ -1238,6 +1238,7 @@ def test_console_displays_read_only_adaptive_transition_deadlines(tmp_path):
             assert "exception=3 in 30s" in policy_status
             assert "timing=disabled" in policy_status
             assert "repair evidence=20 samples / 100 calls" in policy_status
+            assert "backpressure=RETAIN" in policy_status
 
     asyncio.run(exercise())
 
