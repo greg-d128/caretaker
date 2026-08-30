@@ -26,6 +26,8 @@ from .ipc import (
     SocketLogClient,
     SocketLogServer,
     control_request,
+    list_adaptive_transition_requests,
+    acknowledge_adaptive_transition,
     submit_worker_acceptance_observation,
     sign_control_request,
     peer_credentials,

@@ -436,6 +436,8 @@ def main(argv: list[str] | None = None) -> int:
             return None
         current_generations: dict[str, str] = {}
         policy_fingerprints: dict[str, str] = {}
+        promotion_policies: dict[str, dict[str, Any]] = {}
+        promotion_policy_values: dict[str, object] = {}
         ambiguous_targets: set[str] = set()
         for item in contexts:
             if not isinstance(item, dict) or not item.get("enabled"):
@@ -445,28 +447,46 @@ def main(argv: list[str] | None = None) -> int:
             policy_fingerprint = str(item.get("policy_fingerprint") or "").strip()
             if not target or not generation or not policy_fingerprint:
                 continue
+            promotion_policy = item.get("promotion_policy")
             if (
                 target in current_generations
                 and (
                     current_generations[target] != generation
                     or policy_fingerprints[target] != policy_fingerprint
+                    or (
+                        target in promotion_policy_values
+                        and promotion_policy_values[target] != promotion_policy
+                    )
                 )
             ):
                 ambiguous_targets.add(target)
                 continue
             current_generations[target] = generation
             policy_fingerprints[target] = policy_fingerprint
+            promotion_policy_values[target] = promotion_policy
+            if isinstance(promotion_policy, dict):
+                promotion_policies[target] = dict(promotion_policy)
         for target in ambiguous_targets:
             current_generations.pop(target, None)
             policy_fingerprints.pop(target, None)
+            promotion_policies.pop(target, None)
         effective_authority = authority.effective
-        return adaptive_aggregation_store.reconcile(
+        result = adaptive_aggregation_store.reconcile(
             current_generations=current_generations,
             policy_fingerprints=policy_fingerprints,
             authority_policy_generation=str(effective_authority.generation),
             authority_policy_fingerprint=effective_authority.fingerprint,
             maximum_batches=maximum,
         )
+        result["promotions"] = adaptive_aggregation_store.evaluate_promotions(
+            current_generations=current_generations,
+            policy_fingerprints=policy_fingerprints,
+            authority_policy_generation=str(effective_authority.generation),
+            authority_policy_fingerprint=effective_authority.fingerprint,
+            promotion_policies=promotion_policies,
+            maximum=maximum,
+        )
+        return result
 
 
     def control_handler(request, credentials):
@@ -509,12 +529,35 @@ def main(argv: list[str] | None = None) -> int:
                 "ok": True,
                 "store": adaptive_aggregation_store.status(),
                 "aggregates": list(adaptive_aggregation_store.list_aggregates()),
+                "transitions": list(adaptive_aggregation_store.list_transition_requests()),
             }
         if command == "adaptive-aggregation-reconcile":
             result = reconcile_adaptive_aggregation(
                 maximum=max(1, min(int(request.get("maximum", 100)), 1000))
             )
             return {"ok": True, "result": result}
+        if command == "adaptive-transition-list":
+            target_id = str(request.get("target_id") or "").strip() or None
+            worker_id = str(request.get("worker_id") or "").strip() or None
+            limit = max(1, min(int(request.get("limit", 100)), 500))
+            return {
+                "ok": True,
+                "transitions": list(
+                    adaptive_aggregation_store.list_transition_requests(
+                        target_id=target_id,
+                        worker_id=worker_id,
+                        limit=limit,
+                    )
+                ),
+            }
+        if command == "adaptive-transition-ack":
+            return {
+                "ok": True,
+                "acknowledgement": adaptive_aggregation_store.acknowledge_transition(
+                    request,
+                    peer_pid=credentials[0],
+                ),
+            }
         if command == "adaptive-aggregation-ack":
             batch_id = str(request.get("batch_id") or "").strip()
             if not batch_id:
@@ -1615,6 +1658,7 @@ def main(argv: list[str] | None = None) -> int:
                 adaptive_result.get("merged")
                 or adaptive_result.get("rejected")
                 or adaptive_result.get("errors")
+                or (adaptive_result.get("promotions") or {}).get("created")
             ):
                 runtime.event(
                     logger_name="caretaker.adaptive",
@@ -1626,6 +1670,9 @@ def main(argv: list[str] | None = None) -> int:
                         "duplicates": adaptive_result.get("duplicates", 0),
                         "rejected": adaptive_result.get("rejected", 0),
                         "errors": adaptive_result.get("errors", []),
+                        "promotion_requests_created": (
+                            adaptive_result.get("promotions") or {}
+                        ).get("created", 0),
                         "pending": adaptive_result.get("pending", 0),
                         "authority_policy_generation": effective_authority.generation,
                         "authority_policy_fingerprint": effective_authority.fingerprint,

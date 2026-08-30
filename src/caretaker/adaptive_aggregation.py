@@ -27,6 +27,7 @@ MAX_BATCH_COUNTER = 1000
 MAX_WORKER_PROVENANCE = 128
 MAX_PROCESSED_BATCH_IDS = 4096
 MAX_RETAINED_EVENTS = 512
+MAX_TRANSITION_REASON = 512
 _BATCH_COUNTER_NAMES = (
     "exception_count",
     "timing_breach_count",
@@ -375,6 +376,39 @@ def _content_hash(value: Any) -> str:
     ).hexdigest()
 
 
+def _promotion_policy(value: Any, *, name: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise AdaptiveAggregationError(f"{name} promotion policy must be an object")
+    enabled = value.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise AdaptiveAggregationError(f"{name}.enabled must be a boolean")
+    try:
+        occurrences = int(value.get("occurrences", 0))
+    except (TypeError, ValueError) as exc:
+        raise AdaptiveAggregationError(f"{name}.occurrences must be an integer") from exc
+    if occurrences <= 0 or occurrences > MAX_BATCH_EVENTS:
+        raise AdaptiveAggregationError(
+            f"{name}.occurrences must be between 1 and {MAX_BATCH_EVENTS}"
+        )
+    try:
+        window_seconds = float(value.get("window_seconds", 0))
+    except (TypeError, ValueError) as exc:
+        raise AdaptiveAggregationError(f"{name}.window_seconds must be a number") from exc
+    if window_seconds <= 0:
+        raise AdaptiveAggregationError(f"{name}.window_seconds must be greater than zero")
+    promote_to = str(value.get("promote_to", "")).strip().upper()
+    if promote_to not in {"BEHAVIOR", "REPAIR"}:
+        raise AdaptiveAggregationError(
+            f"{name}.promote_to must be BEHAVIOR or REPAIR"
+        )
+    return {
+        "enabled": enabled,
+        "occurrences": occurrences,
+        "window_seconds": window_seconds,
+        "promote_to": promote_to,
+    }
+
+
 def _safe_write(path: Path, value: Mapping[str, Any]) -> None:
     temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
     payload = json.dumps(
@@ -435,12 +469,18 @@ class SupervisorAdaptiveAggregationStore:
         self.rejected_directory = self.root / "adaptive" / "aggregation" / "rejected"
         self.acknowledgement_directory = self.root / "adaptive" / "aggregation" / "acknowledgements"
         self.state_directory = self.root / "adaptive" / "aggregation" / "state"
+        self.transition_directory = self.root / "adaptive" / "aggregation" / "transitions"
+        self.transition_acknowledgement_directory = (
+            self.root / "adaptive" / "aggregation" / "transition-acknowledgements"
+        )
         for directory in (
             self.pending_directory,
             self.archive_directory,
             self.rejected_directory,
             self.acknowledgement_directory,
             self.state_directory,
+            self.transition_directory,
+            self.transition_acknowledgement_directory,
         ):
             directory.mkdir(parents=True, exist_ok=True, mode=0o700)
             try:
@@ -518,6 +558,13 @@ class SupervisorAdaptiveAggregationStore:
 
     def _acknowledgement_path(self, batch_id: str) -> Path:
         return self.acknowledgement_directory / f"{batch_id}.json"
+
+    def _transition_path(self, request_id: str) -> Path:
+        return self.transition_directory / f"{request_id}.json"
+
+    def _transition_acknowledgement_path(self, request_id: str, worker_id: str) -> Path:
+        worker_key = hashlib.sha256(worker_id.encode("utf-8")).hexdigest()[:32]
+        return self.transition_acknowledgement_directory / f"{request_id}-{worker_key}.json"
 
     def _write_acknowledgement(
         self,
@@ -797,6 +844,311 @@ class SupervisorAdaptiveAggregationStore:
             "pending": sum(1 for _ in self.pending_directory.glob("*.json")),
         }
 
+    def _load_transition_request(self, path: Path) -> dict[str, Any]:
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(envelope, Mapping):
+            raise AdaptiveAggregationError("adaptive transition envelope must be an object")
+        if int(envelope.get("schema_version") or 0) != ADAPTIVE_AGGREGATION_SCHEMA_VERSION:
+            raise AdaptiveAggregationError("unsupported adaptive transition schema")
+        request = envelope.get("request")
+        if not isinstance(request, Mapping):
+            raise AdaptiveAggregationError("adaptive transition request is missing")
+        request_id = str(UUID(str(request.get("request_id"))))
+        if request_id != path.stem:
+            raise AdaptiveAggregationError("transition request ID does not match its filename")
+        if str(envelope.get("request_sha256") or "") != _content_hash(request):
+            raise AdaptiveAggregationError("adaptive transition request hash is invalid")
+        return dict(request)
+
+    def _load_transition_acknowledgements(
+        self,
+        request_id: str,
+    ) -> tuple[dict[str, Any], ...]:
+        result: list[dict[str, Any]] = []
+        for path in sorted(self.transition_acknowledgement_directory.glob(f"{request_id}-*.json")):
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(value, Mapping):
+                    continue
+                if str(value.get("request_id") or "") != request_id:
+                    continue
+                payload = {
+                    key: item
+                    for key, item in value.items()
+                    if key not in {"acknowledged_at", "acknowledgement_sha256"}
+                }
+                if str(value.get("acknowledgement_sha256") or "") != _content_hash(payload):
+                    continue
+                result.append(dict(value))
+            except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                continue
+        return tuple(result)
+
+    @staticmethod
+    def _transition_status(
+        request: Mapping[str, Any],
+        acknowledgements: tuple[Mapping[str, Any], ...],
+    ) -> str:
+        required = {
+            str(item["worker_id"])
+            for item in request.get("required_workers", ())
+            if isinstance(item, Mapping) and item.get("worker_id")
+        }
+        by_worker = {
+            str(item.get("worker_id")): item
+            for item in acknowledgements
+            if item.get("worker_id")
+        }
+        if any(not bool(item.get("applied")) for item in by_worker.values()):
+            return "FAILED"
+        if required and required.issubset(by_worker) and all(
+            bool(by_worker[worker_id].get("applied")) for worker_id in required
+        ):
+            return "APPLIED"
+        if by_worker:
+            return "PARTIAL"
+        return "PENDING"
+
+    def evaluate_promotions(
+        self,
+        *,
+        current_generations: Mapping[str, str],
+        policy_fingerprint: str | None = None,
+        policy_fingerprints: Mapping[str, str] | None = None,
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        promotion_policies: Mapping[str, Mapping[str, Any]],
+        maximum: int = 100,
+    ) -> dict[str, Any]:
+        """Create durable, Behavior-only requests from supervisor aggregates.
+
+        This evaluates evidence after reconciliation and never changes a worker's
+        instrumentation itself. A request is scoped to the exact aggregate and
+        current authority/policy context; a worker must validate and acknowledge it
+        before any local state transition can occur.
+        """
+        if maximum <= 0:
+            raise ValueError("maximum must be greater than zero")
+        created = 0
+        existing = 0
+        skipped = 0
+        errors: list[dict[str, str]] = []
+        existing_requests: dict[tuple[str, str], dict[str, Any]] = {}
+        for path in self.transition_directory.glob("*.json"):
+            try:
+                request = self._load_transition_request(path)
+            except Exception:
+                continue
+            existing_requests[(str(request.get("aggregate_key")), str(request.get("signal")))] = request
+
+        for path in sorted(self.state_directory.glob("*.json"))[:maximum]:
+            try:
+                aggregate = self._load_state(path.stem)
+                if aggregate is None:
+                    continue
+                reason = self._context_error(
+                    aggregate,
+                    current_generations=current_generations,
+                    policy_fingerprints=policy_fingerprints,
+                    policy_fingerprint=policy_fingerprint,
+                    authority_policy_generation=authority_policy_generation,
+                    authority_policy_fingerprint=authority_policy_fingerprint,
+                )
+                if reason is not None:
+                    skipped += 1
+                    continue
+                target = str(aggregate["target_id"])
+                raw_policy = promotion_policies.get(target)
+                if not isinstance(raw_policy, Mapping):
+                    skipped += 1
+                    continue
+                workers = aggregate.get("workers")
+                if not isinstance(workers, Mapping) or not workers:
+                    skipped += 1
+                    continue
+                latest = datetime.fromisoformat(str(aggregate["last_observed_at"]))
+                signals = (
+                    ("exception", "exception_events"),
+                    ("soft_timing", "timing_events"),
+                )
+                for signal, event_name in signals:
+                    try:
+                        policy = _promotion_policy(raw_policy.get(signal), name=signal)
+                    except AdaptiveAggregationError as exc:
+                        errors.append({"target_id": target, "error": str(exc)[:256]})
+                        continue
+                    if not policy["enabled"]:
+                        continue
+                    events = []
+                    for event in aggregate.get(event_name) or ():
+                        observed = datetime.fromisoformat(str(event))
+                        if (latest - observed).total_seconds() <= policy["window_seconds"]:
+                            events.append(observed)
+                    if len(events) < policy["occurrences"]:
+                        continue
+                    key = (str(aggregate["aggregate_key"]), signal)
+                    if key in existing_requests:
+                        existing += 1
+                        continue
+                    required_workers = [
+                        {
+                            "worker_id": str(worker_id),
+                            "worker_pid": int(worker.get("worker_pid")),
+                        }
+                        for worker_id, worker in sorted(workers.items())
+                        if isinstance(worker, Mapping)
+                    ]
+                    if not required_workers:
+                        skipped += 1
+                        continue
+                    request: dict[str, Any] = {
+                        "request_id": str(uuid4()),
+                        "request_kind": "ADAPTIVE_PROMOTION",
+                        "aggregate_key": str(aggregate["aggregate_key"]),
+                        "target_id": target,
+                        "generation_id": str(aggregate["generation_id"]),
+                        "code_hash": str(aggregate["code_hash"]),
+                        "monitoring_fingerprint": str(aggregate["monitoring_fingerprint"]),
+                        "policy_fingerprint": str(aggregate["policy_fingerprint"]),
+                        "authority_policy_generation": str(aggregate["authority_policy_generation"]),
+                        "authority_policy_fingerprint": str(aggregate["authority_policy_fingerprint"]),
+                        "signal": signal,
+                        "signal_level": policy["promote_to"],
+                        "requested_level": "BEHAVIOR",
+                        "reason": (
+                            f"{len(events)} {signal} threshold events within "
+                            f"{policy['window_seconds']:g}s"
+                        )[:MAX_TRANSITION_REASON],
+                        "created_at": _utcnow_iso(),
+                        "required_workers": required_workers,
+                    }
+                    envelope = {
+                        "schema_version": ADAPTIVE_AGGREGATION_SCHEMA_VERSION,
+                        "request": request,
+                        "request_sha256": _content_hash(request),
+                    }
+                    _safe_write(self._transition_path(str(request["request_id"])), envelope)
+                    existing_requests[key] = request
+                    created += 1
+            except Exception as exc:
+                errors.append({
+                    "aggregate_key": path.stem,
+                    "error": f"EVALUATION_ERROR:{type(exc).__name__}",
+                })
+        return {
+            "created": created,
+            "existing": existing,
+            "skipped": skipped,
+            "errors": errors[:20],
+        }
+
+    def list_transition_requests(
+        self,
+        *,
+        target_id: str | None = None,
+        worker_id: str | None = None,
+        limit: int = 100,
+    ) -> tuple[dict[str, Any], ...]:
+        bounded = max(1, min(int(limit), 500))
+        result: list[dict[str, Any]] = []
+        for path in sorted(self.transition_directory.glob("*.json")):
+            if len(result) >= bounded:
+                break
+            try:
+                request = self._load_transition_request(path)
+            except Exception:
+                continue
+            if target_id is not None and str(request.get("target_id")) != str(target_id):
+                continue
+            required = request.get("required_workers") or ()
+            if worker_id is not None and not any(
+                isinstance(item, Mapping) and str(item.get("worker_id")) == str(worker_id)
+                for item in required
+            ):
+                continue
+            acknowledgements = self._load_transition_acknowledgements(str(request["request_id"]))
+            visible = dict(request)
+            visible["status"] = self._transition_status(request, acknowledgements)
+            visible["acknowledgement_count"] = len(acknowledgements)
+            visible["acknowledged_worker_ids"] = sorted(
+                str(item["worker_id"]) for item in acknowledgements if item.get("worker_id")
+            )
+            result.append(visible)
+        return tuple(result)
+
+    def acknowledge_transition(
+        self,
+        request: Mapping[str, Any],
+        *,
+        peer_pid: int,
+    ) -> dict[str, Any]:
+        """Record a worker's context-checked application of a transition request."""
+        try:
+            request_id = str(UUID(str(request.get("request_id"))))
+        except (TypeError, ValueError) as exc:
+            raise AdaptiveAggregationError("transition request_id must be a UUID") from exc
+        stored = self._load_transition_request(self._transition_path(request_id))
+        worker_id = _text(request.get("worker_id"), name="worker_id", limit=MAX_BATCH_TEXT)
+        assert worker_id is not None
+        required = {
+            str(item["worker_id"]): int(item["worker_pid"])
+            for item in stored.get("required_workers", ())
+            if isinstance(item, Mapping) and item.get("worker_id")
+        }
+        if worker_id not in required:
+            raise PermissionError("worker is not a required recipient of this transition")
+        if int(peer_pid) != required[worker_id]:
+            raise PermissionError("transition peer process does not match worker provenance")
+        for name in (
+            "target_id",
+            "generation_id",
+            "code_hash",
+            "monitoring_fingerprint",
+            "policy_fingerprint",
+            "authority_policy_generation",
+            "authority_policy_fingerprint",
+        ):
+            if str(request.get(name) or "") != str(stored.get(name) or ""):
+                raise PermissionError(f"transition {name} does not match supervisor request")
+        applied = request.get("applied")
+        if not isinstance(applied, bool):
+            raise AdaptiveAggregationError("transition applied must be a boolean")
+        observed_level = str(request.get("observed_level") or "").strip().upper()
+        if applied and observed_level != str(stored["requested_level"]):
+            raise PermissionError("applied transition level does not match supervisor request")
+        payload: dict[str, Any] = {
+            "schema_version": ADAPTIVE_AGGREGATION_SCHEMA_VERSION,
+            "request_id": request_id,
+            "worker_id": worker_id,
+            "worker_pid": int(peer_pid),
+            "applied": applied,
+            "observed_level": observed_level or None,
+            "error": str(request.get("error") or "")[:MAX_TRANSITION_REASON] or None,
+        }
+        payload["acknowledgement_sha256"] = _content_hash(payload)
+        path = self._transition_acknowledgement_path(request_id, worker_id)
+        duplicate = False
+        if path.exists():
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(existing, Mapping) or str(existing.get("acknowledgement_sha256")) != payload["acknowledgement_sha256"]:
+                raise AdaptiveAggregationError("conflicting transition acknowledgement")
+            duplicate = True
+        else:
+            _safe_write(
+                path,
+                {
+                    **payload,
+                    "acknowledged_at": _utcnow_iso(),
+                },
+            )
+        acknowledgements = self._load_transition_acknowledgements(request_id)
+        return {
+            "status": "DUPLICATE" if duplicate else "RECORDED",
+            "request_id": request_id,
+            "worker_id": worker_id,
+            "transition_status": self._transition_status(stored, acknowledgements),
+        }
+
     def list_aggregates(self, *, limit: int = 100) -> tuple[dict[str, Any], ...]:
         bounded = max(1, min(int(limit), 500))
         result: list[dict[str, Any]] = []
@@ -827,4 +1179,10 @@ class SupervisorAdaptiveAggregationStore:
                 1 for _ in self.acknowledgement_directory.glob("*.json")
             ),
             "aggregates": sum(1 for _ in self.state_directory.glob("*.json")),
+            "transition_requests": sum(
+                1 for _ in self.transition_directory.glob("*.json")
+            ),
+            "transition_acknowledgements": sum(
+                1 for _ in self.transition_acknowledgement_directory.glob("*.json")
+            ),
         }

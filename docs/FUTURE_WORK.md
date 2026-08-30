@@ -693,7 +693,7 @@ and tested.
 
 ## Supervisor-owned multiprocess adaptive aggregation
 
-**Status: In progress in development tree for the durable worker-batch ledger and supervisor reconciliation; supervisor-authorized promotion remains future work.**
+**Status: In progress in development tree for durable worker-batch aggregation and supervisor-authorized Behavior transition requests; Repair promotion, remote transport, and process orchestration remain future work.**
 
 The first implementation slice is documented in
 [`ADAPTIVE_AGGREGATION.md`](ADAPTIVE_AGGREGATION.md). A durable
@@ -705,11 +705,15 @@ stale context, records bounded worker provenance with idempotent batch handling,
 reconciles enabled worker contexts during the supervisor health cycle, and
 publishes per-batch delivery acknowledgements.
 
-Adaptive exception/timing counters and repair-evidence gates are still process
-local for live decisions. Multiple application workers therefore do not yet
-share supervisor-authorized promotion state.
+Adaptive hot-path counters and repair-evidence gates remain process local, but
+the supervisor now evaluates the application-wide exception/timing event window
+and owns the resulting Behavior transition request state. Multiple workers can
+validate, apply, and acknowledge the same exact-context request without each
+independently promoting or double-counting the threshold.
 
-Future design should move authoritative adaptive counters to the supervisor while keeping process-local hot paths inexpensive. Workers should batch threshold observations to the supervisor, which owns:
+Future design should continue moving authoritative adaptive counters and repair
+evidence to the supervisor while keeping process-local hot paths inexpensive.
+Workers should batch threshold observations to the supervisor, which owns:
 
 - target/generation identity;
 - application-wide counter merging;
@@ -721,9 +725,9 @@ Future design should move authoritative adaptive counters to the supervisor whil
 
 The remaining implementation must explicitly define and enforce whether each
 threshold is process-local, application-wide, or workload/population scoped. It
-must consume worker acknowledgements where needed and move threshold evaluation
-and promotion state without double-counting the existing single-process
-lifecycle.
+must move repair-evidence evaluation, dynamic threshold administration, remote
+transport, and process lifecycle orchestration without double-counting the
+existing single-process lifecycle.
 
 ## Import-hook dependency instrumentation
 

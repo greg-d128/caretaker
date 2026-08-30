@@ -669,6 +669,66 @@ def submit_worker_acceptance_observation(
     return control_request(path, request, timeout=timeout)
 
 
+def list_adaptive_transition_requests(
+    path: str | Path,
+    *,
+    worker_id: str | UUID | None = None,
+    target_id: str | None = None,
+    limit: int = 100,
+    timeout: float = 5.0,
+) -> dict[str, Any]:
+    """Fetch supervisor-issued adaptive transition requests for a worker."""
+    request: dict[str, Any] = {
+        "command": "adaptive-transition-list",
+        "limit": int(limit),
+    }
+    if worker_id is not None:
+        request["worker_id"] = str(worker_id)
+    if target_id is not None:
+        request["target_id"] = str(target_id)
+    return control_request(path, request, timeout=timeout)
+
+
+def acknowledge_adaptive_transition(
+    path: str | Path,
+    *,
+    request_id: str | UUID,
+    worker_id: str | UUID,
+    target_id: str,
+    generation_id: str,
+    code_hash: str,
+    monitoring_fingerprint: str,
+    policy_fingerprint: str,
+    authority_policy_generation: str,
+    authority_policy_fingerprint: str,
+    applied: bool,
+    observed_level: str | None = None,
+    error: str | None = None,
+    timeout: float = 5.0,
+) -> dict[str, Any]:
+    """Acknowledge one context-checked adaptive transition application."""
+    if not isinstance(applied, bool):
+        raise ValueError("adaptive transition applied must be a boolean")
+    request: dict[str, Any] = {
+        "command": "adaptive-transition-ack",
+        "request_id": str(request_id),
+        "worker_id": str(worker_id),
+        "target_id": str(target_id),
+        "generation_id": str(generation_id),
+        "code_hash": str(code_hash),
+        "monitoring_fingerprint": str(monitoring_fingerprint),
+        "policy_fingerprint": str(policy_fingerprint),
+        "authority_policy_generation": str(authority_policy_generation),
+        "authority_policy_fingerprint": str(authority_policy_fingerprint),
+        "applied": applied,
+    }
+    if observed_level is not None:
+        request["observed_level"] = str(observed_level)
+    if error is not None:
+        request["error"] = str(error)
+    return control_request(path, request, timeout=timeout)
+
+
 def _send_control_payload(connection: socket.socket, payload: bytes) -> None:
     connection.sendall(len(payload).to_bytes(4, "big") + payload)
 

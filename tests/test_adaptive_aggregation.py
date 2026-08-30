@@ -13,6 +13,7 @@ from caretaker.adaptive_aggregation import (
 from caretaker.adaptive import (
     AdaptiveAggregationPolicy,
     BehaviorSamplingPolicy,
+    ExceptionPromotionPolicy,
     InstrumentationDemotionPolicy,
     InstrumentationLevel,
     LightweightPolicy,
@@ -100,6 +101,176 @@ def test_supervisor_aggregation_is_idempotent_for_resubmitted_batch(tmp_path: Pa
     assert store.submit(batch)["status"] == "DUPLICATE"
     assert store.status()["pending"] == 0
     assert store.list_aggregates()[0]["total_batches"] == 1
+
+
+def test_supervisor_creates_context_bound_promotion_and_tracks_worker_acknowledgements(
+    tmp_path: Path,
+):
+    store = SupervisorAdaptiveAggregationStore(tmp_path)
+    first = _batch(batch_id="00000000-0000-0000-0000-000000000008")
+    second = _batch(
+        batch_id="00000000-0000-0000-0000-000000000009",
+        worker_id="worker-b",
+    )
+    store.submit(first)
+    store.submit(second)
+    context = _context()
+    assert store.reconcile(**context)["merged"] == 2
+
+    promotion_policy = {
+        "exception": {
+            "enabled": True,
+            "occurrences": 2,
+            "window_seconds": 3600,
+            "promote_to": "REPAIR",
+        },
+        "soft_timing": {
+            "enabled": False,
+            "occurrences": 2,
+            "window_seconds": 3600,
+            "promote_to": "BEHAVIOR",
+        },
+    }
+    evaluated = store.evaluate_promotions(
+        **context,
+        promotion_policies={"example.target": promotion_policy},
+    )
+    assert evaluated["created"] == 1
+    request = store.list_transition_requests()[0]
+    assert request["requested_level"] == "BEHAVIOR"
+    assert request["signal_level"] == "REPAIR"
+    assert request["status"] == "PENDING"
+    assert [item["worker_id"] for item in request["required_workers"]] == [
+        "worker-a",
+        "worker-b",
+    ]
+
+    assert store.evaluate_promotions(
+        **context,
+        promotion_policies={"example.target": promotion_policy},
+    )["created"] == 0
+    assert store.list_transition_requests()[0]["status"] == "PENDING"
+
+    ack = {
+        "request_id": request["request_id"],
+        "worker_id": "worker-a",
+        "target_id": request["target_id"],
+        "generation_id": request["generation_id"],
+        "code_hash": request["code_hash"],
+        "monitoring_fingerprint": request["monitoring_fingerprint"],
+        "policy_fingerprint": request["policy_fingerprint"],
+        "authority_policy_generation": request["authority_policy_generation"],
+        "authority_policy_fingerprint": request["authority_policy_fingerprint"],
+        "applied": True,
+        "observed_level": "BEHAVIOR",
+    }
+    assert store.acknowledge_transition(ack, peer_pid=101)["transition_status"] == "PARTIAL"
+    assert store.acknowledge_transition(
+        {**ack, "worker_id": "worker-b"},
+        peer_pid=101,
+    )["transition_status"] == "APPLIED"
+    assert store.list_transition_requests()[0]["status"] == "APPLIED"
+    assert store.acknowledge_transition(ack, peer_pid=101)["status"] == "DUPLICATE"
+
+    with pytest.raises(PermissionError, match="peer process"):
+        store.acknowledge_transition(
+            {**ack, "request_id": request["request_id"]},
+            peer_pid=202,
+        )
+
+
+def test_aggregated_exception_threshold_waits_for_supervisor_request(tmp_path: Path):
+    policy = LightweightPolicy(
+        exception=ExceptionPromotionPolicy(
+            enabled=True,
+            occurrences=1,
+            window_seconds=3600,
+            promote_to=InstrumentationLevel.BEHAVIOR,
+        ),
+        sampling=BehaviorSamplingPolicy(
+            enabled=True,
+            lightweight_every_calls=0,
+            behavior_every_calls=1,
+            randomize_initial_offset=False,
+        ),
+        demotion=InstrumentationDemotionPolicy(enabled=False),
+        aggregation=AdaptiveAggregationPolicy(
+            enabled=True,
+            flush_after_observations=1,
+            flush_interval_seconds=0,
+        ),
+    )
+
+    @lightweight(policy=policy, target_id="aggregation.supervised", state_directory=tmp_path / "adaptive")
+    def observed() -> None:
+        raise RuntimeError("expected test signal")
+
+    with pytest.raises(RuntimeError, match="expected test signal"):
+        observed()
+    controller = observed.__caretaker_adaptive__
+    assert controller.state.level is InstrumentationLevel.LIGHTWEIGHT
+    status = controller.aggregation_status()
+    store = SupervisorAdaptiveAggregationStore(tmp_path)
+    context = {
+        "current_generations": {"aggregation.supervised": controller.code_hash},
+        "policy_fingerprints": {"aggregation.supervised": status["policy_fingerprint"]},
+        "authority_policy_generation": status["authority_policy_generation"],
+        "authority_policy_fingerprint": status["authority_policy_fingerprint"],
+    }
+    assert store.reconcile(**context)["merged"] == 1
+    evaluated = store.evaluate_promotions(
+        **context,
+        promotion_policies={"aggregation.supervised": status["promotion_policy"]},
+    )
+    assert evaluated["created"] == 1
+    request = store.list_transition_requests()[0]
+    with pytest.raises(PermissionError, match="Behavior only"):
+        controller.apply_supervisor_transition({**request, "requested_level": "REPAIR"})
+    applied = controller.apply_supervisor_transition(request)
+    assert applied["applied"] is True
+    assert applied["changed"] is True
+    assert controller.state.level is InstrumentationLevel.BEHAVIOR
+
+
+def test_adaptive_transition_helpers_keep_context_explicit(monkeypatch):
+    from caretaker.logging import ipc
+
+    captured: list[tuple[object, dict[str, object], float]] = []
+
+    def fake_control_request(path, request, *, timeout):
+        captured.append((path, request, timeout))
+        return {"ok": True}
+
+    monkeypatch.setattr(ipc, "control_request", fake_control_request)
+    ipc.list_adaptive_transition_requests(
+        "/run/caretaker/control.sock",
+        worker_id="worker-a",
+        target_id="example.target",
+        limit=3,
+    )
+    ipc.acknowledge_adaptive_transition(
+        "/run/caretaker/control.sock",
+        request_id="request-1",
+        worker_id="worker-a",
+        target_id="example.target",
+        generation_id="generation-a",
+        code_hash="code-a",
+        monitoring_fingerprint="monitoring-a",
+        policy_fingerprint="policy-a",
+        authority_policy_generation="7",
+        authority_policy_fingerprint="authority-a",
+        applied=True,
+        observed_level="BEHAVIOR",
+    )
+
+    assert captured[0][1] == {
+        "command": "adaptive-transition-list",
+        "worker_id": "worker-a",
+        "target_id": "example.target",
+        "limit": 3,
+    }
+    assert captured[1][1]["command"] == "adaptive-transition-ack"
+    assert "requested_level" not in captured[1][1]
 
 
 @pytest.mark.parametrize(

@@ -856,6 +856,14 @@ class _AdaptiveController:
             # diagnostics rather than opening a competing repair state machine.
             return False
 
+        # When supervisor aggregation is enabled, process-local workers only
+        # collect evidence. The supervisor evaluates application-wide thresholds
+        # and issues a context-bound Behavior request; this prevents each worker
+        # from independently promoting the same target and double-counting the
+        # transition.
+        if self._aggregation_batcher is not None:
+            return False
+
         if requested is InstrumentationLevel.REPAIR and self.allow_repair_promotion:
             self.state.repair_requested = True
             self.state.repair_request_reason = reason
@@ -900,6 +908,55 @@ class _AdaptiveController:
                 InstrumentationLevel.BEHAVIOR,
                 reason,
             )
+
+    def apply_supervisor_transition(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        """Validate and apply one supervisor-issued Behavior transition.
+
+        The request is evidence coordination, not a grant of Repair authority.
+        Exact target, code, policy, monitoring, and authority context must match
+        this worker's current episode before the local state can change.
+        """
+        if not isinstance(request, Mapping):
+            raise ValueError("supervisor transition request must be an object")
+        request_id = str(request.get("request_id") or "").strip()
+        if not request_id:
+            raise ValueError("supervisor transition request requires request_id")
+        if str(request.get("requested_level") or "").upper() != "BEHAVIOR":
+            raise PermissionError("supervisor transition may request Behavior only")
+        with self._lock:
+            self._refresh_generation_if_needed()
+            self._refresh_policy_if_needed()
+            expected = {
+                "target_id": self.target_id,
+                "generation_id": self.code_hash,
+                "code_hash": self.code_hash,
+                "monitoring_fingerprint": _monitoring_policy_hash(self.policy),
+                "policy_fingerprint": self._policy_fingerprint,
+                "authority_policy_generation": str(_authority_context().effective.generation),
+                "authority_policy_fingerprint": self._authority_fingerprint,
+            }
+            for name, value in expected.items():
+                if str(request.get(name) or "") != str(value or ""):
+                    raise PermissionError(
+                        f"supervisor transition {name} does not match worker context"
+                    )
+            if self.state.level.value >= InstrumentationLevel.BEHAVIOR.value:
+                return {
+                    "request_id": request_id,
+                    "applied": True,
+                    "changed": False,
+                    "observed_level": self.state.level.name,
+                }
+            changed = self.request_behavior_promotion(
+                str(request.get("reason") or "supervisor adaptive threshold")[:512],
+                requested_by=f"SUPERVISOR:{request_id}"[:200],
+            )
+            return {
+                "request_id": request_id,
+                "applied": self.state.level is InstrumentationLevel.BEHAVIOR,
+                "changed": changed,
+                "observed_level": self.state.level.name,
+            }
 
     def record_behavior_promotion_outcome(
         self,
@@ -1348,6 +1405,20 @@ class _AdaptiveController:
             self._rebind_aggregation_batcher()
 
     def aggregation_status(self) -> dict[str, Any]:
+        promotion_policy = {
+            "exception": {
+                "enabled": self.policy.exception.enabled,
+                "occurrences": self.policy.exception.occurrences,
+                "window_seconds": self.policy.exception.window_seconds,
+                "promote_to": self.policy.exception.promote_to.name,
+            },
+            "soft_timing": {
+                "enabled": self.policy.soft_timing.enabled,
+                "occurrences": self.policy.soft_timing.occurrences,
+                "window_seconds": self.policy.soft_timing.window_seconds,
+                "promote_to": self.policy.soft_timing.promote_to.name,
+            },
+        }
         batcher = self._aggregation_batcher
         if batcher is None:
             return {
@@ -1359,8 +1430,14 @@ class _AdaptiveController:
                     _authority_context().effective.generation
                 ),
                 "authority_policy_fingerprint": self._authority_fingerprint,
+                "promotion_policy": promotion_policy,
             }
-        return {"enabled": True, **batcher.status(), **batcher.context}
+        return {
+            "enabled": True,
+            **batcher.status(),
+            **batcher.context,
+            "promotion_policy": promotion_policy,
+        }
 
     def _record_aggregation(self, **increments: int) -> None:
         batcher = self._aggregation_batcher

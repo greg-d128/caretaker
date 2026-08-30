@@ -39,17 +39,24 @@ only: an acknowledgement cannot authorize a transition or change policy.
 This first slice establishes durable ownership, batching, generation scope,
 policy-transition rejection, and cross-process provenance. The
 `AdaptiveAggregationPolicy` opt-in connects the adaptive controller to the
-in-process batcher; its default is disabled for least-friction startup. It is
-evidence aggregation only. The existing adaptive controller still owns live
-promotion transitions until a subsequent slice adds supervisor-authorized
-transition requests and worker acknowledgements. No LLM, batch field, or
-aggregate counter creates authority, changes policy, accepts a Guard baseline,
-or activates Repair.
+in-process batcher; its default is disabled for least-friction startup. When
+enabled, workers retain the inexpensive local collection path but do not
+promote from an exception or timing threshold themselves. After reconciliation,
+the supervisor evaluates the application-wide event window and persists a
+generation- and policy-bound Behavior transition request. Each contributing
+worker can validate and apply that request locally, then acknowledge it; the
+request is `PENDING`, `PARTIAL`, `APPLIED`, or `FAILED` based on those
+acknowledgements. No LLM, batch field, aggregate counter, or transition request
+creates authority, changes policy, accepts a Guard baseline, or activates
+Repair.
 
-The supervisor now exposes `adaptive-aggregation-status`,
-`adaptive-aggregation-reconcile`, and `adaptive-aggregation-ack` through its
-control socket, and its health cycle reconciles enabled worker contexts
-automatically. The next implementation slice must move threshold evaluation
-and promotion state to the supervisor without double-counting the existing
-process-local lifecycle, then use the acknowledgement stream for explicit
-transition requests.
+The supervisor exposes `adaptive-aggregation-status`,
+`adaptive-aggregation-reconcile`, `adaptive-aggregation-ack`,
+`adaptive-transition-list`, and `adaptive-transition-ack` through its control
+socket. Its health cycle reconciles enabled worker contexts and evaluates
+thresholds automatically. The worker-side
+`apply_supervisor_transition()` method requires exact target, generation, code,
+monitoring, policy, and authority context before applying Behavior. Dynamic
+console-managed thresholds, supervisor-owned repair-evidence accumulation,
+remote transport, and automatic worker process orchestration remain future
+work.

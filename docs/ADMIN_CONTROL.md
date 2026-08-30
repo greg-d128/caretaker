@@ -67,6 +67,13 @@ packet ID; target and policy context are resolved from the supervisor's
 registration rather than supplied by the worker. Cross-host transport remains
 a future capability.
 
+For enabled adaptive aggregation, the same socket exposes
+`adaptive-transition-list` and `adaptive-transition-ack`. The supervisor creates
+Behavior-only requests from reconciled application-wide threshold evidence.
+Workers must acknowledge the exact target, generation, code, monitoring, policy,
+and authority context; acknowledgements confirm application state only and do
+not grant Repair or policy authority.
+
 Replacement probation and acceptance counters are policy resolved. The default
 guideline is 1,000 successful executions for each stage with no permitted
 failures; a target-specific override may explicitly change those counters.
