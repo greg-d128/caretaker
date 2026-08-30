@@ -23,6 +23,7 @@ from textual.widgets import (
     Static,
     TabbedContent,
     TabPane,
+    TextArea,
 )
 from textual.widgets.data_table import RowDoesNotExist
 
@@ -145,6 +146,17 @@ class CaretakerConsoleApp(App):
     }
     #incident-capsule-assist-actions Input { width: 1fr; min-width: 18; }
     #incident-capsule-assist-actions Button { width: auto; min-width: 14; margin-left: 1; }
+    #incident-capsule-replay-actions {
+        height: 8;
+        padding: 0 1;
+    }
+    #incident-capsule-replay-fields {
+        height: 4;
+        align-vertical: middle;
+    }
+    #incident-capsule-replay-fields Input { width: 1fr; min-width: 18; }
+    #incident-capsule-replay-fields Button { width: auto; min-width: 16; margin-left: 1; }
+    #incident-capsule-replay-source { height: 4; }
     #incident-communication-actions {
         height: 5;
         padding: 0 1;
@@ -583,6 +595,16 @@ class CaretakerConsoleApp(App):
                             yield Input(placeholder="Local Ollama model", id="incident-capsule-model")
                             yield Button("Ask selected", id="incident-capsule-assist-selected", disabled=True)
                             yield Button("Ask all historical", id="incident-capsule-assist-all", variant="primary")
+                        with Vertical(id="incident-capsule-replay-actions"):
+                            with Horizontal(id="incident-capsule-replay-fields"):
+                                yield Input(placeholder="Incident-linked fixture ID", id="incident-capsule-replay-fixture")
+                                yield Input(placeholder="Entrypoint (for example charge)", id="incident-capsule-replay-entrypoint")
+                                yield Button("Replay isolated", id="incident-capsule-replay", disabled=True)
+                            yield TextArea(
+                                id="incident-capsule-replay-source",
+                                language="python",
+                                show_line_numbers=False,
+                            )
                         with Horizontal(id="incident-communication-actions"):
                             yield Input(
                                 placeholder="Audience profile (operators-v1)",
@@ -3049,6 +3071,7 @@ class CaretakerConsoleApp(App):
             self.query_one("#incident-capsule-revision", Input).value = ""
             self.query_one("#incident-capsule-load", Button).disabled = True
             self.query_one("#incident-capsule-assist-selected", Button).disabled = True
+            self.query_one("#incident-capsule-replay", Button).disabled = True
             self.query_one("#incident-communication-draft", Button).disabled = True
             self.query_one("#incident-communication-approve", Button).disabled = True
             self.query_one("#incident-communication-reject", Button).disabled = True
@@ -3083,6 +3106,7 @@ class CaretakerConsoleApp(App):
         self.query_one("#incident-capsule-revision", Input).value = ""
         self.query_one("#incident-capsule-load", Button).disabled = True
         self.query_one("#incident-capsule-assist-selected", Button).disabled = True
+        self.query_one("#incident-capsule-replay", Button).disabled = True
         self.query_one("#incident-communication-draft", Button).disabled = True
         self.query_one("#incident-communication-approve", Button).disabled = True
         self.query_one("#incident-communication-reject", Button).disabled = True
@@ -3125,6 +3149,7 @@ class CaretakerConsoleApp(App):
             self.query_one("#incident-capsule-revision", Input).value = ""
         self.query_one("#incident-capsule-load", Button).disabled = True
         self.query_one("#incident-capsule-assist-selected", Button).disabled = True
+        self.query_one("#incident-capsule-replay", Button).disabled = True
         self.query_one("#incident-communication-draft", Button).disabled = True
         self.query_one("#incident-communication-approve", Button).disabled = True
         self.query_one("#incident-communication-reject", Button).disabled = True
@@ -3152,6 +3177,7 @@ class CaretakerConsoleApp(App):
             payload = envelope.get("capsule") or {}
             self.query_one("#incident-capsule-load", Button).disabled = False
             self.query_one("#incident-capsule-assist-selected", Button).disabled = False
+            self.query_one("#incident-capsule-replay", Button).disabled = False
             self.query_one("#incident-communication-draft", Button).disabled = False
             self._update_incident_capsule_structured_details(payload)
             self.query_one("#incident-capsule-detail-title", Static).update(
@@ -3203,6 +3229,7 @@ class CaretakerConsoleApp(App):
                     f"Correlated persisted timeline unavailable: {type(exc).__name__}"
                 )
         except Exception as exc:
+            self.query_one("#incident-capsule-replay", Button).disabled = True
             self.query_one("#incident-capsule-facts", Static).update("Incident facts unavailable")
             self.query_one("#incident-capsule-evidence-sections", Static).update(
                 "Evidence sections unavailable"
@@ -3804,6 +3831,36 @@ class CaretakerConsoleApp(App):
                 response = await self._request("incident-capsule-assist", **request)
                 self.query_one("#incident-capsule-detail-title", Static).update(
                     f"Advisory assistance | {response.get('result_count', 0)} result(s)"
+                )
+                self._write_json("#incident-capsule-output", response)
+                return
+            if button == "incident-capsule-replay":
+                if self._selected_capsule is None:
+                    raise ValueError("Select an Incident Capsule first")
+                fixture_id = self.query_one(
+                    "#incident-capsule-replay-fixture", Input
+                ).value.strip()
+                entrypoint = self.query_one(
+                    "#incident-capsule-replay-entrypoint", Input
+                ).value.strip()
+                source = self.query_one(
+                    "#incident-capsule-replay-source", TextArea
+                ).text
+                if not fixture_id:
+                    raise ValueError("Enter an incident-linked fixture ID first")
+                if not entrypoint:
+                    raise ValueError("Enter a replay entrypoint first")
+                if not source.strip():
+                    raise ValueError("Enter the subject source text first")
+                response = await self._request(
+                    "incident-capsule-replay",
+                    capsule_id=self._selected_capsule.get("capsule_id"),
+                    fixture_id=fixture_id,
+                    entrypoint=entrypoint,
+                    source=source,
+                )
+                self.query_one("#incident-capsule-detail-title", Static).update(
+                    f"Isolated replay | {response.get('outcome', 'UNKNOWN')}"
                 )
                 self._write_json("#incident-capsule-output", response)
                 return

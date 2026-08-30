@@ -141,9 +141,19 @@ aggregate conclusion. When a supervisor is available, the command includes the
 bounded persisted timeline; direct offline mode analyzes capsule data without
 claiming that absent log records did not occur.
 
+The Incident Explorer can also request isolated replay of an incident-linked
+persistent regression fixture with `caretaker-capsule-replay`. The supervisor
+verifies the selected capsule revision and requires the fixture's recorded
+incident identity to match it before dispatch. Replay requires the regression
+and replay policy opt-ins, matching source identity by default, and a
+configured backend meeting the policy's minimum isolation. The result is
+returned as separate evidence and explicitly reports that the capsule was not
+modified; replay never creates a capsule revision or changes Repair state.
+
 ## Remaining work
 
-Incident Capsules do not yet provide isolated replay, policy-specific capture
-levels for every application state source, LLM-assisted language tailoring, or
-communication approval and delivery. Those remain future work and must be
-implemented with isolated replay, explicit authority, and adversarial tests.
+Incident Capsules do not yet provide policy-specific capture levels for every
+application state source, LLM-assisted language tailoring, or communication
+delivery. VM replay with guest attestation and richer type-preserving
+rehydration remain future work. Existing replay is deliberately limited to
+bounded `JSON_EXACT` fixtures and an explicitly configured isolated backend.

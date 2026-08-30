@@ -188,6 +188,25 @@ result = coordinator.execute(
 )
 ```
 
+For a supervised application, pass the pre-provisioned image when starting
+`caretaker-run`:
+
+```console
+caretaker-run \
+  --replay-podman-image localhost/caretaker-replay-base:0.6.1 \
+  --replay-cgroup-manager cgroupfs \
+  --policy /etc/caretaker/application.toml \
+  my_application
+```
+
+The effective policy must also set `logging.regression.enabled = true`,
+`replay_enabled = true`, and a minimum isolation compatible with the backend.
+The default minimum is `VM`, so the rootless Podman backend is rejected unless
+the deployment explicitly selects `CONTAINER`. Operators can then use
+`caretaker-capsule-replay` with a capsule ID, fixture ID, entrypoint, and the
+subject source (inline or from a file). Missing backend configuration or an
+unavailable local image fails closed.
+
 Passing `backend=...` directly to `execute` remains supported for one-off
 dispatch and compatibility. Supplying `backends=(...)` to the coordinator is
 the policy-driven path when a deployment has both container and VM options.

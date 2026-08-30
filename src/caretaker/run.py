@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
@@ -49,6 +50,11 @@ from .logging.ipc import (
 from .logging.policy import OperatorLoggingPolicy, load_operator_policy
 from .logging.segments import read_segment
 from .regression import RegressionFixtureStore
+from .replay import (
+    IsolatedReplayCoordinator,
+    RootlessPodmanReplayBackend,
+    execute_capsule_replay,
+)
 from .integrity import SignatureVerificationMode, verify_release_publication
 from .builtin_profiles import builtin_profile_names, load_builtin_profile_supervisor
 from .system import SystemCollectionPolicy, SystemDataCollector, SystemOutputPolicy, load_system_policy
@@ -141,6 +147,24 @@ def main(argv: list[str] | None = None) -> int:
         choices=[item.value for item in SignatureVerificationMode],
         default=SignatureVerificationMode.FULL_PUBLICATION.value,
     )
+    parser.add_argument(
+        "--replay-podman-image",
+        help=(
+            "pre-provisioned local rootless Podman image for isolated historical replay; "
+            "replay remains disabled unless policy enables it"
+        ),
+    )
+    parser.add_argument(
+        "--replay-podman-executable",
+        default="podman",
+        help="Podman executable used by the optional isolated replay backend",
+    )
+    parser.add_argument(
+        "--replay-cgroup-manager",
+        choices=("cgroupfs", "systemd"),
+        default="cgroupfs",
+        help="cgroup manager for the optional rootless replay backend",
+    )
     parser.add_argument("module")
     parser.add_argument("module_args", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
@@ -225,6 +249,25 @@ def main(argv: list[str] | None = None) -> int:
         if policy.regression.enabled
         else None
     )
+    replay_coordinator = None
+    if regression_fixture_store is not None:
+        replay_backend = (
+            RootlessPodmanReplayBackend(
+                args.replay_podman_image,
+                podman_executable=args.replay_podman_executable,
+                cgroup_manager=args.replay_cgroup_manager,
+            )
+            if args.replay_podman_image
+            else None
+        )
+        replay_coordinator = IsolatedReplayCoordinator(
+            regression_fixture_store,
+            policy=policy.regression,
+            backend=replay_backend,
+        ) if replay_backend is not None else IsolatedReplayCoordinator(
+            regression_fixture_store,
+            policy=policy.regression,
+        )
     behavior_statistics = BehaviorStatisticsRepository(policy.directory)
     behavior_revision = {"value": 0}
     behavior_collection_id = str(uuid4())
@@ -452,6 +495,48 @@ def main(argv: list[str] | None = None) -> int:
                 "envelope": capsule_store.load(raw_capsule_id, revision=revision),
                 "integrity_verified": True,
             }
+        if command == "incident-capsule-replay":
+            if replay_coordinator is None:
+                raise PermissionError(
+                    "persistent regression fixtures are disabled; capsule replay is unavailable"
+                )
+            raw_capsule_id = str(request.get("capsule_id") or "").strip()
+            fixture_id = str(request.get("fixture_id") or "").strip()
+            entrypoint = str(request.get("entrypoint") or "").strip()
+            source = request.get("source")
+            if not raw_capsule_id:
+                raise ValueError("incident-capsule-replay requires capsule_id")
+            if not fixture_id:
+                raise ValueError("incident-capsule-replay requires fixture_id")
+            if not entrypoint:
+                raise ValueError("incident-capsule-replay requires entrypoint")
+            if not isinstance(source, str) or not source:
+                raise ValueError("incident-capsule-replay requires source text")
+            result = execute_capsule_replay(
+                replay_coordinator,
+                capsule_store,
+                capsule_id=raw_capsule_id,
+                fixture_id=fixture_id,
+                entrypoint=entrypoint,
+                source=source,
+            )
+            runtime.event(
+                logger_name="caretaker.capsule",
+                severity=20,
+                channel=LogChannel.AUDIT,
+                message="Incident Capsule fixture replay completed",
+                fields={
+                    "capsule_id": result["capsule_id"],
+                    "incident_id": result["incident_id"],
+                    "fixture_id": result["fixture_id"],
+                    "outcome": result["outcome"],
+                    "backend_name": result["backend_name"],
+                    "isolation_level": result["isolation_level"],
+                    "capsule_modified": False,
+                },
+                origin="caretaker",
+            )
+            return {"ok": True, **result}
         if command == "incident-capsule-artifact":
             raw_artifact_id = str(request.get("artifact_id") or "").strip()
             if not raw_artifact_id:

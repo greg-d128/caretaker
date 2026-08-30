@@ -29,6 +29,12 @@ modify a capsule or authorize any Caretaker action. The
 interactive console and can submit a query independently to all historical
 capsules.
 
+`caretaker-capsule-replay` requests one incident-linked historical fixture
+through the same authenticated supervisor socket. It requires an active
+`caretaker-run`; the supervisor enforces the effective regression policy,
+source-hash check, capsule/fixture incident binding, and configured isolated
+backend. It does not modify the selected capsule.
+
 The `incident-communication-draft` command creates a bounded, policy-governed
 draft for one verified capsule. The console exposes the same operation as
 **Create review draft**, and `caretaker-incident-draft` can write a new

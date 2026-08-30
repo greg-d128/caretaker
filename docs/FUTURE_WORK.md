@@ -39,9 +39,11 @@ list reserved for future communication records. The console can save its
 current incident-focused view as a redacted `operator-view` side artifact.
 
 The initial Explorer provides read-only capsule, revision, integrity,
-side-artifact, and correlated persisted-timeline inspection. Isolated replay,
-full policy-specific capture of every application state source, communication
-approval, and delivery remain future work. Capsule viewing remains read-only
+side-artifact, and correlated persisted-timeline inspection. It can now request
+isolated replay for an incident-linked bounded JSON fixture through the
+supervisor; replay results remain separate evidence and cannot modify the
+capsule. Full policy-specific capture of every application state source,
+communication approval, and delivery remain future work. Capsule viewing remains read-only
 evidence inspection;
 operator artifacts cannot authorize Repair, satisfy validation, modify policy,
 close incidents, or expand Caretaker authority. See

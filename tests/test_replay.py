@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from caretaker import (
+    IncidentCapsuleStore,
     IsolatedReplayCoordinator,
     RegressionFixturePolicy,
     RegressionFixtureStore,
@@ -13,6 +14,7 @@ from caretaker import (
     ReplayExecutionResult,
     RootlessPodmanReplayBackend,
     ValidationIsolationLevel,
+    execute_capsule_replay,
 )
 from caretaker.validation import ValidationBackendCapabilities
 from caretaker.replay_worker import run_payload
@@ -175,6 +177,86 @@ def test_replay_without_configured_backend_fails_closed(tmp_path: Path) -> None:
 
     with pytest.raises(ReplayExecutionError, match="no replay execution backend"):
         coordinator.execute(fixture_id, entrypoint="charge", source=SOURCE)
+
+
+def test_capsule_replay_requires_incident_link_and_does_not_modify_capsule(tmp_path: Path) -> None:
+    regression_policy = RegressionFixturePolicy(enabled=True, replay_enabled=True)
+    store = RegressionFixtureStore(tmp_path, policy=regression_policy)
+    incident_id = "00000000-0000-0000-0000-000000000001"
+    capsule_store = IncidentCapsuleStore(tmp_path)
+    capsule_envelope = capsule_store.create_placeholder(
+        incident_id,
+        incident_state={"trigger": "exception"},
+    )
+    fixture = store.record(
+        target_id="app:charge",
+        name="incident-case",
+        args=(1,),
+        kwargs={},
+        expected=2,
+        incident_id=incident_id,
+        candidate_id=None,
+        source_function_version=2,
+        source_function_hash=hashlib.sha256(SOURCE.encode()).hexdigest(),
+        replay_safety="PURE",
+    )
+    assert fixture is not None
+    coordinator = IsolatedReplayCoordinator(
+        store,
+        policy=regression_policy,
+        backend=FakeVMReplayBackend(),
+    )
+    capsule_id = str(capsule_envelope["capsule"]["capsule_id"])
+    before = capsule_store.load(capsule_id)
+    result = execute_capsule_replay(
+        coordinator,
+        capsule_store,
+        capsule_id=capsule_id,
+        fixture_id=str(fixture["fixture_id"]),
+        entrypoint="charge",
+        source=SOURCE,
+    )
+    after = capsule_store.load(capsule_id)
+    assert result["outcome"] == "PASSED"
+    assert result["capsule_modified"] is False
+    assert result["integrity_verified"] is True
+    assert before == after
+
+
+def test_capsule_replay_rejects_fixture_from_another_incident(tmp_path: Path) -> None:
+    regression_policy = RegressionFixturePolicy(enabled=True, replay_enabled=True)
+    store = RegressionFixtureStore(tmp_path, policy=regression_policy)
+    capsule_store = IncidentCapsuleStore(tmp_path)
+    capsule_envelope = capsule_store.create_placeholder(
+        "00000000-0000-0000-0000-000000000001",
+    )
+    fixture = store.record(
+        target_id="app:charge",
+        name="other-incident-case",
+        args=(1,),
+        kwargs={},
+        expected=2,
+        incident_id="00000000-0000-0000-0000-000000000002",
+        candidate_id=None,
+        source_function_version=2,
+        source_function_hash=hashlib.sha256(SOURCE.encode()).hexdigest(),
+        replay_safety="PURE",
+    )
+    assert fixture is not None
+    coordinator = IsolatedReplayCoordinator(
+        store,
+        policy=regression_policy,
+        backend=FakeVMReplayBackend(),
+    )
+    with pytest.raises(ReplayExecutionError, match="not owned"):
+        execute_capsule_replay(
+            coordinator,
+            capsule_store,
+            capsule_id=str(capsule_envelope["capsule"]["capsule_id"]),
+            fixture_id=str(fixture["fixture_id"]),
+            entrypoint="charge",
+            source=SOURCE,
+        )
 
 
 def test_replay_backend_registry_rejects_conflicting_configuration(tmp_path: Path) -> None:

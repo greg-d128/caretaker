@@ -58,6 +58,66 @@ class ReplayExecutionResult:
     error: str | None = None
 
 
+def execute_capsule_replay(
+    coordinator: "IsolatedReplayCoordinator",
+    capsule_store: Any,
+    *,
+    capsule_id: str,
+    fixture_id: str,
+    entrypoint: str,
+    source: str,
+) -> dict[str, Any]:
+    """Execute a fixture only when it is owned by the selected capsule's incident.
+
+    Capsule loading verifies the immutable revision chain before this function
+    dispatches anything.  Replay results are returned as a separate response;
+    this function never writes a capsule revision, artifact, or repair state.
+    """
+
+    envelope = capsule_store.load(capsule_id)
+    capsule = envelope.get("capsule")
+    if not isinstance(capsule, Mapping):
+        raise ReplayExecutionError("selected Incident Capsule has no valid capsule payload")
+    incident_id = str(capsule.get("incident_id") or "")
+    if not incident_id:
+        raise ReplayExecutionError("selected Incident Capsule has no incident identity")
+
+    fixture = coordinator.store.load(fixture_id)
+    fixture_incident_id = str(fixture.get("source_incident_id") or "")
+    if not fixture_incident_id:
+        raise ReplayExecutionError(
+            "historical fixture is not linked to an incident and cannot be replayed from a capsule"
+        )
+    if fixture_incident_id != incident_id:
+        raise ReplayExecutionError(
+            "historical fixture is not owned by the selected Incident Capsule incident"
+        )
+
+    result = coordinator.execute(
+        fixture_id,
+        entrypoint=entrypoint,
+        source=source,
+    )
+    integrity = envelope.get("integrity")
+    integrity = integrity if isinstance(integrity, Mapping) else {}
+    return {
+        "capsule_id": str(capsule.get("capsule_id") or capsule_id),
+        "incident_id": incident_id,
+        "capsule_revision": int(capsule.get("revision") or 0),
+        "capsule_content_sha256": integrity.get("content_sha256"),
+        "fixture_id": result.fixture_id,
+        "target_id": result.target_id,
+        "outcome": result.outcome,
+        "backend_name": result.backend_name,
+        "isolation_level": result.isolation_level.name,
+        "output": result.output,
+        "error": result.error,
+        "capsule_modified": False,
+        "integrity_verified": True,
+        "replay_status": "ISOLATED_RESULT_NOT_CAPSULE_DATA",
+    }
+
+
 class ReplayExecutionBackend(Protocol):
     """Backend that rehydrates and executes only inside its declared boundary."""
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from caretaker.console import CaretakerConsoleApp
 from rich.text import Text
-from textual.widgets import Button, Checkbox, DataTable, Input, Static
+from textual.widgets import Button, Checkbox, DataTable, Input, RichLog, Static, TextArea
 
 
 def test_target_runtime_state_marks_candidate_probation_as_validating():
@@ -861,6 +861,79 @@ def test_console_incident_explorer_loads_verified_capsule_and_side_artifact(tmp_
                 ("incident-capsule-artifact", {"artifact_id": artifact_id}),
             ]
             assert app._context_incident == incident_id
+
+    asyncio.run(exercise())
+
+
+def test_console_incident_explorer_requests_read_only_isolated_replay(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+    incident_id = "00000000-0000-0000-0000-000000000001"
+    capsule_id = "00000000-0000-0000-0000-000000000011"
+    fixture_id = "00000000-0000-0000-0000-000000000021"
+    source = "def charge(value):\n    return value + 1\n"
+
+    async def exercise() -> None:
+        async with app.run_test(size=(140, 60)):
+            requests = []
+
+            async def request(command: str, **payload):
+                requests.append((command, payload))
+                if command == "incident-capsule-list":
+                    return {"ok": True, "capsules": [{
+                        "capsule_id": capsule_id,
+                        "incident_id": incident_id,
+                        "revision": 1,
+                        "created_at": "2026-08-29T12:00:00+00:00",
+                        "artifact_count": 0,
+                        "communication_count": 0,
+                        "integrity_status": "VERIFIED",
+                    }]}
+                if command == "incident-capsule-get":
+                    return {"ok": True, "envelope": {
+                        "capsule": {
+                            "capsule_id": capsule_id,
+                            "incident_id": incident_id,
+                            "revision": 1,
+                            "incident_state": {"trigger": "exception"},
+                            "artifacts": [],
+                            "communications": [],
+                        },
+                        "integrity": {"content_sha256": "a" * 64},
+                    }}
+                if command == "incident-capsule-timeline":
+                    return {"ok": True, "records": []}
+                if command == "incident-capsule-replay":
+                    return {
+                        "ok": True,
+                        "capsule_id": capsule_id,
+                        "fixture_id": fixture_id,
+                        "outcome": "PASSED",
+                        "capsule_modified": False,
+                        "integrity_verified": True,
+                    }
+                raise AssertionError(command)
+
+            app._request = request  # type: ignore[method-assign]
+            await app.refresh_incident_capsules()
+            await app._select_incident_capsule(app._capsule_records[0])
+            app.query_one("#incident-capsule-replay-fixture", Input).value = fixture_id
+            app.query_one("#incident-capsule-replay-entrypoint", Input).value = "charge"
+            app.query_one("#incident-capsule-replay-source", TextArea).text = source
+            button = app.query_one("#incident-capsule-replay", Button)
+            assert button.disabled is False
+            await app.on_button_pressed(Button.Pressed(button))
+            assert requests[-1] == (
+                "incident-capsule-replay",
+                {
+                    "capsule_id": capsule_id,
+                    "fixture_id": fixture_id,
+                    "entrypoint": "charge",
+                    "source": source,
+                },
+            )
+            assert "PASSED" in str(
+                app.query_one("#incident-capsule-detail-title", Static).render()
+            )
 
     asyncio.run(exercise())
 

@@ -202,6 +202,7 @@ from .replay import (
     ReplayExecutionRequest,
     ReplayExecutionResult,
     RootlessPodmanReplayBackend,
+    execute_capsule_replay,
 )
 from .store import InMemoryRepairStore, SQLiteRepairStore
 from .telemetry import CorrelatedLogHandler
@@ -462,6 +463,7 @@ __all__ = [
     "ReplayExecutionRequest",
     "ReplayExecutionResult",
     "RootlessPodmanReplayBackend",
+    "execute_capsule_replay",
     "ReplaySafety",
     "SnapshotStrategy",
     "TimeoutMode",

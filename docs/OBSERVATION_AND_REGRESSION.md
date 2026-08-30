@@ -54,8 +54,10 @@ and failures to persist do not change repair success or authority decisions.
 
 Fixtures can be inspected read-only with `caretaker-regression-fixtures` or the
 supervisor control commands `regression-fixture-list` and
-`regression-fixture-get`. Isolated replay execution, including any value
-rehydration and stronger sandbox contract, remains a separate future task.
+`regression-fixture-get`. Incident-linked fixtures can be replayed through the
+supervisor's `incident-capsule-replay` command or the
+`caretaker-capsule-replay` CLI. The selected capsule and fixture must belong to
+the same incident, and the result is separate from the immutable capsule.
 
 The first replay contract is now explicit in the API. `IsolatedReplayCoordinator`
 requires policy opt-in, a PURE or IDEMPOTENT fixture, a verified subject source,
