@@ -3589,6 +3589,32 @@ class CaretakerConsoleApp(App):
                 "deadline": "-",
                 "payload": dict(item),
             })
+            conflicts = item.get("distribution_conflicts")
+            conflicts = conflicts if isinstance(conflicts, (list, tuple)) else ()
+            for conflict in conflicts:
+                if not isinstance(conflict, Mapping):
+                    continue
+                z_score = conflict.get("z_score")
+                try:
+                    z_text = f"z={float(z_score):.2f}"
+                except (TypeError, ValueError):
+                    z_text = "z=?"
+                rows.append({
+                    "kind": "CONFLICT",
+                    "target_id": item.get("aggregation_target_id") or item.get("target_id") or "-",
+                    "scope": item.get("aggregation_scope") or "-",
+                    "generation": item.get("generation_id") or "-",
+                    "status": "REVIEW",
+                    "workers_or_acks": (
+                        f"{conflict.get('worker_id') or '-'} / "
+                        f"{conflict.get('metric') or '-'} / {z_text}"
+                    ),
+                    "deadline": "-",
+                    "payload": {
+                        "aggregate": dict(item),
+                        "conflict": dict(conflict),
+                    },
+                })
         expired = 0
         for item in transitions:
             if not isinstance(item, Mapping):
@@ -3630,7 +3656,9 @@ class CaretakerConsoleApp(App):
         self.query_one("#adaptive-aggregation-status", Static).update(
             f"Aggregates {len(aggregates)} | "
             f"Transitions {len(transitions)} | "
-            f"Expired {expired} | Read-only; no transitions applied"
+            f"Expired {expired} | "
+            f"Distribution conflicts {sum(1 for item in rows if item['kind'] == 'CONFLICT')} | "
+            "Read-only; no transitions applied"
         )
         output.write(
             "Select a row for bounded details. The console does not acknowledge, "

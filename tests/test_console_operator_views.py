@@ -1173,6 +1173,11 @@ def test_console_displays_read_only_adaptive_transition_deadlines(tmp_path):
                         "enabled": True,
                         "total_batches": 4,
                         "workers": {"worker-a": {"worker_pid": 123}},
+                        "distribution_conflicts": [{
+                            "worker_id": "worker-a",
+                            "metric": "timing_duration_seconds",
+                            "z_score": 4.25,
+                        }],
                     }],
                     "transitions": [{
                         "request_id": "request-1",
@@ -1213,13 +1218,14 @@ def test_console_displays_read_only_adaptive_transition_deadlines(tmp_path):
             await app.refresh_adaptive_aggregation()
 
             assert requests == [("adaptive-aggregation-status", {})]
-            assert app.query_one("#adaptive-aggregation-table", DataTable).row_count == 2
+            assert app.query_one("#adaptive-aggregation-table", DataTable).row_count == 3
             status = str(
                 app.query_one("#adaptive-aggregation-status", Static).render()
             )
             assert "Aggregates 1" in status
             assert "Transitions 1" in status
             assert "Expired 1" in status
+            assert "Distribution conflicts 1" in status
             assert "Read-only" in status
             policy_status = str(
                 app.query_one("#adaptive-aggregation-policy-status", Static).render()
