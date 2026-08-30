@@ -74,6 +74,10 @@ class BehaviorSnapshotPolicy:
     materialize_after_samples: int = 100
     maximum_snapshot_age_seconds: float = 3600.0
     automatic_materialization: bool = True
+    randomized_epoch_boundaries: bool = False
+    randomized_epoch_min_samples: int = 50
+    randomized_epoch_max_samples: int = 200
+    randomized_epoch_seed: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,6 +225,17 @@ def validate_guard_policy(policy: GuardPolicy) -> None:
         errors.append("deviations.minimum_duration_samples must be at least one")
     if policy.retention.maximum_raw_events <= 0:
         errors.append("retention.maximum_raw_events must be greater than zero")
+    snapshots = policy.snapshots
+    if snapshots.statistics_target <= 0:
+        errors.append("snapshots.statistics_target must be greater than zero")
+    if snapshots.maximum_resources <= 0:
+        errors.append("snapshots.maximum_resources must be greater than zero")
+    if snapshots.randomized_epoch_min_samples <= 0:
+        errors.append("snapshots.randomized_epoch_min_samples must be greater than zero")
+    if snapshots.randomized_epoch_max_samples < snapshots.randomized_epoch_min_samples:
+        errors.append("snapshots.randomized_epoch_max_samples must be at least the minimum")
+    if isinstance(snapshots.randomized_epoch_seed, bool):
+        errors.append("snapshots.randomized_epoch_seed must be an integer or null")
     if policy.retention.raw_event_seconds is not None:
         errors.append("retention.raw_event_seconds is reserved; durable time-based raw-event pruning is not implemented")
     if policy.retention.aggregate_seconds is not None:

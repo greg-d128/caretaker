@@ -1328,6 +1328,10 @@ class BehaviorStatisticsRepository:
         materialize_after_samples: int = 100,
         maximum_snapshot_age_seconds: float = 3600.0,
         automatic_materialization: bool = True,
+        randomized_epoch_boundaries: bool = False,
+        randomized_epoch_min_samples: int = 50,
+        randomized_epoch_max_samples: int = 200,
+        randomized_epoch_seed: int | None = None,
         environment_fingerprint: str | None = None,
         workload_label: str | None = None,
     ) -> None:
@@ -1347,6 +1351,20 @@ class BehaviorStatisticsRepository:
         self.materialize_after_samples = max(1, int(materialize_after_samples))
         self.maximum_snapshot_age_seconds = max(0.0, float(maximum_snapshot_age_seconds))
         self.automatic_materialization = bool(automatic_materialization)
+        self.randomized_epoch_boundaries = bool(randomized_epoch_boundaries)
+        self.randomized_epoch_min_samples = int(randomized_epoch_min_samples)
+        self.randomized_epoch_max_samples = int(randomized_epoch_max_samples)
+        if self.randomized_epoch_min_samples <= 0:
+            raise ValueError("randomized_epoch_min_samples must be greater than zero")
+        if self.randomized_epoch_max_samples < self.randomized_epoch_min_samples:
+            raise ValueError("randomized_epoch_max_samples must be at least the minimum")
+        if randomized_epoch_seed is not None and (
+            isinstance(randomized_epoch_seed, bool)
+            or not isinstance(randomized_epoch_seed, int)
+        ):
+            raise ValueError("randomized_epoch_seed must be an integer or null")
+        self.randomized_epoch_seed = randomized_epoch_seed
+        self._random_source = random.SystemRandom()
         self.environment_fingerprint = environment_fingerprint
         self.workload_label = workload_label
         self._active: dict[str, dict[str, Any]] = {}
@@ -1369,6 +1387,10 @@ class BehaviorStatisticsRepository:
             materialize_after_samples=policy.materialize_after_samples,
             maximum_snapshot_age_seconds=policy.maximum_snapshot_age_seconds,
             automatic_materialization=policy.automatic_materialization,
+            randomized_epoch_boundaries=policy.randomized_epoch_boundaries,
+            randomized_epoch_min_samples=policy.randomized_epoch_min_samples,
+            randomized_epoch_max_samples=policy.randomized_epoch_max_samples,
+            randomized_epoch_seed=policy.randomized_epoch_seed,
             environment_fingerprint=environment_fingerprint,
             workload_label=workload_label,
         )
@@ -1400,6 +1422,7 @@ class BehaviorStatisticsRepository:
             monitoring_fingerprint=monitoring_fingerprint,
         )
         now = utcnow().isoformat()
+        epoch_boundary = self._epoch_boundary(epoch_sequence)
         return {
             "schema_version": 1,
             "statistics_schema_version": STATISTICS_SCHEMA_VERSION,
@@ -1432,6 +1455,43 @@ class BehaviorStatisticsRepository:
             "duration_seconds": _empty_distribution(),
             "call_frequency_buckets": {},
             "strata": {},
+            "epoch_boundary": epoch_boundary,
+        }
+
+    def _epoch_boundary(self, epoch_sequence: int) -> dict[str, Any]:
+        if not self.randomized_epoch_boundaries:
+            return {
+                "algorithm": "fixed-sample-count-v1",
+                "randomized": False,
+                "target_samples": self.materialize_after_samples,
+            }
+        if self.randomized_epoch_seed is None:
+            seed_material = self._random_source.getrandbits(256)
+        else:
+            seed_material = int.from_bytes(
+                hashlib.sha256(
+                    f"caretaker-randomized-epoch-v1:{self.randomized_epoch_seed}:{epoch_sequence}".encode(
+                        "ascii"
+                    )
+                ).digest(),
+                "big",
+            )
+        target_samples = random.Random(seed_material).randint(
+            self.randomized_epoch_min_samples,
+            self.randomized_epoch_max_samples,
+        )
+        return {
+            "algorithm": "uniform-integer-v1",
+            "randomized": True,
+            "minimum_samples": self.randomized_epoch_min_samples,
+            "maximum_samples": self.randomized_epoch_max_samples,
+            "target_samples": target_samples,
+            "seed_commitment": hashlib.sha256(str(seed_material).encode("ascii")).hexdigest(),
+            "configured_seed_commitment": (
+                hashlib.sha256(str(self.randomized_epoch_seed).encode("ascii")).hexdigest()
+                if self.randomized_epoch_seed is not None
+                else None
+            ),
         }
 
     def _load_active(self, target_id: str) -> dict[str, Any] | None:
@@ -1533,6 +1593,7 @@ class BehaviorStatisticsRepository:
                 "event_samples": int(state.get("event_count") or 0),
                 "statistics_target": self.statistics_target,
                 "strata": strata,
+                "epoch_boundary": dict(state.get("epoch_boundary") or {}),
             },
             "call_frequency_buckets": dict(state.get("call_frequency_buckets") or {}),
         }
@@ -1680,13 +1741,23 @@ class BehaviorStatisticsRepository:
                     _update_distribution(stratum["duration_seconds"], float(duration), target=self.statistics_target)
                 samples = int(state["sample_count"])
                 age = (utcnow() - datetime.fromisoformat(str(state["created_at"]))).total_seconds()
+                boundary = dict(state.get("epoch_boundary") or {})
+                boundary_target = int(
+                    boundary.get("target_samples") or self.materialize_after_samples
+                )
                 if self.automatic_materialization and (
-                    samples >= self.materialize_after_samples
+                    samples >= boundary_target
                     or (self.maximum_snapshot_age_seconds > 0 and age >= self.maximum_snapshot_age_seconds)
                 ):
                     self._queue(
                         state,
-                        reason=("sample-target-reached" if samples >= self.materialize_after_samples else "maximum-snapshot-age-reached"),
+                        reason=(
+                            "randomized-epoch-boundary-reached"
+                            if boundary.get("randomized") and samples >= boundary_target
+                            else "sample-target-reached"
+                            if samples >= boundary_target
+                            else "maximum-snapshot-age-reached"
+                        ),
                     )
                     # The queued capture is now the durable representation of the
                     # old accumulator. Remove any older checkpoint before starting

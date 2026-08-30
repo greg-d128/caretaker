@@ -198,6 +198,77 @@ def test_pending_epochs_materialize_in_subject_generation_sequence(tmp_path: Pat
     assert summary["profile"]["coverage_call_count"] == 4
 
 
+def test_randomized_epoch_boundaries_are_bounded_provenance_and_disjoint(tmp_path: Path) -> None:
+    repository = BehaviorStatisticsRepository(
+        tmp_path,
+        materialize_after_samples=10_000,
+        checkpoint_every_samples=1,
+        randomized_epoch_boundaries=True,
+        randomized_epoch_min_samples=2,
+        randomized_epoch_max_samples=4,
+        randomized_epoch_seed=17,
+    )
+    target_id = "randomized.target"
+    configuration = {"sampling": {"every": 1}}
+
+    repository.observe_event(_completed(target_id, 0.1), monitoring_configuration=configuration)
+    first_active = repository.current_capture(target_id)
+    assert first_active is not None
+    first_boundary = first_active["profile"]["sampling_provenance"]["epoch_boundary"]
+    assert first_boundary["algorithm"] == "uniform-integer-v1"
+    assert first_boundary["randomized"] is True
+    assert 2 <= first_boundary["target_samples"] <= 4
+    assert len(first_boundary["seed_commitment"]) == 64
+
+    for _ in range(first_boundary["target_samples"] - 1):
+        repository.observe_event(_completed(target_id, 0.1), monitoring_configuration=configuration)
+    assert repository.pending_count() == 1
+
+    store = BehaviorSnapshotStore(tmp_path)
+    first_envelope = repository.materialize_pending(store)[0]
+    first_snapshot = first_envelope["snapshot"]
+    assert first_snapshot["seal_reason"] == "randomized-epoch-boundary-reached"
+    assert first_snapshot["first_sample_sequence"] == 1
+    assert first_snapshot["last_sample_sequence"] == first_boundary["target_samples"]
+
+    second_active = repository.current_capture(target_id)
+    assert second_active is not None
+    second_boundary = second_active["profile"]["sampling_provenance"]["epoch_boundary"]
+    assert 2 <= second_boundary["target_samples"] <= 4
+    for _ in range(second_boundary["target_samples"]):
+        repository.observe_event(_completed(target_id, 0.1), monitoring_configuration=configuration)
+    second_envelope = repository.materialize_pending(store)[0]
+    second_snapshot = second_envelope["snapshot"]
+    assert second_snapshot["first_sample_sequence"] == first_snapshot["last_sample_sequence"] + 1
+    assert second_snapshot["last_sample_sequence"] == (
+        second_snapshot["first_sample_sequence"] + second_boundary["target_samples"] - 1
+    )
+
+    replay = BehaviorStatisticsRepository(
+        tmp_path / "replay",
+        materialize_after_samples=10_000,
+        checkpoint_every_samples=1,
+        randomized_epoch_boundaries=True,
+        randomized_epoch_min_samples=2,
+        randomized_epoch_max_samples=4,
+        randomized_epoch_seed=17,
+    )
+    replay.observe_event(_completed(target_id, 0.1), monitoring_configuration=configuration)
+    replay_first = replay.current_capture(target_id)
+    assert replay_first is not None
+    replay_boundary = replay_first["profile"]["sampling_provenance"]["epoch_boundary"]
+    assert replay_boundary["target_samples"] == first_boundary["target_samples"]
+    assert replay_boundary["seed_commitment"] == first_boundary["seed_commitment"]
+    for _ in range(first_boundary["target_samples"] - 1):
+        replay.observe_event(_completed(target_id, 0.1), monitoring_configuration=configuration)
+    replay.materialize_pending(BehaviorSnapshotStore(tmp_path / "replay"))
+    replay_second = replay.current_capture(target_id)
+    assert replay_second is not None
+    replay_second_boundary = replay_second["profile"]["sampling_provenance"]["epoch_boundary"]
+    assert replay_second_boundary["target_samples"] == second_boundary["target_samples"]
+    assert replay_second_boundary["seed_commitment"] == second_boundary["seed_commitment"]
+
+
 def test_monitoring_configuration_change_seals_old_generation_but_stage_change_does_not(tmp_path: Path) -> None:
     repository = BehaviorStatisticsRepository(
         tmp_path,

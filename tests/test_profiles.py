@@ -164,6 +164,7 @@ def test_policy_surface_two_requires_review_of_adaptive_instrumentation() -> Non
     assert [item.capability_id for item in report.missing_capabilities] == [
         "adaptive.instrumentation",
         "guard.behavior-snapshots",
+        "guard.randomized-behavior-regimes",
         "repair.validation-isolation",
         "logging.signing-identity-journal",
     ]

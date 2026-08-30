@@ -347,6 +347,14 @@ class GuardEngine(GuardFacade):
             "statistics": {
                 "statistics_target": snapshots.statistics_target,
                 "maximum_resources": snapshots.maximum_resources,
+                "randomized_epoch_boundaries": snapshots.randomized_epoch_boundaries,
+                "randomized_epoch_min_samples": snapshots.randomized_epoch_min_samples,
+                "randomized_epoch_max_samples": snapshots.randomized_epoch_max_samples,
+                "randomized_epoch_seed_commitment": (
+                    hashlib.sha256(str(snapshots.randomized_epoch_seed).encode("ascii")).hexdigest()
+                    if snapshots.randomized_epoch_seed is not None
+                    else None
+                ),
             },
             "binding": binding_value,
             "target_monitoring": dict(binding.monitoring_configuration or {}) if binding is not None else {},

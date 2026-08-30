@@ -8,6 +8,7 @@ from caretaker.adaptive import LightweightPolicy, validate_lightweight_policy
 from caretaker.guard.policy import (
     GuardPolicy,
     GuardPolicyConfigurationError,
+    BehaviorSnapshotPolicy,
     PeriodicInspectionPolicy,
     RetentionPolicy as GuardRetentionPolicy,
     validate_guard_policy,
@@ -69,6 +70,21 @@ def test_reserved_guard_retention_and_periodic_behavior_controls_fail_explicitly
             replace(
                 policy,
                 targets=(replace(target, periodic=PeriodicInspectionPolicy(compare_behavior=True)),),
+            )
+        )
+
+
+def test_randomized_behavior_snapshot_bounds_are_validated():
+    policy = GuardPolicy()
+    with pytest.raises(GuardPolicyConfigurationError, match="at least the minimum"):
+        validate_guard_policy(
+            replace(
+                policy,
+                snapshots=replace(
+                    BehaviorSnapshotPolicy(),
+                    randomized_epoch_min_samples=10,
+                    randomized_epoch_max_samples=9,
+                ),
             )
         )
 

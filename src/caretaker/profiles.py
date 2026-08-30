@@ -133,6 +133,15 @@ POLICY_CAPABILITIES: tuple[PolicyCapability, ...] = (
         ("guard.snapshots.",),
     ),
     PolicyCapability(
+        "guard.randomized-behavior-regimes",
+        3,
+        "0.6.1",
+        "Randomized behavior snapshot boundaries",
+        "Controls opt-in randomized, bounded behavior epochs that preserve disjoint sample ranges and provenance.",
+        "Review reproducibility, minimum useful epoch size, snapshot rate, and the fact that randomized snapshots remain evidence rather than an automatic baseline.",
+        ("guard.snapshots.randomized_epoch_",),
+    ),
+    PolicyCapability(
         "repair.validation-isolation",
         2,
         "0.6.0",

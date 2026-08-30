@@ -523,9 +523,9 @@ reference a sealed snapshot that satisfies the required signing policy.
 
 ### Randomized behavioral-regime snapshots
 
-**Status: Proposal pending decision.**
+**Status: Implemented in development tree for opt-in randomized epoch boundaries; regime clustering and cross-population analysis remain future work.**
 
-Add an optional collection mode that creates randomized, non-overlapping behavior
+An optional collection mode now creates randomized, non-overlapping behavior
 snapshot boundaries within an otherwise unchanged code and monitoring generation.
 This is intended to reveal distinct runtime regimes—such as configuration-selected
 implementations, workload classes, rare resource use, or behavior changed through
@@ -534,11 +534,11 @@ changed.
 
 The mode should:
 
-- select bounded epoch lengths or closing points from a policy-controlled random
+- select bounded epoch lengths from a policy-controlled uniform random
   distribution rather than always sealing at the same call count;
 - keep every call in at most one epoch and preserve generation-scoped sample
   sequence ranges so randomized snapshots cannot double-count evidence;
-- record the selection algorithm, parameters, effective random seed/commitment,
+- record the selection algorithm, parameters, effective random seed commitment,
   and reason for each boundary as sampling provenance;
 - support optional application-supplied workload or behavior-regime labels without
   treating those labels as trusted proof of equivalence;
@@ -547,7 +547,7 @@ The mode should:
 - show regime/epoch coverage separately from generation-wide coverage so samples
   from observably different populations are not presented as one homogeneous
   profile;
-- impose minimum useful sample counts, maximum snapshot rates, retention bounds,
+- impose minimum useful sample counts and maximum epoch lengths; retention bounds,
   and supervisor backpressure to avoid floods of low-value artifacts;
 - preserve rare/outlier epochs even when common regimes dominate the workload;
 - compare discovered regimes both within one unchanged code generation and across
@@ -555,11 +555,12 @@ The mode should:
 - never automatically promote a randomized snapshot to an accepted Guard baseline
   merely because it reached a sample target.
 
-Open design choices include whether random boundaries should be deterministic from
-a committed seed for reproducibility, cryptographically unpredictable to reduce
-workload gaming, or selectable by policy; and whether regime clustering belongs in
-the application process, supervisor, offline analysis, or a combination of those
-layers.
+The current choice is policy-selectable reproducibility: a configured seed gives
+deterministic boundary selection for controlled experiments, while the default
+unset seed uses a system random source and stores only commitments. Regime
+clustering, rare-regime preservation beyond bounded epoch partitioning, and
+cross-process population analysis remain future design work. Randomized epochs
+are evidence only and cannot automatically become an accepted Guard baseline.
 
 ## Operator-directed and coverage-complete behavior collection
 

@@ -31,6 +31,17 @@ once per code generation when enabled; each ordinary call then needs only an int
 increment and comparison. A sample contributes Guard behavior evidence but does not
 materialize a signed behavior snapshot by itself.
 
+`BehaviorSnapshotPolicy.randomized_epoch_boundaries` is an opt-in policy for
+non-overlapping randomized behavior epochs. When enabled, each epoch chooses a
+uniform target between `randomized_epoch_min_samples` and
+`randomized_epoch_max_samples`; the target is bounded below one snapshot's
+useful minimum and above the configured maximum. The sealed snapshot records the
+algorithm, bounds, selected target, and a commitment to the effective random
+seed. Supplying `randomized_epoch_seed` makes boundary selection reproducible
+for controlled testing; leaving it unset uses a system random source. These
+epochs change evidence partitioning only: they never automatically accept a
+Guard baseline or grant Repair authority.
+
 `RepairEvidencePolicy` gates `BEHAVIOR -> REPAIR`:
 
 - `enabled`;
