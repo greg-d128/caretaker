@@ -63,6 +63,48 @@ from .system import SystemCollectionPolicy, SystemDataCollector, SystemOutputPol
 from .store import SQLiteRepairStore
 
 
+def create_worker_failure_incident_capsule(
+    capsule_store: IncidentCapsuleStore,
+    envelope: dict[str, object],
+    *,
+    run_id: UUID | None = None,
+    policy_fingerprint: str | None = None,
+    authority_policy_generation: int | None = None,
+    authority_policy_fingerprint: str | None = None,
+) -> dict[str, object]:
+    """Create the initial application-scoped capsule for a worker failure.
+
+    The capsule store owns bounded serialization and integrity protection. The
+    returned identifier is evidence of the capsule write only; it does not
+    authorize a restart, shutdown, or policy change.
+    """
+    incident_id = uuid4()
+    envelope_copy = dict(envelope)
+    capsule = capsule_store.create_placeholder(
+        incident_id,
+        run_id=run_id,
+        policy_fingerprint=policy_fingerprint,
+        authority_policy_generation=authority_policy_generation,
+        authority_policy_fingerprint=authority_policy_fingerprint,
+        incident_state={
+            "trigger": "worker_failure",
+            "incident_id": str(incident_id),
+            "transaction_state": "ROLLED_BACK",
+            "worker_failure": envelope_copy,
+        },
+    )
+    capsule_payload = capsule.get("capsule")
+    if not isinstance(capsule_payload, dict):
+        raise RuntimeError("worker failure capsule did not return a capsule payload")
+    return {
+        "accepted": True,
+        "incident_id": str(incident_id),
+        "capsule_id": str(capsule_payload.get("capsule_id") or ""),
+        "incident_recorded": True,
+        "capsule_integrity": (capsule.get("integrity") or {}).get("content_sha256"),
+    }
+
+
 def _load_external_signer(specification: str | None):
     if not specification:
         return None
@@ -1603,15 +1645,39 @@ def main(argv: list[str] | None = None) -> int:
     application_stop_requested = False
     system_failure_handled = False
 
-    def record_worker_failure(envelope: dict[str, object]) -> None:
+    def record_worker_failure(envelope: dict[str, object]) -> dict[str, object]:
+        try:
+            capsule_result = create_worker_failure_incident_capsule(
+                capsule_store,
+                envelope,
+                run_id=runtime.run_id,
+                policy_fingerprint=runtime.snapshot.content_hash,
+                authority_policy_generation=authority.effective.generation,
+                authority_policy_fingerprint=authority.effective.fingerprint,
+            )
+        except Exception as exc:
+            runtime.event(
+                logger_name="caretaker.worker-failure",
+                severity=40,
+                channel=LogChannel.EMERGENCY,
+                message="Caretaker worker failure retained without an Incident Capsule",
+                fields={
+                    **envelope,
+                    "capsule_status": "FAILED",
+                    "capsule_error": f"{type(exc).__name__}: {exc}"[:256],
+                },
+                origin="caretaker",
+            )
+            raise
         runtime.event(
             logger_name="caretaker.worker-failure",
             severity=40,
             channel=LogChannel.EMERGENCY,
             message="Caretaker worker failure recorded as a rolled-back transaction",
-            fields=dict(envelope),
+            fields={**envelope, **capsule_result},
             origin="caretaker",
         )
+        return capsule_result
 
     def restart_system_collector(_worker: object) -> dict[str, object]:
         nonlocal collector, collector_thread

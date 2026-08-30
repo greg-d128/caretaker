@@ -51,7 +51,11 @@ envelope immediately, including in-flight work and queue context. It can record
 an incident and request a callback-owned replacement; if replacement is not
 available or the restart budget is exhausted, the configured exhaustion action
 selects degraded continuation, component disablement, or application stop.
-Caretaker does not create arbitrary worker processes from this boundary.
+In the supervised runtime, the system-collector failure callback also creates
+an initial Incident Capsule immediately, bound to the run, effective logging
+policy, and authority snapshot. Capsule policy still controls whether that
+write is enabled and how much bounded evidence is retained. Caretaker does not
+create arbitrary worker processes from this boundary.
 
 Recovery time and expiry checks use supervisor time. The recovery API reports
 clock skew explicitly and rejects timestamps outside the configured tolerance;

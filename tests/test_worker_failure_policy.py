@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from uuid import uuid4
 
 import pytest
 
@@ -65,6 +66,41 @@ def test_worker_failure_records_incident_and_uses_callback_owned_restart() -> No
     assert current.state.name == "STARTING"
     assert current.authority_packet_id is None
     assert result["restart"]["backoff_seconds"] == 0.5
+
+
+def test_worker_failure_incident_capsule_is_created_immediately_and_policy_bound(tmp_path) -> None:
+    from caretaker.capsule import IncidentCapsulePolicy, IncidentCapsuleStore
+    from caretaker.run import create_worker_failure_incident_capsule
+
+    store = IncidentCapsuleStore(tmp_path / "enabled")
+    result = create_worker_failure_incident_capsule(
+        store,
+        {
+            "worker_id": "worker-1",
+            "worker_kind": "SYSTEM_COLLECTOR",
+            "transaction_state": "ROLLED_BACK",
+            "detail_level": "STANDARD",
+        },
+        run_id=uuid4(),
+        policy_fingerprint="policy-hash",
+        authority_policy_generation=7,
+        authority_policy_fingerprint="authority-hash",
+    )
+
+    assert result["accepted"] is True
+    assert result["incident_recorded"] is True
+    loaded = store.load(result["capsule_id"])
+    assert loaded["capsule"]["incident_id"] == result["incident_id"]
+    assert loaded["capsule"]["incident_state"]["transaction_state"] == "ROLLED_BACK"
+    assert loaded["capsule"]["incident_state"]["worker_failure"]["worker_id"] == "worker-1"
+    assert loaded["integrity"]["content_sha256"] == result["capsule_integrity"]
+
+    disabled = IncidentCapsuleStore(
+        tmp_path / "disabled",
+        policy=IncidentCapsulePolicy(enabled=False),
+    )
+    with pytest.raises(ValueError, match="disabled by policy"):
+        create_worker_failure_incident_capsule(disabled, {"worker_id": "worker-1"})
 
 
 def test_worker_failure_applies_exhaustion_action_and_preserves_failure_evidence() -> None:
