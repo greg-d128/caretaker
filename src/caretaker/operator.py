@@ -502,6 +502,7 @@ class OperatorRuntimeRegistry:
             for guard in self.guard_engines():
                 status = guard.behavior_collection_status()
                 status["requests"] = list(guard.behavior_collection_requests(limit=100))
+                status["backlog"] = guard.behavior_collection_backlog(limit=500)
                 collections.append(
                     {
                         "guard": guard.__class__.__name__,

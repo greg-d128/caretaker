@@ -39,6 +39,7 @@ from ..behavior import (
     BehaviorCollectionScheduler,
     BehaviorSnapshotStore,
     BehaviorStatisticsRepository,
+    behavior_generation_id,
     monitoring_configuration_fingerprint,
     observed_return_category,
 )
@@ -914,6 +915,96 @@ class GuardEngine(GuardFacade):
                 "reason": "Guard behavior snapshots are disabled or have no data root",
             }
         return {"enabled": True, **scheduler.status()}
+
+    def behavior_collection_backlog(self, *, limit: int = 500) -> dict[str, Any]:
+        """Describe current-generation behavior coverage without scheduling work."""
+        if self.behavior_statistics is None or self.behavior_snapshot_store is None:
+            return {
+                "enabled": False,
+                "reason": "Guard behavior snapshots are disabled or have no data root",
+                "items": [],
+                "counts": {},
+            }
+        summaries = {
+            (str(item.get("subject_key") or ""), str(item.get("generation_id") or "")): item
+            for item in self.behavior_snapshot_store.list_summaries(limit=500)
+            if item.get("verified") is not False
+        }
+        requests = {
+            (str(item.get("scope") or ""), str(item.get("subject") or "")): item
+            for item in self.behavior_collection_requests(limit=500)
+            if str(item.get("status") or "") in {"QUEUED", "ACTIVE", "FAILED", "EXPIRED", "CANCELLED"}
+        }
+        items: list[dict[str, Any]] = []
+        with self._lock:
+            target_ids = tuple(sorted(self._targets))
+        for target_id in target_ids:
+            binding = self._targets[target_id]
+            function = binding.function
+            if binding.function_resolver is not None:
+                try:
+                    function = binding.function_resolver()
+                except Exception:
+                    function = binding.function
+            identity = identify_function(function)
+            code_hash = identity.source_hash or identity.bytecode_hash
+            subject_key = f"function:{target_id}"
+            generation_id = behavior_generation_id(
+                subject_key=subject_key,
+                code_hash=code_hash,
+                monitoring_fingerprint=self.monitoring_fingerprint(target_id),
+            )
+            capture = self.behavior_statistics.current_capture(target_id)
+            active_calls = int((capture or {}).get("profile", {}).get("call_count") or 0)
+            summary = summaries.get((subject_key, generation_id))
+            snapshot_calls = int(
+                ((summary or {}).get("profile") or {}).get("coverage_call_count")
+                or ((summary or {}).get("profile") or {}).get("call_count")
+                or 0
+            )
+            request = requests.get(("function", target_id))
+            if request is not None and request.get("status") in {"QUEUED", "ACTIVE"}:
+                status = "queued" if request["status"] == "QUEUED" else "actively_collecting"
+                reason = f"operator request is {str(request['status']).lower()}"
+            elif request is not None and request.get("status") in {"FAILED", "EXPIRED"}:
+                status = "failed"
+                reason = str(request.get("error") or request.get("outcome") or "collection request failed")
+            elif request is not None and request.get("status") == "CANCELLED":
+                status = "deferred"
+                reason = str(request.get("error") or "operator cancelled collection")
+            elif summary is not None and snapshot_calls > 0:
+                status = "sufficiently_covered"
+                reason = "verified snapshot covers the current code and monitoring generation"
+            elif active_calls > 0:
+                status = "actively_collecting"
+                reason = "current generation has completed calls but no useful verified snapshot"
+            else:
+                status = "armed_waiting"
+                reason = "current generation has no completed calls"
+            items.append(
+                {
+                    "target_id": target_id,
+                    "subject_key": subject_key,
+                    "generation_id": generation_id,
+                    "status": status,
+                    "reason": reason,
+                    "active_calls": active_calls,
+                    "snapshot_calls": snapshot_calls,
+                    "snapshot_id": (summary or {}).get("snapshot_id"),
+                    "request_id": (request or {}).get("request_id"),
+                }
+            )
+        bounded = items[: max(1, min(int(limit), 500))]
+        counts: dict[str, int] = {}
+        for item in items:
+            status = str(item["status"])
+            counts[status] = counts.get(status, 0) + 1
+        return {
+            "enabled": True,
+            "items": bounded,
+            "counts": counts,
+            "total": len(items),
+        }
 
     def behavior_collection_requests(self, *, limit: int = 100) -> tuple[dict[str, Any], ...]:
         scheduler = self.behavior_collection_scheduler

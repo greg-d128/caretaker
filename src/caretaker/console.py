@@ -2229,6 +2229,11 @@ class CaretakerConsoleApp(App):
         for item in enabled:
             for status, count in dict(item.get("counts") or {}).items():
                 counts[str(status)] = counts.get(str(status), 0) + int(count or 0)
+        backlog_counts: dict[str, int] = {}
+        for item in enabled:
+            backlog = item.get("backlog") or {}
+            for status, count in dict(backlog.get("counts") or {}).items():
+                backlog_counts[str(status)] = backlog_counts.get(str(status), 0) + int(count or 0)
         terminal = ", ".join(
             f"{status} {counts.get(status, 0)}"
             for status in ("failed", "deferred", "expired", "cancelled")
@@ -2237,6 +2242,7 @@ class CaretakerConsoleApp(App):
         return (
             f"collection queue active {active}/{active_limit}, queued {queued}/{pending_limit}"
             f"{'; terminal ' + terminal if terminal else ''}"
+            f"{'; backlog ' + ', '.join(f'{status} {backlog_counts[status]}' for status in sorted(backlog_counts)) if backlog_counts else ''}"
         )
 
     @staticmethod

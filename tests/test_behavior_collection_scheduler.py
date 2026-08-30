@@ -225,3 +225,33 @@ def test_operator_can_cancel_queued_collection_request(tmp_path: Path, monkeypat
 
     assert result["ok"] is True
     assert result["request"]["status"] == "CANCELLED"
+
+
+def test_guard_backlog_reports_waiting_and_queued_current_generations(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("CARETAKER_DATA_DIR", str(tmp_path))
+    guard = GuardEngine(policy=GuardPolicy())
+
+    def sample(value: int) -> int:
+        return value
+
+    guard.register_target(
+        "example.backlog",
+        sample,
+        GuardBinding(enabled=True),
+        periodic=False,
+    )
+    waiting = guard.behavior_collection_backlog()
+    assert waiting["counts"] == {"armed_waiting": 1}
+    request = guard.behavior_collection_scheduler.enqueue(
+        scope="function",
+        subject="example.backlog",
+        requested_calls=1,
+        requested_by="uid:1001",
+        reason="coverage request",
+    )
+
+    queued = guard.behavior_collection_backlog()
+    assert queued["counts"] == {"queued": 1}
+    assert queued["items"][0]["request_id"] == request["request_id"]
