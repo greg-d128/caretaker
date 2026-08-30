@@ -83,6 +83,9 @@ Behavior-only requests from reconciled application-wide threshold evidence.
 Workers must acknowledge the exact target, generation, code, monitoring, policy,
 and authority context; acknowledgements confirm application state only and do
 not grant Repair or policy authority.
+`adaptive-threshold-proposal` records a delayed, context-bound threshold
+proposal from the caller's local UID. It derives the target's current context
+from the worker control socket and never applies the proposed policy change.
 
 Replacement probation and acceptance counters are policy resolved. The default
 guideline is 1,000 successful executions for each stage with no permitted

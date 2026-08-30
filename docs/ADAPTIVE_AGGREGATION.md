@@ -120,8 +120,11 @@ change; an authorized policy workflow must perform any later update.
 
 The supervisor exposes `adaptive-aggregation-status`,
 `adaptive-aggregation-reconcile`, `adaptive-aggregation-ack`,
-`adaptive-transition-list`, and `adaptive-transition-ack` through its control
-socket. Its health cycle reconciles enabled worker contexts and evaluates
+`adaptive-transition-list`, `adaptive-transition-ack`, and
+`adaptive-threshold-proposal` through its control socket. The threshold proposal
+command derives the selected worker's live context and the caller's local UID;
+it cannot accept arbitrary context supplied by the caller. Its health cycle
+reconciles enabled worker contexts and evaluates
 thresholds automatically. The worker-side
 `apply_supervisor_transition()` method requires exact target, generation, code,
 monitoring, policy, and authority context before applying Behavior. Dynamic

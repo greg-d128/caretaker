@@ -676,6 +676,73 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 ),
             }
+        if command == "adaptive-threshold-proposal":
+            target_id = str(request.get("target_id") or "").strip()
+            if not target_id:
+                raise ValueError("adaptive-threshold-proposal requires target_id")
+            requested_scope = request.get("aggregation_scope")
+            requested_scope = (
+                str(requested_scope).strip() if requested_scope is not None else None
+            )
+            if not unix_socket_exists(runtime_control_socket):
+                raise PermissionError(
+                    "adaptive threshold proposal requires current worker context"
+                )
+            try:
+                context_response = control_request(
+                    runtime_control_socket,
+                    {"command": "adaptive-aggregation-context", "limit": 200},
+                )
+            except OSError as exc:
+                raise PermissionError(
+                    "adaptive threshold proposal requires current worker context"
+                ) from exc
+            contexts = context_response.get("contexts")
+            if not context_response.get("ok") or not isinstance(contexts, list):
+                raise PermissionError(
+                    "adaptive threshold proposal requires current worker context"
+                )
+            matching_contexts = [
+                item
+                for item in contexts
+                if isinstance(item, dict)
+                and item.get("enabled")
+                and str(item.get("target_id") or "").strip() == target_id
+                and (
+                    str(item.get("aggregation_scope") or "").strip() or None
+                )
+                == requested_scope
+            ]
+            if len(matching_contexts) != 1:
+                raise PermissionError(
+                    "adaptive threshold proposal requires one unambiguous enabled target context"
+                )
+            context = matching_contexts[0]
+            effective_authority = authority.effective
+            return {
+                "ok": True,
+                "proposal": adaptive_aggregation_store.create_threshold_proposal(
+                    target_id=target_id,
+                    aggregation_scope=requested_scope,
+                    generation_id=str(context.get("generation_id") or ""),
+                    code_hash=str(context.get("code_hash") or ""),
+                    monitoring_fingerprint=str(
+                        context.get("monitoring_fingerprint") or ""
+                    ),
+                    policy_fingerprint=str(context.get("policy_fingerprint") or ""),
+                    authority_policy_generation=str(effective_authority.generation),
+                    authority_policy_fingerprint=effective_authority.fingerprint,
+                    changes=request.get("changes"),
+                    requested_by=f"uid:{credentials[1]}",
+                    reason=str(request.get("reason") or ""),
+                    effective_after_seconds=float(
+                        request.get("effective_after_seconds", 60)
+                    ),
+                    expires_in_seconds=float(
+                        request.get("expires_in_seconds", 3600)
+                    ),
+                ),
+            }
         if command == "adaptive-transition-ack":
             adaptive_context = current_adaptive_context()
             if adaptive_context is None:
