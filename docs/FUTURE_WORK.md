@@ -707,7 +707,7 @@ belong only in promoted Behavior collection.
 
 ### Return-type and return-shape learning review
 
-**Status: Implemented in development tree for bounded type/category/shape evidence and an evidence-only comparison report; live novelty decisions remain unimplemented.**
+**Status: Implemented in development tree for bounded type/category/shape evidence, an evidence-only comparison report, and an opt-in policy-gated live novelty signal.**
 
 The current contract is intentionally narrower than return learning:
 
@@ -738,8 +738,11 @@ counts, while the comparison report only identifies newly observed categories
 or shapes when both snapshots are the same generation, the selected snapshot is
 newer, and both have the minimum successful sample count. Incomplete tables and
 incompatible snapshots are disclosed rather than treated as absence evidence.
-Categories, shapes, and this report remain evidence only and do not affect Guard
-deviations or Repair decisions.
+Categories, shapes, and this report remain evidence only by default. When the
+explicit return-novelty deviation policy is enabled, repeated newly observed
+categories or shapes can produce a normal `OUTPUT_BEHAVIOR_CHANGE` Guard
+deviation after generation, sample-size, and freshness checks; the signal
+still cannot grant authority or accept a Repair.
 
 Remaining novelty-design review must distinguish declared annotations and
 validators from observed runtime types, structural shapes, bounded categorical
@@ -756,10 +759,11 @@ summaries, and exact values. It should determine:
   and
 - which return signals can be collected within the lightweight overhead budget.
 
-The bounded category contract and comparison report are tested and are not an
-unusual-return detector. A live detector must not be described as implemented
-until its false-positive, freshness, generation, and policy semantics are defined
-and tested.
+The bounded category contract, comparison report, and opt-in live detector are
+tested. The detector requires an accepted same-generation baseline, explicit
+return observations, minimum successful samples, and repeated new observations
+to reduce false positives. It remains disabled by default and does not make
+absence claims from incomplete tables.
 
 ## Supervisor-owned multiprocess adaptive aggregation
 

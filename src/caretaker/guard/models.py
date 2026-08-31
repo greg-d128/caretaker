@@ -110,6 +110,9 @@ class BehaviorProfile:
     dynamic_code_operations: tuple[str, ...] = ()
     success_count: int = 0
     failure_count: int = 0
+    return_category_counts: Mapping[str, int] = field(default_factory=dict)
+    return_shape_counts: Mapping[str, int] = field(default_factory=dict)
+    return_observations_available: bool = False
     statistics: Mapping[str, Any] = field(default_factory=dict)
     sampling_provenance: Mapping[str, Any] = field(default_factory=dict)
 
@@ -128,6 +131,9 @@ class BehaviorProfileSummary:
     dynamic_code_operations: tuple[str, ...]
     success_count: int = 0
     failure_count: int = 0
+    return_category_counts: Mapping[str, int] = field(default_factory=dict)
+    return_shape_counts: Mapping[str, int] = field(default_factory=dict)
+    return_observations_available: bool = False
     statistics: Mapping[str, Any] = field(default_factory=dict)
     sampling_provenance: Mapping[str, Any] = field(default_factory=dict)
 

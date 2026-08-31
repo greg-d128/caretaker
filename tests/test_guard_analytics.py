@@ -18,6 +18,7 @@ from caretaker.evidence import (
 from caretaker.guard.analytics import BaselineManager, BehaviorAggregator, DeviationDetector
 from caretaker.guard.models import BaselineState, DeviationCategory
 from caretaker.guard.policy import AggregationPolicy, BaselinePolicy, DeviationPolicy
+from caretaker.domain import ValueSnapshot
 from tests.guard_targets import stable
 
 
@@ -36,6 +37,30 @@ def _event(resource: ResourceIdentity, *, call_id=None) -> BehaviorEvent:
         process_id=os.getpid(),
         thread_id=threading.get_ident(),
         resource=resource,
+        outcome=EventOutcome.SUCCEEDED,
+    )
+
+
+def _return_event(category: str, shape: str, *, call_id=None) -> BehaviorEvent:
+    return BehaviorEvent.create(
+        event_kind=BehaviorEventKind.FUNCTION_CALL,
+        operation="function.call.completed",
+        code_identity=identify_function(stable),
+        run_id=uuid4(),
+        call_id=call_id or uuid4(),
+        target_id="tests.guard_targets:stable",
+        process_id=os.getpid(),
+        thread_id=threading.get_ident(),
+        attributes={
+            "return_category": ValueSnapshot(
+                type_name="caretaker.return-category",
+                representation=category,
+            ),
+            "return_shape": ValueSnapshot(
+                type_name="caretaker.return-shape",
+                representation=shape,
+            ),
+        },
         outcome=EventOutcome.SUCCEEDED,
     )
 
@@ -150,6 +175,62 @@ def test_deny_new_network_capability_creates_explicit_violation() -> None:
     assert any(
         item.category is DeviationCategory.EXPLICIT_POLICY_VIOLATION
         for item in detector.compare(accepted, observed)
+    )
+
+
+def test_return_novelty_is_policy_gated_and_requires_repeated_observations() -> None:
+    store = InMemoryEvidenceStore()
+    aggregator = BehaviorAggregator(
+        store,
+        AggregationPolicy(close_after_events=2, close_after_calls=2, close_after_seconds=999),
+    )
+    baselines = BaselineManager(BaselinePolicy(minimum_windows=1))
+    detector = DeviationDetector(
+        DeviationPolicy(
+            significance_threshold=0,
+            detect_return_novelty=True,
+            minimum_return_novelty_success_samples=2,
+            minimum_new_return_observations=2,
+        )
+    )
+
+    baseline_window = None
+    for _ in range(2):
+        baseline_window = aggregator.consume(_return_event("integer:builtins.int", "scalar"))
+    assert baseline_window is not None
+    assert baseline_window.return_observations_available is True
+    accepted = baselines.observe(baseline_window)
+    assert accepted is not None
+    accepted = baselines.accept(baseline_window.subject)
+    assert accepted.profile.success_count == 2
+
+    observed_window = None
+    for _ in range(2):
+        observed_window = aggregator.consume(_return_event("text:builtins.str", "text:length-small"))
+    assert observed_window is not None
+    deviations = detector.compare(accepted, observed_window)
+    novelty = [
+        item
+        for item in deviations
+        if item.category is DeviationCategory.OUTPUT_BEHAVIOR_CHANGE
+    ]
+    assert len(novelty) == 2
+    assert {item.observed.values["value"] for item in novelty} == {
+        "text:builtins.str",
+        "text:length-small",
+    }
+
+    single_observation = aggregator.consume(
+        _return_event("bytes:builtins.bytes", "bytes:length-small")
+    )
+    assert single_observation is None
+    single_observation = aggregator.consume(
+        _return_event("integer:builtins.int", "scalar")
+    )
+    assert single_observation is not None
+    assert not any(
+        item.category is DeviationCategory.OUTPUT_BEHAVIOR_CHANGE
+        for item in detector.compare(accepted, single_observation)
     )
 
 

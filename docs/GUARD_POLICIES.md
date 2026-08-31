@@ -97,7 +97,18 @@ A baseline should normally be scoped by:
 - load-time side effect;
 - runtime code change;
 - dependency change;
+- newly observed return category or structural return shape (opt-in; requires
+  enough successful samples and repeated observations);
 - explicit policy violation.
+
+Set `DeviationPolicy.detect_return_novelty=True` to enable the live return
+novelty signal. Caretaker compares only the bounded return categories and
+shapes recorded for the same accepted Guard generation. Both the accepted
+baseline and observed window must contain the configured minimum number of
+successful, explicitly captured returns, and a new value must be observed at
+least `minimum_new_return_observations` times. The resulting
+`OUTPUT_BEHAVIOR_CHANGE` is evidence for the normal Guard action policy; it is
+not proof of failure and cannot grant Repair or other authority.
 
 ## LLM review
 

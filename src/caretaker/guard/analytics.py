@@ -59,6 +59,15 @@ def _filesystem_root(value: str) -> str:
     return str(Path(*parts[: min(2, len(parts))]))
 
 
+def _event_attribute_text(event: BehaviorEvent, name: str) -> str | None:
+    value = (getattr(event, "attributes", {}) or {}).get(name)
+    representation = getattr(value, "representation", value)
+    if representation is None:
+        return None
+    text = str(representation).strip()
+    return text or None
+
+
 @dataclass
 class _WindowAccumulator:
     subject: CodeIdentity
@@ -106,9 +115,35 @@ class BehaviorAggregator:
             return None
         events = tuple(accumulator.events)
         kind_counts = Counter(event.event_kind.name for event in events)
+        return_category_counts: Counter[str] = Counter()
+        return_shape_counts: Counter[str] = Counter()
+        return_observations_available = False
+        success_count = 0
+        failure_count = 0
         resource_events: dict[tuple[str, str, str | None, bool], list[BehaviorEvent]] = defaultdict(list)
         durations = [event.duration_seconds for event in events if event.duration_seconds is not None]
         for event in events:
+            if (
+                event.event_kind is BehaviorEventKind.FUNCTION_CALL
+                and event.operation == "function.call.completed"
+            ):
+                if event.outcome.name == "SUCCEEDED":
+                    success_count += 1
+                elif event.outcome.name == "FAILED":
+                    failure_count += 1
+            if (
+                event.event_kind is BehaviorEventKind.FUNCTION_CALL
+                and event.operation == "function.call.completed"
+                and event.outcome.name == "SUCCEEDED"
+            ):
+                category = _event_attribute_text(event, "return_category")
+                shape = _event_attribute_text(event, "return_shape")
+                if category is not None or shape is not None:
+                    return_observations_available = True
+                if category is not None:
+                    return_category_counts[category] += 1
+                if shape is not None:
+                    return_shape_counts[shape] += 1
             if event.resource is not None:
                 resource = event.resource
                 if resource.kind in {"file", "directory"}:
@@ -158,6 +193,11 @@ class BehaviorAggregator:
             representative_event_ids=tuple(
                 event.event_id for event in events[: self.policy.representative_events]
             ),
+            return_category_counts=dict(return_category_counts),
+            return_shape_counts=dict(return_shape_counts),
+            return_observations_available=return_observations_available,
+            success_count=success_count,
+            failure_count=failure_count,
         )
         self.store.record_behavior_window(window)
         return window
@@ -258,6 +298,9 @@ class BaselineManager:
             dynamic_code_operations=profile.dynamic_code_operations,
             success_count=profile.success_count,
             failure_count=profile.failure_count,
+            return_category_counts=profile.return_category_counts,
+            return_shape_counts=profile.return_shape_counts,
+            return_observations_available=profile.return_observations_available,
             statistics=profile.statistics,
             sampling_provenance=profile.sampling_provenance,
         )
@@ -276,6 +319,9 @@ class BaselineManager:
             subprocesses=profile.subprocesses,
             imports=profile.imports,
             dynamic_code_operations=profile.dynamic_code_operations,
+            return_category_counts=profile.return_category_counts,
+            return_shape_counts=profile.return_shape_counts,
+            return_observations_available=profile.return_observations_available,
         )
 
     @staticmethod
@@ -287,8 +333,13 @@ class BaselineManager:
         subprocesses: set[str] = set()
         imports: set[str] = set()
         dynamic: set[str] = set()
+        return_categories: Counter[str] = Counter()
+        return_shapes: Counter[str] = Counter()
+        return_observations_available = False
         call_count = 0
         event_count = 0
+        success_count = 0
+        failure_count = 0
         duration_count = 0
         duration_total = 0.0
         duration_minimum: float | None = None
@@ -297,6 +348,14 @@ class BaselineManager:
             kind_counts.update(window.event_kind_counts)
             call_count += window.call_count
             event_count += window.event_count
+            return_categories.update(window.return_category_counts)
+            return_shapes.update(window.return_shape_counts)
+            return_observations_available = (
+                return_observations_available
+                or window.return_observations_available
+            )
+            success_count += window.success_count
+            failure_count += window.failure_count
             duration = window.metrics.get("duration_seconds")
             if duration is not None and duration.count:
                 duration_count += duration.count
@@ -328,6 +387,11 @@ class BaselineManager:
             subprocesses=tuple(sorted(subprocesses)),
             imports=tuple(sorted(imports)),
             dynamic_code_operations=tuple(sorted(dynamic)),
+            return_category_counts=dict(return_categories),
+            return_shape_counts=dict(return_shapes),
+            return_observations_available=return_observations_available,
+            success_count=success_count,
+            failure_count=failure_count,
             statistics=(
                 {
                     "duration_seconds": {
@@ -369,6 +433,13 @@ class DeviationDetector:
             )
         )
         deviations.extend(self._explicit_policy_violations(baseline, observed, observed_profile))
+        deviations.extend(
+            self._return_novelty_deviations(
+                baseline,
+                observed,
+                observed_profile,
+            )
+        )
         deviations.extend(
             self._new_set_deviations(
                 baseline,
@@ -467,6 +538,65 @@ class DeviationDetector:
                 )
             )
         return tuple(deviations)
+
+    def _return_novelty_deviations(
+        self,
+        baseline: BehaviorBaseline,
+        observed: BehaviorWindow,
+        observed_profile: BehaviorProfile,
+    ) -> list[BehaviorDeviation]:
+        policy = self.policy
+        expected = baseline.profile
+        if not policy.detect_return_novelty:
+            return []
+        if not expected.return_observations_available or not observed_profile.return_observations_available:
+            return []
+        if (
+            expected.success_count < policy.minimum_return_novelty_success_samples
+            or observed_profile.success_count < policy.minimum_return_novelty_success_samples
+        ):
+            return []
+
+        result: list[BehaviorDeviation] = []
+        minimum_count = policy.minimum_new_return_observations
+        for label, expected_values, observed_values in (
+            (
+                "return category",
+                expected.return_category_counts,
+                observed_profile.return_category_counts,
+            ),
+            (
+                "return shape",
+                expected.return_shape_counts,
+                observed_profile.return_shape_counts,
+            ),
+        ):
+            for value in sorted(set(observed_values) - set(expected_values)):
+                count = int(observed_values.get(value) or 0)
+                if count < minimum_count:
+                    continue
+                result.append(
+                    self._deviation(
+                        baseline,
+                        observed,
+                        DeviationCategory.OUTPUT_BEHAVIOR_CHANGE,
+                        expected=EvidenceSummary(
+                            f"accepted {label}s",
+                            {"values": sorted(expected_values)},
+                        ),
+                        observed_summary=EvidenceSummary(
+                            f"new {label}",
+                            {"value": value, "count": count},
+                        ),
+                        novelty=75.0,
+                        magnitude=min(100.0, 25.0 * count),
+                        sensitivity=55.0,
+                        explanation=(
+                            f"Observed new {label} {value!r} in {count} successful calls"
+                        ),
+                    )
+                )
+        return result
 
     def _explicit_policy_violations(
         self,

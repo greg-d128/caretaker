@@ -181,4 +181,7 @@ def _summary(summary):
         "subprocesses": list(summary.subprocesses),
         "imports": list(summary.imports),
         "dynamic_code_operations": list(summary.dynamic_code_operations),
+        "return_category_counts": dict(summary.return_category_counts),
+        "return_shape_counts": dict(summary.return_shape_counts),
+        "return_observations_available": summary.return_observations_available,
     }

@@ -208,6 +208,19 @@ POLICY_CAPABILITIES: tuple[PolicyCapability, ...] = (
         "Review validation gates, staged rollout permissions, expiry, revocation, and the requirement for deployment authority before permanence.",
         ("repair.rollout.",),
     ),
+    PolicyCapability(
+        "guard.return-novelty",
+        9,
+        "0.6.1",
+        "Policy-gated live return novelty detection",
+        "Controls bounded detection of newly observed return categories and structural shapes against an accepted Guard baseline.",
+        "Review generation, successful-sample, and repeated-observation requirements; novelty remains evidence and cannot by itself authorize Repair or treat an incomplete return table as proof of absence.",
+        (
+            "guard.deviations.detect_return_novelty",
+            "guard.deviations.minimum_return_novelty_success_samples",
+            "guard.deviations.minimum_new_return_observations",
+        ),
+    ),
 )
 
 CURRENT_POLICY_SURFACE_VERSION = max(

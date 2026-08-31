@@ -442,6 +442,11 @@ class GuardEngine(GuardFacade):
                 dynamic_code_operations=tuple(profile_value.get("dynamic_code_operations") or ()),
                 success_count=int(profile_value.get("success_count") or 0),
                 failure_count=int(profile_value.get("failure_count") or 0),
+                return_category_counts=dict(profile_value.get("return_category_counts") or {}),
+                return_shape_counts=dict(profile_value.get("return_shape_counts") or {}),
+                return_observations_available=bool(
+                    profile_value.get("return_observations_available", False)
+                ),
                 statistics=dict(profile_value.get("statistics") or {}),
                 sampling_provenance=dict(profile_value.get("sampling_provenance") or {}),
             ),
@@ -506,6 +511,9 @@ class GuardEngine(GuardFacade):
             "distinct_resource_count": len(profile.resource_counts),
             "success_count": profile.success_count,
             "failure_count": profile.failure_count,
+            "return_category_counts": dict(profile.return_category_counts),
+            "return_shape_counts": dict(profile.return_shape_counts),
+            "return_observations_available": profile.return_observations_available,
             "statistics": dict(profile.statistics),
             "sampling_provenance": dict(profile.sampling_provenance),
         }
@@ -849,6 +857,11 @@ class GuardEngine(GuardFacade):
                 dynamic_code_operations=(),
             )
         kinds: dict[str, int] = defaultdict(int)
+        return_category_counts: dict[str, int] = defaultdict(int)
+        return_shape_counts: dict[str, int] = defaultdict(int)
+        return_observations_available = False
+        success_count = 0
+        failure_count = 0
         network: set[str] = set()
         filesystem: set[str] = set()
         subprocesses: set[str] = set()
@@ -859,6 +872,24 @@ class GuardEngine(GuardFacade):
             kinds[event.event_kind.name] += 1
             if event.call_id:
                 call_ids.add(event.call_id)
+            if event.event_kind is BehaviorEventKind.FUNCTION_CALL and event.outcome is EventOutcome.SUCCEEDED:
+                if event.operation == "function.call.completed":
+                    success_count += 1
+                for name, counts in (
+                    ("return_category", return_category_counts),
+                    ("return_shape", return_shape_counts),
+                ):
+                    value = (event.attributes or {}).get(name)
+                    value = getattr(value, "representation", value)
+                    if value is not None and str(value).strip():
+                        return_observations_available = True
+                        counts[str(value).strip()] += 1
+            elif (
+                event.event_kind is BehaviorEventKind.FUNCTION_CALL
+                and event.operation == "function.call.completed"
+                and event.outcome is EventOutcome.FAILED
+            ):
+                failure_count += 1
             if event.resource:
                 if event.resource.kind == "network":
                     network.add(event.resource.value)
@@ -881,6 +912,11 @@ class GuardEngine(GuardFacade):
             subprocesses=tuple(sorted(subprocesses)),
             imports=tuple(sorted(imports)),
             dynamic_code_operations=tuple(sorted(dynamic)),
+            return_category_counts=dict(return_category_counts),
+            return_shape_counts=dict(return_shape_counts),
+            return_observations_available=return_observations_available,
+            success_count=success_count,
+            failure_count=failure_count,
         )
 
     def behavior_capture(self, target_id: str, *, calls: int = 50) -> dict[str, object]:
@@ -922,6 +958,9 @@ class GuardEngine(GuardFacade):
                 "subprocesses": list(summary.subprocesses),
                 "imports": list(summary.imports),
                 "dynamic_code_operations": list(summary.dynamic_code_operations),
+                "return_category_counts": dict(summary.return_category_counts),
+                "return_shape_counts": dict(summary.return_shape_counts),
+                "return_observations_available": summary.return_observations_available,
             },
             "children": [],
         }

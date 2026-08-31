@@ -113,6 +113,12 @@ class DeviationPolicy:
     maximum_rate_multiplier: float = 10.0
     maximum_duration_p95_multiplier: float = 2.0
     minimum_duration_samples: int = 20
+    # Return novelty is evidence-only by default. When enabled, a new bounded
+    # category or shape is surfaced only after both baseline and observed
+    # generations have enough successful, explicitly captured returns.
+    detect_return_novelty: bool = False
+    minimum_return_novelty_success_samples: int = 20
+    minimum_new_return_observations: int = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,6 +250,14 @@ def validate_guard_policy(policy: GuardPolicy) -> None:
         errors.append("deviations.maximum_duration_p95_multiplier must be greater than 1")
     if policy.deviations.minimum_duration_samples < 1:
         errors.append("deviations.minimum_duration_samples must be at least one")
+    if policy.deviations.minimum_return_novelty_success_samples < 1:
+        errors.append(
+            "deviations.minimum_return_novelty_success_samples must be at least one"
+        )
+    if policy.deviations.minimum_new_return_observations < 1:
+        errors.append(
+            "deviations.minimum_new_return_observations must be at least one"
+        )
     if policy.retention.maximum_raw_events <= 0:
         errors.append("retention.maximum_raw_events must be greater than zero")
     snapshots = policy.snapshots

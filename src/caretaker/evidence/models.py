@@ -188,6 +188,11 @@ class BehaviorWindow:
     representative_event_ids: tuple[UUID, ...] = ()
     environment_fingerprint: str | None = None
     workload_label: str | None = None
+    return_category_counts: Mapping[str, int] = field(default_factory=dict)
+    return_shape_counts: Mapping[str, int] = field(default_factory=dict)
+    return_observations_available: bool = False
+    success_count: int = 0
+    failure_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
