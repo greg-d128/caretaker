@@ -311,6 +311,28 @@ def test_required_external_validation_result_authentication_rejects_missing_enve
     assert any("required result authentication" in finding for finding in report.hard_disqualifications)
 
 
+def test_validation_policy_can_require_result_authentication() -> None:
+    policy = replace(
+        _automatic_policy(),
+        validation=replace(
+            _automatic_policy().validation,
+            require_result_authentication=True,
+        ),
+    )
+    engine = RepairEngine(provider=StaticRepairProvider([]))
+    wrapped = repair(policy=policy, engine=engine)(broken_divide)
+    target = wrapped.__caretaker_target__
+    report = SubprocessValidationBackend().validate_candidate(
+        _repair_candidate(target),
+        target,
+        timeout_seconds=1.0,
+    )
+
+    assert report.eligible is False
+    assert report.result_authentication_status == "MISSING"
+    assert any("no verifier is configured" in finding for finding in report.hard_disqualifications)
+
+
 def test_validation_protocol_rejects_non_finite_numeric_evidence() -> None:
     class NonFiniteResultBackend(SubprocessValidationBackend):
         def _run_worker(self, payload, *, timeout_seconds):

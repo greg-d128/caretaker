@@ -510,6 +510,10 @@ class SubprocessValidationBackend:
         protocol_findings: list[str] = []
         result_authentication = result.pop(_VALIDATION_RESULT_AUTHENTICATION_KEY, None)
         result_authentication_status = "NOT_REQUIRED"
+        authentication_required = (
+            self.require_result_authentication
+            or target.policy.validation.require_result_authentication
+        )
 
         def add_risk_finding(finding: str) -> None:
             existing = result.get("risk_findings", ())
@@ -519,17 +523,22 @@ class SubprocessValidationBackend:
                 result["risk_findings"] = [finding]
 
         if result_authentication is None:
-            if self.result_authenticator is not None:
+            if authentication_required:
                 result_authentication_status = "MISSING"
-                if self.require_result_authentication:
+                if self.result_authenticator is None:
+                    protocol_findings.append(
+                        "validation result authentication is required but no verifier is configured"
+                    )
+                else:
                     protocol_findings.append(
                         "validation worker omitted required result authentication"
                     )
-                else:
-                    add_risk_finding("validation result authentication was not provided")
+            elif self.result_authenticator is not None:
+                result_authentication_status = "MISSING"
+                add_risk_finding("validation result authentication was not provided")
         elif self.result_authenticator is None:
             result_authentication_status = "UNVERIFIED"
-            if self.require_result_authentication:
+            if authentication_required:
                 protocol_findings.append(
                     "validation result authentication cannot be verified"
                 )

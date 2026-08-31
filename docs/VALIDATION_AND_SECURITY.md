@@ -51,7 +51,9 @@ the authentication object beside `result`:
 }
 ```
 
-`Ed25519ValidationResultAuthenticator` verifies this envelope, and
+`Ed25519ValidationResultAuthenticator` verifies this envelope, and the
+policy field `ValidationPolicy.require_result_authentication` makes the
+requirement part of the reviewed target policy. Backend
 `require_result_authentication=True` makes missing, malformed, or invalid
 authentication a hard validation failure. The default process, Podman, and VM
 paths remain compatible with existing unsigned operation; deployments that

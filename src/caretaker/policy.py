@@ -127,6 +127,7 @@ class ValidationPolicy:
     allow_subprocesses: bool = False
     allow_filesystem_writes: bool = False
     accepted_artifact_kinds: tuple[str, ...] = ("FUNCTION_REPLACEMENT",)
+    require_result_authentication: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -559,6 +560,7 @@ def _human_readable(policy: RepairPolicy) -> str:
             f"  isolated: {policy.validation.isolate_validation}",
             f"  minimum isolation: {policy.validation.minimum_isolation.name}",
             f"  backend unavailable: {policy.validation.backend_unavailable_action.name}",
+            f"  result authentication required: {policy.validation.require_result_authentication}",
             f"  registered tests: {policy.validation.run_registered_tests}",
             f"  generated tests: {policy.validation.run_generated_tests}",
             "Selection:",

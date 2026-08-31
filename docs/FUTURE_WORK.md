@@ -293,7 +293,9 @@ The validation module now defines an optional Ed25519-authenticated result
 envelope. A configured verifier pins the validator key ID and public-key
 fingerprint, and required mode fails closed when the envelope is absent,
 malformed, or invalid. The default local backends remain unsigned for least
-friction. Remaining work is the dedicated EXTERNAL backend and deployment
+friction; `ValidationPolicy.require_result_authentication` can make the
+requirement explicit for a target. Remaining work is the dedicated EXTERNAL
+backend and deployment
 provisioning for independent validator identities, key rotation, revocation,
 and remote transport/replay semantics.
 

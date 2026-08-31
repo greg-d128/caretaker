@@ -169,6 +169,7 @@ POLICY_CAPABILITIES: tuple[PolicyCapability, ...] = (
         (
             "repair.validation.minimum_isolation",
             "repair.validation.backend_unavailable_action",
+            "repair.validation.require_result_authentication",
         ),
     ),
     PolicyCapability(
