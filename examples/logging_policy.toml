@@ -94,6 +94,10 @@ debug_rate = 1.0
 ordinary_rate = 1.0
 important_rate = 1.0
 critical_rate = 1.0
+external_delivery_required = false
+external_delivery_require_ack = false
+external_delivery_max_pending_records = 1024
+external_delivery_max_pending_bytes = 8388608
 
 [logging.reload]
 enabled = true

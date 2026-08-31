@@ -82,6 +82,10 @@ debug_rate = 1.0
 ordinary_rate = 1.0
 important_rate = 1.0
 critical_rate = 1.0
+external_delivery_required = false
+external_delivery_require_ack = false
+external_delivery_max_pending_records = 1024
+external_delivery_max_pending_bytes = 8388608
 ```
 
 The current implementation writes the output-only local stream below the main
@@ -101,7 +105,13 @@ rejects a missing or incompatible signer rather than silently downgrading to a
 hash-only stream. Signed events contain a runtime artifact signature over the
 canonical event body, event identity, and stream sequence, and retained signed
 events are verified on restart. The default remains hash chaining without
-per-event signatures. External delivery remains a future capability. See
+per-event signatures. An embedding application may provide an output-only
+external sink. Set `external_delivery_required = true` to fail closed after
+local persistence when that sink is unavailable or rejects a record. Set
+`external_delivery_require_ack = true` to require the sink to acknowledge each
+record with its matching SHA-256 digest; the acknowledgement setting is
+policy-controlled and does not provide transport authentication or replay
+protection. See
 [`LOGGING_RECORD_FORMAT.md`](LOGGING_RECORD_FORMAT.md) for the proposed envelope
 and event registry.
 
