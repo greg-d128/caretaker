@@ -466,6 +466,79 @@ def test_registered_audit_events_enforce_priority_and_required_fields(tmp_path: 
     assert event["event_type"] == "POLICY_APPLIED"
 
 
+def test_audit_policy_sampling_records_loss_before_next_retained_event(tmp_path: Path) -> None:
+    writer = _writer(
+        tmp_path,
+        always_preserve_priorities=frozenset({
+            EvidencePriority.IMPORTANT,
+            EvidencePriority.CRITICAL,
+        }),
+        debug_rate=0.0,
+        ordinary_rate=0.0,
+    )
+    assert writer.emit("LOW_PRIORITY_EVENT", priority=EvidencePriority.DEBUG) is None
+    assert writer.emit("LOW_PRIORITY_EVENT", priority=EvidencePriority.ORDINARY) is None
+    assert writer.pending_loss_count == 2
+
+    retained = writer.emit("INCIDENT_CAPTURED")
+    writer.close()
+
+    assert retained["stream_sequence"] == 2
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "caretaker_audit.log").read_text().splitlines()
+    ]
+    assert [row["event_type"] for row in rows] == [
+        "AUDIT_DATA_LOSS",
+        "INCIDENT_CAPTURED",
+    ]
+    assert rows[0]["priority"] == "CRITICAL"
+    assert rows[0]["details"] == {
+        "category": "audit_events",
+        "count": 2,
+        "priority_counts": {"DEBUG": 1, "ORDINARY": 1},
+        "reason": "sampling_policy",
+        "loss_record_preserved": True,
+    }
+    assert verify_audit_stream(tmp_path / "caretaker_audit.log")["valid"] is True
+
+
+def test_audit_policy_flushes_pending_loss_without_a_following_event(tmp_path: Path) -> None:
+    writer = _writer(tmp_path, debug_rate=0.0)
+    assert writer.emit("LOW_PRIORITY_EVENT", priority=EvidencePriority.DEBUG) is None
+    writer.flush()
+    assert writer.pending_loss_count == 0
+    writer.close()
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "caretaker_audit.log").read_text().splitlines()
+    ]
+    assert len(rows) == 1
+    assert rows[0]["event_type"] == "AUDIT_DATA_LOSS"
+    assert verify_audit_stream(tmp_path / "caretaker_audit.log")["valid"] is True
+
+
+def test_audit_policy_rejects_sampling_critical_events(tmp_path: Path) -> None:
+    from caretaker.logging.policy import LoggingPolicyConfigurationError, OperatorLoggingPolicy, validate_operator_logging_policy
+
+    with pytest.raises(LoggingPolicyConfigurationError, match="critical_rate"):
+        validate_operator_logging_policy(
+            OperatorLoggingPolicy(
+                audit=AuditStreamPolicy(critical_rate=0.0),
+            )
+        )
+    with pytest.raises(AuditStreamError, match="include CRITICAL"):
+        AuditStreamWriter(
+            AuditStreamPolicy(
+                always_preserve_priorities=frozenset({EvidencePriority.IMPORTANT}),
+            ),
+            directory=tmp_path,
+            run_id=uuid4(),
+            process_start_id=uuid4(),
+        )
+
+
 def test_audit_policy_rejects_paths_outside_logging_directory() -> None:
     from caretaker.logging.policy import LoggingPolicyConfigurationError, OperatorLoggingPolicy
 

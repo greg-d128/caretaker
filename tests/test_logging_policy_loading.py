@@ -72,6 +72,11 @@ enabled = true
 file_name = "audit.log"
 hash_chain = true
 maximum_event_bytes = 2048
+always_preserve_priorities = ["important", "critical"]
+debug_rate = 0.25
+ordinary_rate = 0.5
+important_rate = 0.75
+critical_rate = 1.0
 
 [logging.reload]
 check_interval_seconds = 5
@@ -97,6 +102,9 @@ exhaustion_action = "stop_application"
     assert policy.audit == AuditStreamPolicy(
         file_name="audit.log",
         maximum_event_bytes=2048,
+        debug_rate=0.25,
+        ordinary_rate=0.5,
+        important_rate=0.75,
     )
     assert policy.worker_restart.maximum_restarts == 3
     assert policy.worker_restart.exhaustion_action.name == "STOP_APPLICATION"

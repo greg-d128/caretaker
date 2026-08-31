@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import random
 import re
 import threading
 import time
@@ -486,7 +487,10 @@ class AuditStreamWriter:
         self._sequence = 0
         self._previous_hash: str | None = None
         self._recovered_truncated_bytes = 0
+        self._pending_loss_count = 0
+        self._pending_loss_priorities: dict[str, int] = {}
         self._file = None
+        self._validate_delivery_policy()
         if not policy.enabled:
             return
         if policy.sign_events and artifact_signer is None:
@@ -509,6 +513,30 @@ class AuditStreamWriter:
     def recovered_truncated_bytes(self) -> int:
         """Bytes discarded from one incomplete final record during recovery."""
         return self._recovered_truncated_bytes
+
+    @property
+    def pending_loss_count(self) -> int:
+        """Number of policy-suppressed audit events awaiting a loss record."""
+        with self._lock:
+            return self._pending_loss_count
+
+    def _validate_delivery_policy(self) -> None:
+        preserved = getattr(self.policy, "always_preserve_priorities", frozenset())
+        if EvidencePriority.CRITICAL not in preserved:
+            raise AuditStreamError(
+                "logging.audit.always_preserve_priorities must include CRITICAL"
+            )
+        critical_rate = getattr(self.policy, "critical_rate", 1.0)
+        if critical_rate != 1.0:
+            raise AuditStreamError(
+                "logging.audit.critical_rate must be 1; critical audit events cannot be sampled"
+            )
+        for name in ("debug_rate", "ordinary_rate", "important_rate", "critical_rate"):
+            rate = getattr(self.policy, name, None)
+            if not isinstance(rate, (int, float)) or isinstance(rate, bool) or not 0.0 <= rate <= 1.0:
+                raise AuditStreamError(
+                    f"logging.audit.{name} must be between 0 and 1"
+                )
 
     def _set_redaction_policy(self, redaction_policy: Any | None) -> None:
         if redaction_policy is None:
@@ -669,8 +697,62 @@ class AuditStreamWriter:
             warnings.append("logging.audit.sign_events is run-bound; a new run is required")
         if policy.maximum_event_bytes != self.policy.maximum_event_bytes:
             warnings.append("logging.audit.maximum_event_bytes is startup-bound; the existing limit remains active")
+        for field_name in (
+            "always_preserve_priorities",
+            "debug_rate",
+            "ordinary_rate",
+            "important_rate",
+            "critical_rate",
+        ):
+            if getattr(policy, field_name) != getattr(self.policy, field_name):
+                warnings.append(
+                    f"logging.audit.{field_name} is run-bound; the existing delivery policy remains active"
+                )
         self._set_redaction_policy(redaction_policy)
         return tuple(warnings)
+
+    def _sampling_rate(self, priority: EvidencePriority) -> float:
+        return float(getattr(self.policy, f"{priority.name.lower()}_rate", 1.0))
+
+    def _should_retain(self, priority: EvidencePriority) -> bool:
+        preserved = getattr(self.policy, "always_preserve_priorities", frozenset())
+        if priority in preserved:
+            return True
+        rate = self._sampling_rate(priority)
+        if rate <= 0.0:
+            return False
+        if rate >= 1.0:
+            return True
+        return random.random() < rate
+
+    def _record_policy_loss(self, priority: EvidencePriority) -> None:
+        self._pending_loss_count += 1
+        key = priority.name
+        self._pending_loss_priorities[key] = self._pending_loss_priorities.get(key, 0) + 1
+
+    def _flush_policy_loss(self) -> None:
+        if not self._pending_loss_count:
+            return
+        count = self._pending_loss_count
+        priority_counts = dict(self._pending_loss_priorities)
+        # Reset only after the critical loss record is durably written. If the
+        # write fails, the caller retains the pending evidence and receives a
+        # fail-closed AuditStreamError.
+        self._write_event(
+            "AUDIT_DATA_LOSS",
+            actor={"type": "system"},
+            outcome={"state": "SAMPLED"},
+            details={
+                "category": "audit_events",
+                "count": count,
+                "priority_counts": priority_counts,
+                "reason": "sampling_policy",
+                "loss_record_preserved": True,
+            },
+            priority=EvidencePriority.CRITICAL,
+        )
+        self._pending_loss_count = 0
+        self._pending_loss_priorities.clear()
 
     def emit(
         self,
@@ -716,6 +798,39 @@ class AuditStreamWriter:
         with self._lock:
             if self._closed or self._file is None:
                 return None
+            if not self._should_retain(priority):
+                self._record_policy_loss(priority)
+                return None
+            self._flush_policy_loss()
+            return self._write_event(
+                event_type,
+                actor=actor,
+                scope=scope,
+                policy=policy,
+                outcome=outcome,
+                details=details,
+                priority=priority,
+                occurred_at=occurred_at,
+                monotonic_ns=monotonic_ns,
+            )
+
+    def _write_event(
+        self,
+        event_type: str,
+        *,
+        actor: Mapping[str, Any] | None = None,
+        scope: Mapping[str, Any] | None = None,
+        policy: Mapping[str, Any] | None = None,
+        outcome: Mapping[str, Any] | None = None,
+        details: Mapping[str, Any] | None = None,
+        priority: EvidencePriority = EvidencePriority.IMPORTANT,
+        occurred_at: datetime | None = None,
+        monotonic_ns: int | None = None,
+    ) -> dict[str, Any]:
+        """Write one already-validated retained event while holding the lock."""
+        if self._closed or self._file is None:
+            raise AuditStreamError("Audit stream is not open")
+        with self._lock:
             self._sequence += 1
             timestamp = occurred_at or datetime.now(timezone.utc)
             body: dict[str, Any] = {
@@ -798,13 +913,18 @@ class AuditStreamWriter:
     def flush(self) -> None:
         with self._lock:
             if self._file is not None and not self._closed:
+                self._flush_policy_loss()
                 self._file.flush()
 
     def close(self) -> None:
         with self._lock:
             if self._closed:
                 return
-            if self._file is not None:
-                self._file.flush()
-                self._file.close()
-            self._closed = True
+            try:
+                if self._file is not None:
+                    self._flush_policy_loss()
+                    self._file.flush()
+            finally:
+                if self._file is not None:
+                    self._file.close()
+                self._closed = True

@@ -1321,8 +1321,11 @@ Until this exists, restart is a rollback to deployed application code, not conti
   Supervised application validation decisions cross an output-only, PID-bound,
   allow-listed control-socket submission path; worker identity is derived by the
   supervisor and the submitted policy context remains evidence. Remaining work
-  is to connect every registry type to its producer and complete
-  policy-controlled critical/important/ordinary/debug delivery semantics.
+  is to connect every registry type to its producer and complete external
+  delivery semantics. The local writer now applies explicit
+  critical/important/ordinary/debug retention rates, preserves critical events
+  fail-closed, and records policy-suppressed lower-priority events as critical
+  `AUDIT_DATA_LOSS` records.
   Accepted adaptive policy transitions and, when `logging.audit.sign_events` is
   enabled, every audit event are now signed as runtime artifacts when a runtime
   signer is configured; hash-chained mode remains explicitly unsigned. Signed

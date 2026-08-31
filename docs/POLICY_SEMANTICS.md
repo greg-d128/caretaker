@@ -25,7 +25,8 @@ This rule is separate from policy authority. Authority answers **who may request
 
 The logging policy includes the run-bound, output-only audit-stream settings;
 those settings are reviewed as configuration semantics, while external audit
-delivery and per-event signatures remain future work.
+delivery remains future work. Per-event runtime signatures are implemented
+when an approved signing mode and runtime signer are configured.
 
 The lightweight policy's `aggregation` block is an opt-in evidence transport
 control. Its default is disabled for least-friction startup. When enabled,

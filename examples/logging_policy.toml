@@ -89,6 +89,11 @@ file_name = "caretaker_audit.log"
 hash_chain = true
 flush_critical = true
 maximum_event_bytes = 4096
+always_preserve_priorities = ["important", "critical"]
+debug_rate = 1.0
+ordinary_rate = 1.0
+important_rate = 1.0
+critical_rate = 1.0
 
 [logging.reload]
 enabled = true

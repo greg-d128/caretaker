@@ -77,6 +77,11 @@ hash_chain = true
 sign_events = false
 flush_critical = true
 maximum_event_bytes = 4096
+always_preserve_priorities = ["important", "critical"]
+debug_rate = 1.0
+ordinary_rate = 1.0
+important_rate = 1.0
+critical_rate = 1.0
 ```
 
 The current implementation writes the output-only local stream below the main
@@ -106,6 +111,17 @@ active logging redaction policy supplied by `LoggingRuntime`; a directly
 constructed writer also applies the standard secret-field and credential-string
 redaction defaults. Redaction policy changes affect subsequent events, while
 previously written hashes remain immutable.
+
+Audit delivery policy is explicit and run-bound. `critical` events are always
+preserved and synchronously flushed when `flush_critical` is enabled. Important
+events are preserved by default, while `debug_rate`, `ordinary_rate`, and
+`important_rate` may be reduced for a deployment that accepts bounded sampling.
+Every policy-suppressed event increments a bounded loss counter; the next
+retained event, or an explicit flush/close, writes a critical
+`AUDIT_DATA_LOSS` record describing the suppressed priority counts. The default
+rates are all `1.0`, so the least-friction configuration retains the complete
+local audit stream. Critical sampling or dropping is rejected by policy
+validation, and audit policy changes require a new run.
 
 ## Incident communication drafts
 

@@ -206,6 +206,17 @@ class AuditStreamPolicy:
     sign_events: bool = False
     flush_critical: bool = True
     maximum_event_bytes: int = 4096
+    # Critical and important audit decisions are retained by default. Lower
+    # priorities may be sampled explicitly, but critical events are never
+    # eligible for policy loss.
+    always_preserve_priorities: frozenset[EvidencePriority] = frozenset({
+        EvidencePriority.IMPORTANT,
+        EvidencePriority.CRITICAL,
+    })
+    debug_rate: float = 1.0
+    ordinary_rate: float = 1.0
+    important_rate: float = 1.0
+    critical_rate: float = 1.0
 
 
 def runtime_integrity_assurance(policy: RuntimeSigningPolicy) -> dict[str, object]:
@@ -348,6 +359,23 @@ def validate_operator_logging_policy(policy: OperatorLoggingPolicy) -> None:
     audit_name = Path(policy.audit.file_name) if isinstance(policy.audit.file_name, str) else None
     if audit_name is None or audit_name.is_absolute() or ".." in audit_name.parts or not policy.audit.file_name.strip():
         errors.append("logging.audit.file_name must be a non-empty path below logging.directory")
+    if not isinstance(policy.audit.always_preserve_priorities, (frozenset, set, tuple)):
+        errors.append("logging.audit.always_preserve_priorities must be a collection of priorities")
+    else:
+        unknown_priorities = [
+            value for value in policy.audit.always_preserve_priorities
+            if not isinstance(value, EvidencePriority)
+        ]
+        if unknown_priorities:
+            errors.append("logging.audit.always_preserve_priorities must contain EvidencePriority values")
+        if EvidencePriority.CRITICAL not in policy.audit.always_preserve_priorities:
+            errors.append("logging.audit.always_preserve_priorities must include CRITICAL")
+    for name in ("debug_rate", "ordinary_rate", "important_rate", "critical_rate"):
+        rate = getattr(policy.audit, name, None)
+        if not isinstance(rate, (int, float)) or isinstance(rate, bool) or not 0.0 <= rate <= 1.0:
+            errors.append(f"logging.audit.{name} must be between 0 and 1")
+    if getattr(policy.audit, "critical_rate", None) != 1.0:
+        errors.append("logging.audit.critical_rate must be 1; critical audit events cannot be sampled")
     if (
         not isinstance(policy.audit.maximum_event_bytes, int)
         or policy.audit.maximum_event_bytes < 512
@@ -539,6 +567,12 @@ def _priority_set(values: list[str] | tuple[str, ...] | None) -> frozenset[Evide
     return frozenset(_enum(EvidencePriority, item) for item in values)
 
 
+def _audit_priority_set(values: list[str] | tuple[str, ...] | None) -> frozenset[EvidencePriority]:
+    if values is None:
+        return AuditStreamPolicy().always_preserve_priorities
+    return frozenset(_enum(EvidencePriority, item) for item in values)
+
+
 def _communication_audiences(values: Any) -> tuple[CommunicationAudiencePolicy, ...]:
     if not isinstance(values, (list, tuple)):
         raise ValueError("logging.communications.audiences must be an array of tables")
@@ -672,7 +706,12 @@ def load_operator_policy(path: str | Path) -> tuple[OperatorLoggingPolicy, Loggi
             **_enum_if_present(RuntimeRecordIntegrityMode, signing_data, "mode"),
             **_enum_if_present(AnchorFailureAction, signing_data, "external_anchor_failure_action"),
         }),
-        audit=AuditStreamPolicy(**audit_data),
+        audit=AuditStreamPolicy(**{
+            **audit_data,
+            "always_preserve_priorities": _audit_priority_set(
+                audit_data.get("always_preserve_priorities")
+            ),
+        }),
         reload=PolicyReloadPolicy(**reload_data),
         worker_restart=WorkerRestartPolicy(**{
             **worker_restart_data,

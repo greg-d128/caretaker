@@ -11,6 +11,14 @@ events. An unknown uppercase event name may still be retained for forward
 compatibility, but it has no registered event guarantees and is never treated
 as a command. Event-specific values are evidence, not authority.
 
+The audit policy retains `IMPORTANT` and `CRITICAL` events by default. Lower
+priorities may be sampled with explicit per-priority rates. A sampled event is
+not assigned a stream sequence; the writer emits a subsequent critical
+`AUDIT_DATA_LOSS` record with the suppressed priority counts before the next
+retained event (and during flush/close). `CRITICAL` is always preserved and
+cannot be sampled or dropped by policy. This keeps loss visible without
+creating a control channel or weakening the hash chain of retained records.
+
 All event types share these redaction rules:
 
 - never include credentials, private keys, bearer tokens, or authentication
