@@ -342,6 +342,72 @@ def _handle_rollout_advance_request(
         "record": json.loads(json.dumps(asdict(updated), default=str)),
         "transition": json.loads(json.dumps(asdict(transition), default=str)),
     }
+
+
+def _handle_rollout_pause_request(
+    ledger: RepairRolloutLedger,
+    coordinator: RepairRolloutCoordinator,
+    request: Mapping[str, Any],
+    credentials: tuple[int, int, int],
+    *,
+    paused: bool,
+    policy_fingerprint: str,
+    authority_fingerprint: str,
+) -> dict[str, Any]:
+    """Apply one explicitly confirmed operator pause/resume control action."""
+
+    command = "pause" if paused else "resume"
+    if request.get("confirm") is not True:
+        raise PermissionError(f"repair-rollout-{command} requires confirm=true")
+    reason = str(request.get("reason") or "").strip()
+    if not reason:
+        raise ValueError(f"repair rollout {command} requires an operator reason")
+    try:
+        rollout_id = UUID(str(request["rollout_id"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            f"repair-rollout-{command} requires a valid rollout_id"
+        ) from exc
+
+    record = ledger.get(rollout_id)
+    readiness = coordinator.readiness(rollout_id)
+    override_readiness = request.get("override_readiness") is True
+    if not paused and readiness.get("status") in {
+        "NOT_READY",
+        "UNAVAILABLE",
+        "STALE_OR_UNAVAILABLE",
+    } and not override_readiness:
+        raise PermissionError(
+            "rollout readiness does not permit resume; "
+            "set override_readiness=true for an explicitly justified operator override"
+        )
+
+    operation = ledger.pause if paused else ledger.resume
+    updated = operation(
+        rollout_id,
+        authority_type=RepairRolloutAuthority.OPERATOR,
+        authority_id=f"uid:{credentials[1]}",
+        reason=reason,
+        policy_fingerprint=policy_fingerprint,
+        authority_fingerprint=authority_fingerprint,
+    )
+    transition = ledger.transitions(rollout_id)[-1] if updated != record else None
+    return {
+        "ok": True,
+        "read_only": False,
+        "authority_granted": True,
+        "action": command,
+        "readiness": readiness,
+        "readiness_overridden": override_readiness,
+        "record": json.loads(json.dumps(asdict(updated), default=str)),
+        "transition": (
+            json.loads(json.dumps(asdict(transition), default=str))
+            if transition is not None
+            else None
+        ),
+    }
+
+
 def _handle_adaptive_observation_submission(
     store: Any,
     request: Mapping[str, Any],
@@ -1233,6 +1299,20 @@ def main(argv: list[str] | None = None) -> int:
                 coordinator,
                 request,
                 credentials,
+                policy_fingerprint=runtime.effective.fingerprint,
+                authority_fingerprint=authority.effective.fingerprint,
+            )
+        if command in {"repair-rollout-pause", "repair-rollout-resume"}:
+            ledger = rollout_ledger_holder.get("ledger")
+            coordinator = rollout_coordinator_holder.get("coordinator")
+            if ledger is None or coordinator is None:
+                raise RuntimeError("rollout coordinator is not initialized")
+            return _handle_rollout_pause_request(
+                ledger,
+                coordinator,
+                request,
+                credentials,
+                paused=command == "repair-rollout-pause",
                 policy_fingerprint=runtime.effective.fingerprint,
                 authority_fingerprint=authority.effective.fingerprint,
             )

@@ -1465,6 +1465,64 @@ def test_console_does_not_offer_validation_bypass_for_proposed_rollout(tmp_path)
     asyncio.run(exercise())
 
 
+def test_console_rollout_pause_and_resume_are_explicit_control_actions(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            requests = []
+            status_record = {
+                "rollout_id": "rollout-1",
+                "target_id": "app:charge",
+                "stage": "canary",
+                "paused": False,
+                "candidate_id": "candidate-1",
+                "execution_summary_status": "AVAILABLE",
+                "execution_summary": {},
+            }
+
+            async def request(command: str, **payload):
+                requests.append((command, payload))
+                if command == "repair-rollout-status":
+                    return {
+                        "ok": True,
+                        "available": True,
+                        "records": [dict(status_record)],
+                        "worker_coordination": {"rollouts": []},
+                        "transitions": [],
+                    }
+                if command == "repair-rollout-pause":
+                    return {"ok": True, "record": {"paused": True}}
+                raise AssertionError(command)
+
+            app._request = request  # type: ignore[method-assign]
+            app._application_running = True
+            await app.refresh_rollouts()
+            app._selected_rollout_id = "rollout-1"
+            app._refresh_rollout_advance_controls()
+            app.query_one("#rollout-advance-reason", Input).value = "hold canary for investigation"
+            app.query_one("#rollout-advance-confirm", Checkbox).value = True
+            app._refresh_rollout_advance_controls()
+
+            pause = app.query_one("#rollout-pause", Button)
+            resume = app.query_one("#rollout-resume", Button)
+            assert pause.disabled is False
+            assert resume.disabled is True
+            await app._set_selected_rollout_paused(True)
+
+            assert requests[1] == (
+                "repair-rollout-pause",
+                {
+                    "rollout_id": "rollout-1",
+                    "reason": "hold canary for investigation",
+                    "confirm": True,
+                    "override_readiness": False,
+                },
+            )
+
+    asyncio.run(exercise())
+
+
 def test_console_displays_read_only_adaptive_transition_deadlines(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 

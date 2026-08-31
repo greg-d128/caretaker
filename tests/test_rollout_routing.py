@@ -27,7 +27,11 @@ from caretaker import (
 )
 from caretaker.domain import ReplaySafety, SideEffectClass
 from caretaker.observation import ObservationManager
-from caretaker.run import _handle_rollout_advance_request
+from caretaker.run import (
+    _handle_rollout_advance_request,
+    _handle_rollout_pause_request,
+)
+from caretaker.repair_rollout import _coerce_record
 from caretaker.slot import FunctionSlot
 
 
@@ -897,6 +901,63 @@ def test_operator_rollout_advance_requires_explicit_override_for_unready_rollout
     assert response["readiness_overridden"] is True
 
 
+def test_operator_rollout_resume_requires_readiness_or_explicit_override() -> None:
+    store = InMemoryRepairStore()
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            readiness=RolloutReadinessRequirements(minimum_current_workers=1),
+        ),
+        store=store,
+    )
+    record = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, record, RepairRolloutStage.SHADOW)
+    record = ledger.pause(
+        record.rollout_id,
+        authority_type=RepairRolloutAuthority.OPERATOR,
+        authority_id="operator-1",
+        reason="hold for review",
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+    )
+    coordinator = RepairRolloutCoordinator(
+        ledger,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        store=store,
+    )
+    request = {
+        "rollout_id": str(record.rollout_id),
+        "reason": "resume after operator review",
+        "confirm": True,
+    }
+    with pytest.raises(PermissionError, match="resume"):
+        _handle_rollout_pause_request(
+            ledger,
+            coordinator,
+            request,
+            (503, 1000, 1000),
+            paused=False,
+            policy_fingerprint="policy-hash",
+            authority_fingerprint="authority-hash",
+        )
+
+    request["override_readiness"] = True
+    response = _handle_rollout_pause_request(
+        ledger,
+        coordinator,
+        request,
+        (503, 1000, 1000),
+        paused=False,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+    )
+    assert response["action"] == "resume"
+    assert response["record"]["paused"] is False
+    assert response["readiness"]["status"] == "NOT_READY"
+    assert response["readiness_overridden"] is True
+
+
 def test_operator_rollout_safety_actions_do_not_require_readiness() -> None:
     store = InMemoryRepairStore()
     ledger = RepairRolloutLedger(
@@ -934,6 +995,80 @@ def test_operator_rollout_safety_actions_do_not_require_readiness() -> None:
 
     assert response["record"]["stage"] == "revoked"
     assert response["readiness"]["status"] == "NOT_READY"
+
+
+def test_paused_rollout_persists_and_blocks_routing_until_resumed(tmp_path) -> None:
+    store = SQLiteRepairStore(tmp_path / "repair.sqlite")
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            routing=RolloutRoutingPolicy(canary_percentage=100),
+        ),
+        store=store,
+    )
+    record = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, record, RepairRolloutStage.CANARY)
+
+    paused = ledger.pause(
+        record.rollout_id,
+        authority_type=RepairRolloutAuthority.OPERATOR,
+        authority_id="operator-1",
+        reason="investigate canary mismatch",
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+    )
+    assert paused.paused is True
+    assert ledger.transitions(record.rollout_id)[-1].action == "pause"
+    with pytest.raises(RepairRolloutError, match="paused"):
+        decide_rollout_routing(
+            paused,
+            policy=ledger.policy,
+            policy_fingerprint="policy-hash",
+            routing_scope="tenant",
+            routing_key="tenant-1",
+        )
+    with pytest.raises(RepairRolloutError, match="paused"):
+        ledger.advance(
+            paused.rollout_id,
+            to_stage=RepairRolloutStage.ACTIVE,
+            authority_type=RepairRolloutAuthority.OPERATOR,
+            authority_id="operator-1",
+            reason="must not skip pause",
+            policy_fingerprint="policy-hash",
+            authority_fingerprint="authority-hash",
+        )
+
+    reopened = RepairRolloutLedger(
+        policy=ledger.policy,
+        store=store,
+    )
+    assert reopened.get(record.rollout_id).paused is True
+    resumed = reopened.resume(
+        record.rollout_id,
+        authority_type=RepairRolloutAuthority.OPERATOR,
+        authority_id="operator-1",
+        reason="canary review complete",
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+    )
+    assert resumed.paused is False
+    assert [item.action for item in reopened.transitions(record.rollout_id)][-2:] == [
+        "pause",
+        "resume",
+    ]
+    decision = decide_rollout_routing(
+        resumed,
+        policy=reopened.policy,
+        policy_fingerprint="policy-hash",
+        routing_scope="tenant",
+        routing_key="tenant-1",
+    )
+    assert decision.candidate_authoritative is True
+
+
+def test_malformed_persisted_pause_state_fails_closed() -> None:
+    with pytest.raises(RepairRolloutError, match="paused state must be a boolean"):
+        _coerce_record({"paused": "false"})
 
 
 def test_sqlite_rollout_worker_acknowledgement_survives_coordinator_restart(tmp_path) -> None:

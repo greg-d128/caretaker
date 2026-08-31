@@ -217,6 +217,7 @@ class RepairRolloutRecord:
     deployment_artifact_hash: str | None = None
     last_transition_id: UUID | None = None
     transition_count: int = 0
+    paused: bool = False
 
     @property
     def authority_expired(self) -> bool:
@@ -513,6 +514,11 @@ class RepairRolloutLedger:
             raise RepairRolloutError("unknown rollout stage") from exc
         if record.stage in {RepairRolloutStage.RETIRED, RepairRolloutStage.REVOKED}:
             raise RepairRolloutError(f"rollout is terminal in stage {record.stage.value}")
+        if record.paused and to_stage not in {
+            RepairRolloutStage.RETIRED,
+            RepairRolloutStage.REVOKED,
+        }:
+            raise RepairRolloutError("rollout is paused; resume it before advancement")
         if self._authority_expired(record) and to_stage not in {
             RepairRolloutStage.RETIRED,
             RepairRolloutStage.REVOKED,
@@ -583,6 +589,8 @@ class RepairRolloutLedger:
             self._require_actor(authority_type, authority_id)
         if record.stage is not RepairRolloutStage.ACTIVE:
             raise RepairRolloutError("only an active field repair can become permanent")
+        if record.paused:
+            raise RepairRolloutError("a paused rollout must be resumed before permanent promotion")
         if self._authority_expired(record):
             raise RepairRolloutError("rollout authority has expired")
         if record.release_kind is RepairReleaseKind.PERMANENT:
@@ -607,6 +615,95 @@ class RepairRolloutLedger:
             authority_type=authority_type,
             authority_id=authority_id,
             incident_id=incident_id,
+            reason=reason,
+        )
+        return self._records[rollout_id]
+
+    def pause(
+        self,
+        rollout_id: UUID,
+        *,
+        authority_type: RepairRolloutAuthority,
+        authority_id: str,
+        reason: str,
+        policy_fingerprint: str,
+        authority_fingerprint: str,
+    ) -> RepairRolloutRecord:
+        """Pause execution without changing the rollout lifecycle stage."""
+
+        return self._set_paused(
+            rollout_id,
+            paused=True,
+            authority_type=authority_type,
+            authority_id=authority_id,
+            reason=reason,
+            policy_fingerprint=policy_fingerprint,
+            authority_fingerprint=authority_fingerprint,
+        )
+
+    def resume(
+        self,
+        rollout_id: UUID,
+        *,
+        authority_type: RepairRolloutAuthority,
+        authority_id: str,
+        reason: str,
+        policy_fingerprint: str,
+        authority_fingerprint: str,
+    ) -> RepairRolloutRecord:
+        """Resume execution at the existing lifecycle stage."""
+
+        return self._set_paused(
+            rollout_id,
+            paused=False,
+            authority_type=authority_type,
+            authority_id=authority_id,
+            reason=reason,
+            policy_fingerprint=policy_fingerprint,
+            authority_fingerprint=authority_fingerprint,
+        )
+
+    def _set_paused(
+        self,
+        rollout_id: UUID,
+        *,
+        paused: bool,
+        authority_type: RepairRolloutAuthority,
+        authority_id: str,
+        reason: str,
+        policy_fingerprint: str,
+        authority_fingerprint: str,
+    ) -> RepairRolloutRecord:
+        self._require_enabled()
+        if not reason.strip():
+            raise RepairRolloutError("rollout pause/resume reason is required")
+        record = self._get(rollout_id)
+        self._check_context(record, policy_fingerprint, authority_fingerprint)
+        self._require_actor(authority_type, authority_id)
+        if record.stage not in {
+            RepairRolloutStage.SHADOW,
+            RepairRolloutStage.CANARY,
+            RepairRolloutStage.ACTIVE,
+        }:
+            raise RepairRolloutError(
+                f"rollout stage {record.stage.value} cannot be paused or resumed"
+            )
+        if self._authority_expired(record):
+            raise RepairRolloutError("rollout authority has expired")
+        if record.paused is paused:
+            return record
+        now = self._clock()
+        updated = replace(record, paused=paused, updated_at=now)
+        self._records[rollout_id] = updated
+        self._persist_record(updated)
+        self._record_transition(
+            updated,
+            from_stage=record.stage,
+            to_stage=record.stage,
+            action="pause" if paused else "resume",
+            authority_type=authority_type,
+            authority_id=authority_id,
+            incident_id=None,
             reason=reason,
         )
         return self._records[rollout_id]
@@ -1360,6 +1457,8 @@ def decide_rollout_routing(
         raise RepairRolloutError("rollout routing key is required")
     if record.authority_expired:
         raise RepairRolloutError("rollout authority has expired")
+    if record.paused:
+        raise RepairRolloutError("rollout is paused")
     if record.stage in {RepairRolloutStage.RETIRED, RepairRolloutStage.REVOKED}:
         raise RepairRolloutError(f"rollout is terminal in stage {record.stage.value}")
 
@@ -2251,6 +2350,9 @@ def _utcnow() -> datetime:
 def _coerce_record(raw: Any) -> RepairRolloutRecord:
     if isinstance(raw, RepairRolloutRecord):
         return raw
+    paused = raw.get("paused", False)
+    if not isinstance(paused, bool):
+        raise RepairRolloutError("rollout paused state must be a boolean")
     return RepairRolloutRecord(
         rollout_id=UUID(str(raw["rollout_id"])),
         target_id=str(raw["target_id"]),
@@ -2280,6 +2382,7 @@ def _coerce_record(raw: Any) -> RepairRolloutRecord:
             else None
         ),
         transition_count=int(raw.get("transition_count") or 0),
+        paused=paused,
     )
 
 

@@ -141,9 +141,16 @@ an explicit operator choice. The console refreshes the projection after a
 recorded transition and shows the returned signed/audited transition evidence.
 
 This is intentionally narrower than general rollout control. The console does
-not change routing percentages, pause/resume traffic, activate a FunctionSlot,
-or grant execution authority. The supervisor and ledger remain authoritative
-for policy, readiness, lifecycle, expiry, and incident checks.
+not change routing percentages, activate a FunctionSlot, or grant execution
+authority. The supervisor and ledger remain authoritative for policy,
+readiness, lifecycle, expiry, and incident checks.
+
+Pause and resume are separate control actions over an executable stage. A
+paused rollout retains its lifecycle stage and transition history, but routing
+fails closed until an authorized operator resumes it. Pausing does not require
+readiness; resuming does, unless the operator explicitly records a readiness
+override. A paused rollout cannot advance or become a permanent deployment
+until it is resumed, while safety retirement or revocation remains available.
 
 ## Supervisor worker coordination
 

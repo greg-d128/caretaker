@@ -1183,6 +1183,18 @@ class CaretakerConsoleApp(App):
                         variant="warning",
                         disabled=True,
                     )
+                    yield Button(
+                        "Pause rollout",
+                        id="rollout-pause",
+                        variant="warning",
+                        disabled=True,
+                    )
+                    yield Button(
+                        "Resume rollout",
+                        id="rollout-resume",
+                        variant="success",
+                        disabled=True,
+                    )
                 yield Static(
                     "Select a rollout to review available lifecycle transitions.",
                     id="rollout-advance-status",
@@ -1191,7 +1203,7 @@ class CaretakerConsoleApp(App):
                 table = DataTable(id="rollout-table")
                 table.cursor_type = "row"
                 table.add_columns(
-                    "#", "Target", "Stage", "Release", "Candidate", "Executions", "Candidate results", "Shadow", "Workers", "Readiness", "Evidence", "Updated"
+                    "#", "Target", "Stage", "Control", "Release", "Candidate", "Executions", "Candidate results", "Shadow", "Workers", "Readiness", "Evidence", "Updated"
                 )
                 yield table
                 yield RichLog(id="rollout-output", wrap=True, markup=False)
@@ -4066,21 +4078,29 @@ class CaretakerConsoleApp(App):
         else:
             selector.value = Select.NULL
 
-        form_enabled = bool(
+        executable_stage = stage in {"shadow", "canary", "active"}
+        control_enabled = bool(
+            record
+            and executable_stage
+            and self._application_running is True
+        )
+        advance_enabled = bool(
             record
             and allowed
             and self._application_running is True
+            and not record.get("paused")
         )
-        selector.disabled = not form_enabled
+        fields_enabled = advance_enabled or control_enabled
+        selector.disabled = not advance_enabled
         reason = self.query_one("#rollout-advance-reason", Input)
         incident = self.query_one("#rollout-advance-incident", Input)
-        reason.disabled = not form_enabled
-        incident.disabled = not form_enabled
+        reason.disabled = not fields_enabled
+        incident.disabled = not fields_enabled
         override = self.query_one("#rollout-advance-override", Checkbox)
         confirm = self.query_one("#rollout-advance-confirm", Checkbox)
-        override.disabled = not form_enabled
-        confirm.disabled = not form_enabled
-        if not form_enabled:
+        override.disabled = not fields_enabled
+        confirm.disabled = not fields_enabled
+        if not fields_enabled:
             override.value = False
             confirm.value = False
 
@@ -4088,13 +4108,27 @@ class CaretakerConsoleApp(App):
         requires_incident = stage == "active" and selected_stage == "revoked"
         has_required_incident = bool(incident.value.strip()) or not requires_incident
         can_submit = bool(
-            form_enabled
+            advance_enabled
             and selected_stage in allowed
             and reason.value.strip()
             and confirm.value
             and has_required_incident
         )
         self.query_one("#rollout-advance", Button).disabled = not can_submit
+        can_pause = bool(
+            control_enabled
+            and not record.get("paused")
+            and reason.value.strip()
+            and confirm.value
+        )
+        can_resume = bool(
+            control_enabled
+            and record.get("paused") is True
+            and reason.value.strip()
+            and confirm.value
+        )
+        self.query_one("#rollout-pause", Button).disabled = not can_pause
+        self.query_one("#rollout-resume", Button).disabled = not can_resume
 
         status = self.query_one("#rollout-advance-status", Static)
         if record is None:
@@ -4111,9 +4145,14 @@ class CaretakerConsoleApp(App):
                 "A live supervised application is required to request an authenticated rollout transition."
             )
         else:
+            state_detail = (
+                "PAUSED; resume it before further advancement, or use an available safety action."
+                if record.get("paused")
+                else "Allowed next stages: " + ", ".join(allowed) + "."
+            )
             status.update(
                 f"Selected {record.get('rollout_id', '-')} at {stage}. "
-                f"Allowed next stages: {', '.join(allowed)}. "
+                f"{state_detail} "
                 "Readiness is checked by the supervisor; override it only with explicit justification."
             )
 
@@ -4154,6 +4193,45 @@ class CaretakerConsoleApp(App):
         self.notify(
             f"Rollout advanced to {to_stage}",
             title="Rollout transition recorded",
+            timeout=10,
+        )
+
+    async def _set_selected_rollout_paused(self, paused: bool) -> None:
+        record = self._selected_rollout()
+        if record is None:
+            raise ValueError("Select a rollout before requesting pause/resume")
+        if str(record.get("stage") or "").strip().lower() not in {
+            "shadow",
+            "canary",
+            "active",
+        }:
+            raise ValueError("Only an executable rollout stage can be paused or resumed")
+        if record.get("paused") is paused:
+            raise ValueError(
+                f"Rollout is already {'paused' if paused else 'running'}"
+            )
+        if self._application_running is not True:
+            raise RuntimeError("Rollout pause/resume requires a live supervised application")
+        reason = self.query_one("#rollout-advance-reason", Input).value.strip()
+        if not reason:
+            raise ValueError("Rollout pause/resume requires an operator reason")
+        if not self.query_one("#rollout-advance-confirm", Checkbox).value:
+            raise ValueError("Confirm the rollout pause/resume before dispatching it")
+        command = "repair-rollout-pause" if paused else "repair-rollout-resume"
+        response = await self._request(
+            command,
+            rollout_id=record.get("rollout_id"),
+            reason=reason,
+            confirm=True,
+            override_readiness=self.query_one(
+                "#rollout-advance-override", Checkbox
+            ).value,
+        )
+        await self.refresh_rollouts()
+        self._write_json("#rollout-output", response)
+        self.notify(
+            f"Rollout {'paused' if paused else 'resumed'}",
+            title="Rollout control recorded",
             timeout=10,
         )
 
@@ -4256,6 +4334,7 @@ class CaretakerConsoleApp(App):
                 index,
                 self._compact_log_text(record.get("target_id"), limit=24) or "-",
                 self._compact_log_text(record.get("stage"), limit=12) or "-",
+                "PAUSED" if record.get("paused") is True else "RUNNING",
                 self._compact_log_text(record.get("release_kind"), limit=18) or "-",
                 self._compact_log_text(record.get("candidate_id"), limit=14) or "-",
                 str(summary.get("observation_count", 0)),
@@ -4269,7 +4348,7 @@ class CaretakerConsoleApp(App):
         self.query_one("#rollout-status", Static).update(
             f"Rollouts {len(self._rollout_records)} | "
             f"Transitions {len(self._rollout_transitions)} | "
-            "Read-only; no authority or rollout actions dispatched"
+            "Read-only evidence projection; operator transitions require explicit confirmation"
         )
         output.write(
             "Select a rollout for bounded lifecycle and execution details. "
@@ -5412,6 +5491,12 @@ class CaretakerConsoleApp(App):
                 return
             if button == "rollout-advance":
                 await self._advance_selected_rollout()
+                return
+            if button == "rollout-pause":
+                await self._set_selected_rollout_paused(True)
+                return
+            if button == "rollout-resume":
+                await self._set_selected_rollout_paused(False)
                 return
             if button == "worker-failure-recovery-refresh":
                 await self.refresh_worker_failure_recovery()
