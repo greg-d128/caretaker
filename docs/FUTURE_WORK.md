@@ -979,6 +979,8 @@ and explicitly do not grant authority or advance lifecycle state.
 The same read-only coordination projection now includes an integrity-checked
 summary of durable application-wide rollout execution evidence, while missing
 or stale evidence is reported as unavailable rather than counted as progress.
+The Rollouts console tab displays the current-versus-acknowledged worker counts
+alongside lifecycle and execution evidence; it remains read-only.
 
 Future Repair should provide more operator and policy control over how a validated
 candidate is introduced. Potential execution strategies include:

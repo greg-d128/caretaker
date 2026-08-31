@@ -1326,14 +1326,21 @@ def test_console_displays_read_only_rollout_execution_status(tmp_path):
                         "release_kind": "field-repair",
                         "updated_at": "2026-08-31T12:00:00+00:00",
                         "execution_summary_status": "AVAILABLE",
-                        "execution_summary": {
-                            "observation_count": 5,
-                            "candidate_success_count": 3,
-                            "candidate_failure_count": 1,
-                            "shadow_equivalent_count": 1,
-                            "shadow_mismatch_count": 0,
-                        },
-                    }],
+                    "execution_summary": {
+                        "observation_count": 5,
+                        "candidate_success_count": 3,
+                        "candidate_failure_count": 1,
+                        "shadow_equivalent_count": 1,
+                        "shadow_mismatch_count": 0,
+                    },
+                }],
+                    "worker_coordination": {
+                        "rollouts": [{
+                            "rollout_id": "rollout-1",
+                            "current_worker_count": 2,
+                            "acknowledgement_count": 3,
+                        }],
+                    },
                     "transitions": [{"transition_id": "transition-1"}],
                 }
 
@@ -1352,6 +1359,7 @@ def test_console_displays_read_only_rollout_execution_status(tmp_path):
             assert "Rollouts 1" in status
             assert "Transitions 1" in status
             assert "Read-only" in status
+            assert "2 current/3 ack" in str(app.query_one("#rollout-table", DataTable).get_row_at(0))
             app._rollout_records[0]["execution_summary_status"] = "STALE_OR_UNAVAILABLE"
             assert app._rollout_records[0]["execution_summary_status"] == "STALE_OR_UNAVAILABLE"
 

@@ -1126,7 +1126,7 @@ class CaretakerConsoleApp(App):
                 table = DataTable(id="rollout-table")
                 table.cursor_type = "row"
                 table.add_columns(
-                    "#", "Target", "Stage", "Release", "Candidate", "Executions", "Candidate results", "Shadow", "Evidence", "Updated"
+                    "#", "Target", "Stage", "Release", "Candidate", "Executions", "Candidate results", "Shadow", "Workers", "Evidence", "Updated"
                 )
                 yield table
                 yield RichLog(id="rollout-output", wrap=True, markup=False)
@@ -3992,6 +3992,21 @@ class CaretakerConsoleApp(App):
             for item in response.get("records", ())
             if isinstance(item, Mapping)
         ]
+        worker_coordination = response.get("worker_coordination")
+        worker_records = (
+            worker_coordination.get("rollouts", ())
+            if isinstance(worker_coordination, Mapping)
+            else ()
+        )
+        worker_by_rollout = {
+            str(item.get("rollout_id")): dict(item)
+            for item in worker_records
+            if isinstance(item, Mapping) and item.get("rollout_id")
+        }
+        for record in self._rollout_records:
+            coordination = worker_by_rollout.get(str(record.get("rollout_id")))
+            if coordination is not None:
+                record["worker_coordination"] = coordination
         self._rollout_transitions = [
             dict(item)
             for item in response.get("transitions", ())
@@ -4008,6 +4023,14 @@ class CaretakerConsoleApp(App):
                 f"{summary.get('shadow_equivalent_count', 0)} eq/"
                 f"{summary.get('shadow_mismatch_count', 0)} diff"
             )
+            coordination = record.get("worker_coordination")
+            if isinstance(coordination, Mapping):
+                worker_results = (
+                    f"{coordination.get('current_worker_count', 0)} current/"
+                    f"{coordination.get('acknowledgement_count', 0)} ack"
+                )
+            else:
+                worker_results = "unavailable"
             evidence_status = str(
                 record.get("execution_summary_status") or "UNKNOWN"
             )
@@ -4020,6 +4043,7 @@ class CaretakerConsoleApp(App):
                 str(summary.get("observation_count", 0)),
                 candidate_results,
                 shadow_results,
+                self._compact_log_text(worker_results, limit=20) or "-",
                 self._compact_log_text(evidence_status, limit=20) or "-",
                 self._compact_log_text(record.get("updated_at"), limit=19) or "-",
             )

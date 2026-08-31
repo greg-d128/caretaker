@@ -131,8 +131,9 @@ advance a rollout, change routing percentages, activate a FunctionSlot, or
 grant execution authority.
 
 The Caretaker Console's `Rollouts` tab requests this projection, displays the
-current stage and bounded candidate/shadow counts, and lets an operator inspect
-the complete returned record as read-only evidence. It provides no pause,
+current stage, bounded candidate/shadow counts, and current worker
+acknowledgement counts, and lets an operator inspect the complete returned
+record as read-only evidence. It provides no pause,
 resume, percentage-change, activation, or rollback action yet.
 
 ## Supervisor worker coordination
