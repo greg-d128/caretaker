@@ -1428,6 +1428,8 @@ class BehaviorCollectionScheduler:
         maximum_calls: int = 1000,
         soft_budget_seconds_per_minute: float | None = None,
         hard_budget_seconds_per_minute: float | None = None,
+        soft_budget_calls_per_minute: int | None = None,
+        hard_budget_calls_per_minute: int | None = None,
         clock: Callable[[], datetime] = utcnow,
     ) -> None:
         if int(maximum_active) <= 0:
@@ -1444,12 +1446,26 @@ class BehaviorCollectionScheduler:
                 isinstance(value, bool) or not math.isfinite(float(value)) or float(value) <= 0.0
             ):
                 raise ValueError(f"{name} must be greater than zero when configured")
+        for name, value in (
+            ("soft_budget_calls_per_minute", soft_budget_calls_per_minute),
+            ("hard_budget_calls_per_minute", hard_budget_calls_per_minute),
+        ):
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            ):
+                raise ValueError(f"{name} must be a positive integer when configured")
         if (
             soft_budget_seconds_per_minute is not None
             and hard_budget_seconds_per_minute is not None
             and float(soft_budget_seconds_per_minute) > float(hard_budget_seconds_per_minute)
         ):
             raise ValueError("soft_budget_seconds_per_minute cannot exceed hard_budget_seconds_per_minute")
+        if (
+            soft_budget_calls_per_minute is not None
+            and hard_budget_calls_per_minute is not None
+            and int(soft_budget_calls_per_minute) > int(hard_budget_calls_per_minute)
+        ):
+            raise ValueError("soft_budget_calls_per_minute cannot exceed hard_budget_calls_per_minute")
         self.root = Path(root)
         self.request_directory = self.root / "behavior" / "collection" / "requests"
         self.automatic_cursor_path = self.root / "behavior" / "collection" / "automatic-cursor.json"
@@ -1469,6 +1485,16 @@ class BehaviorCollectionScheduler:
         self.hard_budget_seconds_per_minute = (
             float(hard_budget_seconds_per_minute)
             if hard_budget_seconds_per_minute is not None
+            else None
+        )
+        self.soft_budget_calls_per_minute = (
+            int(soft_budget_calls_per_minute)
+            if soft_budget_calls_per_minute is not None
+            else None
+        )
+        self.hard_budget_calls_per_minute = (
+            int(hard_budget_calls_per_minute)
+            if hard_budget_calls_per_minute is not None
             else None
         )
         self._clock = clock
@@ -1636,37 +1662,81 @@ class BehaviorCollectionScheduler:
         observed_at = now or self._now()
         window_start = observed_at.timestamp() - 60.0
         recent_seconds = 0.0
+        recent_observed_calls = 0
+        recent_requested_calls = 0
         for request in self._requests():
-            duration = request.get("duration_seconds")
             completed_at = request.get("completed_at")
-            if duration is None or completed_at is None:
+            if completed_at is None:
                 continue
             try:
                 completed_timestamp = datetime.fromisoformat(
                     str(completed_at).replace("Z", "+00:00")
                 ).timestamp()
-                duration_value = float(duration)
             except (TypeError, ValueError, OverflowError):
                 continue
-            if math.isfinite(duration_value) and duration_value >= 0.0 and completed_timestamp >= window_start:
-                recent_seconds += duration_value
-        state = "NORMAL"
+            if completed_timestamp < window_start:
+                continue
+            duration = request.get("duration_seconds")
+            if duration is not None:
+                try:
+                    duration_value = float(duration)
+                except (TypeError, ValueError, OverflowError):
+                    duration_value = 0.0
+                if math.isfinite(duration_value) and duration_value >= 0.0:
+                    recent_seconds += duration_value
+            try:
+                observed_calls = int(request.get("observed_calls") or 0)
+                requested_calls = int(request.get("requested_calls") or 0)
+            except (TypeError, ValueError, OverflowError):
+                observed_calls = requested_calls = 0
+            recent_observed_calls += max(0, observed_calls)
+            recent_requested_calls += max(0, requested_calls)
+        sampling_density = (
+            min(1.0, recent_observed_calls / recent_requested_calls)
+            if recent_requested_calls
+            else None
+        )
+        hard_reasons: list[str] = []
+        soft_reasons: list[str] = []
         if (
             self.hard_budget_seconds_per_minute is not None
             and recent_seconds >= self.hard_budget_seconds_per_minute
         ):
-            state = "HARD_LIMIT"
-        elif (
+            hard_reasons.append("duration")
+        if (
             self.soft_budget_seconds_per_minute is not None
             and recent_seconds >= self.soft_budget_seconds_per_minute
         ):
+            soft_reasons.append("duration")
+        if (
+            self.hard_budget_calls_per_minute is not None
+            and recent_observed_calls >= self.hard_budget_calls_per_minute
+        ):
+            hard_reasons.append("call_volume")
+        if (
+            self.soft_budget_calls_per_minute is not None
+            and recent_observed_calls >= self.soft_budget_calls_per_minute
+        ):
+            soft_reasons.append("call_volume")
+        state = "NORMAL"
+        if hard_reasons:
+            state = "HARD_LIMIT"
+        elif soft_reasons:
             state = "SOFT_LIMIT"
         return {
             "state": state,
             "window_seconds": 60,
             "recent_collection_seconds": recent_seconds,
+            "recent_observed_calls": recent_observed_calls,
+            "recent_requested_calls": recent_requested_calls,
+            "recent_call_rate_per_minute": recent_observed_calls,
+            "sampling_density": sampling_density,
+            "hard_limit_reasons": hard_reasons,
+            "soft_limit_reasons": soft_reasons,
             "soft_limit_seconds": self.soft_budget_seconds_per_minute,
             "hard_limit_seconds": self.hard_budget_seconds_per_minute,
+            "soft_limit_calls": self.soft_budget_calls_per_minute,
+            "hard_limit_calls": self.hard_budget_calls_per_minute,
         }
 
     def enqueue(

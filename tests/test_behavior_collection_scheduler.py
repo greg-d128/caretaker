@@ -206,6 +206,73 @@ def test_scheduler_duration_budget_expires_with_time_window(tmp_path: Path) -> N
     assert scheduler.status()["resource_budget"]["state"] == "NORMAL"
 
 
+def test_scheduler_reports_sampling_density_and_enforces_call_budget(
+    tmp_path: Path,
+) -> None:
+    scheduler = BehaviorCollectionScheduler(
+        tmp_path,
+        soft_budget_calls_per_minute=5,
+        hard_budget_calls_per_minute=10,
+    )
+    request = scheduler.enqueue(
+        scope="function",
+        subject="target-a",
+        requested_calls=20,
+        requested_by="uid:1001",
+        reason="call budget test",
+    )
+    claimed = scheduler.claim_next(request_id=request["request_id"])
+    assert claimed is not None
+    scheduler.complete(
+        claimed["request_id"],
+        outcome="CAPTURED",
+        observed_calls=10,
+    )
+
+    budget = scheduler.status()["resource_budget"]
+    assert budget["state"] == "HARD_LIMIT"
+    assert budget["hard_limit_reasons"] == ["call_volume"]
+    assert budget["recent_observed_calls"] == 10
+    assert budget["recent_requested_calls"] == 20
+    assert budget["recent_call_rate_per_minute"] == 10
+    assert budget["sampling_density"] == 0.5
+
+    queued = scheduler.enqueue(
+        scope="function",
+        subject="target-b",
+        requested_calls=1,
+        requested_by="uid:1001",
+        reason="call budget test",
+    )
+    assert scheduler.claim_next(request_id=queued["request_id"]) is None
+    requests = {
+        item["request_id"]: item
+        for item in scheduler.list_requests(limit=10)
+    }
+    assert requests[queued["request_id"]]["status"] == "QUEUED"
+
+
+def test_scheduler_call_budget_expires_with_time_window(tmp_path: Path) -> None:
+    now = [datetime(2026, 8, 30, tzinfo=timezone.utc)]
+    scheduler = BehaviorCollectionScheduler(
+        tmp_path,
+        hard_budget_calls_per_minute=1,
+        clock=lambda: now[0],
+    )
+    request = scheduler.enqueue(
+        scope="function",
+        subject="target-a",
+        requested_calls=1,
+        requested_by="uid:1001",
+        reason="call budget window test",
+    )
+    claimed = scheduler.claim_next(request_id=request["request_id"])
+    assert claimed is not None
+    scheduler.complete(claimed["request_id"], outcome="CAPTURED", observed_calls=1)
+    now[0] += timedelta(seconds=61)
+    assert scheduler.status()["resource_budget"]["state"] == "NORMAL"
+
+
 def test_scheduler_expires_deadline_without_claiming_request(tmp_path: Path) -> None:
     now = [datetime(2026, 8, 30, tzinfo=timezone.utc)]
     scheduler = BehaviorCollectionScheduler(tmp_path, clock=lambda: now[0])

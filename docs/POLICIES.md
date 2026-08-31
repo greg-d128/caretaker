@@ -74,8 +74,14 @@ wall-clock cost over a rolling minute. The soft limit is advisory and appears
 in scheduler status. Once the hard limit is reached, new requests remain
 queued until the window clears; existing collection is not interrupted. The
 default is unlimited, preserving the least-friction profile. These budgets
-measure scheduled collection duration only and do not yet account for host
-resource pressure, call rate, or sampling density.
+measure scheduled collection duration only. Optional
+`collection_soft_budget_calls_per_minute` and
+`collection_hard_budget_calls_per_minute` settings similarly bound observed
+collection calls. Scheduler status reports the rolling observed call rate,
+requested-call total, and observed/requested sampling density. A hard limit
+from either budget leaves queued work intact; it does not interrupt an active
+collection. Host resource pressure, queue pressure, and density-aware cost
+accounting are not yet included.
 
 `BehaviorSnapshotPolicy.collection_auto_promote` is disabled by default. When
 enabled, the supervisor health cycle may promote only current-generation,

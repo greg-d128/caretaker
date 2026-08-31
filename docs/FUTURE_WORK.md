@@ -673,8 +673,10 @@ The scheduler now provides an initial measured-cost boundary: optional soft and
 hard wall-clock budgets can be configured per rolling minute. Completed
 collection requests record bounded observed duration; the soft limit is exposed
 as an advisory status, while the hard limit leaves queued work intact and
-defers new claims until the window clears. Call-rate, sampling-density,
-queue-pressure, and host-resource-aware budgeting remain future work.
+defers new claims until the window clears. Optional soft and hard observed-call
+budgets provide the same boundary for call volume, and status reports rolling
+observed call rate plus observed/requested sampling density. Queue-pressure,
+host-resource-aware, and density-aware cost budgeting remain future work.
 
 Sealed behavioral snapshots should inform later lightweight anomaly triggers.
 Candidate signals include expected duration ranges, failure/return categories,

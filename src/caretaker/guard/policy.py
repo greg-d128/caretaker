@@ -88,6 +88,10 @@ class BehaviorSnapshotPolicy:
     # The default remains unlimited for the least-friction profile.
     collection_soft_budget_seconds_per_minute: float | None = None
     collection_hard_budget_seconds_per_minute: float | None = None
+    # Optional application-wide observed-call budgets for scheduled collection.
+    # The default remains unlimited for the least-friction profile.
+    collection_soft_budget_calls_per_minute: int | None = None
+    collection_hard_budget_calls_per_minute: int | None = None
     collection_auto_promote: bool = False
     collection_auto_max_promoted: int = 1
     collection_auto_max_waiting: int = 4
@@ -283,6 +287,25 @@ def validate_guard_policy(policy: GuardPolicy) -> None:
         errors.append(
             "snapshots.collection_soft_budget_seconds_per_minute cannot exceed "
             "collection_hard_budget_seconds_per_minute"
+        )
+    for name in (
+        "collection_soft_budget_calls_per_minute",
+        "collection_hard_budget_calls_per_minute",
+    ):
+        value = getattr(snapshots, name)
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value <= 0
+        ):
+            errors.append(f"snapshots.{name} must be a positive integer when configured")
+    if (
+        snapshots.collection_soft_budget_calls_per_minute is not None
+        and snapshots.collection_hard_budget_calls_per_minute is not None
+        and snapshots.collection_soft_budget_calls_per_minute
+        > snapshots.collection_hard_budget_calls_per_minute
+    ):
+        errors.append(
+            "snapshots.collection_soft_budget_calls_per_minute cannot exceed "
+            "collection_hard_budget_calls_per_minute"
         )
     if not isinstance(snapshots.collection_auto_promote, bool):
         errors.append("snapshots.collection_auto_promote must be a boolean")

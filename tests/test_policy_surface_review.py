@@ -130,6 +130,24 @@ def test_behavior_collection_scheduler_limits_are_validated():
                 ),
             )
         )
+    with pytest.raises(GuardPolicyConfigurationError, match="collection_soft_budget_calls"):
+        validate_guard_policy(
+            replace(
+                policy,
+                snapshots=replace(
+                    policy.snapshots,
+                    collection_soft_budget_calls_per_minute=10,
+                    collection_hard_budget_calls_per_minute=5,
+                ),
+            )
+        )
+    with pytest.raises(GuardPolicyConfigurationError, match="collection_hard_budget_calls"):
+        validate_guard_policy(
+            replace(
+                policy,
+                snapshots=replace(policy.snapshots, collection_hard_budget_calls_per_minute=0),
+            )
+        )
     with pytest.raises(GuardPolicyConfigurationError, match="maximum_return_shapes"):
         validate_guard_policy(
             replace(
