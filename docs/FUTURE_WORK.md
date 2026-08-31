@@ -1193,7 +1193,11 @@ routes replacement admission through `WorkerRegistry.prepare_replacement()`
 and `register_replacement()`. The application still owns process creation;
 packet verification, expiry, exact context, and acceptance-state checks occur
 before the handler can satisfy the recovery gate. Cross-process spawning and
-fleet coordination remain future work.
+fleet coordination remain future work. The direct worker-failure path also
+provides `build_authorized_restart_callback()`, which accepts an application-
+owned spawn result only after the replacement has been admitted with that
+packet. A generic `started=true` callback cannot replace an already-authorized
+worker.
 
 The supervisor can now consume coordinated worker-failure evidence and select
 the ordinary or critical-evidence recovery action per scope. Dispatch still

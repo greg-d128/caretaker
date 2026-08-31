@@ -450,6 +450,11 @@ use `CaretakerApplicationSupervisor.build_replacement_action_handler()` so the
 new process is admitted only through the supervisor-issued packet and
 `WorkerRegistry` acceptance checks. Process creation remains application-owned
 and cross-process orchestration is not provided by this API.
+For the direct worker-failure path, `build_authorized_restart_callback()`
+provides the same packet-verified handoff in the callback shape accepted by
+`handle_worker_failure()`. An already-authorized worker cannot be counted as
+restarted from a callback that merely reports `started=true`; it must return a
+replacement admitted with a non-expired supervisor packet.
 
 For incident and shutdown actions, applications can use
 `CaretakerApplicationSupervisor.build_incident_action_handler()` and

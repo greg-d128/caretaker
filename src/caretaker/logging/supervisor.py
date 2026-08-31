@@ -436,6 +436,7 @@ class WorkerRegistry:
                 raise PermissionError("worker replacement references an unknown worker")
             if failed.state not in {WorkerState.FAILED, WorkerState.UNAUTHORIZED}:
                 raise PermissionError("worker replacement source is no longer failed")
+            replacement_restart_count = failed.restart_count + 1
             self._replacement_requests.add(request.request_id)
         try:
             admitted = self.register_authorized(
@@ -458,7 +459,11 @@ class WorkerRegistry:
                 self._replacement_requests.discard(request.request_id)
             raise
         with self._lock:
-            replacement = replace(admitted, replaced_worker_id=request.failed_worker_id)
+            replacement = replace(
+                admitted,
+                replaced_worker_id=request.failed_worker_id,
+                restart_count=replacement_restart_count,
+            )
             self._workers[replacement.worker_id] = replacement
             return replacement
 
@@ -1038,8 +1043,39 @@ class CaretakerApplicationSupervisor:
                     "started": False,
                     "error": f"{type(exc).__name__}: {exc}"[:256],
                 }
+            replacement = None
             if restart_result and bool(restart_result.get("started")):
-                restarted = self.workers.record_restart(
+                replacement_id = restart_result.get("replacement_worker_id")
+                if replacement_id is not None:
+                    try:
+                        replacement = self.workers.get(UUID(str(replacement_id)))
+                    except (KeyError, TypeError, ValueError):
+                        replacement = None
+                    if (
+                        replacement is None
+                        or replacement.replaced_worker_id != worker.worker_id
+                        or replacement.authority_packet_id is None
+                        or replacement.state
+                        not in {WorkerState.STARTING, WorkerState.HEALTHY, WorkerState.DEGRADED}
+                    ):
+                        replacement = None
+                        restart_result = {
+                            "started": False,
+                            "error": (
+                                "replacement callback did not return a packet-authorized "
+                                "replacement admitted by the supervisor"
+                            ),
+                        }
+                elif worker.authority_packet_id is not None:
+                    restart_result = {
+                        "started": False,
+                        "error": (
+                            "an already-authorized worker must be replaced through "
+                            "packet-verified supervisor admission"
+                        ),
+                    }
+            if restart_result and bool(restart_result.get("started")):
+                restarted = replacement or self.workers.record_restart(
                     worker.worker_id,
                     pid=(
                         int(restart_result["pid"])
@@ -1400,6 +1436,8 @@ class CaretakerApplicationSupervisor:
                 }
             return {
                 "accepted": True,
+                "started": True,
+                "pid": pid,
                 "failed_worker_id": str(failed_worker_id),
                 "replacement_worker_id": str(replacement.worker_id),
                 "authority_packet_id": str(packet.packet_id),
@@ -1410,6 +1448,63 @@ class CaretakerApplicationSupervisor:
             }
 
         return handler
+
+    def build_authorized_restart_callback(
+        self,
+        *,
+        failed_worker_id: UUID,
+        packet: RecoveryAuthorityPacket,
+        supervisor_time: datetime,
+        target_id: str,
+        generation_id: str,
+        code_hash: str,
+        policy_fingerprint: str,
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        spawn_worker: Callable[[WorkerReplacementRequest], Any],
+        allowed_capabilities: set[str] | frozenset[str] = frozenset(),
+        policy: RepairRecoveryPolicy | None = None,
+        acceptance_policy: WorkerAcceptancePolicy | None = None,
+    ) -> Callable[[WorkerHealth], dict[str, Any]]:
+        """Build a restart callback that performs packet-verified admission.
+
+        The embedding application owns process creation. The callback is safe
+        to pass to ``handle_worker_failure``: it supplies the immutable packet
+        to the application callback, verifies the returned PID, admits the new
+        worker, and reports the replacement identity back to the supervisor.
+        """
+        replacement_handler = self.build_replacement_action_handler(
+            failed_worker_id=failed_worker_id,
+            packet=packet,
+            supervisor_time=supervisor_time,
+            target_id=target_id,
+            generation_id=generation_id,
+            code_hash=code_hash,
+            policy_fingerprint=policy_fingerprint,
+            authority_policy_generation=authority_policy_generation,
+            authority_policy_fingerprint=authority_policy_fingerprint,
+            spawn_worker=spawn_worker,
+            allowed_capabilities=allowed_capabilities,
+            policy=policy,
+            acceptance_policy=acceptance_policy,
+        )
+
+        def callback(worker: WorkerHealth) -> dict[str, Any]:
+            if worker.worker_id != failed_worker_id:
+                return {
+                    "started": False,
+                    "error": "restart callback received an unexpected worker identity",
+                }
+            result = replacement_handler({"target_id": target_id})
+            if not bool(result.get("accepted")):
+                return {
+                    "started": False,
+                    "error": str(result.get("reason") or "replacement admission was rejected")[:256],
+                    "handler_result": result,
+                }
+            return dict(result)
+
+        return callback
 
     @staticmethod
     def build_incident_action_handler(

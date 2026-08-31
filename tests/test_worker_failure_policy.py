@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -111,6 +111,124 @@ def test_worker_failure_records_incident_and_uses_callback_owned_restart() -> No
     assert runtime.audit.events[1]["outcome"]["state"] == "RECORDED"
     assert runtime.audit.events[2]["outcome"]["state"] == "REQUESTED"
     assert runtime.audit.events[3]["outcome"]["state"] == "RESTARTED"
+
+
+def test_authorized_worker_cannot_restart_without_packet_verified_replacement() -> None:
+    runtime = FakeRuntime()
+    supervisor = CaretakerApplicationSupervisor(runtime)
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    recovery_policy = RepairRecoveryPolicy(
+        worker_acceptance=WorkerAcceptancePolicy(
+            probation_successful_executions=1,
+            acceptance_successful_executions=1,
+        )
+    )
+    packet = create_recovery_authority_packet(
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        capabilities=("observe",),
+        supervisor_time=supervisor_time,
+        policy=recovery_policy,
+    )
+    worker = supervisor.workers.register_authorized(
+        WorkerKind.REPAIR_ANALYZER,
+        1234,
+        packet,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+        policy=recovery_policy,
+    )
+    failed = supervisor.workers.mark_failed(worker.worker_id, error_fingerprint="worker-crash")
+    disabled = []
+
+    result = supervisor.handle_worker_failure(
+        failed,
+        policy=WorkerRestartPolicy(maximum_restarts=1),
+        restart_worker=lambda _current: {"started": True, "pid": 5678},
+        disable_component=lambda current: disabled.append(current.worker_id),
+    )
+
+    assert result["action"] == "DISABLE_COMPONENT"
+    assert "packet-verified" in result["restart"]["error"]
+    assert disabled == [worker.worker_id]
+    assert supervisor.workers.get(worker.worker_id).state.name == "FAILED"
+
+
+def test_authorized_restart_callback_admits_replacement_before_reporting_restart() -> None:
+    runtime = FakeRuntime()
+    supervisor = CaretakerApplicationSupervisor(runtime)
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    recovery_policy = RepairRecoveryPolicy(
+        worker_acceptance=WorkerAcceptancePolicy(
+            probation_successful_executions=2,
+            acceptance_successful_executions=3,
+        )
+    )
+    packet = create_recovery_authority_packet(
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        capabilities=("observe",),
+        supervisor_time=supervisor_time,
+        policy=recovery_policy,
+    )
+    worker = supervisor.workers.register_authorized(
+        WorkerKind.REPAIR_ANALYZER,
+        1234,
+        packet,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+        policy=recovery_policy,
+    )
+    failed = supervisor.workers.mark_failed(worker.worker_id, error_fingerprint="worker-crash")
+    spawned = []
+    callback = supervisor.build_authorized_restart_callback(
+        failed_worker_id=worker.worker_id,
+        packet=packet,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+        policy=recovery_policy,
+        spawn_worker=lambda request: spawned.append(request) or {"started": True, "pid": 5678},
+    )
+
+    result = supervisor.handle_worker_failure(
+        failed,
+        policy=WorkerRestartPolicy(maximum_restarts=1),
+        restart_worker=callback,
+    )
+
+    assert result["action"] == "RESTARTED"
+    replacement_id = result["restart"]["worker_id"]
+    replacement = supervisor.workers.get(UUID(replacement_id))
+    assert replacement.replaced_worker_id == worker.worker_id
+    assert replacement.authority_packet_id == packet.packet_id
+    assert replacement.restart_count == 1
+    assert len(spawned) == 1
 
 
 def test_worker_failure_scope_uses_transaction_or_incident_and_does_not_use_target_alone() -> None:
