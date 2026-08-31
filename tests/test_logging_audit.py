@@ -608,6 +608,7 @@ def test_logging_runtime_emits_separate_audit_stream(tmp_path: Path) -> None:
     delivery = [row for row in rows if row["event_type"] == "AUDIT_DELIVERY_STATUS"][-1]
     assert delivery["outcome"]["state"] == "LOCAL_ONLY"
     assert delivery["details"] == {
+        "acknowledgement_required": False,
         "external_delivery": False,
         "sink_id": "local-file",
         "state": "ACTIVE",
@@ -633,6 +634,7 @@ def test_audit_writer_delivers_exact_local_record_to_output_only_sink(tmp_path: 
     assert writer.delivery_status() == {
         "state": "ACTIVE",
         "required": False,
+        "acknowledgement_required": False,
         "sink_id": "monitoring-test",
         "delivered_events": 1,
         "failed_events": 0,
@@ -712,6 +714,7 @@ def test_required_external_audit_delivery_accepts_matching_record_acknowledgemen
 
     assert writer.delivery_status()["delivered_events"] == 1
     assert writer.delivery_status()["pending_records"] == 0
+    assert writer.delivery_status()["acknowledgement_required"] is True
 
 
 def test_required_external_audit_delivery_queues_unverified_acknowledgement(

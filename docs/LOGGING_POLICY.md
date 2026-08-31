@@ -110,8 +110,8 @@ external sink. Set `external_delivery_required = true` to fail closed after
 local persistence when that sink is unavailable or rejects a record. Set
 `external_delivery_require_ack = true` to require the sink to acknowledge each
 record with its matching SHA-256 digest; the acknowledgement setting is
-policy-controlled and does not provide transport authentication or replay
-protection. See
+policy-controlled and is exposed in delivery status; it does not provide
+transport authentication or replay protection. See
 [`LOGGING_RECORD_FORMAT.md`](LOGGING_RECORD_FORMAT.md) for the proposed envelope
 and event registry.
 

@@ -197,6 +197,7 @@ class LoggingRuntime:
             details={
                 "sink_id": delivery["sink_id"] or "local-file",
                 "external_delivery": delivery["sink_id"] is not None,
+                "acknowledgement_required": delivery["acknowledgement_required"],
                 "state": "ACTIVE",
             },
             priority=EvidencePriority.IMPORTANT,

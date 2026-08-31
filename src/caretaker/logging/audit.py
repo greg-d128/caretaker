@@ -584,6 +584,9 @@ class AuditStreamWriter:
             return {
                 "state": state,
                 "required": required,
+                "acknowledgement_required": bool(
+                    getattr(self.policy, "external_delivery_require_ack", False)
+                ),
                 "sink_id": sink_id,
                 "delivered_events": self._external_delivered_events,
                 "failed_events": self._external_failed_events,
