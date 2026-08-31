@@ -39,6 +39,16 @@ retried in order during writer startup, flush, and the next retained event.
 `external_delivery_max_pending_bytes` bound that queue; exhaustion raises an
 explicit error and never removes the local audit record.
 
+When an output-only sink changes between `ACTIVE` and `DEGRADED`, the writer
+records an `AUDIT_DELIVERY_STATUS` transition in the local hash chain. A
+degraded transition is placed directly into the retry queue after local
+persistence; it does not retry the already-failed sink recursively. When the
+queue drains and delivery becomes active again, the recovery transition is
+delivered as the next status record. If the bounded retry queue is full, the
+status record remains in the local stream and the queue-full failure remains
+visible through the delivery projection. These status records describe
+delivery evidence only and never create a command or authority channel.
+
 All event types share these redaction rules:
 
 - never include credentials, private keys, bearer tokens, or authentication

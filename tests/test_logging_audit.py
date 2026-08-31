@@ -57,6 +57,17 @@ class MismatchedAcknowledgementSink(RecordingAuditSink):
         return {"acknowledged": True, "record_sha256": "0" * 64}
 
 
+class ToggleAuditSink(RecordingAuditSink):
+    def __init__(self) -> None:
+        super().__init__()
+        self.available = False
+
+    def deliver(self, record: bytes) -> None:
+        if not self.available:
+            raise OSError("sink unavailable")
+        super().deliver(record)
+
+
 def _writer(path: Path, **changes):
     policy = AuditStreamPolicy(**changes)
     return AuditStreamWriter(policy, directory=path, run_id=uuid4(), process_start_id=uuid4())
@@ -736,7 +747,7 @@ def test_required_external_audit_delivery_queues_unverified_acknowledgement(
     with pytest.raises(AuditStreamError, match="required external audit delivery"):
         writer.emit("INCIDENT_CAPTURED")
 
-    assert writer.delivery_status()["pending_records"] == 1
+    assert writer.delivery_status()["pending_records"] == 2
     assert writer.delivery_status()["failed_events"] == 1
     with pytest.raises(AuditStreamError, match="required external audit delivery"):
         writer.close()
@@ -792,7 +803,8 @@ def test_audit_delivery_queue_retries_in_order_after_restart(tmp_path: Path) -> 
     )
     first.emit("INCIDENT_CAPTURED")
     first.close()
-    assert first.delivery_status()["pending_records"] == 1
+    # The delivery-state transition is queued after the original record.
+    assert first.delivery_status()["pending_records"] == 2
 
     recovered = RecordingAuditSink()
     second = AuditStreamWriter(
@@ -807,7 +819,77 @@ def test_audit_delivery_queue_retries_in_order_after_restart(tmp_path: Path) -> 
     second.close()
 
     local_records = (tmp_path / "caretaker_audit.log").read_bytes().splitlines(keepends=True)
-    assert recovered.records == [local_records[0], local_records[1]]
+    assert recovered.records == [local_records[0], local_records[1], local_records[2]]
+    assert verify_audit_stream(tmp_path / "caretaker_audit.log")["valid"] is True
+
+
+def test_audit_delivery_state_transitions_are_recorded_without_failure_recursion(
+    tmp_path: Path,
+) -> None:
+    sink = ToggleAuditSink()
+    writer = AuditStreamWriter(
+        AuditStreamPolicy(),
+        directory=tmp_path,
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        external_sink=sink,
+    )
+
+    writer.emit("INCIDENT_CAPTURED")
+    assert writer.delivery_status()["state"] == "DEGRADED"
+    sink.available = True
+    writer.emit("RECOVERY_DECISION", priority=EvidencePriority.CRITICAL)
+    writer.close()
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "caretaker_audit.log").read_text().splitlines()
+    ]
+    assert [row["event_type"] for row in rows] == [
+        "INCIDENT_CAPTURED",
+        "AUDIT_DELIVERY_STATUS",
+        "RECOVERY_DECISION",
+        "AUDIT_DELIVERY_STATUS",
+    ]
+    assert [
+        row["outcome"]["state"]
+        for row in rows
+        if row["event_type"] == "AUDIT_DELIVERY_STATUS"
+    ] == ["DEGRADED", "ACTIVE"]
+    assert writer.delivery_status()["state"] == "ACTIVE"
+    assert writer.delivery_status()["failed_events"] == 1
+    assert verify_audit_stream(tmp_path / "caretaker_audit.log")["valid"] is True
+
+
+def test_audit_delivery_recovery_during_flush_is_recorded(tmp_path: Path) -> None:
+    sink = ToggleAuditSink()
+    writer = AuditStreamWriter(
+        AuditStreamPolicy(),
+        directory=tmp_path,
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        external_sink=sink,
+    )
+
+    writer.emit("INCIDENT_CAPTURED")
+    sink.available = True
+    writer.flush()
+    writer.close()
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "caretaker_audit.log").read_text().splitlines()
+    ]
+    assert [row["event_type"] for row in rows] == [
+        "INCIDENT_CAPTURED",
+        "AUDIT_DELIVERY_STATUS",
+        "AUDIT_DELIVERY_STATUS",
+    ]
+    assert [
+        row["outcome"]["state"]
+        for row in rows
+        if row["event_type"] == "AUDIT_DELIVERY_STATUS"
+    ] == ["DEGRADED", "ACTIVE"]
     assert verify_audit_stream(tmp_path / "caretaker_audit.log")["valid"] is True
 
 
@@ -826,7 +908,9 @@ def test_audit_delivery_queue_is_bounded_without_dropping_local_records(
         writer.emit("RECOVERY_DECISION", priority=EvidencePriority.CRITICAL)
 
     assert writer.delivery_status()["pending_records"] == 1
-    assert len((tmp_path / "caretaker_audit.log").read_bytes().splitlines()) == 2
+    # The failed delivery transition remains locally durable even when the
+    # bounded retry queue cannot retain another record.
+    assert len((tmp_path / "caretaker_audit.log").read_bytes().splitlines()) == 3
     assert verify_audit_stream(tmp_path / "caretaker_audit.log")["valid"] is True
     writer.close()
 

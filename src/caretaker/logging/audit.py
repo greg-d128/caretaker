@@ -571,6 +571,9 @@ class AuditStreamWriter:
         self._external_delivered_events = 0
         self._external_failed_events = 0
         self._external_last_error: str | None = None
+        self._external_delivery_degraded = False
+        self._last_delivery_state: str | None = None
+        self._emitting_delivery_status = False
         self._file = None
         self._validate_delivery_policy()
         if external_sink is not None and (
@@ -602,6 +605,7 @@ class AuditStreamWriter:
                 raise AuditStreamError(
                     "required external audit delivery is unavailable during startup"
                 )
+        self._last_delivery_state = self._delivery_state()
 
     @property
     def enabled(self) -> bool:
@@ -628,15 +632,8 @@ class AuditStreamWriter:
             required = bool(getattr(self.policy, "external_delivery_required", False))
             pending_records = self._read_delivery_queue()
             pending_bytes = sum(len(record) for record in pending_records)
-            if self._external_sink is None:
-                state = "LOCAL_ONLY"
-                sink_id = None
-            else:
-                state = "DEGRADED" if self._external_failed_events or pending_records else "ACTIVE"
-                sink_id = str(
-                    getattr(self._external_sink, "sink_id", None)
-                    or type(self._external_sink).__name__
-                )[:128]
+            state = self._delivery_state(pending_records=pending_records)
+            sink_id = self._sink_id()
             return {
                 "state": state,
                 "required": required,
@@ -650,6 +647,78 @@ class AuditStreamWriter:
                 "pending_records": len(pending_records),
                 "pending_bytes": pending_bytes,
             }
+
+    def _sink_id(self) -> str | None:
+        sink = self._external_sink
+        if sink is None:
+            return None
+        return str(
+            getattr(sink, "sink_id", None) or type(sink).__name__
+        )[:128]
+
+    def _delivery_state(self, *, pending_records: list[bytes] | None = None) -> str:
+        if self._external_sink is None:
+            return "LOCAL_ONLY"
+        if pending_records is None:
+            pending_records = self._read_delivery_queue()
+        return "DEGRADED" if self._external_delivery_degraded or pending_records else "ACTIVE"
+
+    def _emit_delivery_status_transition(self, state: str) -> None:
+        """Persist and queue one delivery-state transition without recursion.
+
+        Delivery status is itself audit evidence. When delivery is already
+        degraded, the transition is queued directly instead of attempting the
+        failed sink again; otherwise the status record could recursively create
+        more failure records and obscure the original delivery failure.
+        """
+        if self._emitting_delivery_status or self._closed or self._file is None:
+            return
+        if state == self._last_delivery_state:
+            return
+        self._emitting_delivery_status = True
+        try:
+            details = {
+                "sink_id": self._sink_id() or "local-file",
+                "state": state,
+                "external_delivery": self._external_sink is not None,
+                "acknowledgement_required": bool(
+                    getattr(self.policy, "external_delivery_require_ack", False)
+                ),
+                "failed_events": self._external_failed_events,
+                "pending_records": len(self._read_delivery_queue()),
+                "last_error_type": self._external_last_error,
+            }
+            event = self._write_event(
+                "AUDIT_DELIVERY_STATUS",
+                actor={"type": "system", "id": "audit-delivery"},
+                outcome={"state": state},
+                details=details,
+                priority=EvidencePriority.IMPORTANT,
+                deliver_external=False,
+            )
+            encoded = _canonical(event) + b"\n"
+            try:
+                if state == "DEGRADED":
+                    self._queue_external(encoded)
+                else:
+                    self._deliver_to_sink(encoded)
+                    self._external_delivered_events += 1
+            except Exception as exc:
+                self._external_failed_events += 1
+                self._external_last_error = type(exc).__name__
+                try:
+                    self._queue_external(encoded)
+                except Exception:
+                    # The local status record remains authoritative even when
+                    # the bounded retry queue is exhausted.
+                    pass
+                if getattr(self.policy, "external_delivery_required", False):
+                    raise AuditStreamError(
+                        "required external audit delivery status could not be delivered"
+                    ) from exc
+            self._last_delivery_state = self._delivery_state()
+        finally:
+            self._emitting_delivery_status = False
 
     def _validate_delivery_policy(self) -> None:
         preserved = getattr(self.policy, "always_preserve_priorities", frozenset())
@@ -997,6 +1066,7 @@ class AuditStreamWriter:
         priority: EvidencePriority = EvidencePriority.IMPORTANT,
         occurred_at: datetime | None = None,
         monotonic_ns: int | None = None,
+        deliver_external: bool = True,
     ) -> dict[str, Any]:
         """Write one already-validated retained event while holding the lock."""
         if self._closed or self._file is None:
@@ -1079,32 +1149,45 @@ class AuditStreamWriter:
             except OSError as exc:
                 raise AuditStreamError("Unable to persist audit event") from exc
             self._previous_hash = content_hash
-            self._deliver_external(encoded)
+            if deliver_external:
+                self._deliver_external(encoded)
             return event
 
     def _deliver_external(self, encoded: bytes) -> None:
         sink = self._external_sink
         if sink is None:
             return
+        previous_state = self._delivery_state()
         if not self._drain_external_queue():
-            self._queue_external(encoded)
+            try:
+                self._queue_external(encoded)
+            except Exception:
+                self._emit_delivery_status_transition(self._delivery_state())
+                raise
+            self._emit_delivery_status_transition(self._delivery_state())
             if getattr(self.policy, "external_delivery_required", False):
                 raise AuditStreamError(
                     "required external audit delivery remains unavailable"
                 )
             return
+        self._external_delivery_degraded = False
         try:
             self._deliver_to_sink(encoded)
         except Exception as exc:
             self._external_failed_events += 1
             self._external_last_error = type(exc).__name__
+            self._external_delivery_degraded = True
             self._queue_external(encoded)
+            self._emit_delivery_status_transition(self._delivery_state())
             if getattr(self.policy, "external_delivery_required", False):
                 raise AuditStreamError(
                     "required external audit delivery failed after local persistence"
                 ) from exc
             return
         self._external_delivered_events += 1
+        current_state = self._delivery_state()
+        if current_state != previous_state:
+            self._emit_delivery_status_transition(current_state)
 
     def _read_delivery_queue(self) -> list[bytes]:
         path = self.delivery_queue_path
@@ -1202,10 +1285,12 @@ class AuditStreamWriter:
             except Exception as exc:
                 self._external_failed_events += 1
                 self._external_last_error = type(exc).__name__
+                self._external_delivery_degraded = True
                 return False
             self._external_delivered_events += 1
             remaining.pop(0)
             self._rewrite_delivery_queue(remaining)
+        self._external_delivery_degraded = False
         return True
 
     def flush(self) -> None:
@@ -1219,17 +1304,26 @@ class AuditStreamWriter:
         sink = self._external_sink
         if sink is None:
             return
+        previous_state = self._delivery_state()
         if not self._drain_external_queue():
+            self._emit_delivery_status_transition(self._delivery_state())
             if getattr(self.policy, "external_delivery_required", False):
                 raise AuditStreamError("required external audit delivery remains unavailable")
             return
+        self._external_delivery_degraded = False
         try:
             sink.flush()
         except Exception as exc:
             self._external_failed_events += 1
             self._external_last_error = type(exc).__name__
+            self._external_delivery_degraded = True
+            self._emit_delivery_status_transition(self._delivery_state())
             if getattr(self.policy, "external_delivery_required", False):
                 raise AuditStreamError("required external audit flush failed") from exc
+            return
+        current_state = self._delivery_state()
+        if current_state != previous_state:
+            self._emit_delivery_status_transition(current_state)
 
     def close(self) -> None:
         with self._lock:
