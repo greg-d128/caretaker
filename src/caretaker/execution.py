@@ -28,6 +28,26 @@ class ExecutionEffectCategory(str, Enum):
     ENVIRONMENT = "environment"
 
 
+_FILESYSTEM_EVENT_KINDS = frozenset(
+    {
+        BehaviorEventKind.FILE_OPEN,
+        BehaviorEventKind.FILE_READ,
+        BehaviorEventKind.FILE_WRITE,
+        BehaviorEventKind.DIRECTORY_LIST,
+        BehaviorEventKind.DIRECTORY_WALK,
+    }
+)
+
+
+def _filesystem_resource_is_mutating(event_kinds: set[str]) -> bool:
+    """Classify retained filesystem resources without trusting ambiguity."""
+
+    return (
+        BehaviorEventKind.FILE_WRITE.name in event_kinds
+        or not any(kind.name in event_kinds for kind in _FILESYSTEM_EVENT_KINDS)
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class FunctionExecutionContract:
     """Application declaration for retry and duplicate-execution handling.
@@ -176,8 +196,11 @@ class EffectObservation:
         # especially useful when an event-kind count was compacted away but a
         # captured destination/root/operation was retained. Presence proves
         # that activity was observed; it never proves that an absent category
-        # did not occur. Mutability remains conservative: a retained
-        # filesystem or subprocess resource is treated as externally visible.
+        # did not occur. A retained filesystem root is considered mutating when
+        # the event kinds prove a write, or when no filesystem event kind is
+        # available to disambiguate the operation. This preserves a useful
+        # read-only decision without turning an ambiguous resource summary into
+        # evidence of safety.
         resource_fields = {
             "network_destinations": ExecutionEffectCategory.NETWORK,
             "filesystem_roots": ExecutionEffectCategory.FILESYSTEM,
@@ -188,12 +211,14 @@ class EffectObservation:
         for name, category in resource_fields.items():
             if any(value is not None and str(value) for value in (field(name, ()) or ())):
                 categories.add(category.value)
-                if category in {
+                mutating_category = category in {
                     ExecutionEffectCategory.NETWORK,
-                    ExecutionEffectCategory.FILESYSTEM,
                     ExecutionEffectCategory.SUBPROCESS,
                     ExecutionEffectCategory.DYNAMIC_CODE,
-                }:
+                }
+                if category is ExecutionEffectCategory.FILESYSTEM:
+                    mutating_category = _filesystem_resource_is_mutating(event_kinds)
+                if mutating_category:
                     mutating.add(category.value)
 
         resource_kind_categories = {
@@ -210,13 +235,16 @@ class EffectObservation:
             if category is None:
                 continue
             categories.add(category.value)
-            if category in {
+            mutating_category = category in {
                 ExecutionEffectCategory.NETWORK,
-                ExecutionEffectCategory.FILESYSTEM,
                 ExecutionEffectCategory.SUBPROCESS,
                 ExecutionEffectCategory.DYNAMIC_CODE,
-            }:
+            }
+            if mutating_category:
                 mutating.add(category.value)
+            elif category is ExecutionEffectCategory.FILESYSTEM:
+                if _filesystem_resource_is_mutating(event_kinds):
+                    mutating.add(category.value)
 
         return cls(
             categories=tuple(sorted(categories)),

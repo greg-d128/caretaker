@@ -78,10 +78,13 @@ decision = assess_shadow_eligibility(function_contract, observation)
 The converter uses both event-kind counts and retained resource summaries. A
 retained API/network destination, filesystem root, subprocess, import, or
 dynamic-code operation is therefore enough to flag observed activity even if
-the event-kind count was compacted. `complete` must be asserted by the
-collector that can justify complete coverage; a normal bounded capture must
-remain incomplete. This makes positive side-effect detection partly automatic
-without turning absence of an observed resource into proof of purity.
+the event-kind count was compacted. When filesystem event kinds are retained,
+an observed `FILE_WRITE` is distinguished from proven read-only activity; an
+ambiguous filesystem root remains conservatively externally visible. `complete`
+must be asserted by the collector that can justify complete coverage; a normal
+bounded capture must remain incomplete. This makes positive side-effect
+detection partly automatic without turning absence of an observed resource into
+proof of purity.
 
 The result is rollout evidence, not authorization. A rollout policy must still
 authorize the execution strategy, preserve validation and authority gates, and

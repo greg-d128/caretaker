@@ -200,6 +200,26 @@ def test_behavior_capture_resource_evidence_identifies_effects_without_event_cou
     assert decision.requires_isolation
 
 
+def test_behavior_capture_preserves_proven_read_only_filesystem_activity() -> None:
+    observation = EffectObservation.from_behavior_capture(
+        {
+            "profile": {
+                "event_kind_counts": {"FILE_READ": 3},
+                "filesystem_roots": ["/var/cache/application"],
+            }
+        },
+        complete=True,
+    )
+
+    assert observation.categories == ("filesystem",)
+    assert observation.externally_visible_categories == ()
+    decision = assess_shadow_eligibility(
+        FunctionExecutionContract(side_effects=SideEffectClass.READ_ONLY), observation
+    )
+    assert decision.eligible
+    assert not decision.requires_isolation
+
+
 def test_behavior_capture_incomplete_resource_evidence_does_not_prove_purity() -> None:
     observation = EffectObservation.from_behavior_capture(
         {"profile": {"network_destinations": [], "filesystem_roots": []}},
