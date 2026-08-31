@@ -1728,6 +1728,45 @@ def decide_rollout_routing(
     return decision
 
 
+def _select_rollout_routing(
+    record: RepairRolloutRecord,
+    *,
+    policy: RepairRolloutPolicy,
+    policy_fingerprint: str,
+    routing_scope: str,
+    routing_key: str,
+    audit_event: Callable[..., Any] | None,
+    coordinator: RepairRolloutCoordinator | None,
+    worker_id: str | None,
+    worker_process_id: int | None,
+) -> RolloutRoutingDecision:
+    if coordinator is None:
+        return decide_rollout_routing(
+            record,
+            policy=policy,
+            policy_fingerprint=policy_fingerprint,
+            routing_scope=routing_scope,
+            routing_key=routing_key,
+            audit_event=audit_event,
+        )
+    if coordinator.policy_fingerprint != policy_fingerprint:
+        raise RepairRolloutError(
+            "rollout coordinator policy fingerprint does not match the execution context"
+        )
+    if not worker_id or worker_process_id is None:
+        raise PermissionError(
+            "coordinated rollout execution requires worker identity and process identity"
+        )
+    return coordinator.route(
+        rollout_id=record.rollout_id,
+        worker_id=worker_id,
+        worker_process_id=worker_process_id,
+        routing_scope=routing_scope,
+        routing_key=routing_key,
+        audit_event=audit_event,
+    )
+
+
 def execute_rollout(
     record: RepairRolloutRecord,
     *,
@@ -1748,6 +1787,9 @@ def execute_rollout(
     audit_event: Callable[..., Any] | None = None,
     execution_store: RepairRolloutStore | None = None,
     execution_id: UUID | None = None,
+    coordinator: RepairRolloutCoordinator | None = None,
+    worker_id: str | None = None,
+    worker_process_id: int | None = None,
 ) -> RolloutExecutionResult:
     """Invoke an already-authorized rollout path.
 
@@ -1765,13 +1807,16 @@ def execute_rollout(
         behavior_capture_complete=behavior_capture_complete,
     )
 
-    decision = decide_rollout_routing(
+    decision = _select_rollout_routing(
         record,
         policy=policy,
         policy_fingerprint=policy_fingerprint,
         routing_scope=routing_scope,
         routing_key=routing_key,
         audit_event=audit_event,
+        coordinator=coordinator,
+        worker_id=worker_id,
+        worker_process_id=worker_process_id,
     )
     return _execute_and_record(
         decision,
@@ -1810,6 +1855,9 @@ def execute_slot_rollout(
     call_id: UUID | None = None,
     execution_store: RepairRolloutStore | None = None,
     execution_id: UUID | None = None,
+    coordinator: RepairRolloutCoordinator | None = None,
+    worker_id: str | None = None,
+    worker_process_id: int | None = None,
 ) -> RolloutExecutionResult:
     """Execute a rollout bound to one slot's current candidate.
 
@@ -1880,13 +1928,16 @@ def execute_slot_rollout(
         deployed = previous.implementation
         candidate = current.implementation
 
-    decision = decide_rollout_routing(
+    decision = _select_rollout_routing(
         record,
         policy=policy,
         policy_fingerprint=policy_fingerprint,
         routing_scope=routing_scope,
         routing_key=routing_key,
         audit_event=audit_event,
+        coordinator=coordinator,
+        worker_id=worker_id,
+        worker_process_id=worker_process_id,
     )
     try:
         result = _execute_and_record(

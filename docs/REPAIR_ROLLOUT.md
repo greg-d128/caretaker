@@ -104,6 +104,12 @@ returns the deployed result; canary and active selections return the candidate
 only when the decision makes it authoritative. It does not mutate a slot,
 install a repair, grant authority, or choose an isolation-unavailable fallback.
 
+An embedding application may pass a `RepairRolloutCoordinator` together with
+the worker ID and process ID. In that mode, the adapter obtains the route only
+after the worker has acknowledged the exact current rollout context. Missing,
+stale, or mismatched worker acknowledgement fails closed. Omitting the
+coordinator preserves the direct process-local path for unsupervised runs.
+
 When an audit callback is supplied, direct deployed/candidate invocations and
 shadow outcomes also emit bounded execution-outcome evidence. It records the
 implementation class, selection state, decision hash, and exception type when

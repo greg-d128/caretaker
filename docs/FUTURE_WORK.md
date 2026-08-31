@@ -979,6 +979,10 @@ and explicitly do not grant authority or advance lifecycle state.
 The same read-only coordination projection now includes an integrity-checked
 summary of durable application-wide rollout execution evidence, while missing
 or stale evidence is reported as unavailable rather than counted as progress.
+The rollout invocation adapters can also consume this coordinator directly;
+when supplied, execution requires a current worker acknowledgement and process
+identity before routing. Direct process-local invocation remains available for
+unsupervised runs.
 The Rollouts console tab displays the current-versus-acknowledged worker counts
 and readiness state alongside lifecycle and execution evidence. It now exposes
 an authenticated, explicitly confirmed operator transition request for legal

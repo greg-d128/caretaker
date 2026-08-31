@@ -262,6 +262,41 @@ def test_execute_slot_rollout_binds_previous_and_current_versions() -> None:
     assert slot.load().number == version_before
 
 
+def test_execute_slot_rollout_can_require_supervisor_worker_context() -> None:
+    ledger = _ledger(canary_percentage=100)
+    slot, record = _slot_and_record(ledger)
+    record = _advance(ledger, record, RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, record, RepairRolloutStage.CANARY)
+    coordinator = RepairRolloutCoordinator(
+        ledger,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+    )
+    common = {
+        "policy": ledger.policy,
+        "policy_fingerprint": "policy-hash",
+        "routing_scope": "tenant",
+        "routing_key": "tenant-1",
+        "args": (4,),
+        "kwargs": {},
+        "effect_observation": EffectObservation(complete=True),
+        "coordinator": coordinator,
+        "worker_id": "worker-1",
+        "worker_process_id": 321,
+    }
+    with pytest.raises(PermissionError, match="acknowledged"):
+        execute_slot_rollout(slot, record, **common)
+
+    coordinator.acknowledge_worker(
+        rollout_id=record.rollout_id,
+        worker_id="worker-1",
+        worker_process_id=321,
+    )
+    result = execute_slot_rollout(slot, record, **common)
+    assert result.result == 5
+    assert result.candidate_authoritative is True
+
+
 def test_execute_slot_rollout_rejects_stale_candidate_binding() -> None:
     ledger = _ledger(canary_percentage=100)
     slot, record = _slot_and_record(ledger)
