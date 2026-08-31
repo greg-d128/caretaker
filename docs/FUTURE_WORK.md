@@ -987,6 +987,11 @@ thresholds for the next stage and reports each passing or failing check without
 advancing the rollout. Thresholds remain disabled by default; staged authority,
 atomic fleet counters, and deployment-owned worker orchestration remain future
 work.
+The supervised control plane now has an explicitly confirmed operator advance
+request that uses those readiness results for promotion and preserves a
+separate safety path for retirement or incident-backed revocation. A proposed
+rollout still cannot be marked validated through that request without the
+validation workflow.
 
 Future Repair should provide more operator and policy control over how a validated
 candidate is introduced. Potential execution strategies include:

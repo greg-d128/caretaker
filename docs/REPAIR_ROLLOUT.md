@@ -176,6 +176,17 @@ not yet receive deployment-specific worker authority packets. Deployment-owned
 worker admission, process spawning, fleet-wide counters, atomic staged
 advancement, and cross-host coordination remain future work.
 
+The supervised control plane also accepts `repair-rollout-advance` for an
+explicitly confirmed operator transition. The OS-authenticated control peer is
+recorded as the operator identity, a reason is required, promotion into
+shadow/canary/active is checked against configured readiness thresholds, and an
+operator may explicitly override an unmet or unavailable readiness result.
+Proposed rollouts cannot skip the validation workflow through this command.
+Retirement and incident-backed revocation remain available as safety actions
+without a readiness override. The resulting transition is still subject to
+the ledger's current policy, authority fingerprint, expiry, lifecycle, and
+incident checks, and is recorded in the transition chain and audit stream.
+
 The invocation helpers also accept a Guard behavior capture directly through
 `behavior_capture`. Caretaker converts its retained event and resource
 evidence into the shadow eligibility check before execution. A normal capture

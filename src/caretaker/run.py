@@ -66,9 +66,11 @@ from .logging.segments import read_segment
 from .regression import RegressionFixtureStore
 from .repair_recovery import worker_failure_recovery_status
 from .repair_rollout import (
+    RepairRolloutAuthority,
     RepairRolloutCoordinator,
     RepairRolloutError,
     RepairRolloutLedger,
+    RepairRolloutStage,
 )
 from .replay import (
     IsolatedReplayCoordinator,
@@ -259,6 +261,87 @@ def _handle_console_identity_request(
     return {"ok": True, "identity": public_fields, "authority_granted": False}
 
 
+def _handle_rollout_advance_request(
+    ledger: RepairRolloutLedger,
+    coordinator: RepairRolloutCoordinator,
+    request: Mapping[str, Any],
+    credentials: tuple[int, int, int],
+    *,
+    policy_fingerprint: str,
+    authority_fingerprint: str,
+) -> dict[str, Any]:
+    """Apply one explicitly confirmed operator rollout transition.
+
+    The control socket authenticates the OS peer before calling this helper.
+    Readiness is an evidence gate, not authority: an operator may explicitly
+    override an unmet or unavailable readiness result, and that choice is
+    retained in the returned transition context for the audit caller.
+    """
+
+    if request.get("confirm") is not True:
+        raise PermissionError("repair-rollout-advance requires confirm=true")
+    reason = str(request.get("reason") or "").strip()
+    if not reason:
+        raise ValueError("repair rollout advancement requires an operator reason")
+    try:
+        rollout_id = UUID(str(request["rollout_id"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("repair-rollout-advance requires a valid rollout_id") from exc
+    try:
+        to_stage = RepairRolloutStage(str(request["to_stage"]).strip().lower())
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("repair-rollout-advance requires a valid to_stage") from exc
+
+    record = ledger.get(rollout_id)
+    if record.stage is RepairRolloutStage.PROPOSED:
+        raise PermissionError(
+            "proposed rollouts must enter validated through the validation workflow"
+        )
+    readiness = coordinator.readiness(rollout_id)
+    readiness_status = str(readiness.get("status") or "UNKNOWN")
+    override_readiness = request.get("override_readiness") is True
+    readiness_required = to_stage in {
+        RepairRolloutStage.SHADOW,
+        RepairRolloutStage.CANARY,
+        RepairRolloutStage.ACTIVE,
+    }
+    if readiness_required and readiness_status in {
+        "NOT_READY",
+        "UNAVAILABLE",
+        "STALE_OR_UNAVAILABLE",
+    } and not override_readiness:
+        raise PermissionError(
+            "rollout readiness does not permit advancement; "
+            "set override_readiness=true for an explicitly justified operator override"
+        )
+
+    raw_incident_id = str(request.get("incident_id") or "").strip()
+    incident_id = None
+    if raw_incident_id:
+        try:
+            incident_id = UUID(raw_incident_id)
+        except ValueError as exc:
+            raise ValueError("repair-rollout-advance incident_id must be a UUID") from exc
+    updated = ledger.advance(
+        rollout_id,
+        to_stage=to_stage,
+        authority_type=RepairRolloutAuthority.OPERATOR,
+        authority_id=f"uid:{credentials[1]}",
+        reason=reason,
+        policy_fingerprint=policy_fingerprint,
+        authority_fingerprint=authority_fingerprint,
+        incident_id=incident_id,
+    )
+    transition = ledger.transitions(rollout_id)[-1]
+    return {
+        "ok": True,
+        "read_only": False,
+        "authority_granted": True,
+        "readiness": readiness,
+        "readiness_overridden": override_readiness,
+        "record": json.loads(json.dumps(asdict(updated), default=str)),
+        "transition": json.loads(json.dumps(asdict(transition), default=str)),
+    }
 def _handle_adaptive_observation_submission(
     store: Any,
     request: Mapping[str, Any],
@@ -1140,6 +1223,19 @@ def main(argv: list[str] | None = None) -> int:
                     "reason": decision.reason,
                 },
             }
+        if command == "repair-rollout-advance":
+            ledger = rollout_ledger_holder.get("ledger")
+            coordinator = rollout_coordinator_holder.get("coordinator")
+            if ledger is None or coordinator is None:
+                raise RuntimeError("rollout coordinator is not initialized")
+            return _handle_rollout_advance_request(
+                ledger,
+                coordinator,
+                request,
+                credentials,
+                policy_fingerprint=runtime.effective.fingerprint,
+                authority_fingerprint=authority.effective.fingerprint,
+            )
         if command == "repair-rollout-status":
             ledger = rollout_ledger_holder.get("ledger")
             if ledger is None:
@@ -2874,6 +2970,12 @@ def main(argv: list[str] | None = None) -> int:
     rollout_ledger_holder["ledger"] = RepairRolloutLedger(
         policy=policy.rollout,
         store=failure_store,
+        signer=runtime.writer.signing_service,
+        audit_event=lambda event_type, **fields: runtime.audit.emit(
+            event_type,
+            priority=EvidencePriority.CRITICAL,
+            **fields,
+        ),
     )
     rollout_coordinator_holder["coordinator"] = RepairRolloutCoordinator(
         rollout_ledger_holder["ledger"],

@@ -27,6 +27,7 @@ from caretaker import (
 )
 from caretaker.domain import ReplaySafety, SideEffectClass
 from caretaker.observation import ObservationManager
+from caretaker.run import _handle_rollout_advance_request
 from caretaker.slot import FunctionSlot
 
 
@@ -800,6 +801,139 @@ def test_rollout_readiness_requires_policy_thresholds_and_current_worker() -> No
     assert after["status"] == "READY"
     assert after["checks"]["candidate_authoritative_observations"]["passed"] is True
     assert len(ledger.transitions(record.rollout_id)) == 3
+
+
+def test_operator_rollout_advance_requires_confirmation_and_records_identity() -> None:
+    store = InMemoryRepairStore()
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(enabled=True),
+        store=store,
+    )
+    validated = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    coordinator = RepairRolloutCoordinator(
+        ledger,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        store=store,
+    )
+
+    with pytest.raises(PermissionError, match="confirm=true"):
+        _handle_rollout_advance_request(
+            ledger,
+            coordinator,
+            {
+                "rollout_id": str(validated.rollout_id),
+                "to_stage": "shadow",
+                "reason": "begin reviewed shadow",
+            },
+            (500, 1000, 1000),
+            policy_fingerprint="policy-hash",
+            authority_fingerprint="authority-hash",
+        )
+
+    response = _handle_rollout_advance_request(
+        ledger,
+        coordinator,
+        {
+            "rollout_id": str(validated.rollout_id),
+            "to_stage": "shadow",
+            "reason": "begin reviewed shadow",
+            "confirm": True,
+        },
+        (500, 1000, 1000),
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+    )
+
+    assert response["record"]["stage"] == "shadow"
+    assert response["transition"]["authority_id"] == "uid:1000"
+    assert response["transition"]["authority_type"] == "operator"
+    assert response["authority_granted"] is True
+
+
+def test_operator_rollout_advance_requires_explicit_override_for_unready_rollout() -> None:
+    store = InMemoryRepairStore()
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            readiness=RolloutReadinessRequirements(minimum_current_workers=1),
+        ),
+        store=store,
+    )
+    validated = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    coordinator = RepairRolloutCoordinator(
+        ledger,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        store=store,
+    )
+
+    request = {
+        "rollout_id": str(validated.rollout_id),
+        "to_stage": "shadow",
+        "reason": "begin shadow after operator review",
+        "confirm": True,
+    }
+    with pytest.raises(PermissionError, match="readiness"):
+        _handle_rollout_advance_request(
+            ledger,
+            coordinator,
+            request,
+            (501, 1000, 1000),
+            policy_fingerprint="policy-hash",
+            authority_fingerprint="authority-hash",
+        )
+
+    request["override_readiness"] = True
+    response = _handle_rollout_advance_request(
+        ledger,
+        coordinator,
+        request,
+        (501, 1000, 1000),
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+    )
+    assert response["readiness"]["status"] == "NOT_READY"
+    assert response["readiness_overridden"] is True
+
+
+def test_operator_rollout_safety_actions_do_not_require_readiness() -> None:
+    store = InMemoryRepairStore()
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            readiness=RolloutReadinessRequirements(minimum_current_workers=1),
+        ),
+        store=store,
+    )
+    record = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, record, RepairRolloutStage.SHADOW)
+    record = _advance(ledger, record, RepairRolloutStage.CANARY)
+    record = _advance(ledger, record, RepairRolloutStage.ACTIVE)
+    coordinator = RepairRolloutCoordinator(
+        ledger,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        store=store,
+    )
+
+    response = _handle_rollout_advance_request(
+        ledger,
+        coordinator,
+        {
+            "rollout_id": str(record.rollout_id),
+            "to_stage": "revoked",
+            "reason": "incident requires immediate rollback",
+            "incident_id": str(uuid4()),
+            "confirm": True,
+        },
+        (502, 1000, 1000),
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+    )
+
+    assert response["record"]["stage"] == "revoked"
+    assert response["readiness"]["status"] == "NOT_READY"
 
 
 def test_sqlite_rollout_worker_acknowledgement_survives_coordinator_restart(tmp_path) -> None:
