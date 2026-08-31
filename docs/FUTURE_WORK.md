@@ -21,7 +21,7 @@ on demonstrated Application Caretaker maturity.
 
 ## Testing environments and failure corpus
 
-**Status: Implemented in development tree for the initial metadata-only corpus, explicit trusted harness contract, bounded local observation store, and deterministic outcome reports; isolated lifecycle tooling and observed scenario coverage remain future work.**
+**Status: Implemented in development tree for the metadata-only corpus, explicit trusted harness contract, bounded local observation store, deterministic outcome reports, trusted process execution, the repository application laboratory, and policy-gated Podman/VM runner contracts; live higher-isolation execution and broader observed scenario coverage remain environment-dependent or future work.**
 
 The repository now contains a bounded, schema-validated failure scenario
 manifest in [`examples/failure_corpus/manifest.json`](../examples/failure_corpus/manifest.json)

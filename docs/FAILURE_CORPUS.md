@@ -241,10 +241,12 @@ silent downgrade.
 
 ## Current status and next work
 
-The loader, manifest, explicit trusted harness, bounded observation store, and
-deterministic outcome report provide the initial reviewable contract.
-Executable launch/reset/destroy tooling, isolated scenario runners, captured
-incident fixtures, and cross-version/adversarial execution reports remain
+The loader, manifest, explicit trusted harness, bounded observation store,
+deterministic outcome report, trusted process runner, application laboratory,
+and policy-gated Podman/VM runner contracts provide the current reviewable
+execution path. Live higher-isolation execution depends on the operator's
+pre-provisioned runtime and image/guest, and broader captured-incident,
+cross-version, adversarial, and automatic launch/reset/destroy workflows remain
 future work. A policy gate does not replace repository-owned isolated
 launch/reset/destroy tooling.
 Those additions must record actual observed outcomes separately from expected
