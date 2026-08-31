@@ -980,7 +980,8 @@ The same read-only coordination projection now includes an integrity-checked
 summary of durable application-wide rollout execution evidence, while missing
 or stale evidence is reported as unavailable rather than counted as progress.
 The Rollouts console tab displays the current-versus-acknowledged worker counts
-alongside lifecycle and execution evidence; it remains read-only.
+and readiness state alongside lifecycle and execution evidence; it remains
+read-only.
 Optional `RolloutReadinessRequirements` now evaluates explicit evidence
 thresholds for the next stage and reports each passing or failing check without
 advancing the rollout. Thresholds remain disabled by default; staged authority,

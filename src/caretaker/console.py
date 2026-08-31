@@ -1126,7 +1126,7 @@ class CaretakerConsoleApp(App):
                 table = DataTable(id="rollout-table")
                 table.cursor_type = "row"
                 table.add_columns(
-                    "#", "Target", "Stage", "Release", "Candidate", "Executions", "Candidate results", "Shadow", "Workers", "Evidence", "Updated"
+                    "#", "Target", "Stage", "Release", "Candidate", "Executions", "Candidate results", "Shadow", "Workers", "Readiness", "Evidence", "Updated"
                 )
                 yield table
                 yield RichLog(id="rollout-output", wrap=True, markup=False)
@@ -4031,6 +4031,12 @@ class CaretakerConsoleApp(App):
                 )
             else:
                 worker_results = "unavailable"
+            readiness = coordination.get("readiness") if isinstance(coordination, Mapping) else None
+            readiness_status = (
+                str(readiness.get("status") or "UNKNOWN")
+                if isinstance(readiness, Mapping)
+                else "UNKNOWN"
+            )
             evidence_status = str(
                 record.get("execution_summary_status") or "UNKNOWN"
             )
@@ -4044,6 +4050,7 @@ class CaretakerConsoleApp(App):
                 candidate_results,
                 shadow_results,
                 self._compact_log_text(worker_results, limit=20) or "-",
+                self._compact_log_text(readiness_status, limit=16) or "-",
                 self._compact_log_text(evidence_status, limit=20) or "-",
                 self._compact_log_text(record.get("updated_at"), limit=19) or "-",
             )
