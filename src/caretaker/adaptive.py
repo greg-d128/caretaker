@@ -36,6 +36,7 @@ from .acceptance import AcceptanceCriteria, long_term_accepted, short_term_accep
 from .adaptive_aggregation import (
     AdaptiveAggregationBackpressureAction,
     AdaptiveObservationBatcher,
+    RemoteAdaptiveAggregationStore,
     SupervisorAdaptiveAggregationStore,
 )
 from .domain import CandidateState
@@ -1431,8 +1432,14 @@ class _AdaptiveController:
             self._aggregation_batcher = None
             return
         context = self._aggregation_context()
+        supervisor_socket = os.environ.get("CARETAKER_SUPERVISOR_CONTROL_SOCKET")
+        aggregation_store = (
+            RemoteAdaptiveAggregationStore(supervisor_socket)
+            if supervisor_socket
+            else SupervisorAdaptiveAggregationStore(self._aggregation_root())
+        )
         self._aggregation_batcher = AdaptiveObservationBatcher(
-            SupervisorAdaptiveAggregationStore(self._aggregation_root()),
+            aggregation_store,
             worker_id=_ADAPTIVE_WORKER_ID,
             worker_pid=os.getpid(),
             flush_after_observations=self.policy.aggregation.flush_after_observations,
@@ -1486,6 +1493,7 @@ class _AdaptiveController:
         if batcher is None:
             return {
                 "enabled": False,
+                "transport": "DISABLED",
                 "target_id": self.target_id,
                 "aggregation_scope": self.policy.aggregation.aggregation_scope,
                 "generation_id": self.code_hash,
@@ -1500,6 +1508,11 @@ class _AdaptiveController:
             }
         return {
             "enabled": True,
+            "transport": (
+                "SUPERVISOR_CONTROL_SOCKET"
+                if isinstance(batcher.store, RemoteAdaptiveAggregationStore)
+                else "LOCAL_LEDGER"
+            ),
             **batcher.status(),
             **batcher.context,
             "promotion_policy": promotion_policy,

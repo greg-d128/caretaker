@@ -695,7 +695,7 @@ and tested.
 
 ## Supervisor-owned multiprocess adaptive aggregation
 
-**Status: In progress in development tree for durable worker-batch aggregation and supervisor-authorized Behavior transition requests; Repair promotion, remote transport, and process orchestration remain future work.**
+**Status: In progress in development tree for durable worker-batch aggregation and supervisor-authorized Behavior transition requests; Repair promotion, cross-host transport, and process orchestration remain future work.**
 
 The first implementation slice is documented in
 [`ADAPTIVE_AGGREGATION.md`](ADAPTIVE_AGGREGATION.md). A durable
@@ -735,12 +735,19 @@ original transition as immutable evidence, and prevents later acknowledgements
 or retries from treating the staged policy as active. Once a transition is
 `APPLIED`, it is accepted state and requires a new incident for correction.
 
+Supervised application workers can submit bounded batches through the
+output-only supervisor control socket. The supervisor re-normalizes each batch
+and binds its worker PID to the authenticated Unix peer PID before writing the
+same single-writer ledger. Unsupervised runs retain the direct local-ledger
+default; an unavailable configured socket is a submission failure rather than
+an implicit local fallback. Cross-host transport remains future work.
+
 The remaining implementation must explicitly define and enforce whether each
 threshold is process-local, application-wide, or workload/population scoped. It
 now preserves an optional, explicitly declared aggregation scope as an
 extended target identity; it still needs policy and operator semantics for
 discovering or changing workload/population membership. It must move dynamic
-threshold administration, remote transport, process lifecycle orchestration,
+threshold administration, cross-host transport, process lifecycle orchestration,
 and additional resource-aware distribution reconciliation without
 double-counting the existing single-process lifecycle. The initial
 repair-evidence gate is proposal-only and is implemented in the current slice.

@@ -34,6 +34,7 @@ from .adaptive_aggregation import (
     AdaptiveAggregationBackpressureAction,
     AdaptiveAggregationError,
     AdaptiveObservationBatcher,
+    RemoteAdaptiveAggregationStore,
     SupervisorAdaptiveAggregationStore,
     extended_aggregation_target_id,
     normalize_adaptive_observation_batch,

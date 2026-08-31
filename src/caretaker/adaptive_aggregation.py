@@ -80,6 +80,51 @@ class AdaptiveAggregationBackpressureAction(Enum):
     REDUCE = "REDUCE"
 
 
+class RemoteAdaptiveAggregationStore:
+    """Submit bounded adaptive batches through the supervisor control plane.
+
+    The remote path is intentionally a submission-only adapter. The supervisor
+    validates the batch again and binds its worker PID to the authenticated
+    Unix peer before writing the durable ledger. A missing path is not treated
+    as a local fallback: callers must choose the local store explicitly when
+    running without supervision.
+    """
+
+    def __init__(self, socket_path: str | Path, *, timeout: float = 5.0) -> None:
+        self.socket_path = str(socket_path)
+        self.timeout = float(timeout)
+        if self.timeout <= 0:
+            raise ValueError("adaptive aggregation transport timeout must be positive")
+
+    def submit(self, batch: Mapping[str, Any]) -> dict[str, Any]:
+        normalized = normalize_adaptive_observation_batch(batch)
+        from .logging.ipc import control_request
+
+        try:
+            response = control_request(
+                self.socket_path,
+                {"command": "adaptive-observation-submit", "batch": normalized},
+                timeout=self.timeout,
+            )
+        except OSError as exc:
+            raise AdaptiveAggregationError(
+                "supervisor adaptive aggregation transport is unavailable"
+            ) from exc
+        if not isinstance(response, Mapping) or not response.get("ok"):
+            error = (
+                response.get("error", "supervisor rejected adaptive observation batch")
+                if isinstance(response, Mapping)
+                else "invalid supervisor adaptive aggregation response"
+            )
+            raise AdaptiveAggregationError(str(error)[:2048])
+        result = response.get("result")
+        if not isinstance(result, Mapping):
+            raise AdaptiveAggregationError(
+                "supervisor returned an invalid adaptive aggregation acknowledgement"
+            )
+        return dict(result)
+
+
 class AdaptiveObservationBatcher:
     """Collect bounded worker observations and periodically submit one batch.
 

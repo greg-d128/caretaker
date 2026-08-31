@@ -10,9 +10,11 @@ from caretaker.adaptive_aggregation import (
     AdaptiveAggregationBackpressureAction,
     AdaptiveAggregationError,
     AdaptiveObservationBatcher,
+    RemoteAdaptiveAggregationStore,
     SupervisorAdaptiveAggregationStore,
     extended_aggregation_target_id,
 )
+from caretaker.run import _handle_adaptive_observation_submission
 from caretaker.adaptive import (
     AdaptiveAggregationPolicy,
     BehaviorSamplingPolicy,
@@ -65,6 +67,53 @@ def _context():
         "authority_policy_generation": "7",
         "authority_policy_fingerprint": "authority-a",
     }
+
+
+def test_remote_adaptive_store_submits_bounded_batch_to_supervisor(monkeypatch):
+    batch = _batch(batch_id="00000000-0000-0000-0000-0000000000aa")
+    calls = []
+
+    def fake_control_request(path, request, *, timeout):
+        calls.append((path, request, timeout))
+        return {"ok": True, "result": {"status": "QUEUED", "batch_id": batch["batch_id"]}}
+
+    monkeypatch.setattr("caretaker.logging.ipc.control_request", fake_control_request)
+    result = RemoteAdaptiveAggregationStore("/run/caretaker/control.sock").submit(batch)
+
+    assert result == {"status": "QUEUED", "batch_id": batch["batch_id"]}
+    assert calls[0][1]["command"] == "adaptive-observation-submit"
+    assert calls[0][1]["batch"]["schema_version"] == 1
+    assert calls[0][1]["batch"]["batch_id"] == batch["batch_id"]
+
+
+def test_supervisor_adaptive_intake_binds_batch_worker_pid_to_peer():
+    batch = _batch(batch_id="00000000-0000-0000-0000-0000000000ab")
+    submitted = []
+
+    class Store:
+        def submit(self, value):
+            submitted.append(value)
+            return {"status": "QUEUED", "batch_id": value["batch_id"]}
+
+    response = _handle_adaptive_observation_submission(
+        Store(),
+        {"command": "adaptive-observation-submit", "batch": batch},
+        (101, 1000, 1000),
+        type("Child", (), {"pid": 101, "poll": lambda self: None})(),
+    )
+    assert response["ok"] is True
+    assert response["transport_peer_pid"] == 101
+    assert submitted[0]["worker_pid"] == 101
+
+    with pytest.raises(PermissionError, match="worker_pid"):
+        altered = dict(batch)
+        altered["worker_pid"] = 202
+        _handle_adaptive_observation_submission(
+            Store(),
+            {"command": "adaptive-observation-submit", "batch": altered},
+            (101, 1000, 1000),
+            type("Child", (), {"pid": 101, "poll": lambda self: None})(),
+        )
 
 
 def test_supervisor_aggregation_merges_batches_and_retains_worker_provenance(tmp_path: Path):

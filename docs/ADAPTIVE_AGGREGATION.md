@@ -44,6 +44,17 @@ batch ID, batch hash, result (`ACCEPTED`, `DUPLICATE`, or `REJECTED`), and
 aggregate key/rejection reason where applicable. This is delivery provenance
 only: an acknowledgement cannot authorize a transition or change policy.
 
+When an adaptive wrapper runs inside a supervised application worker, it may
+submit its bounded batch through the supervisor's output-only control socket
+using `adaptive-observation-submit`. The supervisor re-normalizes the batch,
+binds its `worker_pid` to the authenticated Unix peer PID of the live
+application process, and then writes it through the same single-writer ledger.
+Worker-supplied identity and context remain provenance and evidence; they do
+not grant authority. Unsupervised runs retain the direct local-ledger path as
+the least-friction default. A configured supervisor socket that is unavailable
+is reported as submission failure and is not silently converted to local
+aggregation.
+
 For sufficiently large complete worker samples, the aggregate also tracks
 per-worker exception and timing-breach rates. A worker whose rate differs from
 the other eligible workers by more than three standard deviations produces a
@@ -160,7 +171,8 @@ adaptive actor to activate its own proposal.
 policy-lineage projection. The projection is for operator history and analytics;
 it does not turn a runtime lease into a permanent deployment policy.
 
-The supervisor exposes `adaptive-aggregation-status`,
+The supervisor exposes `adaptive-observation-submit`,
+`adaptive-aggregation-status`,
 `adaptive-aggregation-reconcile`, `adaptive-aggregation-ack`,
 `adaptive-transition-list`, `adaptive-transition-ack`,
 `adaptive-threshold-proposal`, `adaptive-threshold-review`,
@@ -173,7 +185,7 @@ thresholds automatically. The worker-side
 `apply_supervisor_transition()` method requires exact target, generation, code,
 monitoring, policy, and authority context before applying Behavior. Dynamic
 console-managed thresholds, supervisor-owned Repair activation/evidence beyond
-the current bounded gate, remote transport, and automatic worker process
+the current bounded gate, cross-host transport, and automatic worker process
 orchestration remain future work. Each generated Behavior transition carries
 the policy's bounded `transition_timeout_seconds` (60 seconds by default) and
 an absolute `expires_at`. A completed transition remains `APPLIED`; an

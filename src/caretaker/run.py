@@ -26,6 +26,7 @@ from .capsule_assistance import assist_capsules
 from .adaptive_aggregation import (
     SupervisorAdaptiveAggregationStore,
     extended_aggregation_target_id,
+    normalize_adaptive_observation_batch,
 )
 from .communications import generate_communication_draft, review_communication_draft
 from .behavior import (
@@ -176,6 +177,35 @@ def _handle_console_invocation_event(
         "recorded": audit_event is not None,
         "event_id": audit_event.get("event_id") if audit_event else None,
         "stream_sequence": audit_event.get("stream_sequence") if audit_event else None,
+    }
+
+
+def _handle_adaptive_observation_submission(
+    store: Any,
+    request: Mapping[str, Any],
+    credentials: tuple[int, int, int],
+    child: Any,
+) -> dict[str, Any]:
+    """Accept one adaptive batch only from the live supervised application."""
+    if child is None or child.poll() is not None:
+        raise PermissionError("application worker is not running")
+    if credentials[0] != child.pid:
+        raise PermissionError(
+            "adaptive observation submission is not from the application worker"
+        )
+    raw_batch = request.get("batch")
+    if not isinstance(raw_batch, Mapping):
+        raise ValueError("adaptive observation submission requires a batch object")
+    batch = normalize_adaptive_observation_batch(raw_batch)
+    if batch["worker_pid"] != credentials[0]:
+        raise PermissionError(
+            "adaptive observation worker_pid does not match the application peer"
+        )
+    result = store.submit(batch)
+    return {
+        "ok": True,
+        "result": dict(result),
+        "transport_peer_pid": credentials[0],
     }
 
 
@@ -811,6 +841,13 @@ def main(argv: list[str] | None = None) -> int:
                 request,
                 credentials,
                 console_invocations,
+            )
+        if command == "adaptive-observation-submit":
+            return _handle_adaptive_observation_submission(
+                adaptive_aggregation_store,
+                request,
+                credentials,
+                child_holder.get("child"),
             )
         if command == "audit-validation-decision":
             return _handle_validation_audit_submission(
