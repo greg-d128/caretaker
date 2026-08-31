@@ -38,6 +38,7 @@ from .adaptive_aggregation import (
     SupervisorAdaptiveAggregationStore,
     extended_aggregation_target_id,
     normalize_adaptive_observation_batch,
+    verify_adaptive_policy_transition_signature,
 )
 from .behavior import observed_return_shape
 from .authority import (
@@ -342,10 +343,12 @@ __all__ = [
     "AdaptiveAggregationPolicy",
     "AdaptiveAggregationBackpressureAction",
     "AdaptiveObservationBatcher",
+    "RemoteAdaptiveAggregationStore",
     "adaptive_aggregation_status",
     "SupervisorAdaptiveAggregationStore",
     "extended_aggregation_target_id",
     "normalize_adaptive_observation_batch",
+    "verify_adaptive_policy_transition_signature",
     "AuthorityKind",
     "AuthorityLayerSource",
     "AuthorityLayerVerification",

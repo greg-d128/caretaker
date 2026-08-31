@@ -3,13 +3,16 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
 from caretaker.adaptive_aggregation import (
     AdaptiveAggregationError,
     SupervisorAdaptiveAggregationStore,
+    verify_adaptive_policy_transition_signature,
 )
+from caretaker.logging import RuntimeArtifactSigningService, RuntimeRecordIntegrityMode, RuntimeSigningPolicy
 
 
 def _approved_proposal(store: SupervisorAdaptiveAggregationStore) -> dict[str, object]:
@@ -45,7 +48,12 @@ def _approved_proposal(store: SupervisorAdaptiveAggregationStore) -> dict[str, o
     return proposal
 
 
-def _transition(store: SupervisorAdaptiveAggregationStore, *, now: datetime) -> dict[str, object]:
+def _transition(
+    store: SupervisorAdaptiveAggregationStore,
+    *,
+    now: datetime,
+    artifact_signer: object | None = None,
+) -> dict[str, object]:
     proposal = _approved_proposal(store)
     return store.create_threshold_policy_transition(
         str(proposal["request_id"]),
@@ -62,7 +70,43 @@ def _transition(store: SupervisorAdaptiveAggregationStore, *, now: datetime) -> 
         authority_expires_at="2030-01-01T00:00:00+00:00",
         now=now,
         effective_at=now,
+        artifact_signer=artifact_signer,
     )
+
+
+def test_runtime_signer_binds_adaptive_transition_and_identity_journal(tmp_path: Path) -> None:
+    service = RuntimeArtifactSigningService(
+        policy=RuntimeSigningPolicy(
+            mode=RuntimeRecordIntegrityMode.EPHEMERAL_SIGNED,
+            run_signer_in_separate_process=False,
+        ),
+        application_id="payments",
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        root=tmp_path,
+    )
+    transition = _transition(
+        SupervisorAdaptiveAggregationStore(tmp_path / "ledger"),
+        now=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        artifact_signer=service,
+    )
+
+    assert transition["signature_status"] == "EPHEMERAL_SIGNED"
+    assert isinstance(transition["signature"], dict)
+    verified = verify_adaptive_policy_transition_signature(
+        transition,
+        identity_journal=service.journal,
+    )
+    assert verified["valid"] is True, verified
+    assert verified["signer_mode"] == "EPHEMERAL_SIGNED"
+
+    tampered = dict(transition)
+    tampered["change_description"] = "forged change"
+    assert verify_adaptive_policy_transition_signature(
+        tampered,
+        identity_journal=service.journal,
+    )["valid"] is False
+    service.close()
 
 
 def test_policy_ledger_records_lineage_and_survives_restart(tmp_path: Path) -> None:

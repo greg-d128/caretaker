@@ -162,8 +162,13 @@ stable UUID policy IDs, affected fields, target/aggregation scope, effective
 and recorded timestamps, authority type, authority expiry, evidence references,
 and worker acknowledgement counts. Native policy snapshot IDs can be supplied;
 otherwise the UUID is deterministically derived from the policy fingerprint.
-The current record is explicitly `UNSIGNED` evidence until policy-driven audit
-signing is implemented. These records are append-only and read-only: they do
+When a runtime artifact signer is configured, the transition record contains
+its serialized `adaptive-policy-transition` signature and the canonical
+transition content hash it covers. In hash-chained mode the record remains
+explicitly `UNSIGNED`; this is integrity evidence, not a cryptographic
+signature. The exported `verify_adaptive_policy_transition_signature()` helper
+verifies signed records through the signing identity journal. These records are
+append-only and read-only: they do
 not replace the authority stack, reapply policy after restart, or allow an
 adaptive actor to activate its own proposal.
 

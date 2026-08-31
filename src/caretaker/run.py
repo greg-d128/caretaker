@@ -1291,6 +1291,7 @@ def main(argv: list[str] | None = None) -> int:
                     reason=str(request.get("reason") or proposal.get("reason") or "")[:512],
                     authority_lease_id=str(lease.lease_id),
                     authority_expires_at=lease.expires_at.isoformat(),
+                    artifact_signer=runtime.writer.signing_service,
                     transition_timeout_seconds=transition_timeout,
                 )
             except Exception:

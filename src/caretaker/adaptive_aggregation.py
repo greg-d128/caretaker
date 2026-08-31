@@ -45,6 +45,7 @@ MAX_RESOURCE_SAMPLES = MAX_BATCH_EVENTS
 MAX_THRESHOLD_CHANGES = 16
 MAX_THRESHOLD_DELAY_SECONDS = 86_400.0
 MAX_THRESHOLD_PROPOSAL_TTL_SECONDS = 86_400.0
+MAX_TRANSITION_SIGNATURE_BYTES = 16 * 1024
 _ADAPTIVE_POLICY_ID_NAMESPACE = uuid5(
     NAMESPACE_URL, "https://caretaker.dev/adaptive-policy-id"
 )
@@ -761,6 +762,105 @@ def _content_hash(value: Any) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     ).hexdigest()
+
+
+def _transition_signature_payload(transition: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the canonical transition fields covered by its runtime signature."""
+    return {
+        str(key): value
+        for key, value in transition.items()
+        if key not in {
+            "signature",
+            "signature_status",
+            # These are mutable/projection fields added after the immutable
+            # transition request is written.
+            "status",
+            "duplicate",
+            "context_status",
+            "rollback_status",
+        }
+    }
+
+
+def _normalize_transition_signature(value: Any) -> Mapping[str, Any] | str | None:
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        try:
+            encoded = json.dumps(
+                value,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise AdaptiveAggregationError("adaptive transition signature is not JSON data") from exc
+        if len(encoded) > MAX_TRANSITION_SIGNATURE_BYTES:
+            raise AdaptiveAggregationError("adaptive transition signature is too large")
+        return dict(value)
+    return str(value)[:MAX_TRANSITION_REASON]
+
+
+def verify_adaptive_policy_transition_signature(
+    transition: Mapping[str, Any],
+    *,
+    identity_journal: Any,
+) -> dict[str, Any]:
+    """Verify a signed adaptive transition without granting policy authority."""
+    signature = transition.get("signature")
+    if signature is None:
+        return {"valid": False, "status": "UNSIGNED", "reason": "signature is absent"}
+    if not isinstance(signature, Mapping):
+        return {"valid": False, "status": "MALFORMED", "reason": "signature envelope is not an object"}
+    from .logging.signing import (
+        deserialize_signed_artifact,
+        verify_signed_artifact,
+    )
+    try:
+        artifact = deserialize_signed_artifact(signature)
+    except Exception as exc:
+        return {
+            "valid": False,
+            "status": "MALFORMED",
+            "reason": f"signature envelope cannot be decoded: {type(exc).__name__}",
+        }
+    if artifact.artifact_kind != "adaptive-policy-transition":
+        return {"valid": False, "status": "INVALID", "reason": "unexpected artifact kind"}
+    expected_hash = _content_hash(_transition_signature_payload(transition))
+    if artifact.content_hash != expected_hash:
+        return {"valid": False, "status": "INVALID", "reason": "signature binds different transition content"}
+    if str(artifact.context.get("transition_id") or "") != str(
+        transition.get("transition_id") or transition.get("request_id") or ""
+    ):
+        return {"valid": False, "status": "INVALID", "reason": "signature context does not match transition"}
+    fingerprint = artifact.public_key_fingerprint
+    if not fingerprint or identity_journal is None:
+        return {"valid": False, "status": "UNVERIFIABLE", "reason": "signing identity is unavailable"}
+    try:
+        identity_ok, identity_error = identity_journal.verify_identity(fingerprint)
+        if not identity_ok:
+            return {
+                "valid": False,
+                "status": "INVALID",
+                "reason": f"signing identity chain is invalid: {identity_error}",
+            }
+        public_key = identity_journal.public_key(fingerprint)
+    except Exception as exc:
+        return {
+            "valid": False,
+            "status": "UNVERIFIABLE",
+            "reason": f"signing identity lookup failed: {type(exc).__name__}",
+        }
+    if public_key is None or not verify_signed_artifact(artifact, public_key):
+        return {"valid": False, "status": "INVALID", "reason": "signature is invalid"}
+    return {
+        "valid": True,
+        "status": "VERIFIED",
+        "signer_identity_id": artifact.signer_identity_id,
+        "signer_mode": artifact.signer_mode.name,
+        "public_key_fingerprint": fingerprint,
+    }
 
 
 def _adaptive_policy_id(fingerprint: str) -> str:
@@ -2514,7 +2614,8 @@ class SupervisorAdaptiveAggregationStore:
         authority_type: str = "operator",
         prior_policy_id: str | None = None,
         policy_id: str | None = None,
-        signature: str | None = None,
+        signature: Mapping[str, Any] | str | None = None,
+        artifact_signer: Any | None = None,
         authority_expires_at: str | None = None,
         effective_at: datetime | None = None,
         transition_timeout_seconds: float = DEFAULT_TRANSITION_TIMEOUT_SECONDS,
@@ -2602,8 +2703,7 @@ class SupervisorAdaptiveAggregationStore:
             fingerprint=applied_policy,
             name="policy_id",
         )
-        if signature is not None:
-            signature = str(signature)[:MAX_TRANSITION_REASON]
+        signature = _normalize_transition_signature(signature)
         timeout = _transition_timeout(transition_timeout_seconds)
         if not isinstance(required_workers, (list, tuple)) or not required_workers:
             raise AdaptiveAggregationError("adaptive policy transition requires workers")
@@ -2691,6 +2791,28 @@ class SupervisorAdaptiveAggregationStore:
             "required_workers": normalized_workers,
         }
         transition["transition_id"] = transition["request_id"]
+        if signature is None and artifact_signer is not None:
+            try:
+                signed_artifact = artifact_signer.sign_artifact(
+                    artifact_kind="adaptive-policy-transition",
+                    content_hash=_content_hash(_transition_signature_payload(transition)),
+                    context={
+                        "transition_id": transition["transition_id"],
+                        "proposal_request_id": transition["proposal_request_id"],
+                        "policy_id": transition["policy_id"],
+                        "target_id": transition["target_id"],
+                    },
+                )
+            except Exception as exc:
+                raise AdaptiveAggregationError(
+                    "adaptive policy transition signing failed"
+                ) from exc
+            if signed_artifact is not None:
+                from .logging.signing import serialize_signed_artifact
+
+                signature = serialize_signed_artifact(signed_artifact)
+                transition["signature"] = signature
+                transition["signature_status"] = signed_artifact.signer_mode.name
         _safe_write(
             self._transition_path(str(transition["request_id"])),
             {

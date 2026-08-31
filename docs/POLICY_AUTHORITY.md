@@ -322,6 +322,12 @@ The minimum record is a versioned canonical object containing:
 - canonical-content hash and, when enabled, audit-stream sequence and previous
   hash.
 
+The runtime signer, when configured, signs the canonical transition content as
+an `adaptive-policy-transition` artifact and records the serialized artifact
+with the lineage row. Verification uses the existing signing-identity journal
+and never grants policy authority. Hash-chained mode remains explicitly
+unsigned while preserving the content hash and audit record.
+
 The resulting policy snapshot, rather than the description, is the source of
 truth. Historical records remain visible and immutable after migration or
 supersession. A policy ID is not sufficient by itself: fingerprints bind the
