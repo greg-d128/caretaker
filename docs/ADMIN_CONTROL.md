@@ -216,6 +216,12 @@ Tabs provide target/FunctionSlot inspection, Guard evidence and baseline
 operations, Repair event/approval controls, persisted logs, and Guard LLM
 assistance when the application configured an advisory assessment provider.
 
+The read-only `console-invocation-identity` control command retrieves the
+bounded public identity for a recorded console invocation. It is useful for
+future signature verification and returns the public key, fingerprint, key
+algorithm, and session attribution metadata only; it never returns private key
+material and does not grant authority.
+
 The **Guard** tab discovers Guard-enabled runtime targets and presents their
 operational status, most recent inspection/deviation time, recent violation
 count, and escalation count. Selecting a row supplies the target context for

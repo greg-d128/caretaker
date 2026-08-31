@@ -9,6 +9,7 @@ from caretaker.logging import AuditStreamError, EvidencePriority, RemoteAuditStr
 from caretaker.console_identity import ConsoleIdentityStore
 from caretaker.run import (
     _handle_console_invocation_event,
+    _handle_console_identity_request,
     _handle_validation_audit_submission,
 )
 
@@ -238,6 +239,13 @@ def test_console_public_identity_is_audited_and_stored_without_authority(tmp_pat
     stored = store.get(invocation_id)
     assert stored["public_key_fingerprint"] == identity["public_key_fingerprint"]
     assert "private_key" not in stored
+    retrieved = _handle_console_identity_request(
+        store,
+        {"command": "console-invocation-identity", "invocation_id": invocation_id},
+    )
+    assert retrieved["authority_granted"] is False
+    assert retrieved["identity"]["public_key"] == identity["public_key"]
+    assert "private_key" not in retrieved["identity"]
 
 
 def test_console_cli_registers_and_closes_one_invocation(monkeypatch, tmp_path):

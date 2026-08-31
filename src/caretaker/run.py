@@ -214,6 +214,41 @@ def _handle_console_invocation_event(
     }
 
 
+def _handle_console_identity_request(
+    identity_store: ConsoleIdentityStore,
+    request: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return one recorded public console identity without private material."""
+    invocation_id = str(request.get("invocation_id") or "").strip()
+    if not invocation_id:
+        raise ValueError("console-invocation-identity requires invocation_id")
+    try:
+        invocation_id = str(UUID(invocation_id))
+    except (ValueError, AttributeError) as exc:
+        raise ValueError("console invocation_id must be a UUID") from exc
+    record = identity_store.get(invocation_id)
+    if record is None:
+        raise KeyError("console invocation identity was not found")
+    public_fields = {
+        key: record[key]
+        for key in (
+            "invocation_id",
+            "identity_id",
+            "public_key",
+            "public_key_fingerprint",
+            "algorithm",
+            "encoding",
+            "process_id",
+            "uid",
+            "gid",
+            "started_at",
+            "ended_at",
+        )
+        if key in record
+    }
+    return {"ok": True, "identity": public_fields, "authority_granted": False}
+
+
 def _handle_adaptive_observation_submission(
     store: Any,
     request: Mapping[str, Any],
@@ -870,6 +905,8 @@ def main(argv: list[str] | None = None) -> int:
 
     def control_handler(request, credentials):
         command = request.get("command")
+        if command == "console-invocation-identity":
+            return _handle_console_identity_request(console_identity_store, request)
         if command in {"console-invocation-start", "console-invocation-end"}:
             return _handle_console_invocation_event(
                 runtime,
