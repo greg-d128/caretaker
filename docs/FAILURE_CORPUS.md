@@ -39,15 +39,15 @@ pipeline can be regression-tested together. They do not perform the stated
 stimuli and must not be counted as observed application coverage; real
 scenario runners remain separately reviewed test infrastructure.
 
-The process-tier application laboratory in
+The repository application laboratory in
 [`application_laboratory.py`](../examples/failure_corpus/application_laboratory.py)
-is a separate executable fixture. It performs bounded local stimuli for ten
-scenarios—including exception, soft timeout, invalid output, configuration and
-intermittent behavior, storage pressure, worker failure, repair failures, and
-LLM unavailability—and returns the resulting bounded observation details. It
-does not contact the network, load production application code, or claim to
-reproduce a historical incident. The remaining higher-isolation scenarios
-must be run through the Podman or Multipass runners.
+is a separate executable fixture. It performs bounded local stimuli for fifteen
+scenarios: the ten PROCESS scenarios plus dependency changes and version drift,
+concurrency conflict, deployment regression, and resource pressure. It returns
+bounded observation details and does not contact the network, load production
+application code, or claim to reproduce a historical incident. The two VM-only
+scenarios must still be run through Multipass, and the five CONTAINER scenarios
+can count as observed coverage only when run through Podman.
 
 The example [`trusted_runner.py`](../examples/failure_corpus/trusted_runner.py)
 executes those oracle mappings through the process runner's JSON protocol. It

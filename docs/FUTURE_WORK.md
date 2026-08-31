@@ -47,7 +47,7 @@ contract when a pre-provisioned guest is present. Repository-owned oracle
 mappings now cover the reviewed default manifest; real application runners and
 capsule-linked fixtures are now supported. The repository also exercises the
 process protocol against all reviewed mappings and provides a bounded
-application laboratory for ten process-tier stimuli, while a curated
+application laboratory for fifteen bounded process/container stimuli, while a curated
 repository of captured real incidents, production-like applications, and
 broader container/VM observed coverage remain future work.
 The runner-selection CLI exposes the same policy boundary for repeatable local

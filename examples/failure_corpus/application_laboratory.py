@@ -64,6 +64,83 @@ def _configuration_changed() -> dict[str, object]:
     raise RuntimeError("laboratory configuration stimulus did not change state")
 
 
+def _dependency_changed() -> dict[str, object]:
+    configured_response = "baseline-response"
+    dependency_response = "changed-response"
+    if dependency_response != configured_response:
+        return {
+            "signal": "DEPENDENCY_FAILURE",
+            "caretaker_action": "CAPTURE_INCIDENT",
+            "authority_effect": "NO_AUTHORITY_CHANGE",
+            "details": {
+                "dependency": "laboratory-provider",
+                "baseline_response": configured_response,
+                "observed_response": dependency_response,
+            },
+        }
+    raise RuntimeError("laboratory dependency-change stimulus did not diverge")
+
+
+def _dependency_version_drift() -> dict[str, object]:
+    accepted_version = "1.0"
+    observed_version = "2.0"
+    if observed_version != accepted_version:
+        return {
+            "signal": "DEPENDENCY_FAILURE",
+            "caretaker_action": "CAPTURE_INCIDENT",
+            "authority_effect": "NO_AUTHORITY_CHANGE",
+            "details": {
+                "dependency": "laboratory-provider",
+                "accepted_version": accepted_version,
+                "observed_version": observed_version,
+            },
+        }
+    raise RuntimeError("laboratory dependency-version stimulus did not drift")
+
+
+def _concurrency_conflict() -> dict[str, object]:
+    first = {"transaction_id": "transaction-1", "policy_fingerprint": "policy-a"}
+    second = {"transaction_id": "transaction-1", "policy_fingerprint": "policy-b"}
+    if first != second:
+        return {
+            "signal": "CONCURRENCY_CONFLICT",
+            "caretaker_action": "REQUIRE_OPERATOR_REVIEW",
+            "authority_effect": "OPERATOR_REVIEW",
+            "details": {"conflict": "same transaction has incompatible policy lineage"},
+        }
+    raise RuntimeError("laboratory concurrency stimulus did not conflict")
+
+
+def _deployment_bad() -> dict[str, object]:
+    accepted_behavior = {"result": "stable"}
+    deployed_behavior = {"result": "regressed"}
+    if deployed_behavior != accepted_behavior:
+        return {
+            "signal": "DEPLOYMENT_FAILURE",
+            "caretaker_action": "ROLLBACK_REPAIR",
+            "authority_effect": "ROLLBACK",
+            "details": {"comparison": "deployment differs from accepted baseline"},
+        }
+    raise RuntimeError("laboratory deployment stimulus matched the baseline")
+
+
+def _resource_pressure() -> dict[str, object]:
+    soft_budget = 1024
+    observed = 2048
+    if observed > soft_budget:
+        return {
+            "signal": "RESOURCE_PRESSURE",
+            "caretaker_action": "CONTINUE_DEGRADED",
+            "authority_effect": "DEGRADED",
+            "details": {
+                "resource": "bounded-work-budget",
+                "soft_budget": soft_budget,
+                "observed": observed,
+            },
+        }
+    raise RuntimeError("laboratory resource-pressure stimulus stayed within budget")
+
+
 def _intermittent() -> dict[str, object]:
     results = ["baseline", "baseline", "deviation"]
     if len(set(results)) > 1:
@@ -146,6 +223,11 @@ _STIMULI = {
     "timeout.soft": _timeout,
     "output.invalid": _invalid_output,
     "configuration.changed": _configuration_changed,
+    "dependency.changed": _dependency_changed,
+    "dependency.version-drift": _dependency_version_drift,
+    "concurrency.conflict": _concurrency_conflict,
+    "deployment.bad": _deployment_bad,
+    "resource.pressure": _resource_pressure,
     "behavior.intermittent": _intermittent,
     "resource.storage-full": _storage_full,
     "worker.failed": _worker_failed,

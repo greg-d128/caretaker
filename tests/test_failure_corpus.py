@@ -23,6 +23,7 @@ from caretaker.failure_corpus_cli import main as failure_corpus_report_main
 from caretaker.failure_corpus_run_cli import main as failure_corpus_run_main
 from caretaker.capsule import IncidentCapsuleStore
 from examples.failure_corpus.trusted_mappings import build_reviewed_harness
+from examples.failure_corpus import application_laboratory
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -101,6 +102,27 @@ def test_application_laboratory_executes_real_process_stimuli(tmp_path: Path) ->
     assert all(item.status == "MATCHED" for item in observations)
     assert all(item.observed and item.observed.get("details") for item in observations)
     assert tuple(tmp_path.iterdir()) == ()
+
+
+@pytest.mark.parametrize(
+    "scenario_id",
+    (
+        "dependency.changed",
+        "dependency.version-drift",
+        "concurrency.conflict",
+        "deployment.bad",
+        "resource.pressure",
+    ),
+)
+def test_application_laboratory_has_explicit_container_stimuli(scenario_id: str) -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    scenario = corpus.get(scenario_id)
+    observed = application_laboratory._STIMULI[scenario_id]()
+
+    assert observed["signal"] == scenario.expected_signal
+    assert observed["caretaker_action"] == scenario.caretaker_action
+    assert observed["authority_effect"] == scenario.authority_effect
+    assert observed["details"]
 
 
 def test_failure_corpus_is_read_only_and_bounded(tmp_path: Path) -> None:
