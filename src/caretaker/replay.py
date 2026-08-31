@@ -13,10 +13,12 @@ import json
 import os
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Protocol
 from uuid import UUID
 
+from .capsule import IncidentCapsulePolicy, bounded_safe_data, canonical_json_bytes, content_hash
 from .domain import ValidationIsolationLevel
 from .regression import (
     DATA_ONLY_NOT_EXECUTABLE,
@@ -32,6 +34,140 @@ from .validation import (
 
 class ReplayExecutionError(ValueError):
     """Raised when a historical replay cannot be authorized or dispatched."""
+
+
+REPLAY_RESULT_SCHEMA_VERSION = 1
+MAX_REPLAY_RESULT_BYTES = 512 * 1024
+
+
+class ReplayResultStore:
+    """Persist bounded replay responses as separate, content-addressed evidence."""
+
+    def __init__(
+        self,
+        directory: str | Path,
+        *,
+        maximum_bytes: int = MAX_REPLAY_RESULT_BYTES,
+    ) -> None:
+        if int(maximum_bytes) <= 0:
+            raise ValueError("maximum_bytes must be greater than zero")
+        self.maximum_bytes = int(maximum_bytes)
+        self.directory = Path(directory).expanduser().resolve() / "replay-results"
+        self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.directory.chmod(0o700)
+
+    def _payload(self, result: Mapping[str, Any]) -> dict[str, Any]:
+        if not isinstance(result, Mapping):
+            raise ReplayExecutionError("replay result must be a mapping")
+        policy = IncidentCapsulePolicy(
+            maximum_capsule_bytes=self.maximum_bytes,
+            maximum_artifact_bytes=self.maximum_bytes,
+            maximum_artifacts=1,
+            maximum_communications=1,
+            maximum_depth=8,
+            maximum_collection_items=128,
+            maximum_text_characters=16_384,
+        )
+        payload = {
+            "schema_version": REPLAY_RESULT_SCHEMA_VERSION,
+            "result": bounded_safe_data(
+                dict(result), policy=policy, name="replay_result"
+            ),
+        }
+        if len(canonical_json_bytes(payload)) > self.maximum_bytes:
+            raise ReplayExecutionError(
+                f"replay result exceeds {self.maximum_bytes} bytes"
+            )
+        return payload
+
+    def record(self, result: Mapping[str, Any]) -> dict[str, Any]:
+        """Write one replay response and return its immutable storage summary."""
+        payload = self._payload(result)
+        digest = content_hash(payload)
+        path = self.directory / f"{digest}.json"
+        envelope = {
+            **payload,
+            "content_sha256": digest,
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+        }
+        encoded = canonical_json_bytes(envelope)
+        try:
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            loaded = self.load(digest)
+            return {
+                "content_sha256": digest,
+                "recorded_at": loaded.get("recorded_at"),
+                "path": str(path),
+                "duplicate": True,
+            }
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+        except Exception:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            raise
+        return {
+            "content_sha256": digest,
+            "recorded_at": envelope["recorded_at"],
+            "path": str(path),
+            "duplicate": False,
+        }
+
+    def load(self, digest: str) -> dict[str, Any]:
+        """Load and verify one content-addressed replay response."""
+        if not isinstance(digest, str) or len(digest) != 64:
+            raise ReplayExecutionError("replay result content hash is invalid")
+        path = self.directory / f"{digest}.json"
+        try:
+            envelope = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise ReplayExecutionError("replay result is not valid JSON") from exc
+        if not isinstance(envelope, Mapping):
+            raise ReplayExecutionError("replay result envelope must be an object")
+        payload = {
+            "schema_version": envelope.get("schema_version"),
+            "result": envelope.get("result"),
+        }
+        if payload["schema_version"] != REPLAY_RESULT_SCHEMA_VERSION:
+            raise ReplayExecutionError("unsupported replay result schema version")
+        if str(envelope.get("content_sha256") or "") != digest:
+            raise ReplayExecutionError("replay result filename does not match its hash")
+        if content_hash(payload) != digest:
+            raise ReplayExecutionError("replay result content hash does not match")
+        if not isinstance(envelope.get("recorded_at"), str):
+            raise ReplayExecutionError("replay result recorded_at is missing")
+        return dict(envelope)
+
+    def list_summaries(self, *, limit: int = 100) -> tuple[dict[str, Any], ...]:
+        """Return bounded metadata without returning full replay output."""
+        summaries: list[dict[str, Any]] = []
+        for path in sorted(self.directory.glob("*.json"))[: max(1, min(int(limit), 500))]:
+            digest = path.stem
+            try:
+                envelope = self.load(digest)
+                result = envelope.get("result")
+                results = result.get("results") if isinstance(result, Mapping) else None
+                summaries.append({
+                    "content_sha256": digest,
+                    "recorded_at": envelope.get("recorded_at"),
+                    "fixture_count": result.get("fixture_count") if isinstance(result, Mapping) else None,
+                    "completed_count": result.get("completed_count") if isinstance(result, Mapping) else None,
+                    "result_count": len(results) if isinstance(results, list) else None,
+                    "integrity_verified": True,
+                })
+            except Exception as exc:
+                summaries.append({
+                    "content_sha256": digest,
+                    "integrity_verified": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
+        return tuple(summaries)
 
 
 @dataclass(frozen=True, slots=True)

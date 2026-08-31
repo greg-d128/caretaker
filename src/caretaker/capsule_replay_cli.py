@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .console import discover_control_socket
 from .logging.ipc import control_request
+from .replay import ReplayResultStore
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -43,6 +44,11 @@ def main(argv: list[str] | None = None) -> int:
         help="maximum fixtures for incident/all scope (bounded by the supervisor)",
     )
     parser.add_argument("--entrypoint", required=True, help="fixture function entrypoint")
+    parser.add_argument(
+        "--persist-result",
+        action="store_true",
+        help="persist the bounded replay response as separate local evidence",
+    )
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--source", help="subject function source text")
     source.add_argument("--source-file", type=Path, help="file containing subject function source")
@@ -93,6 +99,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.target_id:
             request["target_id"] = args.target_id
     result = control_request(socket_path, request, timeout=360.0)
+    if args.persist_result:
+        try:
+            persisted = ReplayResultStore(data_directory).record(result)
+        except Exception as exc:
+            parser.error(f"could not persist replay result: {type(exc).__name__}: {exc}")
+        result = {**result, "persisted_result": persisted}
     json.dump(result, sys.stdout, indent=2, sort_keys=True, default=str)
     sys.stdout.write("\n")
     return 0

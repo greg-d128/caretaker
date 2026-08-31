@@ -160,6 +160,14 @@ source are rejected by the same policy check as selected replay; the batch
 reports that rejection per fixture rather than treating it as a successful
 historical comparison.
 
+The non-interactive replay command accepts `--persist-result` when the replay
+response should be retained for later comparison or release review. It writes
+a bounded, safe-JSON, content-addressed record below `replay-results/`;
+repeating persistence of the same response is idempotent. This record is
+separate evidence and does not create a capsule revision, modify Repair state,
+or grant authority. Persistence is opt-in and fails explicitly if the response
+cannot be safely retained.
+
 ## Remaining work
 
 Incident Capsules do not yet provide policy-specific capture levels for every

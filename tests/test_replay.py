@@ -12,6 +12,7 @@ from caretaker import (
     RegressionFixtureStore,
     ReplayExecutionError,
     ReplayExecutionResult,
+    ReplayResultStore,
     RootlessPodmanReplayBackend,
     ValidationIsolationLevel,
     execute_capsule_replay,
@@ -105,6 +106,30 @@ def test_replay_requires_explicit_policy_and_matching_source(tmp_path: Path) -> 
     )
     with pytest.raises(ReplayExecutionError, match="source hash"):
         enabled.prepare(fixture_id, entrypoint="charge", source=SOURCE + "\n")
+
+
+def test_replay_result_store_is_bounded_content_addressed_and_separate_from_capsule(tmp_path: Path) -> None:
+    store = ReplayResultStore(tmp_path)
+    result = {
+        "fixture_count": 1,
+        "completed_count": 1,
+        "capsule_modified": False,
+        "results": [{"fixture_id": "fixture-1", "outcome": "PASSED", "output": {"value": 2}}],
+    }
+
+    first = store.record(result)
+    second = store.record(result)
+    loaded = store.load(first["content_sha256"])
+
+    assert first["duplicate"] is False
+    assert second["duplicate"] is True
+    assert loaded["result"] == result
+    assert store.list_summaries()[0]["integrity_verified"] is True
+
+    path = store.directory / f"{first['content_sha256']}.json"
+    path.write_text(path.read_text(encoding="utf-8").replace("PASSED", "FAILED"), encoding="utf-8")
+    with pytest.raises(ReplayExecutionError, match="content hash"):
+        store.load(first["content_sha256"])
 
 
 def test_replay_rejects_process_backend_and_dispatches_only_to_isolated_backend(tmp_path: Path) -> None:
