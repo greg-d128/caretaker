@@ -135,6 +135,31 @@ current stage and bounded candidate/shadow counts, and lets an operator inspect
 the complete returned record as read-only evidence. It provides no pause,
 resume, percentage-change, activation, or rollback action yet.
 
+## Supervisor worker coordination
+
+`RepairRolloutCoordinator` adds a narrow supervisor-owned context gate for
+application workers. Before requesting a route, a worker must acknowledge the
+current rollout record, including its target, candidate, lifecycle stage, policy
+fingerprint, authority fingerprint, worker identity, and process identity. The
+acknowledgement is durably stored as bounded evidence and is restored after a
+supervisor restart. When the rollout advances, earlier acknowledgements remain
+available for analysis but become stale and cannot be used for routing.
+
+The supervised runtime exposes two authenticated worker requests:
+`repair-rollout-worker-ack` records the worker acknowledgement, and
+`repair-rollout-route` returns the existing deterministic routing decision only
+after the acknowledgement and current worker packet/process checks succeed.
+The route response contains a digest of the routing key, never the raw key.
+Neither request advances a rollout, changes policy, activates a FunctionSlot,
+or grants execution authority. These requests are a coordination/evidence
+boundary; the application still owns invocation and failure handling.
+
+The current runtime's built-in writer, event server, control server, and system
+collector are not automatically admitted as rollout workers because they do
+not yet receive deployment-specific worker authority packets. Deployment-owned
+worker admission, process spawning, fleet-wide counters, atomic staged
+advancement, and cross-host coordination remain future work.
+
 The invocation helpers also accept a Guard behavior capture directly through
 `behavior_capture`. Caretaker converts its retained event and resource
 evidence into the shadow eligibility check before execution. A normal capture

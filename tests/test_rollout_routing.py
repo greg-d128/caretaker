@@ -11,6 +11,7 @@ from caretaker import (
     InMemoryRepairStore,
     ObservationPolicy,
     RepairRolloutAuthority,
+    RepairRolloutCoordinator,
     RepairRolloutError,
     RepairRolloutExecutionError,
     RepairRolloutLedger,
@@ -674,6 +675,145 @@ def test_rollout_operator_projection_surfaces_stale_policy_evidence() -> None:
     assert projection["records"][0]["execution_summary"] is None
     assert projection["records"][0]["execution_summary_status"] == "STALE_OR_UNAVAILABLE"
     assert "stale" in projection["records"][0]["execution_summary_reason"]
+
+
+def test_supervisor_rollout_coordinator_requires_current_worker_ack() -> None:
+    store = InMemoryRepairStore()
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            routing=RolloutRoutingPolicy(canary_percentage=100),
+        ),
+        store=store,
+    )
+    validated = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, validated, RepairRolloutStage.CANARY)
+    coordinator = RepairRolloutCoordinator(
+        ledger,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        store=store,
+    )
+
+    with pytest.raises(PermissionError, match="not acknowledged"):
+        coordinator.route(
+            rollout_id=record.rollout_id,
+            worker_id="worker-a",
+            worker_process_id=101,
+            routing_scope="tenant",
+            routing_key="tenant-1",
+        )
+
+    acknowledgement = coordinator.acknowledge_worker(
+        rollout_id=record.rollout_id,
+        worker_id="worker-a",
+        worker_process_id=101,
+    )
+    assert acknowledgement.stage is RepairRolloutStage.CANARY
+    decision = coordinator.route(
+        rollout_id=record.rollout_id,
+        worker_id="worker-a",
+        worker_process_id=101,
+        routing_scope="tenant",
+        routing_key="tenant-1",
+    )
+    assert decision.candidate_authoritative is True
+    status = coordinator.status(record.rollout_id)
+    assert status["rollouts"][0]["current_worker_count"] == 1
+    assert status["rollouts"][0]["stale_acknowledgement_count"] == 0
+
+    _advance(ledger, record, RepairRolloutStage.ACTIVE)
+    with pytest.raises(PermissionError, match="not acknowledged"):
+        coordinator.route(
+            rollout_id=record.rollout_id,
+            worker_id="worker-a",
+            worker_process_id=101,
+            routing_scope="tenant",
+            routing_key="tenant-1",
+        )
+    status = coordinator.status(record.rollout_id)
+    assert status["rollouts"][0]["current_worker_count"] == 0
+    assert status["rollouts"][0]["stale_acknowledgement_count"] == 1
+
+
+def test_sqlite_rollout_worker_acknowledgement_survives_coordinator_restart(tmp_path) -> None:
+    store = SQLiteRepairStore(tmp_path / "repair.sqlite")
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            routing=RolloutRoutingPolicy(canary_percentage=100),
+        ),
+        store=store,
+    )
+    validated = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, validated, RepairRolloutStage.CANARY)
+    coordinator = RepairRolloutCoordinator(
+        ledger,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        store=store,
+    )
+    acknowledgement = coordinator.acknowledge_worker(
+        rollout_id=record.rollout_id,
+        worker_id="worker-a",
+        worker_process_id=202,
+    )
+    reopened_ledger = RepairRolloutLedger(
+        policy=ledger.policy,
+        store=store,
+    )
+    reopened = RepairRolloutCoordinator(
+        reopened_ledger,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        store=store,
+    )
+
+    assert store.all_rollout_worker_acknowledgements()[0]["content_hash"] == acknowledgement.content_hash
+    decision = reopened.route(
+        rollout_id=record.rollout_id,
+        worker_id="worker-a",
+        worker_process_id=202,
+        routing_scope="tenant",
+        routing_key="tenant-1",
+    )
+    assert decision.candidate_authoritative is True
+
+
+def test_rollout_coordinator_reports_tampered_acknowledgement_as_invalid() -> None:
+    store = InMemoryRepairStore()
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(enabled=True),
+        store=store,
+    )
+    record = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    acknowledgement = RepairRolloutCoordinator(
+        ledger,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        store=store,
+    ).acknowledge_worker(
+        rollout_id=record.rollout_id,
+        worker_id="worker-a",
+        worker_process_id=303,
+    )
+    store.record_rollout_worker_acknowledgement(
+        replace(
+            acknowledgement,
+            acknowledgement_id=uuid4(),
+            content_hash="tampered",
+        )
+    )
+
+    status = RepairRolloutCoordinator(
+        ledger,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        store=store,
+    ).status(record.rollout_id)
+
+    assert status["rollouts"][0]["current_worker_count"] == 1
+    assert status["rollouts"][0]["invalid_acknowledgement_count"] == 1
 
 
 def test_execute_rollout_emits_failure_type_without_exception_message() -> None:

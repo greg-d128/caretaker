@@ -37,6 +37,7 @@ from .repair_rollout import (
     RepairRolloutRecord,
     RepairRolloutTransition,
     RolloutExecutionObservation,
+    RolloutWorkerAcknowledgement,
 )
 
 
@@ -64,6 +65,10 @@ class RepairStore(Protocol):
     def all_rollouts(self) -> tuple[Any, ...]: ...
     def record_rollout_transition(self, record: RepairRolloutTransition) -> None: ...
     def all_rollout_transitions(self) -> tuple[Any, ...]: ...
+    def record_rollout_worker_acknowledgement(
+        self, record: RolloutWorkerAcknowledgement
+    ) -> None: ...
+    def all_rollout_worker_acknowledgements(self) -> tuple[Any, ...]: ...
     def record_recovery(self, record: RepairRecoveryRecord) -> None: ...
     def all_recoveries(self) -> tuple[Any, ...]: ...
     def record_worker_failure(self, record: WorkerFailureRecord) -> None: ...
@@ -89,6 +94,7 @@ class InMemoryRepairStore:
         self.rollouts: dict[UUID, RepairRolloutRecord] = {}
         self.rollout_transitions: dict[UUID, RepairRolloutTransition] = {}
         self.rollout_executions: dict[UUID, RolloutExecutionObservation] = {}
+        self.rollout_worker_acknowledgements: dict[UUID, RolloutWorkerAcknowledgement] = {}
         self.observations: dict[UUID, ObservationRecord] = {}
         self.internal_incidents: dict[UUID, InternalIncident] = {}
         self.integrity_verifications: dict[UUID, IntegrityVerification] = {}
@@ -232,6 +238,28 @@ class InMemoryRepairStore:
                 )
             )
 
+    def record_rollout_worker_acknowledgement(
+        self, record: RolloutWorkerAcknowledgement
+    ) -> None:
+        with self._lock:
+            existing = self.rollout_worker_acknowledgements.get(record.acknowledgement_id)
+            if existing is not None and existing != record:
+                raise ValueError(
+                    "worker acknowledgement ID was already recorded with different evidence"
+                )
+            self.rollout_worker_acknowledgements[record.acknowledgement_id] = record
+
+    def all_rollout_worker_acknowledgements(
+        self,
+    ) -> tuple[RolloutWorkerAcknowledgement, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    self.rollout_worker_acknowledgements.values(),
+                    key=lambda record: record.acknowledged_at,
+                )
+            )
+
     def record_recovery(self, record: RepairRecoveryRecord) -> None:
         with self._lock:
             self.recoveries.setdefault(record.attempt_id, record)
@@ -287,6 +315,7 @@ class SQLiteRepairStore:
         "repair_rollouts": "rollout_id",
         "repair_rollout_transitions": "transition_id",
         "repair_rollout_executions": "observation_id",
+        "repair_rollout_worker_acknowledgements": "acknowledgement_id",
         "attempts": "attempt_id",
         "recovery_records": "recovery_id",
         "worker_failure_records": "failure_id",
@@ -486,6 +515,39 @@ class SQLiteRepairStore:
 
     def all_rollout_executions(self) -> tuple[Mapping[str, Any], ...]:
         return tuple(self.query_records("repair_rollout_executions", limit=10000))
+
+    def record_rollout_worker_acknowledgement(
+        self, record: RolloutWorkerAcknowledgement
+    ) -> None:
+        payload = json.dumps(_jsonable(record), sort_keys=True, separators=(",", ":"))
+        with self._lock, closing(self._connect()) as connection:
+            existing = connection.execute(
+                "SELECT payload FROM repair_rollout_worker_acknowledgements WHERE record_id = ?",
+                (str(record.acknowledgement_id),),
+            ).fetchone()
+            if existing is not None:
+                if existing[0] != payload:
+                    raise ValueError(
+                        "worker acknowledgement ID was already recorded with different evidence"
+                    )
+                return
+            connection.execute(
+                "INSERT INTO repair_rollout_worker_acknowledgements(record_id, target_id, created_at, payload) VALUES (?, ?, ?, ?)",
+                (
+                    str(record.acknowledgement_id),
+                    record.target_id,
+                    record.acknowledged_at.isoformat(),
+                    payload,
+                ),
+            )
+            connection.commit()
+
+    def all_rollout_worker_acknowledgements(
+        self,
+    ) -> tuple[Mapping[str, Any], ...]:
+        return tuple(
+            self.query_records("repair_rollout_worker_acknowledgements", limit=10000)
+        )
 
     def record_recovery(self, record: RepairRecoveryRecord) -> None:
         self._write("recovery_records", record, target_id=record.target_id)

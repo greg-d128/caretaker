@@ -969,6 +969,14 @@ read-only `repair-rollout-status` projection containing lifecycle records,
 transition history, and integrity-checked execution summaries. Stale or
 unavailable summaries remain visibly unresolved and cannot advance authority.
 
+The first supervisor coordination slice is now implemented through
+`RepairRolloutCoordinator`. An authenticated worker can acknowledge the exact
+current rollout context and request a deterministic route only while its
+acknowledgement matches the rollout's target, candidate, stage, policy, and
+authority fingerprints. Acknowledgements are durable, process-bound by the
+supervised control plane, retained as stale evidence after a stage transition,
+and explicitly do not grant authority or advance lifecycle state.
+
 Future Repair should provide more operator and policy control over how a validated
 candidate is introduced. Potential execution strategies include:
 

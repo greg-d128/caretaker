@@ -16,6 +16,7 @@ from collections import Counter
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
+import threading
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID, uuid4
 
@@ -267,6 +268,28 @@ class RolloutExecutionSummary:
     evidence_hash: str
 
 
+@dataclass(frozen=True, slots=True)
+class RolloutWorkerAcknowledgement:
+    """Durable evidence that one worker observed the current rollout context.
+
+    This is a supervisor coordination record, not an authority grant. A
+    worker must still pass the supervisor's process and authority checks before
+    this record is accepted by an application control plane.
+    """
+
+    acknowledgement_id: UUID
+    rollout_id: UUID
+    target_id: str
+    candidate_id: UUID
+    worker_id: str
+    worker_process_id: int
+    stage: RepairRolloutStage
+    policy_fingerprint: str
+    authority_fingerprint: str
+    acknowledged_at: datetime
+    content_hash: str
+
+
 def _execution_observation_payload(
     observation: RolloutExecutionObservation,
 ) -> dict[str, Any]:
@@ -290,6 +313,23 @@ def _execution_observation_payload(
     }
 
 
+def _worker_acknowledgement_payload(
+    acknowledgement: RolloutWorkerAcknowledgement,
+) -> dict[str, Any]:
+    return {
+        "acknowledgement_id": str(acknowledgement.acknowledgement_id),
+        "rollout_id": str(acknowledgement.rollout_id),
+        "target_id": acknowledgement.target_id,
+        "candidate_id": str(acknowledgement.candidate_id),
+        "worker_id": acknowledgement.worker_id,
+        "worker_process_id": acknowledgement.worker_process_id,
+        "stage": acknowledgement.stage.value,
+        "policy_fingerprint": acknowledgement.policy_fingerprint,
+        "authority_fingerprint": acknowledgement.authority_fingerprint,
+        "acknowledged_at": acknowledgement.acknowledged_at.isoformat(),
+    }
+
+
 class RepairRolloutStore(Protocol):
     def record_rollout(self, record: RepairRolloutRecord) -> None: ...
     def all_rollouts(self) -> tuple[Any, ...]: ...
@@ -297,6 +337,10 @@ class RepairRolloutStore(Protocol):
     def all_rollout_transitions(self) -> tuple[Any, ...]: ...
     def record_rollout_execution(self, record: RolloutExecutionObservation) -> None: ...
     def all_rollout_executions(self) -> tuple[Any, ...]: ...
+    def record_rollout_worker_acknowledgement(
+        self, record: RolloutWorkerAcknowledgement
+    ) -> None: ...
+    def all_rollout_worker_acknowledgements(self) -> tuple[Any, ...]: ...
 
 
 class RolloutArtifactSigner(Protocol):
@@ -648,18 +692,282 @@ class RepairRolloutLedger:
         except KeyError as exc:
             raise RepairRolloutError(f"unknown rollout {rollout_id}") from exc
 
+    # These private persistence operations are implemented once below on the
+    # coordinator's shared internal helper surface.  Keeping the forwarding
+    # methods here makes the ledger's own contract explicit and avoids
+    # attaching methods to the class after module definition.
     def _require_enabled(self) -> None:
+        return RepairRolloutCoordinator._ledger_require_enabled(self)
+
+    def _authority_expired(self, record: RepairRolloutRecord) -> bool:
+        return RepairRolloutCoordinator._ledger_authority_expired(self, record)
+
+    def _persist_record(self, record: RepairRolloutRecord) -> None:
+        return RepairRolloutCoordinator._ledger_persist_record(self, record)
+
+    def _record_transition(
+        self,
+        record: RepairRolloutRecord,
+        **kwargs: Any,
+    ) -> RepairRolloutTransition:
+        return RepairRolloutCoordinator._ledger_record_transition(self, record, **kwargs)
+
+    def _restore(self) -> None:
+        return RepairRolloutCoordinator._ledger_restore(self)
+
+
+class RepairRolloutCoordinator:
+    """Supervisor-owned context gate for application-wide rollout routing.
+
+    Workers do ordinary invocation work. This coordinator only verifies that
+    a worker has acknowledged the exact current rollout context before it may
+    request a routing decision. It does not advance lifecycle stages or grant
+    execution authority.
+    """
+
+    def __init__(
+        self,
+        ledger: RepairRolloutLedger,
+        *,
+        policy_fingerprint: str,
+        authority_fingerprint: str,
+        store: RepairRolloutStore | None = None,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        if not policy_fingerprint.strip() or not authority_fingerprint.strip():
+            raise ValueError("rollout coordinator context fingerprints are required")
+        self.ledger = ledger
+        self.policy_fingerprint = policy_fingerprint
+        self.authority_fingerprint = authority_fingerprint
+        self.store = store if store is not None else ledger.store
+        self._clock = clock or _utcnow
+        self._acknowledgements: dict[UUID, RolloutWorkerAcknowledgement] = {}
+        self._lock = threading.RLock()
+        self._restore_acknowledgements()
+
+    def acknowledge_worker(
+        self,
+        *,
+        rollout_id: UUID,
+        worker_id: str,
+        worker_process_id: int,
+        stage: RepairRolloutStage | str | None = None,
+        acknowledgement_id: UUID | None = None,
+    ) -> RolloutWorkerAcknowledgement:
+        """Record a worker's acknowledgement of the current rollout state."""
+
+        normalized_worker_id = str(worker_id).strip()
+        if not normalized_worker_id or len(normalized_worker_id) > 256:
+            raise ValueError("worker_id must contain 1..256 non-whitespace characters")
+        if isinstance(worker_process_id, bool) or worker_process_id <= 0:
+            raise ValueError("worker_process_id must be positive")
+        record = self.ledger.get(rollout_id)
+        if record.stage in {RepairRolloutStage.RETIRED, RepairRolloutStage.REVOKED}:
+            raise RepairRolloutError(
+                f"cannot acknowledge terminal rollout stage {record.stage.value}"
+            )
+        self._check_context(record)
+        acknowledged_stage = (
+            record.stage
+            if stage is None
+            else _coerce_rollout_enum(stage, RepairRolloutStage)
+        )
+        if acknowledged_stage is not record.stage:
+            raise RepairRolloutError("worker acknowledgement stage is stale")
+        now = self._clock()
+        acknowledgement = RolloutWorkerAcknowledgement(
+            acknowledgement_id=acknowledgement_id or uuid4(),
+            rollout_id=record.rollout_id,
+            target_id=record.target_id,
+            candidate_id=record.candidate_id,
+            worker_id=normalized_worker_id,
+            worker_process_id=int(worker_process_id),
+            stage=record.stage,
+            policy_fingerprint=record.policy_fingerprint,
+            authority_fingerprint=record.authority_fingerprint,
+            acknowledged_at=now,
+            content_hash="",
+        )
+        acknowledgement = replace(
+            acknowledgement,
+            content_hash=_digest(_worker_acknowledgement_payload(acknowledgement)),
+        )
+        if self.store is not None:
+            recorder = getattr(self.store, "record_rollout_worker_acknowledgement", None)
+            if not callable(recorder):
+                raise RepairRolloutError(
+                    "rollout store does not support worker acknowledgements"
+                )
+            recorder(acknowledgement)
+        with self._lock:
+            existing = self._acknowledgements.get(acknowledgement.acknowledgement_id)
+            if existing is not None and existing != acknowledgement:
+                raise RepairRolloutError(
+                    "worker acknowledgement ID was already recorded with different evidence"
+                )
+            self._acknowledgements[acknowledgement.acknowledgement_id] = acknowledgement
+        return acknowledgement
+
+    def route(
+        self,
+        *,
+        rollout_id: UUID,
+        worker_id: str,
+        worker_process_id: int,
+        routing_scope: str,
+        routing_key: str,
+        audit_event: Callable[..., Any] | None = None,
+    ) -> RolloutRoutingDecision:
+        """Return a route only for a worker bound to the current context."""
+
+        record = self.ledger.get(rollout_id)
+        self._check_context(record)
+        normalized_worker_id = str(worker_id).strip()
+        if not normalized_worker_id:
+            raise ValueError("worker_id is required")
+        if self._current_acknowledgement(
+            record,
+            worker_id=normalized_worker_id,
+            worker_process_id=worker_process_id,
+        ) is None:
+            raise PermissionError(
+                "worker has not acknowledged the current rollout context"
+            )
+        return decide_rollout_routing(
+            record,
+            policy=self.ledger.policy,
+            policy_fingerprint=self.policy_fingerprint,
+            routing_scope=routing_scope,
+            routing_key=routing_key,
+            audit_event=audit_event,
+        )
+
+    def status(self, rollout_id: UUID | None = None) -> dict[str, Any]:
+        """Return bounded worker-context status for supervisor/operator review."""
+
+        records = self.ledger.all()
+        if rollout_id is not None:
+            records = tuple(item for item in records if item.rollout_id == rollout_id)
+        output: list[dict[str, Any]] = []
+        for record in records:
+            acknowledgements = self._acknowledgements_for(record.rollout_id)
+            current: list[RolloutWorkerAcknowledgement] = []
+            stale = 0
+            invalid = 0
+            for acknowledgement in acknowledgements:
+                if not _valid_worker_acknowledgement(acknowledgement):
+                    invalid += 1
+                    continue
+                if self._ack_matches_record(acknowledgement, record):
+                    current.append(acknowledgement)
+                else:
+                    stale += 1
+            output.append({
+                "rollout_id": str(record.rollout_id),
+                "target_id": record.target_id,
+                "candidate_id": str(record.candidate_id),
+                "stage": record.stage.value,
+                "acknowledgement_count": len(acknowledgements),
+                "current_worker_count": len({item.worker_id for item in current}),
+                "stale_acknowledgement_count": stale,
+                "invalid_acknowledgement_count": invalid,
+                "workers": [
+                    {
+                        "worker_id": item.worker_id,
+                        "worker_process_id": item.worker_process_id,
+                        "stage": item.stage.value,
+                        "acknowledged_at": item.acknowledged_at.isoformat(),
+                    }
+                    for item in sorted(current, key=lambda item: item.acknowledged_at)
+                ],
+            })
+        return {
+            "read_only": True,
+            "authority_granted": False,
+            "policy_fingerprint": self.policy_fingerprint,
+            "rollouts": output,
+        }
+
+    def _check_context(self, record: RepairRolloutRecord) -> None:
+        if record.policy_fingerprint != self.policy_fingerprint:
+            raise RepairRolloutError("rollout coordinator policy fingerprint is stale")
+        if record.authority_fingerprint != self.authority_fingerprint:
+            raise RepairRolloutError("rollout coordinator authority fingerprint is stale")
+
+    def _acknowledgements_for(
+        self, rollout_id: UUID
+    ) -> tuple[RolloutWorkerAcknowledgement, ...]:
+        values: dict[UUID, RolloutWorkerAcknowledgement] = {}
+        if self.store is not None:
+            reader = getattr(self.store, "all_rollout_worker_acknowledgements", None)
+            if callable(reader):
+                for raw in reader():
+                    acknowledgement = _coerce_worker_acknowledgement(raw)
+                    if acknowledgement is not None:
+                        values[acknowledgement.acknowledgement_id] = acknowledgement
+        with self._lock:
+            values.update(self._acknowledgements)
+        return tuple(
+            item for item in values.values() if item.rollout_id == rollout_id
+        )
+
+    def _current_acknowledgement(
+        self,
+        record: RepairRolloutRecord,
+        *,
+        worker_id: str,
+        worker_process_id: int,
+    ) -> RolloutWorkerAcknowledgement | None:
+        if isinstance(worker_process_id, bool) or worker_process_id <= 0:
+            return None
+        candidates = [
+            item
+            for item in self._acknowledgements_for(record.rollout_id)
+            if item.worker_id == worker_id
+            and item.worker_process_id == worker_process_id
+            and _valid_worker_acknowledgement(item)
+            and self._ack_matches_record(item, record)
+        ]
+        return max(candidates, key=lambda item: item.acknowledged_at, default=None)
+
+    def _ack_matches_record(
+        self,
+        acknowledgement: RolloutWorkerAcknowledgement,
+        record: RepairRolloutRecord,
+    ) -> bool:
+        return (
+            acknowledgement.rollout_id == record.rollout_id
+            and acknowledgement.target_id == record.target_id
+            and acknowledgement.candidate_id == record.candidate_id
+            and acknowledgement.stage is record.stage
+            and acknowledgement.policy_fingerprint == self.policy_fingerprint
+            and acknowledgement.authority_fingerprint == self.authority_fingerprint
+        )
+
+    def _restore_acknowledgements(self) -> None:
+        if self.store is None:
+            return
+        reader = getattr(self.store, "all_rollout_worker_acknowledgements", None)
+        if not callable(reader):
+            return
+        for raw in reader():
+            acknowledgement = _coerce_worker_acknowledgement(raw)
+            if acknowledgement is None or not _valid_worker_acknowledgement(acknowledgement):
+                continue
+            self._acknowledgements[acknowledgement.acknowledgement_id] = acknowledgement
+
+    def _ledger_require_enabled(self) -> None:
         if not self.policy.enabled:
             raise RepairRolloutError("repair rollout is disabled by policy")
 
-    def _authority_expired(self, record: RepairRolloutRecord) -> bool:
+    def _ledger_authority_expired(self, record: RepairRolloutRecord) -> bool:
         return record.expires_at is not None and record.expires_at <= self._clock()
 
-    def _persist_record(self, record: RepairRolloutRecord) -> None:
+    def _ledger_persist_record(self, record: RepairRolloutRecord) -> None:
         if self.store is not None:
             self.store.record_rollout(record)
 
-    def _record_transition(
+    def _ledger_record_transition(
         self,
         record: RepairRolloutRecord,
         *,
@@ -782,7 +1090,7 @@ class RepairRolloutLedger:
             )
         return transition
 
-    def _restore(self) -> None:
+    def _ledger_restore(self) -> None:
         if self.store is None:
             return
         for raw in self.store.all_rollouts():
@@ -1461,6 +1769,45 @@ def _coerce_execution_observation(
         )
     except (KeyError, TypeError, ValueError):
         return None
+
+
+def _coerce_worker_acknowledgement(
+    raw: Any,
+) -> RolloutWorkerAcknowledgement | None:
+    if isinstance(raw, RolloutWorkerAcknowledgement):
+        return raw
+    if not isinstance(raw, Mapping):
+        return None
+    try:
+        return RolloutWorkerAcknowledgement(
+            acknowledgement_id=UUID(str(raw["acknowledgement_id"])),
+            rollout_id=UUID(str(raw["rollout_id"])),
+            target_id=str(raw["target_id"]),
+            candidate_id=UUID(str(raw["candidate_id"])),
+            worker_id=str(raw["worker_id"]),
+            worker_process_id=int(raw["worker_process_id"]),
+            stage=_coerce_rollout_enum(raw["stage"], RepairRolloutStage),
+            policy_fingerprint=str(raw["policy_fingerprint"]),
+            authority_fingerprint=str(raw["authority_fingerprint"]),
+            acknowledged_at=datetime.fromisoformat(str(raw["acknowledged_at"])),
+            content_hash=str(raw["content_hash"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _valid_worker_acknowledgement(
+    acknowledgement: RolloutWorkerAcknowledgement,
+) -> bool:
+    return (
+        bool(acknowledgement.worker_id.strip())
+        and len(acknowledgement.worker_id) <= 256
+        and acknowledgement.worker_process_id > 0
+        and bool(acknowledgement.policy_fingerprint.strip())
+        and bool(acknowledgement.authority_fingerprint.strip())
+        and acknowledgement.content_hash
+        == _digest(_worker_acknowledgement_payload(acknowledgement))
+    )
 
 
 def _coerce_rollout_enum(value: Any, enum_type: type[Enum]) -> Any:

@@ -65,7 +65,11 @@ from .logging.policy import OperatorLoggingPolicy, load_operator_policy
 from .logging.segments import read_segment
 from .regression import RegressionFixtureStore
 from .repair_recovery import worker_failure_recovery_status
-from .repair_rollout import RepairRolloutLedger, RepairRolloutError
+from .repair_rollout import (
+    RepairRolloutCoordinator,
+    RepairRolloutError,
+    RepairRolloutLedger,
+)
 from .replay import (
     IsolatedReplayCoordinator,
     RootlessPodmanReplayBackend,
@@ -702,6 +706,7 @@ def main(argv: list[str] | None = None) -> int:
     supervisor_holder: dict[str, CaretakerApplicationSupervisor] = {}
     failure_store_holder: dict[str, SQLiteRepairStore] = {}
     rollout_ledger_holder: dict[str, RepairRolloutLedger] = {}
+    rollout_coordinator_holder: dict[str, RepairRolloutCoordinator] = {}
     authority_generation_holder = {"generation": authority.effective.generation}
     authority_runtime_match_holder: dict[str, bool | None] = {"match": None}
     authority_lease_holder = {
@@ -909,6 +914,27 @@ def main(argv: list[str] | None = None) -> int:
         )
         return result
 
+    def authenticated_rollout_worker(request: Mapping[str, Any], credentials: tuple[int, int, int]):
+        supervisor = supervisor_holder.get("supervisor")
+        if supervisor is None:
+            raise RuntimeError("supervisor is not initialized")
+        try:
+            worker_id = UUID(str(request["worker_id"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("rollout worker request requires a valid worker_id") from exc
+        worker = supervisor.workers.get(worker_id)
+        if worker.process_id != credentials[0]:
+            raise PermissionError("rollout worker process identity does not match registration")
+        if str(request.get("process_start_id") or "") != str(worker.process_start_id):
+            raise PermissionError("rollout worker process start identity does not match registration")
+        if str(request.get("authority_packet_id") or "") != str(worker.authority_packet_id or ""):
+            raise PermissionError("rollout worker authority packet identity does not match registration")
+        if worker.authority_packet_id is None:
+            raise PermissionError("rollout worker has no active authority packet")
+        if worker.state not in {WorkerState.STARTING, WorkerState.HEALTHY, WorkerState.DEGRADED}:
+            raise PermissionError("rollout worker is not in an executable lifecycle state")
+        return worker
+
 
     def control_handler(request, credentials):
         command = request.get("command")
@@ -1033,6 +1059,87 @@ def main(argv: list[str] | None = None) -> int:
                 "available": True,
                 **worker_failure_recovery_status(store, limit=limit),
             }
+        if command == "repair-rollout-worker-ack":
+            worker = authenticated_rollout_worker(request, credentials)
+            coordinator = rollout_coordinator_holder.get("coordinator")
+            if coordinator is None:
+                raise RuntimeError("rollout coordinator is not initialized")
+            try:
+                rollout_id = UUID(str(request["rollout_id"]))
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("rollout worker acknowledgement requires a valid rollout_id") from exc
+            record = coordinator.ledger.get(rollout_id)
+            if worker.target_id != record.target_id:
+                raise PermissionError("rollout worker target does not match rollout target")
+            acknowledgement = coordinator.acknowledge_worker(
+                rollout_id=rollout_id,
+                worker_id=str(worker.worker_id),
+                worker_process_id=worker.process_id,
+                stage=request.get("stage"),
+                acknowledgement_id=(
+                    UUID(str(request["acknowledgement_id"]))
+                    if request.get("acknowledgement_id")
+                    else None
+                ),
+            )
+            return {
+                "ok": True,
+                "read_only": True,
+                "authority_granted": False,
+                "acknowledgement": {
+                    "acknowledgement_id": str(acknowledgement.acknowledgement_id),
+                    "rollout_id": str(acknowledgement.rollout_id),
+                    "target_id": acknowledgement.target_id,
+                    "candidate_id": str(acknowledgement.candidate_id),
+                    "worker_id": acknowledgement.worker_id,
+                    "worker_process_id": acknowledgement.worker_process_id,
+                    "stage": acknowledgement.stage.value,
+                    "acknowledged_at": acknowledgement.acknowledged_at.isoformat(),
+                    "content_hash": acknowledgement.content_hash,
+                },
+            }
+        if command == "repair-rollout-route":
+            worker = authenticated_rollout_worker(request, credentials)
+            coordinator = rollout_coordinator_holder.get("coordinator")
+            if coordinator is None:
+                raise RuntimeError("rollout coordinator is not initialized")
+            try:
+                rollout_id = UUID(str(request["rollout_id"]))
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("rollout route request requires a valid rollout_id") from exc
+            record = coordinator.ledger.get(rollout_id)
+            if worker.target_id != record.target_id:
+                raise PermissionError("rollout worker target does not match rollout target")
+            decision = coordinator.route(
+                rollout_id=rollout_id,
+                worker_id=str(worker.worker_id),
+                worker_process_id=worker.process_id,
+                routing_scope=str(request.get("routing_scope") or ""),
+                routing_key=str(request.get("routing_key") or ""),
+            )
+            return {
+                "ok": True,
+                "read_only": True,
+                "authority_granted": False,
+                "decision": {
+                    "rollout_id": str(decision.rollout_id),
+                    "target_id": decision.target_id,
+                    "candidate_id": str(decision.candidate_id),
+                    "stage": decision.stage.value,
+                    "routing_scope": decision.routing_scope,
+                    "routing_key_digest": decision.routing_key_digest,
+                    "bucket": decision.bucket,
+                    "bucket_count": decision.bucket_count,
+                    "configured_percentage": decision.configured_percentage,
+                    "candidate_selected": decision.candidate_selected,
+                    "candidate_authoritative": decision.candidate_authoritative,
+                    "authoritative_implementation": decision.authoritative_implementation.value,
+                    "strategy": decision.strategy,
+                    "policy_fingerprint": decision.policy_fingerprint,
+                    "decision_hash": decision.decision_hash,
+                    "reason": decision.reason,
+                },
+            }
         if command == "repair-rollout-status":
             ledger = rollout_ledger_holder.get("ledger")
             if ledger is None:
@@ -1068,6 +1175,9 @@ def main(argv: list[str] | None = None) -> int:
                     "records": [],
                     "transitions": [],
                 }
+            coordinator = rollout_coordinator_holder.get("coordinator")
+            if coordinator is not None:
+                projection["worker_coordination"] = coordinator.status(rollout_id)
             return {"ok": True, "available": True, **projection}
         if command == "adaptive-aggregation-reconcile":
             result = reconcile_adaptive_aggregation(
@@ -2763,6 +2873,12 @@ def main(argv: list[str] | None = None) -> int:
     failure_store_holder["store"] = failure_store
     rollout_ledger_holder["ledger"] = RepairRolloutLedger(
         policy=policy.rollout,
+        store=failure_store,
+    )
+    rollout_coordinator_holder["coordinator"] = RepairRolloutCoordinator(
+        rollout_ledger_holder["ledger"],
+        policy_fingerprint=runtime.effective.fingerprint,
+        authority_fingerprint=authority.effective.fingerprint,
         store=failure_store,
     )
     supervisor = CaretakerApplicationSupervisor(
