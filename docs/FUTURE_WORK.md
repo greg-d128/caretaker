@@ -1314,7 +1314,10 @@ the in-memory and SQLite Repair stores reject reuse of an observation ID with
 different evidence. This restores evidence for probation and long-term review
 without replaying calls or treating the projection as candidate activation;
 continuation still requires live candidate, policy, and authority
-revalidation. Automatic FunctionSlot reactivation remains future work.
+revalidation. The Recovery console shows the bounded observation count and
+success/failure split for each interrupted attempt, while retaining the full
+projection for detail inspection. Automatic FunctionSlot reactivation remains
+future work.
 
 - mark interrupted incidents, generations, attempts, and validations incomplete;
 - reconstruct pending approvals or deliberately stale them for every restart path;

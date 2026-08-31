@@ -794,7 +794,7 @@ class CaretakerConsoleApp(App):
                 table = DataTable(id="worker-failure-recovery-table")
                 table.cursor_type = "row"
                 table.add_columns(
-                    "#", "Kind", "Scope", "Target", "Worker / Action", "Status", "Critical", "Observed"
+                    "#", "Kind", "Scope", "Target", "Worker / Action", "Status", "Critical", "Observations", "Observed"
                 )
                 yield table
                 yield RichLog(id="worker-failure-recovery-output", wrap=True, markup=False)
@@ -3771,6 +3771,7 @@ class CaretakerConsoleApp(App):
                 "worker_or_action": item.get("worker_id") or "-",
                 "status": item.get("postmortem_status") or "UNKNOWN",
                 "critical": "yes" if item.get("critical_evidence") else "no",
+                "observations": "-",
                 "observed_at": item.get("observed_at") or "-",
                 "payload": dict(item),
             })
@@ -3786,6 +3787,7 @@ class CaretakerConsoleApp(App):
                 "worker_or_action": item.get("action") or "-",
                 "status": execution.get("status") or "UNKNOWN",
                 "critical": "yes" if item.get("critical_evidence_conflict") else "no",
+                "observations": "-",
                 "observed_at": item.get("observed_at") or "-",
                 "payload": dict(item),
             })
@@ -3799,6 +3801,7 @@ class CaretakerConsoleApp(App):
                 "worker_or_action": item.get("report_id") or "-",
                 "status": "REVIEW",
                 "critical": "-",
+                "observations": "-",
                 "observed_at": item.get("observed_at") or "-",
                 "payload": dict(item),
             })
@@ -3836,8 +3839,23 @@ class CaretakerConsoleApp(App):
                 self._compact_log_text(item["worker_or_action"], limit=22) or "-",
                 self._compact_log_text(item["status"], limit=20) or "-",
                 item["critical"],
+                self._compact_log_text(item.get("observations", "-"), limit=22) or "-",
                 self._compact_log_text(item["observed_at"], limit=19) or "-",
             )
+
+    @staticmethod
+    def _observation_recovery_summary(value: Any) -> str:
+        if not isinstance(value, Mapping):
+            return "-"
+        state = str(value.get("state") or "UNKNOWN")
+        count = int(value.get("observation_count") or 0)
+        successes = int(value.get("successful_executions") or 0)
+        failures = int(value.get("failed_executions") or 0)
+        if state == "NO_PERSISTED_OBSERVATIONS":
+            return "none"
+        if state == "CONFLICTING_EVIDENCE":
+            return f"CONFLICT ({count})"
+        return f"{count} ({successes} ok/{failures} fail)"
 
     def _refresh_worker_failure_recovery_actions(self) -> None:
         record = self._selected_worker_failure_recovery_record
@@ -3890,6 +3908,7 @@ class CaretakerConsoleApp(App):
                     "worker_or_action": "NO INCOMPLETE ATTEMPTS",
                     "status": "CLEAR",
                     "critical": "-",
+                    "observations": "-",
                     "observed_at": observed_at,
                     "payload": dict(plan),
                 })
@@ -3904,6 +3923,9 @@ class CaretakerConsoleApp(App):
                     "worker_or_action": decision.get("recovery_action") or "-",
                     "status": decision.get("transaction_state") or "INTERRUPTED",
                     "critical": "-",
+                    "observations": self._observation_recovery_summary(
+                        decision.get("observation_recovery")
+                    ),
                     "observed_at": observed_at,
                     "payload": dict(decision),
                 })

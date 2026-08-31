@@ -1175,6 +1175,12 @@ def test_console_displays_read_only_repair_recovery_plan(tmp_path):
                             "recovery_action": "ROLLBACK_TO_DEPLOYED_CODE",
                             "candidate_reactivation_allowed": False,
                             "approval_survives_restart": False,
+                            "observation_recovery": {
+                                "state": "PERSISTED_EVIDENCE_READY",
+                                "observation_count": 4,
+                                "successful_executions": 3,
+                                "failed_executions": 1,
+                            },
                         }],
                     }, {
                         "target_id": "app:healthy",
@@ -1196,6 +1202,7 @@ def test_console_displays_read_only_repair_recovery_plan(tmp_path):
                 item["worker_or_action"]
                 for item in app._worker_failure_recovery_plan_records
             ] == ["ROLLBACK_TO_DEPLOYED_CODE", "NO INCOMPLETE ATTEMPTS"]
+            assert app._worker_failure_recovery_plan_records[0]["observations"] == "4 (3 ok/1 fail)"
             status = str(
                 app.query_one("#worker-failure-recovery-plan-status", Static).render()
             )
