@@ -64,6 +64,25 @@ filesystem reads and writes, subprocesses, dynamic code, and environment reads.
 - idempotence permits a policy to consider retries, but does not by itself make
   duplicate shadow execution safe.
 
+An operator or rollout adapter can derive the same bounded evidence directly
+from a Guard behavior capture:
+
+```python
+observation = EffectObservation.from_behavior_capture(
+    behavior_capture,
+    complete=False,
+)
+decision = assess_shadow_eligibility(function_contract, observation)
+```
+
+The converter uses both event-kind counts and retained resource summaries. A
+retained API/network destination, filesystem root, subprocess, import, or
+dynamic-code operation is therefore enough to flag observed activity even if
+the event-kind count was compacted. `complete` must be asserted by the
+collector that can justify complete coverage; a normal bounded capture must
+remain incomplete. This makes positive side-effect detection partly automatic
+without turning absence of an observed resource into proof of purity.
+
 The result is rollout evidence, not authorization. A rollout policy must still
 authorize the execution strategy, preserve validation and authority gates, and
 record the decision.

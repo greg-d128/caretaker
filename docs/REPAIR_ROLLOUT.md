@@ -164,4 +164,10 @@ allowed only for an operator, active revocation requires a new incident, and
 permanent promotion requires deployment authority. The routing decision itself
 is implemented, while application traffic integration, side-effect isolation,
 and supervisor-wide traffic coordination remain separate capabilities and are
-not implied by this ledger.
+not implied by this ledger. The execution-contract/effect-evidence layer does
+provide a partial safety signal: a rollout adapter can pass a Guard behavior
+capture through `EffectObservation.from_behavior_capture()` before requesting
+shadow execution. Positive network, filesystem, subprocess, import, or
+dynamic-code evidence is then considered by the shadow gate. Missing evidence
+still requires isolation because a bounded capture cannot prove that no effect
+occurred.

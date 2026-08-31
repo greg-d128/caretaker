@@ -8,7 +8,7 @@ may be used.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -136,10 +136,22 @@ class EffectObservation:
         a bounded store.
         """
 
-        event_kinds = {
-            str(name).upper()
-            for name in (getattr(profile, "event_kind_counts", {}) or {})
-        }
+        # Behavior captures expose the profile under a ``profile`` key while
+        # Guard summaries expose the profile fields directly. Accept both
+        # forms so callers cannot accidentally omit resource evidence while
+        # converting an operator-facing capture into a safety decision.
+        if isinstance(profile, Mapping):
+            source = profile.get("profile", profile)
+        else:
+            source = profile
+
+        def field(name: str, default: Any = None) -> Any:
+            if isinstance(source, Mapping):
+                return source.get(name, default)
+            return getattr(source, name, default)
+
+        event_kind_counts = field("event_kind_counts", {}) or {}
+        event_kinds = {str(name).upper() for name in event_kind_counts}
         categories: set[str] = set()
         mutating: set[str] = set()
         for name in event_kinds:
@@ -159,17 +171,82 @@ class EffectObservation:
                 BehaviorEventKind.DYNAMIC_CODE,
             }:
                 mutating.add(category.value)
+
+        # Resource summaries are an independent evidence surface. They are
+        # especially useful when an event-kind count was compacted away but a
+        # captured destination/root/operation was retained. Presence proves
+        # that activity was observed; it never proves that an absent category
+        # did not occur. Mutability remains conservative: a retained
+        # filesystem or subprocess resource is treated as externally visible.
+        resource_fields = {
+            "network_destinations": ExecutionEffectCategory.NETWORK,
+            "filesystem_roots": ExecutionEffectCategory.FILESYSTEM,
+            "subprocesses": ExecutionEffectCategory.SUBPROCESS,
+            "imports": ExecutionEffectCategory.IMPORT,
+            "dynamic_code_operations": ExecutionEffectCategory.DYNAMIC_CODE,
+        }
+        for name, category in resource_fields.items():
+            if any(value is not None and str(value) for value in (field(name, ()) or ())):
+                categories.add(category.value)
+                if category in {
+                    ExecutionEffectCategory.NETWORK,
+                    ExecutionEffectCategory.FILESYSTEM,
+                    ExecutionEffectCategory.SUBPROCESS,
+                    ExecutionEffectCategory.DYNAMIC_CODE,
+                }:
+                    mutating.add(category.value)
+
+        resource_kind_categories = {
+            "network": ExecutionEffectCategory.NETWORK,
+            "file": ExecutionEffectCategory.FILESYSTEM,
+            "directory": ExecutionEffectCategory.FILESYSTEM,
+            "subprocess": ExecutionEffectCategory.SUBPROCESS,
+            "import": ExecutionEffectCategory.IMPORT,
+            "dynamic-code": ExecutionEffectCategory.DYNAMIC_CODE,
+        }
+        for resource_key in (field("resource_counts", {}) or {}):
+            category_name = str(resource_key).split(":", 1)[0].strip().lower()
+            category = resource_kind_categories.get(category_name)
+            if category is None:
+                continue
+            categories.add(category.value)
+            if category in {
+                ExecutionEffectCategory.NETWORK,
+                ExecutionEffectCategory.FILESYSTEM,
+                ExecutionEffectCategory.SUBPROCESS,
+                ExecutionEffectCategory.DYNAMIC_CODE,
+            }:
+                mutating.add(category.value)
+
         return cls(
             categories=tuple(sorted(categories)),
             externally_visible_categories=tuple(sorted(mutating)),
             event_kinds=tuple(sorted(event_kinds)),
             event_count=sum(
                 int(value)
-                for value in (getattr(profile, "event_kind_counts", {}) or {}).values()
+                for value in event_kind_counts.values()
                 if isinstance(value, int) and value >= 0
             ),
             complete=complete,
         )
+
+    @classmethod
+    def from_behavior_capture(
+        cls,
+        capture: Mapping[str, Any],
+        *,
+        complete: bool = False,
+    ) -> "EffectObservation":
+        """Extract effect evidence from a Guard behavior capture.
+
+        Completeness is deliberately caller-supplied. A capture can prove
+        observed network/filesystem/subprocess activity, but its bounded or
+        sampled nature cannot prove that an unlisted effect did not happen.
+        """
+
+        if not isinstance(capture, Mapping):
+            raise TypeError("behavior capture must be an object")
+        return cls.from_profile(capture, complete=complete)
 
 
 @dataclass(frozen=True, slots=True)

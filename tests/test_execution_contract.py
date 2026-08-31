@@ -177,6 +177,43 @@ def test_read_only_contract_rejects_observed_mutating_activity() -> None:
     assert decision.observed_external_effects == ("filesystem",)
 
 
+def test_behavior_capture_resource_evidence_identifies_effects_without_event_counts() -> None:
+    observation = EffectObservation.from_behavior_capture(
+        {
+            "scope": "function",
+            "profile": {
+                "event_kind_counts": {},
+                "network_destinations": ["api.example:443"],
+                "filesystem_roots": ["/tmp/output"],
+                "subprocesses": [],
+            },
+        },
+        complete=True,
+    )
+
+    assert observation.categories == ("filesystem", "network")
+    assert observation.externally_visible_categories == ("filesystem", "network")
+    decision = assess_shadow_eligibility(
+        FunctionExecutionContract(side_effects=SideEffectClass.READ_ONLY), observation
+    )
+    assert not decision.eligible
+    assert decision.requires_isolation
+
+
+def test_behavior_capture_incomplete_resource_evidence_does_not_prove_purity() -> None:
+    observation = EffectObservation.from_behavior_capture(
+        {"profile": {"network_destinations": [], "filesystem_roots": []}},
+        complete=False,
+    )
+
+    decision = assess_shadow_eligibility(
+        FunctionExecutionContract(side_effects=SideEffectClass.PURE), observation
+    )
+    assert not decision.eligible
+    assert decision.requires_isolation
+    assert not decision.evidence_complete
+
+
 def test_missing_effect_coverage_never_proves_purity() -> None:
     decision = assess_shadow_eligibility(
         FunctionExecutionContract(side_effects=SideEffectClass.PURE),
