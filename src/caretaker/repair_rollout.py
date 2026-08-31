@@ -358,6 +358,7 @@ class RolloutWorkerAcknowledgement:
     stage: RepairRolloutStage
     policy_fingerprint: str
     authority_fingerprint: str
+    routing_policy_fingerprint: str
     acknowledged_at: datetime
     content_hash: str
 
@@ -398,6 +399,7 @@ def _worker_acknowledgement_payload(
         "stage": acknowledgement.stage.value,
         "policy_fingerprint": acknowledgement.policy_fingerprint,
         "authority_fingerprint": acknowledgement.authority_fingerprint,
+        "routing_policy_fingerprint": acknowledgement.routing_policy_fingerprint,
         "acknowledged_at": acknowledgement.acknowledged_at.isoformat(),
     }
 
@@ -1062,6 +1064,7 @@ class RepairRolloutCoordinator:
         if acknowledged_stage is not record.stage:
             raise RepairRolloutError("worker acknowledgement stage is stale")
         now = self._clock()
+        routing_policy = record.routing_policy or self.ledger.policy.routing
         acknowledgement = RolloutWorkerAcknowledgement(
             acknowledgement_id=acknowledgement_id or uuid4(),
             rollout_id=record.rollout_id,
@@ -1072,6 +1075,7 @@ class RepairRolloutCoordinator:
             stage=record.stage,
             policy_fingerprint=record.policy_fingerprint,
             authority_fingerprint=record.authority_fingerprint,
+            routing_policy_fingerprint=_routing_policy_fingerprint(routing_policy),
             acknowledged_at=now,
             content_hash="",
         )
@@ -1395,6 +1399,10 @@ class RepairRolloutCoordinator:
             and acknowledgement.stage is record.stage
             and acknowledgement.policy_fingerprint == self.policy_fingerprint
             and acknowledgement.authority_fingerprint == self.authority_fingerprint
+            and acknowledgement.routing_policy_fingerprint
+            == _routing_policy_fingerprint(
+                record.routing_policy or self.ledger.policy.routing
+            )
         )
 
     def _restore_acknowledgements(self) -> None:
@@ -2304,6 +2312,7 @@ def _coerce_worker_acknowledgement(
             stage=_coerce_rollout_enum(raw["stage"], RepairRolloutStage),
             policy_fingerprint=str(raw["policy_fingerprint"]),
             authority_fingerprint=str(raw["authority_fingerprint"]),
+            routing_policy_fingerprint=str(raw["routing_policy_fingerprint"]),
             acknowledged_at=datetime.fromisoformat(str(raw["acknowledged_at"])),
             content_hash=str(raw["content_hash"]),
         )
@@ -2320,6 +2329,7 @@ def _valid_worker_acknowledgement(
         and acknowledgement.worker_process_id > 0
         and bool(acknowledgement.policy_fingerprint.strip())
         and bool(acknowledgement.authority_fingerprint.strip())
+        and bool(acknowledgement.routing_policy_fingerprint.strip())
         and acknowledgement.content_hash
         == _digest(_worker_acknowledgement_payload(acknowledgement))
     )
@@ -2521,6 +2531,10 @@ def _routing_policy_payload(routing: RolloutRoutingPolicy) -> dict[str, int]:
         "active_candidate_percentage": routing.active_candidate_percentage,
         "bucket_count": routing.bucket_count,
     }
+
+
+def _routing_policy_fingerprint(routing: RolloutRoutingPolicy) -> str:
+    return _digest(_routing_policy_payload(routing))
 
 
 def _json_safe(value: Any) -> Any:

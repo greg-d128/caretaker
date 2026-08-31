@@ -172,6 +172,11 @@ authoritative outside the existing stage rules. The percentages remain
 process-local routing configuration; exact application-wide percentages still
 require supervisor-wide atomic coordination.
 
+Worker acknowledgements include a deterministic fingerprint of the effective
+routing policy. Changing any rollout percentage therefore preserves the old
+acknowledgement as stale evidence and requires each worker to acknowledge the
+new routing configuration before it can request a route.
+
 The Rollouts console displays the bound percentages and enables the update
 control only when the supervisor policy advertises operator routing changes.
 The same reason and confirmation controls are shared with lifecycle and
@@ -190,9 +195,11 @@ until it is resumed, while safety retirement or revocation remains available.
 `RepairRolloutCoordinator` adds a narrow supervisor-owned context gate for
 application workers. Before requesting a route, a worker must acknowledge the
 current rollout record, including its target, candidate, lifecycle stage, policy
-fingerprint, authority fingerprint, worker identity, and process identity. The
-acknowledgement is durably stored as bounded evidence and is restored after a
-supervisor restart. When the rollout advances, earlier acknowledgements remain
+fingerprint, authority fingerprint, effective routing-policy fingerprint,
+worker identity, and process identity. The acknowledgement is durably stored as
+bounded evidence and is restored after a supervisor restart. A percentage
+change makes earlier acknowledgements stale. When the rollout advances, earlier
+acknowledgements remain
 available for analysis but become stale and cannot be used for routing.
 
 The supervised runtime exposes two authenticated worker requests:

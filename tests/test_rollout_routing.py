@@ -1073,6 +1073,71 @@ def test_operator_routing_percentage_update_is_bound_and_audited() -> None:
     assert decision.configured_percentage == 75
 
 
+def test_routing_percentage_update_invalidates_worker_acknowledgements() -> None:
+    store = InMemoryRepairStore()
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            allow_operator_routing_changes=True,
+            allow_operator_routing_increases=True,
+            require_readiness_for_routing_increase=False,
+            routing=RolloutRoutingPolicy(canary_percentage=10),
+        ),
+        store=store,
+    )
+    record = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, record, RepairRolloutStage.CANARY)
+    coordinator = RepairRolloutCoordinator(
+        ledger,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        store=store,
+    )
+    coordinator.acknowledge_worker(
+        rollout_id=record.rollout_id,
+        worker_id="worker-a",
+        worker_process_id=101,
+    )
+
+    ledger.update_routing_percentages(
+        record.rollout_id,
+        shadow_sample_percentage=100,
+        canary_percentage=25,
+        active_candidate_percentage=100,
+        authority_type=RepairRolloutAuthority.OPERATOR,
+        authority_id="operator-1",
+        reason="adjust canary after review",
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+    )
+
+    status = coordinator.status(record.rollout_id)
+    assert status["rollouts"][0]["current_worker_count"] == 0
+    assert status["rollouts"][0]["stale_acknowledgement_count"] == 1
+    with pytest.raises(PermissionError, match="not acknowledged"):
+        coordinator.route(
+            rollout_id=record.rollout_id,
+            worker_id="worker-a",
+            worker_process_id=101,
+            routing_scope="tenant",
+            routing_key="tenant-1",
+        )
+
+    coordinator.acknowledge_worker(
+        rollout_id=record.rollout_id,
+        worker_id="worker-a",
+        worker_process_id=101,
+    )
+    decision = coordinator.route(
+        rollout_id=record.rollout_id,
+        worker_id="worker-a",
+        worker_process_id=101,
+        routing_scope="tenant",
+        routing_key="tenant-1",
+    )
+    assert decision.configured_percentage == 25
+
+
 def test_routing_percentage_increase_requires_policy_and_readiness() -> None:
     ledger = RepairRolloutLedger(
         policy=RepairRolloutPolicy(
