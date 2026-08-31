@@ -52,10 +52,11 @@ The referenced attribute may be a signer instance, class, or zero-argument facto
 
 ## Proposed audit-stream signing policy
 
-The future `caretaker_audit.log` uses the same canonicalization and signer
-interfaces as runtime artifact manifests, but its signing decision is policy
-controlled per deployment. A least-friction deployment may use an unsealed local
-stream with checksums; a reviewed deployment may require a hash chain and
+The `caretaker_audit.log` local stream currently uses canonical JSON and a
+policy-controlled hash chain. Future signing will use the same canonicalization
+and signer interfaces as runtime artifact manifests, with the signing decision
+controlled per deployment. A least-friction deployment may use a local stream
+with checksums; a reviewed deployment may require a hash chain and
 `EPHEMERAL_SIGNED`; a high-assurance deployment may require an external signer
 and immediate external delivery. These modes are assurance choices, not
 authority grants.

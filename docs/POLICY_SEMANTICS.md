@@ -23,6 +23,10 @@ This rule is separate from policy authority. Authority answers **who may request
 - system collection policy;
 - lightweight adaptive instrumentation policy.
 
+The logging policy includes the run-bound, output-only audit-stream settings;
+those settings are reviewed as configuration semantics, while external audit
+delivery and per-event signatures remain future work.
+
 The lightweight policy's `aggregation` block is an opt-in evidence transport
 control. Its default is disabled for least-friction startup. When enabled,
 workers batch bounded counters for supervisor-owned merging; it does not grant

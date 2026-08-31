@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from caretaker.logging import (
+    AuditStreamPolicy,
     AttachmentOverloadAction,
     BackpressureAction,
     CompressionAlgorithm,
@@ -66,6 +67,12 @@ level = 3
 mode = "ephemeral_signed"
 key_epoch_maximum_seconds = 86400
 
+[logging.audit]
+enabled = true
+file_name = "audit.log"
+hash_chain = true
+maximum_event_bytes = 2048
+
 [logging.reload]
 check_interval_seconds = 5
 
@@ -87,6 +94,10 @@ exhaustion_action = "stop_application"
     assert policy.capsules.maximum_artifacts == 12
     assert policy.signing.mode is RuntimeRecordIntegrityMode.EPHEMERAL_SIGNED
     assert policy.signing.key_epoch_maximum_seconds == 86_400
+    assert policy.audit == AuditStreamPolicy(
+        file_name="audit.log",
+        maximum_event_bytes=2048,
+    )
     assert policy.worker_restart.maximum_restarts == 3
     assert policy.worker_restart.exhaustion_action.name == "STOP_APPLICATION"
     assert snapshot.source_path == str(policy_file)

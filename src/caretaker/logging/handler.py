@@ -15,6 +15,7 @@ from typing import Any, Callable, Mapping, Protocol
 from uuid import UUID, uuid4
 
 from ..runtime import snapshot_context
+from .audit import AuditStreamWriter
 from .attachments import AttachmentStore
 from .buffering import BufferedSegmentSink
 from .models import EvidencePriority, LogChannel, LogEnvelope, LoggingCapability
@@ -85,6 +86,13 @@ class LoggingRuntime:
         self.effective = self.leases.effective
         self.run_id = uuid4()
         self.process_start_id = uuid4()
+        self.audit = AuditStreamWriter(
+            policy.audit,
+            directory=policy.directory,
+            run_id=self.run_id,
+            process_start_id=self.process_start_id,
+            supervisor_id=os.environ.get("CARETAKER_SUPERVISOR_ID"),
+        )
         self.attachments = AttachmentStore(policy.directory, policy.attachments)
         self.writer = SegmentWriter(
             policy,
@@ -121,9 +129,10 @@ class LoggingRuntime:
 
     def _apply_effective_runtime_policy(self) -> tuple[str, ...]:
         active = self.active_policy
-        warnings_out = self.sink.update_policy(active)
+        warnings_out = list(self.sink.update_policy(active))
+        warnings_out.extend(self.audit.update_policy(active.audit))
         self.attachments.update_policy(active.attachments)
-        return warnings_out
+        return tuple(warnings_out)
 
     def _next_sequence(self) -> int:
         with self._lock:
@@ -140,6 +149,17 @@ class LoggingRuntime:
         return hashlib.sha256(json_bytes(manifest)).hexdigest()
 
     def _emit_policy_state(self) -> None:
+        self.audit.emit(
+            "AUDIT_STREAM_STARTED",
+            actor={"type": "supervisor" if self.supervised else "system"},
+            policy={
+                "policy_id": str(self.snapshot.snapshot_id),
+                "fingerprint": self.snapshot.content_hash,
+                "authority_generation": self.effective.generation,
+            },
+            details={"hash_chain": self.active_policy.audit.hash_chain},
+            priority=EvidencePriority.CRITICAL,
+        )
         self.event(
             logger_name="caretaker.logging.policy",
             severity=logging.INFO,
@@ -250,6 +270,7 @@ class LoggingRuntime:
             policy = self._policy_transform(policy)
             snapshot = policy_snapshot(policy, source_path=snapshot.source_path)
         validate_operator_logging_policy(policy)
+        old_snapshot_id = self.snapshot.snapshot_id
         old_hash = self.snapshot.content_hash
         # Record the request under the old effective policy before a new policy
         # can disable logging or protected channels.
@@ -258,6 +279,18 @@ class LoggingRuntime:
             channel=LogChannel.CARETAKER_INTERNAL,
             message="Operator logging policy change detected; reconciling atomically",
             fields={"old_policy_hash": old_hash, "new_policy_hash": snapshot.content_hash},
+        )
+        self.audit.emit(
+            "POLICY_PROPOSED",
+            actor={"type": "supervisor"},
+            policy={
+                "prior_policy_id": str(old_snapshot_id),
+                "policy_id": str(snapshot.snapshot_id),
+                "prior_fingerprint": old_hash,
+                "fingerprint": snapshot.content_hash,
+            },
+            outcome={"state": "PROPOSED"},
+            priority=EvidencePriority.CRITICAL,
         )
         self.policy = policy
         self.snapshot = snapshot
@@ -275,6 +308,20 @@ class LoggingRuntime:
                 "security_warnings": policy_security_warnings(snapshot),
                 "restart_bound_changes": list(restart_warnings),
             },
+        )
+        self.audit.emit(
+            "POLICY_APPLIED",
+            actor={"type": "supervisor"},
+            policy={
+                "prior_policy_id": str(old_snapshot_id),
+                "policy_id": str(snapshot.snapshot_id),
+                "prior_fingerprint": old_hash,
+                "fingerprint": snapshot.content_hash,
+                "authority_generation": self.effective.generation,
+            },
+            outcome={"state": "APPLIED"},
+            details={"restart_bound_changes": list(restart_warnings)},
+            priority=EvidencePriority.CRITICAL,
         )
 
 
@@ -317,6 +364,15 @@ class LoggingRuntime:
                 ],
             },
         )
+        self.audit.emit(
+            "AUTHORITY_SNAPSHOT_CHANGED",
+            actor={"type": "operator"},
+            policy={"authority_generation": self.effective.generation},
+            scope={"lease_id": str(lease.lease_id)},
+            outcome={"state": "APPLIED"},
+            details={"mode": lease.requested_mode.name, "reason": lease.reason},
+            priority=EvidencePriority.CRITICAL,
+        )
         return lease
 
     def release_mode(self, lease_id: UUID):
@@ -334,10 +390,19 @@ class LoggingRuntime:
                 "restart_bound_changes": list(restart_warnings),
             },
         )
+        self.audit.emit(
+            "AUTHORITY_SNAPSHOT_CHANGED",
+            actor={"type": "operator"},
+            policy={"authority_generation": effective.generation},
+            scope={"lease_id": str(lease_id)},
+            outcome={"state": "RELEASED"},
+            priority=EvidencePriority.CRITICAL,
+        )
         return effective
 
     def flush(self) -> None:
         self.sink.flush()
+        self.audit.flush()
 
     def overhead_status(self) -> dict[str, Any]:
         """Return bounded Caretaker logging-path overhead evidence."""
@@ -369,6 +434,7 @@ class LoggingRuntime:
             else None
         )
         self.sink.close(attachment_manifest_hash=attachment_manifest_hash)
+        self.audit.close()
         self._closed = True
 
 

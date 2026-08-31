@@ -1,4 +1,5 @@
 from .acceptance import WorkerAcceptanceStore, WorkerAcceptanceStoreError
+from .audit import AUDIT_SCHEMA_VERSION, AuditStreamError, AuditStreamWriter
 from .attachments import AttachmentStore
 from .baselines import BaselineBuilder, BaselineComparator, BaselineStore
 from .decorators import logged

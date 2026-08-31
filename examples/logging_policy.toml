@@ -83,6 +83,13 @@ publish_public_key_to_log = true
 publish_public_key_to_control_clients = true
 require_external_anchor = false
 
+[logging.audit]
+enabled = true
+file_name = "caretaker_audit.log"
+hash_chain = true
+flush_critical = true
+maximum_event_bytes = 4096
+
 [logging.reload]
 enabled = true
 check_interval_seconds = 30

@@ -1246,14 +1246,16 @@ Until this exists, restart is a rollback to deployed application code, not conti
 
 ## Other logging and storage work
 
-**Status: Design clarified; audit-stream implementation remains future work.**
+**Status: Implemented in development tree for the local hash-chained stream; external delivery and signing remain future work.**
 
 - Extract the writer, attachment store, and system collector into independently restartable worker processes while preserving the current IPC and evidence contracts.
 - Add external `LogSink` implementations and reliable store-and-forward delivery to independent log collection systems.
-- Add the output-only `caretaker_audit.log` stream with the versioned envelope,
-  initial event registry, per-type example fixtures, redaction rules, and
-  explicit critical/important/ordinary/debug priority classes described in
-  [`LOGGING_RECORD_FORMAT.md`](LOGGING_RECORD_FORMAT.md).
+- Extend the output-only `caretaker_audit.log` stream with the versioned event
+  registry, per-type example fixtures, redaction rules, and complete
+  critical/important/ordinary/debug priority semantics described in
+  [`LOGGING_RECORD_FORMAT.md`](LOGGING_RECORD_FORMAT.md). The current local
+  slice emits startup, policy, and authority-snapshot events and preserves a
+  policy-controlled hash chain.
 - Make audit hash chaining and signing mode policy controlled. Critical policy,
   authority, worker-lifecycle, supervisor-state, and audit-delivery events must
   be retained before their effects are reported complete; ordinary metrics may

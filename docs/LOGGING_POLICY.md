@@ -64,6 +64,28 @@ Ordinary application logging now fails by stopping Caretaker logging rather than
 
 Logging and system-collection output directories are normalized to absolute paths when policies are constructed. Relative paths loaded from a TOML policy are resolved relative to the policy file rather than the process working directory. This prevents a working-directory change from silently redirecting evidence storage.
 
+## Caretaker audit stream
+
+The local high-value audit stream is configured independently under
+`[logging.audit]`:
+
+```toml
+[logging.audit]
+enabled = true
+file_name = "caretaker_audit.log"
+hash_chain = true
+flush_critical = true
+maximum_event_bytes = 4096
+```
+
+The current implementation writes the output-only local stream below the main
+logging directory and emits startup, policy, and authority-snapshot events.
+Audit settings are run-bound; a reload records the attempted change but requires
+a new run to change the stream configuration. External delivery and per-event
+signatures remain future capabilities. See
+[`LOGGING_RECORD_FORMAT.md`](LOGGING_RECORD_FORMAT.md) for the proposed envelope
+and event registry.
+
 ## Incident communication drafts
 
 Communication drafting is controlled by `[logging.communications]`. Each

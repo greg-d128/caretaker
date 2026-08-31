@@ -48,17 +48,18 @@ Large bodies are stored outside the 4 KiB event stream. The event contains a com
 
 Attachment overload now preserves all payloads by default. Sampling or dropping requires an explicit `AttachmentOverloadAction`; when selected, the primary event records the resulting storage decision. Critical categories can bypass sampling/drop policies.
 
-## Proposed Caretaker audit stream
+## Caretaker audit stream
 
-The planned `caretaker_audit.log` is a high-value, output-only decision stream. It is
+The local `caretaker_audit.log` implementation is a high-value, output-only decision stream. It is
 separate from the detailed evidence stream, Incident Capsule attachments, and the
 authenticated control socket. It contains compact facts about authority, policy,
 worker lifecycle, incident, recovery, and audit-delivery decisions; it does not
 accept commands and it should not contain raw evidence when a reference and hash are
 sufficient.
 
-The stream uses the existing record and segment framing. Its typed payload is a
-canonical, bounded JSON object with this common envelope:
+The stream uses a canonical, bounded JSON-lines payload. Its local implementation
+is intentionally small and does not replace the existing binary record and
+segment framing for detailed evidence. Its typed payload has this common envelope:
 
 | Field | Requirement |
 | --- | --- |
@@ -154,6 +155,12 @@ dropped only under explicit policy, with the loss recorded in `AUDIT_DATA_LOSS` 
 `AUDIT_DELIVERY_STATUS`. If critical audit data cannot be retained, the configured
 failure policy decides whether Caretaker degrades, refuses the transition, raises
 an incident, or stops the application; it must never silently claim success.
+
+The local audit file is `caretaker_audit.log` below the configured logging
+directory. Its enablement, filename, hash-chain choice, and event-size limit are
+startup/run-bound for the current process. A policy reload records the proposed
+change under the current stream first and requires a new run for those audit
+settings to take effect.
 
 The external sink is write-only from Caretaker's perspective. Incoming records,
 alerts, or suggested actions are untrusted input and cannot be routed back into

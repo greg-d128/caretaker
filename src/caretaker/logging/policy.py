@@ -196,6 +196,17 @@ class RuntimeSigningPolicy:
     external_anchor_failure_action: AnchorFailureAction = AnchorFailureAction.CONTINUE_SELF_RECORDED
 
 
+@dataclass(frozen=True, slots=True)
+class AuditStreamPolicy:
+    """Local policy for the high-value, output-only audit stream."""
+
+    enabled: bool = True
+    file_name: str = "caretaker_audit.log"
+    hash_chain: bool = True
+    flush_critical: bool = True
+    maximum_event_bytes: int = 4096
+
+
 def runtime_integrity_assurance(policy: RuntimeSigningPolicy) -> dict[str, object]:
     """Return explicit assurance properties for operator/status reporting."""
     # EXTERNAL_SIGNED is itself an externally held signing authority. Merely
@@ -286,6 +297,7 @@ class OperatorLoggingPolicy:
     communications: IncidentCommunicationPolicy = field(default_factory=IncidentCommunicationPolicy)
     regression: RegressionFixturePolicy = field(default_factory=RegressionFixturePolicy)
     signing: RuntimeSigningPolicy = field(default_factory=RuntimeSigningPolicy)
+    audit: AuditStreamPolicy = field(default_factory=AuditStreamPolicy)
     reload: PolicyReloadPolicy = field(default_factory=PolicyReloadPolicy)
     worker_restart: WorkerRestartPolicy = field(default_factory=WorkerRestartPolicy)
 
@@ -332,6 +344,15 @@ def validate_operator_logging_policy(policy: OperatorLoggingPolicy) -> None:
         errors.append("retention.preserve_baseline_segments is reserved until segment-class-aware retention is implemented")
     if policy.codec.format_version != 1:
         errors.append("codec.format_version is fixed at 1 in this release")
+    audit_name = Path(policy.audit.file_name) if isinstance(policy.audit.file_name, str) else None
+    if audit_name is None or audit_name.is_absolute() or ".." in audit_name.parts or not policy.audit.file_name.strip():
+        errors.append("logging.audit.file_name must be a non-empty path below logging.directory")
+    if (
+        not isinstance(policy.audit.maximum_event_bytes, int)
+        or policy.audit.maximum_event_bytes < 512
+        or policy.audit.maximum_event_bytes > policy.codec.maximum_record_bytes
+    ):
+        errors.append("logging.audit.maximum_event_bytes must be between 512 and codec.maximum_record_bytes")
     if policy.interrogation.maximum_records <= 0:
         errors.append("interrogation.maximum_records must be greater than zero")
     if policy.interrogation.maximum_representative_records <= 0:
@@ -563,6 +584,7 @@ def load_operator_policy(path: str | Path) -> tuple[OperatorLoggingPolicy, Loggi
             regression_data["replay_minimum_isolation"],
         )
     signing_data = dict(log.get("signing", {}))
+    audit_data = dict(log.get("audit", {}))
     reload_data = dict(log.get("reload", {}))
     worker_restart_data = dict(log.get("worker_restart", {}))
 
@@ -640,6 +662,7 @@ def load_operator_policy(path: str | Path) -> tuple[OperatorLoggingPolicy, Loggi
             **_enum_if_present(RuntimeRecordIntegrityMode, signing_data, "mode"),
             **_enum_if_present(AnchorFailureAction, signing_data, "external_anchor_failure_action"),
         }),
+        audit=AuditStreamPolicy(**audit_data),
         reload=PolicyReloadPolicy(**reload_data),
         worker_restart=WorkerRestartPolicy(**{
             **worker_restart_data,
