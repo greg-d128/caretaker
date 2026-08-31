@@ -44,6 +44,10 @@ class RecoveryAction(Enum):
     ROLLBACK_TO_DEPLOYED_CODE = auto()
 
 
+class RecoveryPlanStaleError(ValueError):
+    """Raised when an acknowledgement plan no longer matches its source."""
+
+
 @dataclass(frozen=True, slots=True)
 class WorkerAcceptanceOverride:
     """Optional replacement-worker counter overrides for one target."""
@@ -1818,6 +1822,66 @@ def _incomplete_lifecycle_records(store: Any, attempt: Any) -> tuple[dict[str, A
     return tuple(records)
 
 
+def _recovery_json(value: Any) -> str:
+    """Serialize bounded recovery evidence for an exact stale-plan check."""
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+        default=str,
+    )
+
+
+def _validate_recovery_decision_source(store: Any, decision: Mapping[str, Any]) -> None:
+    """Verify that a plan decision still describes the persisted attempt."""
+    attempt_id = str(decision.get("attempt_id") or "")
+    attempts = _records_by_id(store, "all_attempts", "attempt_id")
+    attempt = attempts.get(attempt_id)
+    if attempt is None:
+        raise RecoveryPlanStaleError(
+            f"recovery plan is stale: attempt {attempt_id or '<missing>'} is unavailable"
+        )
+
+    for field_name in ("episode_id", "incident_id", "target_id", "candidate_id"):
+        planned = str(decision.get(field_name) or "")
+        persisted = str(_field(attempt, field_name, "") or "")
+        if planned != persisted:
+            raise RecoveryPlanStaleError(
+                f"recovery plan is stale: {field_name} no longer matches attempt"
+            )
+
+    persisted_outcome = _enum_name(_field(attempt, "outcome"))
+    persisted_stage = _enum_name(_field(attempt, "stage"))
+    if (
+        _field(attempt, "completed_at") is not None
+        and persisted_outcome != RepairAttemptOutcome.PENDING.name
+    ):
+        raise RecoveryPlanStaleError(
+            f"recovery plan is stale: attempt {attempt_id} has completed"
+        )
+    if str(decision.get("persisted_outcome") or "") != persisted_outcome:
+        raise RecoveryPlanStaleError(
+            "recovery plan is stale: persisted attempt outcome changed"
+        )
+    if str(decision.get("last_milestone") or "") != persisted_stage:
+        raise RecoveryPlanStaleError(
+            "recovery plan is stale: persisted attempt milestone changed"
+        )
+
+    planned_records = decision.get("incomplete_records")
+    if not isinstance(planned_records, list):
+        raise RecoveryPlanStaleError(
+            "recovery plan is stale: incomplete lifecycle evidence is malformed"
+        )
+    current_records = list(_incomplete_lifecycle_records(store, attempt))
+    if _recovery_json(planned_records) != _recovery_json(current_records):
+        raise RecoveryPlanStaleError(
+            "recovery plan is stale: linked lifecycle evidence changed"
+        )
+
+
 def build_repair_recovery_plan(
     store: Any,
     *,
@@ -1978,6 +2042,8 @@ def apply_repair_recovery_plan(
     if not isinstance(decisions, list):
         raise ValueError("Repair recovery plan decisions must be a list")
     existing = _recovered_attempt_ids(store)
+    seen_attempt_ids: set[str] = set()
+    validated_decisions: list[Mapping[str, Any]] = []
     observed_at = now or utcnow()
     applied = 0
     skipped = 0
@@ -1988,9 +2054,21 @@ def apply_repair_recovery_plan(
         attempt_id = str(decision.get("attempt_id") or "")
         if not attempt_id:
             raise ValueError("Repair recovery decision requires attempt_id")
+        if attempt_id in seen_attempt_ids:
+            raise RecoveryPlanStaleError(
+                f"recovery plan contains duplicate attempt {attempt_id}"
+            )
+        seen_attempt_ids.add(attempt_id)
         if attempt_id in existing:
             skipped += 1
             continue
+        _validate_recovery_decision_source(store, decision)
+        validated_decisions.append(decision)
+
+    # Validate every source before dispatching any application-owned handler or
+    # writing a recovery record. A stale decision later in the batch must not
+    # leave an earlier decision partially applied.
+    for decision in validated_decisions:
         action_execution = dispatch_recovery_action(decision, handlers=handlers)
         record = RepairRecoveryRecord(
             recovery_id=uuid4(),

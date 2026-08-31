@@ -1388,6 +1388,11 @@ so the command cannot reactivate candidates or dispatch replacement, incident,
 or shutdown actions. The Recovery console can explicitly request this bounded
 ledger mutation for a selected interrupted plan through the authenticated
 control plane, while remaining read-only with respect to recovery execution.
+Applying a plan now revalidates the persisted attempt identity, milestone,
+outcome, and linked lifecycle evidence against the current store. A changed or
+completed attempt, malformed lifecycle projection, or duplicate decision is
+rejected as a stale plan; the source records remain immutable and no candidate
+is reactivated.
 
 For a target-scoped `RepairEngine.recovery_plan(target_id=...)`, the engine now
 adds the currently registered source hash and supervisor authority generation

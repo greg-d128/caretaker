@@ -226,6 +226,7 @@ from .provider import CandidateProposal, OllamaRepairProvider, StaticRepairProvi
 from .repair_recovery import (
     RecoveryAction,
     RecoveryAuthorityPacket,
+    RecoveryPlanStaleError,
     RepairRecoveryPolicy,
     RepairRecoveryRecord,
     WorkerAcceptanceOverride,
@@ -601,6 +602,7 @@ __all__ = [
     "validate_recovery_candidate_binding",
     "RecoveryAction",
     "RecoveryAuthorityPacket",
+    "RecoveryPlanStaleError",
     "RepairRecoveryPolicy",
     "apply_repair_recovery_plan",
     "create_worker_failure_record",

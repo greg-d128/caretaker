@@ -11,6 +11,7 @@ import pytest
 from caretaker import (
     InMemoryRepairStore,
     RecoveryAction,
+    RecoveryPlanStaleError,
     RepairRecoveryPolicy,
     SQLiteRepairStore,
     WorkerAcceptanceOverride,
@@ -211,6 +212,67 @@ def test_sqlite_recovery_plan_and_acknowledgement_preserve_attempt_evidence(tmp_
     assert len(recoveries) == 1
     assert recoveries[0]["attempt_id"] == str(interrupted.attempt_id)
     assert recoveries[0]["recovery_action"] == "ROLLBACK_TO_DEPLOYED_CODE"
+
+
+def test_recovery_plan_rejects_tampered_or_completed_source() -> None:
+    store = InMemoryRepairStore()
+    interrupted = _attempt(
+        target_id="app:charge",
+        completed=False,
+        outcome=RepairAttemptOutcome.PENDING,
+    )
+    store.record_attempt(interrupted)
+    plan = build_repair_recovery_plan(store)
+
+    tampered = {
+        **plan,
+        "decisions": [
+            {**plan["decisions"][0], "target_id": "app:other"}
+        ],
+    }
+    with pytest.raises(RecoveryPlanStaleError, match="target_id"):
+        apply_repair_recovery_plan(store, tampered)
+    assert store.all_recoveries() == ()
+
+    store.record_attempt(
+        replace(
+            interrupted,
+            completed_at=datetime.now(timezone.utc),
+            stage=RepairAttemptStage.COMPLETE,
+            outcome=RepairAttemptOutcome.SUCCEEDED,
+        )
+    )
+    with pytest.raises(RecoveryPlanStaleError, match="completed"):
+        apply_repair_recovery_plan(store, plan)
+    assert store.all_recoveries() == ()
+
+
+def test_recovery_plan_validates_all_decisions_before_writing() -> None:
+    store = InMemoryRepairStore()
+    first = _attempt(
+        target_id="app:charge",
+        completed=False,
+        outcome=RepairAttemptOutcome.PENDING,
+    )
+    second = _attempt(
+        target_id="app:refund",
+        completed=False,
+        outcome=RepairAttemptOutcome.PENDING,
+    )
+    store.record_attempt(first)
+    store.record_attempt(second)
+    plan = build_repair_recovery_plan(store)
+    tampered = {
+        **plan,
+        "decisions": [
+            plan["decisions"][0],
+            {**plan["decisions"][1], "candidate_id": str(uuid4())},
+        ],
+    }
+
+    with pytest.raises(RecoveryPlanStaleError, match="candidate_id"):
+        apply_repair_recovery_plan(store, tampered)
+    assert store.all_recoveries() == ()
 
 
 def test_recovery_plan_projects_linked_lifecycle_records_without_mutating_them() -> None:
