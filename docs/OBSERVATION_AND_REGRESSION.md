@@ -68,6 +68,22 @@ The result is rollout evidence, not authorization. A rollout policy must still
 authorize the execution strategy, preserve validation and authority gates, and
 record the decision.
 
+## Original-authoritative shadow execution
+
+`shadow_execute()` is a bounded evidence primitive for a future rollout adapter.
+It always returns the deployed/original result; candidate output and exceptions
+are evidence only. Original and candidate calls receive independent input
+copies. A target with uncertain or observed externally visible effects must
+provide an application-owned `ShadowIsolationAdapter` whose
+`isolation_verified=True` means that candidate effects cannot escape into
+authoritative application state. An adapter identity and the verified-isolation
+claim are recorded in the result. An unverified adapter is rejected.
+
+This does not make a candidate active, satisfy validation, or grant authority.
+It also does not claim that a pure declaration proves the absence of hidden
+effects; observed effects disqualify the unisolated path, while missing
+observations remain incomplete evidence.
+
 ## Differential execution
 
 For explicitly pure functions, Caretaker may run the previous and candidate versions against independent deep-copied arguments.

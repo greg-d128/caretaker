@@ -268,6 +268,12 @@ from .repair_rollout import (
     RepairRolloutStage,
     RepairRolloutTransition,
 )
+from .shadow import (
+    ShadowExecutionAdapter,
+    ShadowExecutionError,
+    ShadowExecutionResult,
+    shadow_execute,
+)
 from .regression import (
     DATA_ONLY_NOT_EXECUTABLE,
     JSON_EXACT_REHYDRATION,
@@ -620,6 +626,10 @@ __all__ = [
     "FunctionExecutionContract",
     "ShadowEligibility",
     "assess_shadow_eligibility",
+    "ShadowExecutionAdapter",
+    "ShadowExecutionError",
+    "ShadowExecutionResult",
+    "shadow_execute",
     "SnapshotStrategy",
     "TimeoutMode",
     "repair_and_retry",

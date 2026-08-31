@@ -9,6 +9,12 @@ from .contracts import Comparator, normalize_comparison_result
 from .domain import CandidateState, ObservationRecord, utcnow
 from .policy import ObservationPolicy
 from .slot import FunctionSlot, FunctionVersion
+from .shadow import (
+    ShadowExecutionAdapter,
+    ShadowExecutionResult,
+    shadow_execute,
+)
+from .execution import EffectObservation, FunctionExecutionContract
 from .state import exception_evidence, value_snapshot
 from .store import RepairStore
 
@@ -251,4 +257,29 @@ class ObservationManager:
                 **dict(comparison.evidence),
                 "argument_state_equivalent": state_equivalent,
             },
+        )
+
+    def shadow_execute(
+        self,
+        *,
+        current: FunctionVersion,
+        previous: FunctionVersion,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        contract: FunctionExecutionContract,
+        effect_observation: EffectObservation | None = None,
+        isolation_adapter: ShadowExecutionAdapter | None = None,
+        comparator: Comparator | None = None,
+    ) -> ShadowExecutionResult:
+        """Execute the candidate without allowing it to author the result."""
+
+        return shadow_execute(
+            original=previous.implementation,
+            candidate=current.implementation,
+            args=args,
+            kwargs=kwargs,
+            contract=contract,
+            effect_observation=effect_observation,
+            isolation_adapter=isolation_adapter,
+            comparator=comparator,
         )

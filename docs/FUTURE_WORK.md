@@ -934,6 +934,13 @@ record does not make the change a permanent deployment. Promotion to
 hash. Active revocation requires a new incident by default. These records do
 not route traffic, activate a FunctionSlot, or grant authority on their own.
 
+The bounded `shadow_execute()` primitive now provides original-authoritative
+candidate observation for an individual invocation. It keeps the deployed
+result authoritative, copies inputs independently, and requires a verified
+application-owned isolation adapter when the contract/evidence gate does not
+permit unisolated duplicate execution. This remains an execution primitive,
+not traffic routing or rollout activation.
+
 Future Repair should provide more operator and policy control over how a validated
 candidate is introduced. Potential execution strategies include:
 
