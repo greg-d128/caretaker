@@ -4,7 +4,7 @@
 
 Candidates are parsed, compiled, and exercised in a child process. This protects the main interpreter from many crashes and state mutations but is not a hostile-code sandbox.
 
-The PROCESS worker may still inherit access available to the operating-system account. Caretaker also includes rootless Podman CONTAINER and Multipass VM validation backends with stronger configured boundaries. These reduce exposure but do not guarantee containment; see `ISOLATED_EXECUTION.md`.
+The PROCESS worker may still inherit access available to the operating-system account. Caretaker also includes rootless Podman and Docker CONTAINER backends and a Multipass VM backend with stronger configured boundaries. These reduce exposure but do not guarantee containment; see `ISOLATED_EXECUTION.md`.
 
 ## Current validation trust boundaries
 

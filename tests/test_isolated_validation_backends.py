@@ -7,6 +7,7 @@ from pathlib import Path
 from caretaker.domain import ValidationIsolationLevel
 from caretaker.validation import (
     MultipassValidationBackend,
+    RootlessDockerValidationBackend,
     RootlessPodmanValidationBackend,
     VALIDATION_PROTOCOL_VERSION,
     _encode_validation_data,
@@ -56,6 +57,60 @@ def test_rootless_podman_rejects_rootful_runtime(monkeypatch, tmp_path: Path) ->
 
     assert available is False
     assert "rootless" in reason.lower()
+
+
+def test_rootless_docker_requires_rootless_daemon_and_local_image(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("caretaker.validation.shutil.which", lambda executable: f"/usr/bin/{executable}")
+
+    def fake_run(command, **kwargs):
+        if command[1:3] == ["info", "--format"]:
+            return completed(command, stdout=json.dumps({"SecurityOptions": ["name=rootless"]}))
+        if command[1:3] == ["image", "inspect"] and "--format" not in command:
+            return completed(command)
+        if command[1:3] == ["image", "inspect"]:
+            return completed(command, stdout=json.dumps(["localhost/caretaker@sha256:trusted"]))
+        raise AssertionError(command)
+
+    monkeypatch.setattr("caretaker.validation.subprocess.run", fake_run)
+    backend = RootlessDockerValidationBackend("caretaker-validator:local", workspace=tmp_path)
+
+    available, reason = backend.available()
+
+    assert available is True
+    assert reason is None
+    assert backend.capabilities().name == "docker-rootless"
+    assert backend.capabilities().details["image_digest"].endswith("sha256:trusted")
+
+
+def test_rootless_docker_command_preserves_container_boundary(tmp_path: Path) -> None:
+    workspace = tmp_path / "application"
+    workspace.mkdir()
+    request = tmp_path / "request"
+    request.mkdir()
+    backend = RootlessDockerValidationBackend(
+        "caretaker-validator:local",
+        workspace=workspace,
+        memory="768m",
+        cpus=2,
+        pids_limit=48,
+    )
+
+    command = backend._build_command(request)
+    text = " ".join(command)
+
+    assert command[:3] == ["docker", "run", "--rm"]
+    assert "--network=none" in command
+    assert "--read-only" in command
+    assert "--cap-drop=ALL" in command
+    assert "--security-opt=no-new-privileges" in command
+    assert "--pids-limit=48" in command
+    assert "--memory=768m" in command
+    assert "--cpus=2" in command
+    assert "--cgroup-manager=cgroupfs" not in command
+    assert "--userns=keep-id" not in command
+    assert "docker.sock" not in text
+    assert f"src={workspace},dst=/workspace,readonly" in text
+    assert f"src={request},dst=/work,rw" in text
 
 
 def test_rootless_podman_command_has_strict_container_boundary(tmp_path: Path) -> None:

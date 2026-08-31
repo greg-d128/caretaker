@@ -1029,6 +1029,181 @@ class RootlessPodmanValidationBackend(SubprocessValidationBackend):
             )
 
 
+class RootlessDockerValidationBackend(RootlessPodmanValidationBackend):
+    """Run a validation worker through a rootless Docker-compatible runtime.
+
+    Docker's CLI and rootless capability reporting differ from Podman's, so the
+    availability and command construction are explicit rather than relying on
+    Podman flags.  The backend never pulls images and requires the daemon to
+    advertise rootless mode.
+    """
+
+    def __init__(
+        self,
+        image: str,
+        *,
+        docker_executable: str = "docker",
+        workspace: str | Path | None = None,
+        additional_read_only_paths: tuple[str | Path, ...] = (),
+        memory: str = "512m",
+        cpus: float = 1.0,
+        pids_limit: int = 64,
+        tmpfs_size: str = "64m",
+    ) -> None:
+        super().__init__(
+            image,
+            podman_executable=docker_executable,
+            cgroup_manager="cgroupfs",
+            workspace=workspace,
+            additional_read_only_paths=additional_read_only_paths,
+            memory=memory,
+            cpus=cpus,
+            pids_limit=pids_limit,
+            tmpfs_size=tmpfs_size,
+        )
+        self.docker_executable = docker_executable
+
+    def capabilities(self) -> ValidationBackendCapabilities:
+        details = {
+            "image": self.image,
+            "workspace": str(self.workspace),
+            "network": "none",
+            "read_only_root": True,
+            "capabilities_dropped": "ALL",
+            "runtime": "docker-rootless",
+            **self._availability_details,
+        }
+        return ValidationBackendCapabilities(
+            name="docker-rootless",
+            isolation_level=ValidationIsolationLevel.CONTAINER,
+            separate_kernel=False,
+            rootless=True,
+            network_control=True,
+            resource_control=True,
+            ephemeral_workspace=True,
+            details=details,
+        )
+
+    def available(self) -> tuple[bool, str | None]:
+        executable = shutil.which(self.docker_executable)
+        if executable is None and not Path(self.docker_executable).is_file():
+            return False, f"Docker executable {self.docker_executable!r} was not found"
+        try:
+            info = subprocess.run(
+                [self.docker_executable, "info", "--format", "{{json .}}"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+                close_fds=True,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return False, f"Docker information query failed: {exc}"
+        if info.returncode != 0:
+            return False, f"Docker information query failed: {info.stderr[-1000:]}"
+        try:
+            payload = json.loads(info.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            return False, f"Docker returned invalid JSON: {exc}"
+        rootless = payload.get("Rootless")
+        if not isinstance(rootless, bool):
+            options = payload.get("SecurityOptions")
+            rootless = (
+                isinstance(options, list)
+                and any("rootless" in str(option).lower() for option in options)
+            )
+        if rootless is not True:
+            return False, "Docker validation requires rootless mode"
+        image = subprocess.run(
+            [self.docker_executable, "image", "inspect", self.image],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            close_fds=True,
+        )
+        if image.returncode != 0:
+            return False, f"Docker validation image {self.image!r} is not present locally"
+        digest = subprocess.run(
+            [
+                self.docker_executable,
+                "image",
+                "inspect",
+                self.image,
+                "--format",
+                "{{json .RepoDigests}}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            close_fds=True,
+        )
+        if digest.returncode == 0 and digest.stdout.strip():
+            try:
+                digests = json.loads(digest.stdout)
+            except json.JSONDecodeError:
+                digests = ()
+            if isinstance(digests, list) and digests:
+                self._availability_details["image_digest"] = str(digests[0])
+        self._availability_details["rootless_verified"] = True
+        return True, None
+
+    def _build_command(self, host_workdir: Path) -> list[str]:
+        source_root = Path(__file__).resolve().parents[1]
+        mounts: list[tuple[Path, str, bool]] = [
+            (host_workdir, "/work", False),
+            (source_root, "/opt/caretaker-src", True),
+        ]
+        python_paths = ["/opt/caretaker-src"]
+        if self.workspace != source_root:
+            mounts.append((self.workspace, "/workspace", True))
+            python_paths.append("/workspace")
+        for index, path in enumerate(self.additional_read_only_paths):
+            destination = f"/inputs/{index}"
+            mounts.append((path, destination, True))
+            python_paths.append(destination)
+
+        command = [
+            self.docker_executable,
+            "run",
+            "--rm",
+            "--network=none",
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            f"--pids-limit={self.pids_limit}",
+            f"--memory={self.memory}",
+            f"--cpus={self.cpus:g}",
+            "--user",
+            f"{os.getuid()}:{os.getgid()}",
+            "--tmpfs",
+            f"/tmp:rw,nosuid,nodev,noexec,size={self.tmpfs_size}",
+        ]
+        for source, destination, read_only in mounts:
+            options = f"type=bind,src={source},dst={destination}"
+            options += ",readonly" if read_only else ",rw"
+            command.extend(("--mount", options))
+        command.extend(
+            (
+                "--workdir=/work",
+                "--env",
+                f"PYTHONPATH={':'.join(python_paths)}",
+                "--env",
+                "PYTHONIOENCODING=utf-8",
+                "--env",
+                "PYTHONDONTWRITEBYTECODE=1",
+                self.image,
+                "python",
+                "-m",
+                "caretaker.validation_worker",
+                "/work/request.json",
+                "/work/result.json",
+            )
+        )
+        return command
+
+
 class MultipassValidationBackend(SubprocessValidationBackend):
     """Run validation in a pre-provisioned Multipass VM.
 

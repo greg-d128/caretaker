@@ -874,12 +874,13 @@ This should remain explicit and policy-controlled. Caretaker should not globally
 
 ## Validation isolation backends
 
-**Status: Implemented in development tree for PROCESS, rootless Podman CONTAINER, Multipass VM, and a transport-neutral authenticated EXTERNAL adapter; Docker compatibility and remote deployment assurance remain future work.**
+**Status: Implemented in development tree for PROCESS, rootless Podman and Docker CONTAINER adapters, Multipass VM, and a transport-neutral authenticated EXTERNAL adapter; remote deployment assurance remains future work.**
 
 Validation uses a common capability-based backend contract. Policy specifies a minimum isolation level rather than a product name:
 
 - **PROCESS**: the existing subprocess worker; fast and portable, but not a hostile-code sandbox.
 - **CONTAINER**: `RootlessPodmanValidationBackend`, which requires rootless Podman and a pre-provisioned local image. It uses no network, a read-only root filesystem, dropped capabilities, `no-new-privileges`, PID/CPU/memory limits, an isolated writable request/result directory, and read-only Caretaker/application inputs. It never pulls an image automatically.
+- **CONTAINER**: `RootlessDockerValidationBackend` provides the same boundary through a rootless Docker daemon. It uses Docker-specific rootless detection and flags, requires a pre-provisioned local image, never pulls automatically, and does not use the Docker socket.
 - **VM**: `MultipassValidationBackend`, which uses a pre-provisioned guest with no host-directory mounts. Artifacts cross the boundary through `multipass transfer`. Normal mode can restore a configured clean snapshot before validation; suspicious scenarios can use a disposable clone of a stopped clean template and purge it afterward.
 - **EXTERNAL**: a caller-owned transport-neutral adapter for a dedicated
   remote/disposable validation service. It requires authenticated results by
@@ -892,7 +893,6 @@ Multipass candidate validation is distinct from the existing whole-subject Multi
 
 Outstanding isolation work:
 
-- Docker-rootless compatibility adapter using the same CONTAINER contract;
 - remote transport and validator-service lifecycle for the EXTERNAL adapter;
 - richer capability attestation (seccomp/profile hashes and image provenance; the guest firewall policy hash is now exposed);
 - optional stronger VM technologies when a deployment requires them.
