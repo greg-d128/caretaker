@@ -269,6 +269,7 @@ from .replay import (
 from .store import InMemoryRepairStore, SQLiteRepairStore
 from .telemetry import CorrelatedLogHandler
 from .logging import (
+    AuditDeliverySink,
     ApplicationLoggingBaseline,
     AttachmentPolicy,
     AttachmentReference,
@@ -409,6 +410,7 @@ __all__ = [
     "LogEnvelope",
     "LogInterrogator",
     "LogSink",
+    "AuditDeliverySink",
     "LoggingBinding",
     "LoggingCapability",
     "LoggingMode",

@@ -1,6 +1,6 @@
 # Caretaker audit event registry
 
-This document is the per-event contract for the local `caretaker_audit.log`
+This document is the per-event contract for the `caretaker_audit.log`
 stream. Every registered event has a stable name, a minimum evidence priority,
 required envelope paths, and a bounded example. The examples show the
 event-specific fields only; all events also carry the common envelope defined
@@ -18,6 +18,14 @@ not assigned a stream sequence; the writer emits a subsequent critical
 retained event (and during flush/close). `CRITICAL` is always preserved and
 cannot be sampled or dropped by policy. This keeps loss visible without
 creating a control channel or weakening the hash chain of retained records.
+
+An embedding application may provide an output-only `AuditDeliverySink`. The
+writer sends the exact redacted, newline-terminated JSON record after local
+persistence, and reports delivery as `ACTIVE`, `DEGRADED`, or `LOCAL_ONLY`.
+`logging.audit.external_delivery_required=true` makes a missing or failed sink
+fail closed after preserving the local record. The adapter has no read or
+command interface; transport authentication, remote retention, replay
+protection, and durable store-and-forward remain external responsibilities.
 
 All event types share these redaction rules:
 

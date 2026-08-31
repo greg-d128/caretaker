@@ -1323,7 +1323,7 @@ Until this exists, restart is a rollback to deployed application code, not conti
 
 ## Other logging and storage work
 
-**Status: Implemented in development tree for the local hash-chained stream and optional per-event runtime signing; external delivery remains future work.**
+**Status: Implemented in development tree for the local hash-chained stream, optional per-event runtime signing, and a synchronous output-only external sink boundary; reliable external delivery remains future work.**
 
 - Extract the writer, attachment store, and system collector into independently restartable worker processes while preserving the current IPC and evidence contracts.
 - Add external `LogSink` implementations and reliable store-and-forward delivery to independent log collection systems.
@@ -1340,7 +1340,9 @@ Until this exists, restart is a rollback to deployed application code, not conti
   allow-listed control-socket submission path; worker identity is derived by the
   supervisor and the submitted policy context remains evidence. Remaining work
   is to connect every registry type to its producer and complete external
-  delivery semantics. The local writer now applies explicit
+  delivery semantics. A pluggable output-only sink can now receive each exact
+  locally persisted audit record, with optional policy-required fail-closed
+  delivery and bounded delivery status. The local writer now applies explicit
   critical/important/ordinary/debug retention rates, preserves critical events
   fail-closed, and records policy-suppressed lower-priority events as critical
   `AUDIT_DATA_LOSS` records.
@@ -1354,9 +1356,11 @@ Until this exists, restart is a rollback to deployed application code, not conti
   be retained before their effects are reported complete; ordinary metrics may
   use policy-approved sampling or loss with an explicit loss event.
 - Ship critical audit events to an independently secured external sink in
-  real time, with bounded local store-and-forward. The sink is never a command
-  channel, and the design requires a security review for injection, replay,
-  redaction, key lifecycle, and disk-full behavior.
+  real time, with bounded local store-and-forward. The current adapter is
+  synchronous and output-only; reliable retry/store-and-forward, transport
+  authentication, replay handling, and the security review for injection,
+  redaction, key lifecycle, and disk-full behavior remain future work. The
+  sink is never a command channel.
 - Add a durable adaptive-policy transition ledger with immutable lineage,
   resulting-policy IDs/fingerprints, effective and recorded timestamps, scope,
   validation/acknowledgement references, and operator/deployment attribution.

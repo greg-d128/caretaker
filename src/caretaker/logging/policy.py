@@ -217,6 +217,9 @@ class AuditStreamPolicy:
     ordinary_rate: float = 1.0
     important_rate: float = 1.0
     critical_rate: float = 1.0
+    # External delivery is an output-only integration supplied by the host
+    # application. It is optional for the least-friction profile.
+    external_delivery_required: bool = False
 
 
 def runtime_integrity_assurance(policy: RuntimeSigningPolicy) -> dict[str, object]:
@@ -391,6 +394,8 @@ def validate_operator_logging_policy(policy: OperatorLoggingPolicy) -> None:
         errors.append(
             "logging.audit.sign_events requires signing.mode=EPHEMERAL_SIGNED or EXTERNAL_SIGNED"
         )
+    if not isinstance(policy.audit.external_delivery_required, bool):
+        errors.append("logging.audit.external_delivery_required must be a boolean")
     if policy.interrogation.maximum_records <= 0:
         errors.append("interrogation.maximum_records must be greater than zero")
     if policy.interrogation.maximum_representative_records <= 0:

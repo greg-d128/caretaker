@@ -22,9 +22,9 @@ from .logging import policy as logging_policy
 from .system import policy as system_policy
 
 
-POLICY_SEMANTICS_REVIEW_GENERATION = 17
+POLICY_SEMANTICS_REVIEW_GENERATION = 18
 # Updated only after the policy truthfulness suite reviews every changed field.
-REVIEWED_POLICY_SURFACE_HASH = "2f0755c4ef4e92619152f299a86387e909faff5d0afbfa6ac43f56a6f5fad369"
+REVIEWED_POLICY_SURFACE_HASH = "002ea7d37e24453977ffb73369db1bb301129c5072f6b1abea67b0eec0ecdf68"
 
 
 RESERVED_SETTINGS: dict[str, str] = {

@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 from .models import EvidencePriority
@@ -200,6 +200,16 @@ def _has_field(envelope: Mapping[str, Any], path: str) -> bool:
 
 class AuditStreamError(RuntimeError):
     """Raised when the local audit stream cannot preserve its integrity."""
+
+
+class AuditDeliverySink(Protocol):
+    """Output-only adapter for shipping exact audit records externally."""
+
+    sink_id: str
+
+    def deliver(self, record: bytes) -> None: ...
+
+    def flush(self) -> None: ...
 
 
 def _canonical(value: Any) -> bytes:
@@ -471,6 +481,7 @@ class AuditStreamWriter:
         supervisor_id: UUID | str | None = None,
         artifact_signer: RuntimeArtifactSigningService | None = None,
         redaction_policy: Any | None = None,
+        external_sink: AuditDeliverySink | None = None,
     ) -> None:
         self.policy = policy
         self.run_id = run_id
@@ -489,8 +500,23 @@ class AuditStreamWriter:
         self._recovered_truncated_bytes = 0
         self._pending_loss_count = 0
         self._pending_loss_priorities: dict[str, int] = {}
+        self._external_sink = external_sink
+        self._external_delivered_events = 0
+        self._external_failed_events = 0
+        self._external_last_error: str | None = None
         self._file = None
         self._validate_delivery_policy()
+        if external_sink is not None and (
+            not callable(getattr(external_sink, "deliver", None))
+            or not callable(getattr(external_sink, "flush", None))
+        ):
+            raise AuditStreamError(
+                "external audit sink must provide output-only deliver and flush methods"
+            )
+        if getattr(policy, "external_delivery_required", False) and external_sink is None:
+            raise AuditStreamError(
+                "external audit delivery is required but no output-only sink was provided"
+            )
         if not policy.enabled:
             return
         if policy.sign_events and artifact_signer is None:
@@ -520,6 +546,28 @@ class AuditStreamWriter:
         with self._lock:
             return self._pending_loss_count
 
+    def delivery_status(self) -> dict[str, Any]:
+        """Return bounded external-delivery state without exposing sink data."""
+        with self._lock:
+            required = bool(getattr(self.policy, "external_delivery_required", False))
+            if self._external_sink is None:
+                state = "LOCAL_ONLY"
+                sink_id = None
+            else:
+                state = "DEGRADED" if self._external_failed_events else "ACTIVE"
+                sink_id = str(
+                    getattr(self._external_sink, "sink_id", None)
+                    or type(self._external_sink).__name__
+                )[:128]
+            return {
+                "state": state,
+                "required": required,
+                "sink_id": sink_id,
+                "delivered_events": self._external_delivered_events,
+                "failed_events": self._external_failed_events,
+                "last_error_type": self._external_last_error,
+            }
+
     def _validate_delivery_policy(self) -> None:
         preserved = getattr(self.policy, "always_preserve_priorities", frozenset())
         if EvidencePriority.CRITICAL not in preserved:
@@ -537,6 +585,8 @@ class AuditStreamWriter:
                 raise AuditStreamError(
                     f"logging.audit.{name} must be between 0 and 1"
                 )
+        if not isinstance(getattr(self.policy, "external_delivery_required", False), bool):
+            raise AuditStreamError("logging.audit.external_delivery_required must be a boolean")
 
     def _set_redaction_policy(self, redaction_policy: Any | None) -> None:
         if redaction_policy is None:
@@ -703,6 +753,7 @@ class AuditStreamWriter:
             "ordinary_rate",
             "important_rate",
             "critical_rate",
+            "external_delivery_required",
         ):
             if getattr(policy, field_name) != getattr(self.policy, field_name):
                 warnings.append(
@@ -908,13 +959,43 @@ class AuditStreamWriter:
             except OSError as exc:
                 raise AuditStreamError("Unable to persist audit event") from exc
             self._previous_hash = content_hash
+            self._deliver_external(encoded)
             return event
+
+    def _deliver_external(self, encoded: bytes) -> None:
+        sink = self._external_sink
+        if sink is None:
+            return
+        try:
+            sink.deliver(encoded)
+        except Exception as exc:
+            self._external_failed_events += 1
+            self._external_last_error = type(exc).__name__
+            if getattr(self.policy, "external_delivery_required", False):
+                raise AuditStreamError(
+                    "required external audit delivery failed after local persistence"
+                ) from exc
+            return
+        self._external_delivered_events += 1
 
     def flush(self) -> None:
         with self._lock:
             if self._file is not None and not self._closed:
                 self._flush_policy_loss()
                 self._file.flush()
+                self._flush_external()
+
+    def _flush_external(self) -> None:
+        sink = self._external_sink
+        if sink is None:
+            return
+        try:
+            sink.flush()
+        except Exception as exc:
+            self._external_failed_events += 1
+            self._external_last_error = type(exc).__name__
+            if getattr(self.policy, "external_delivery_required", False):
+                raise AuditStreamError("required external audit flush failed") from exc
 
     def close(self) -> None:
         with self._lock:
@@ -924,6 +1005,7 @@ class AuditStreamWriter:
                 if self._file is not None:
                     self._flush_policy_loss()
                     self._file.flush()
+                self._flush_external()
             finally:
                 if self._file is not None:
                     self._file.close()

@@ -17,6 +17,30 @@ from caretaker.logging import (
 from caretaker.logging.policy import RedactionPolicy
 
 
+class RecordingAuditSink:
+    sink_id = "monitoring-test"
+
+    def __init__(self) -> None:
+        self.records: list[bytes] = []
+        self.flushes = 0
+
+    def deliver(self, record: bytes) -> None:
+        self.records.append(bytes(record))
+
+    def flush(self) -> None:
+        self.flushes += 1
+
+
+class FailingAuditSink:
+    sink_id = "monitoring-failing"
+
+    def deliver(self, record: bytes) -> None:
+        raise OSError("sink unavailable")
+
+    def flush(self) -> None:
+        raise OSError("sink unavailable")
+
+
 def _writer(path: Path, **changes):
     policy = AuditStreamPolicy(**changes)
     return AuditStreamWriter(policy, directory=path, run_id=uuid4(), process_start_id=uuid4())
@@ -573,6 +597,97 @@ def test_logging_runtime_emits_separate_audit_stream(tmp_path: Path) -> None:
         "state": "ACTIVE",
     }
     assert all("control" not in row["event_type"].lower() for row in rows)
+
+
+def test_audit_writer_delivers_exact_local_record_to_output_only_sink(tmp_path: Path) -> None:
+    sink = RecordingAuditSink()
+    writer = AuditStreamWriter(
+        AuditStreamPolicy(),
+        directory=tmp_path,
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        external_sink=sink,
+    )
+    writer.emit("INCIDENT_CAPTURED", details={"token": "redacted-by-policy"})
+    writer.close()
+
+    local_record = (tmp_path / "caretaker_audit.log").read_bytes()
+    assert sink.records == [local_record]
+    assert sink.flushes == 1
+    assert writer.delivery_status() == {
+        "state": "ACTIVE",
+        "required": False,
+        "sink_id": "monitoring-test",
+        "delivered_events": 1,
+        "failed_events": 0,
+        "last_error_type": None,
+    }
+
+
+def test_logging_runtime_can_use_external_audit_sink(tmp_path: Path) -> None:
+    from caretaker.logging.handler import LoggingRuntime
+    from caretaker.logging.policy import CompressionPolicy, OperatorLoggingPolicy
+
+    sink = RecordingAuditSink()
+    runtime = LoggingRuntime(
+        OperatorLoggingPolicy(
+            directory=str(tmp_path),
+            compression=CompressionPolicy(enabled=False),
+        ),
+        supervised=True,
+        external_audit_sink=sink,
+    )
+    try:
+        runtime.flush()
+        assert runtime.audit.delivery_status()["state"] == "ACTIVE"
+    finally:
+        runtime.close()
+    assert len(sink.records) >= 2
+
+
+def test_required_external_audit_delivery_fails_closed_after_local_persistence(
+    tmp_path: Path,
+) -> None:
+    writer = AuditStreamWriter(
+        AuditStreamPolicy(external_delivery_required=True),
+        directory=tmp_path,
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        external_sink=FailingAuditSink(),
+    )
+    with pytest.raises(AuditStreamError, match="required external audit delivery"):
+        writer.emit("INCIDENT_CAPTURED")
+
+    assert writer.delivery_status()["state"] == "DEGRADED"
+    assert writer.delivery_status()["failed_events"] == 1
+    assert verify_audit_stream(tmp_path / "caretaker_audit.log")["valid"] is True
+    with pytest.raises(AuditStreamError, match="required external audit flush"):
+        writer.close()
+
+
+def test_required_external_audit_sink_must_be_present(tmp_path: Path) -> None:
+    with pytest.raises(AuditStreamError, match="no output-only sink"):
+        AuditStreamWriter(
+            AuditStreamPolicy(external_delivery_required=True),
+            directory=tmp_path,
+            run_id=uuid4(),
+            process_start_id=uuid4(),
+        )
+
+
+def test_audit_policy_validates_external_delivery_requirement() -> None:
+    from caretaker.logging.policy import (
+        LoggingPolicyConfigurationError,
+        OperatorLoggingPolicy,
+        validate_operator_logging_policy,
+    )
+
+    with pytest.raises(LoggingPolicyConfigurationError, match="external_delivery_required"):
+        validate_operator_logging_policy(
+            OperatorLoggingPolicy(
+                audit=AuditStreamPolicy(external_delivery_required="yes"),
+            )
+        )
 
 
 def test_logging_runtime_can_sign_audit_stream_with_runtime_identity(tmp_path: Path) -> None:

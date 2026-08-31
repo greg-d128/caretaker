@@ -15,7 +15,7 @@ from typing import Any, Callable, Mapping, Protocol
 from uuid import UUID, uuid4
 
 from ..runtime import snapshot_context
-from .audit import AuditStreamError, AuditStreamWriter
+from .audit import AuditDeliverySink, AuditStreamError, AuditStreamWriter
 from .attachments import AttachmentStore
 from .buffering import BufferedSegmentSink
 from .models import EvidencePriority, LogChannel, LogEnvelope, LoggingCapability
@@ -75,6 +75,7 @@ class LoggingRuntime:
         supervised: bool | None = None,
         policy_transform: Callable[[OperatorLoggingPolicy], OperatorLoggingPolicy] | None = None,
         external_signer: Any | None = None,
+        external_audit_sink: AuditDeliverySink | None = None,
     ) -> None:
         self._declared_policy = policy
         self._policy_transform = policy_transform
@@ -102,6 +103,7 @@ class LoggingRuntime:
             supervisor_id=os.environ.get("CARETAKER_SUPERVISOR_ID"),
             artifact_signer=self.writer.signing_service,
             redaction_policy=policy.redaction,
+            external_sink=external_audit_sink,
         )
         self.sink = BufferedSegmentSink(self.writer, policy)
         self._sequence = 0
@@ -182,6 +184,7 @@ class LoggingRuntime:
                 },
                 priority=EvidencePriority.CRITICAL,
             )
+        delivery = self.audit.delivery_status()
         self.audit.emit(
             "AUDIT_DELIVERY_STATUS",
             actor={"type": "supervisor" if self.supervised else "system"},
@@ -190,10 +193,10 @@ class LoggingRuntime:
                 "fingerprint": self.snapshot.content_hash,
                 "authority_generation": self.effective.generation,
             },
-            outcome={"state": "LOCAL_ONLY"},
+            outcome={"state": delivery["state"]},
             details={
-                "sink_id": "local-file",
-                "external_delivery": False,
+                "sink_id": delivery["sink_id"] or "local-file",
+                "external_delivery": delivery["sink_id"] is not None,
                 "state": "ACTIVE",
             },
             priority=EvidencePriority.IMPORTANT,
@@ -642,9 +645,14 @@ def configure(
     attach_root: bool = True,
     replace_existing_caretaker_handler: bool = True,
     external_signer: Any | None = None,
+    external_audit_sink: AuditDeliverySink | None = None,
 ) -> LoggingRuntime:
     global _default_runtime
-    runtime = LoggingRuntime(policy, external_signer=external_signer)
+    runtime = LoggingRuntime(
+        policy,
+        external_signer=external_signer,
+        external_audit_sink=external_audit_sink,
+    )
     _default_runtime = runtime
     if attach_root:
         root = logging.getLogger()

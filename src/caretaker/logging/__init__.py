@@ -1,5 +1,6 @@
 from .acceptance import WorkerAcceptanceStore, WorkerAcceptanceStoreError
 from .audit import (
+    AuditDeliverySink,
     AUDIT_EVENT_REGISTRY,
     AUDIT_SCHEMA_VERSION,
     AuditStreamError,
