@@ -35,7 +35,10 @@ from caretaker.domain import (
 from caretaker.guard.policy import BaselinePolicy, GuardPolicy, validate_guard_policy
 from caretaker.validation import (
     Ed25519ValidationResultAuthenticator,
+    ExternalValidationBackend,
     MultipassValidationBackend,
+    _decode_validation_data,
+    _encode_validation_data,
     sign_validation_result,
     SubprocessValidationBackend,
     ValidationBackendCapabilities,
@@ -331,6 +334,112 @@ def test_validation_policy_can_require_result_authentication() -> None:
     assert report.eligible is False
     assert report.result_authentication_status == "MISSING"
     assert any("no verifier is configured" in finding for finding in report.hard_disqualifications)
+
+
+def test_external_validation_backend_uses_authenticated_data_only_transport() -> None:
+    pytest.importorskip("cryptography")
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    private_key = Ed25519PrivateKey.generate()
+    authenticator = Ed25519ValidationResultAuthenticator(
+        private_key.public_key().public_bytes(
+            serialization.Encoding.Raw,
+            serialization.PublicFormat.Raw,
+        ),
+        "remote-validator-1",
+    )
+
+    class Client:
+        def __init__(self):
+            self.request = None
+
+        def validate(self, request, *, timeout_seconds):
+            self.request = request
+            payload = _decode_validation_data(request["payload"])
+            result = _bound_successful_result(payload)
+            return {
+                "protocol_version": 1,
+                "result": _encode_validation_data(result),
+                "authentication": sign_validation_result(
+                    result,
+                    private_key=private_key,
+                    key_id="remote-validator-1",
+                ),
+            }
+
+    client = Client()
+    backend = ExternalValidationBackend(
+        client,
+        result_authenticator=authenticator,
+        validator_identity="remote-validator",
+    )
+    policy = replace(
+        _automatic_policy(),
+        validation=replace(
+            _automatic_policy().validation,
+            minimum_isolation=ValidationIsolationLevel.EXTERNAL,
+        ),
+    )
+    engine = RepairEngine(provider=StaticRepairProvider([]))
+    wrapped = repair(policy=policy, engine=engine)(broken_divide)
+    target = wrapped.__caretaker_target__
+    report = backend.validate_candidate(
+        _repair_candidate(target),
+        target,
+        timeout_seconds=1.0,
+    )
+
+    assert report.eligible is True
+    assert report.backend_name == "external"
+    assert report.result_authentication_status == "VERIFIED"
+    assert client.request["protocol_version"] == 1
+    assert isinstance(client.request["payload"], dict)
+    assert client.request["payload"].get("__caretaker_validation_data__") == "mapping"
+
+
+def test_external_validation_backend_rejects_unsigned_service_response() -> None:
+    class Client:
+        def validate(self, request, *, timeout_seconds):
+            payload = _decode_validation_data(request["payload"])
+            return {
+                "protocol_version": 1,
+                "result": _encode_validation_data(_bound_successful_result(payload)),
+            }
+
+    pytest.importorskip("cryptography")
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    private_key = Ed25519PrivateKey.generate()
+    authenticator = Ed25519ValidationResultAuthenticator(
+        private_key.public_key().public_bytes(
+            serialization.Encoding.Raw,
+            serialization.PublicFormat.Raw,
+        ),
+        "remote-validator-1",
+    )
+    backend = ExternalValidationBackend(
+        Client(),
+        result_authenticator=authenticator,
+    )
+    policy = replace(
+        _automatic_policy(),
+        validation=replace(
+            _automatic_policy().validation,
+            minimum_isolation=ValidationIsolationLevel.EXTERNAL,
+        ),
+    )
+    engine = RepairEngine(provider=StaticRepairProvider([]))
+    wrapped = repair(policy=policy, engine=engine)(broken_divide)
+    report = backend.validate_candidate(
+        _repair_candidate(wrapped.__caretaker_target__),
+        wrapped.__caretaker_target__,
+        timeout_seconds=1.0,
+    )
+
+    assert report.eligible is False
+    assert report.result_authentication_status == "MISSING"
 
 
 def test_validation_protocol_rejects_non_finite_numeric_evidence() -> None:

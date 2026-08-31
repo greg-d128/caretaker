@@ -60,6 +60,17 @@ class ValidationResultAuthenticator(Protocol):
     ) -> tuple[bool, str | None]: ...
 
 
+class ExternalValidationClient(Protocol):
+    """Caller-owned transport for a remote/disposable validation service."""
+
+    def validate(
+        self,
+        request: Mapping[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> Mapping[str, Any]: ...
+
+
 def _canonical_validation_value(value: Any) -> Any:
     """Return the strict JSON vocabulary used for result signatures."""
 
@@ -716,6 +727,106 @@ class SubprocessValidationBackend:
                 timeout_seconds=timeout_seconds,
                 cwd=temporary,
                 env=environment,
+            )
+
+
+class ExternalValidationBackend(SubprocessValidationBackend):
+    """Use a caller-owned transport for an independently managed validator.
+
+    The client receives a strict, encoded request envelope and must return the
+    corresponding encoded result envelope.  No network client, retry policy, or
+    credential store is built into Caretaker; those remain deployment concerns.
+    Authenticated results are required by default because an external backend
+    is selected specifically to create an independent trust boundary.
+    """
+
+    def __init__(
+        self,
+        client: ExternalValidationClient,
+        *,
+        result_authenticator: ValidationResultAuthenticator | None,
+        require_result_authentication: bool = True,
+        validator_identity: str | None = None,
+    ) -> None:
+        super().__init__(
+            python_executable="external",
+            result_authenticator=result_authenticator,
+            require_result_authentication=require_result_authentication,
+        )
+        if not hasattr(client, "validate"):
+            raise TypeError("external validation client must provide validate()")
+        self.client = client
+        self.validator_identity = validator_identity
+
+    def capabilities(self) -> ValidationBackendCapabilities:
+        return ValidationBackendCapabilities(
+            name="external",
+            isolation_level=ValidationIsolationLevel.EXTERNAL,
+            # Caretaker cannot independently attest the remote service's
+            # kernel or resource boundary through a caller-owned transport.
+            separate_kernel=False,
+            rootless=None,
+            network_control=False,
+            resource_control=False,
+            ephemeral_workspace=True,
+            details={
+                "transport": "caller-owned",
+                "validator_identity": self.validator_identity,
+                "authenticated_results_required": self.require_result_authentication,
+                "isolation_attestation": "caller-supplied",
+            },
+        )
+
+    def available(self) -> tuple[bool, str | None]:
+        probe = getattr(self.client, "available", None)
+        if probe is None:
+            return True, None
+        try:
+            result = probe()
+        except Exception as exc:
+            return False, f"external validation availability check failed: {exc}"
+        if (
+            not isinstance(result, tuple)
+            or len(result) != 2
+            or not isinstance(result[0], bool)
+            or (result[1] is not None and not isinstance(result[1], str))
+        ):
+            return False, "external validation availability check returned an invalid result"
+        return result
+
+    def _run_worker(
+        self,
+        payload: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        try:
+            request = {
+                "protocol_version": VALIDATION_PROTOCOL_VERSION,
+                "payload": _encode_validation_data(payload),
+            }
+            envelope = self.client.validate(
+                request,
+                timeout_seconds=timeout_seconds,
+            )
+            if not isinstance(envelope, Mapping):
+                raise ValueError("external validator response must be an object")
+            if envelope.get("protocol_version") != VALIDATION_PROTOCOL_VERSION:
+                raise ValueError("external validator returned an unsupported protocol version")
+            result = _decode_validation_data(envelope["result"])
+            if not isinstance(result, dict):
+                raise ValueError("external validator result must be an object")
+            authentication = envelope.get("authentication")
+            if authentication is not None:
+                if not isinstance(authentication, Mapping):
+                    raise ValueError("external validator authentication must be an object")
+                if _VALIDATION_RESULT_AUTHENTICATION_KEY in result:
+                    raise ValueError("external validator returned duplicate authentication")
+                result[_VALIDATION_RESULT_AUTHENTICATION_KEY] = dict(authentication)
+            return result
+        except Exception as exc:
+            return _worker_backend_error(
+                f"external validation transport or protocol failed: {type(exc).__name__}: {exc}"
             )
 
 

@@ -874,14 +874,17 @@ This should remain explicit and policy-controlled. Caretaker should not globally
 
 ## Validation isolation backends
 
-**Status: Implemented in development tree for PROCESS, rootless Podman CONTAINER, and Multipass VM. Docker and EXTERNAL adapters remain future work.**
+**Status: Implemented in development tree for PROCESS, rootless Podman CONTAINER, Multipass VM, and a transport-neutral authenticated EXTERNAL adapter; Docker compatibility and remote deployment assurance remain future work.**
 
 Validation uses a common capability-based backend contract. Policy specifies a minimum isolation level rather than a product name:
 
 - **PROCESS**: the existing subprocess worker; fast and portable, but not a hostile-code sandbox.
 - **CONTAINER**: `RootlessPodmanValidationBackend`, which requires rootless Podman and a pre-provisioned local image. It uses no network, a read-only root filesystem, dropped capabilities, `no-new-privileges`, PID/CPU/memory limits, an isolated writable request/result directory, and read-only Caretaker/application inputs. It never pulls an image automatically.
 - **VM**: `MultipassValidationBackend`, which uses a pre-provisioned guest with no host-directory mounts. Artifacts cross the boundary through `multipass transfer`. Normal mode can restore a configured clean snapshot before validation; suspicious scenarios can use a disposable clone of a stopped clean template and purge it afterward.
-- **EXTERNAL**: reserved for a future dedicated remote/disposable validation service.
+- **EXTERNAL**: a caller-owned transport-neutral adapter for a dedicated
+  remote/disposable validation service. It requires authenticated results by
+  default but does not implement transport, isolation attestation, or key
+  lifecycle.
 
 If a configured backend cannot meet `ValidationPolicy.minimum_isolation`, `backend_unavailable_action` controls whether repair fails, remains proposal-only, or enters an explicit operator-review workflow. Required isolation is non-overridable: approval can retain a proposal for review but cannot authorize activation without validation at the requested tier.
 
@@ -890,7 +893,7 @@ Multipass candidate validation is distinct from the existing whole-subject Multi
 Outstanding isolation work:
 
 - Docker-rootless compatibility adapter using the same CONTAINER contract;
-- EXTERNAL/remote validator backend;
+- remote transport and validator-service lifecycle for the EXTERNAL adapter;
 - richer capability attestation (seccomp/profile hashes and image provenance; the guest firewall policy hash is now exposed);
 - optional stronger VM technologies when a deployment requires them.
 

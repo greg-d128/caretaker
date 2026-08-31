@@ -61,6 +61,13 @@ need independent validator provenance must configure a verifier and require the
 envelope. Authentication proves result provenance only. It does not grant
 authority, replace policy checks, or make a candidate eligible by itself.
 
+`ExternalValidationBackend` supplies a transport-neutral adapter for a
+caller-owned remote or disposable validator. It sends the same encoded,
+data-only request contract and accepts only the versioned encoded result
+envelope. The adapter does not implement networking, retries, credentials,
+isolation attestation, or key rotation; its `EXTERNAL` capability therefore
+records those boundaries as caller-supplied deployment responsibilities.
+
 Validator private keys belong to the separately managed validator. Caretaker
 does not persist, distribute, or infer them. A public-key pin is an operational
 trust decision and should be provisioned independently of the result channel.
