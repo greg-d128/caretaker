@@ -934,6 +934,12 @@ record does not make the change a permanent deployment. Promotion to
 hash. Active revocation requires a new incident by default. These records do
 not route traffic, activate a FunctionSlot, or grant authority on their own.
 
+When an audit writer callback is supplied, each rollout transition also emits
+the registered critical `REPAIR_ROLLOUT_TRANSITION` event with rollout and
+transition scope, authority actor, policy fingerprints, lifecycle outcome, and
+content/chain hashes. The callback remains output-only; it does not turn audit
+input into a control channel.
+
 The bounded `shadow_execute()` primitive now provides original-authoritative
 candidate observation for an individual invocation. It keeps the deployed
 result authoritative, copies inputs independently, and requires a verified

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
@@ -152,11 +152,13 @@ class RepairRolloutLedger:
         policy: RepairRolloutPolicy,
         store: RepairRolloutStore | None = None,
         signer: RolloutArtifactSigner | None = None,
+        audit_event: Callable[..., Any] | None = None,
         clock: Any | None = None,
     ) -> None:
         self.policy = policy
         self.store = store
         self.signer = signer
+        self.audit_event = audit_event
         self._clock = clock or _utcnow
         self._records: dict[UUID, RepairRolloutRecord] = {}
         self._transitions: dict[UUID, RepairRolloutTransition] = {}
@@ -514,6 +516,36 @@ class RepairRolloutLedger:
                         },
                     )
                 )
+        if self.audit_event is not None:
+            self.audit_event(
+                "REPAIR_ROLLOUT_TRANSITION",
+                actor={
+                    "type": authority_type.value,
+                    "id": authority_id,
+                },
+                scope={
+                    "target_id": record.target_id,
+                    "incident_id": str(incident_id or record.incident_id),
+                    "rollout_id": str(record.rollout_id),
+                    "transition_id": str(transition.transition_id),
+                },
+                policy={
+                    "fingerprint": record.policy_fingerprint,
+                    "authority_fingerprint": record.authority_fingerprint,
+                },
+                outcome={
+                    "state": to_stage.value,
+                    "from_state": from_stage.value if from_stage else None,
+                    "action": action,
+                },
+                details={
+                    "candidate_id": str(record.candidate_id),
+                    "content_hash": content_hash,
+                    "transition_hash": transition_hash,
+                    "signature_status": signature_status,
+                    "reason": reason,
+                },
+            )
         return transition
 
     def _restore(self) -> None:

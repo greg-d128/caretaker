@@ -340,3 +340,24 @@ def test_runtime_signer_is_attached_to_rollout_transitions_when_configured(tmp_p
         assert transition.signature is not None
     finally:
         signer.close()
+
+
+def test_rollout_transitions_can_be_emitted_to_the_registered_audit_stream() -> None:
+    events: list[tuple[str, dict[str, object]]] = []
+
+    def audit_event(event_type: str, **fields: object) -> None:
+        events.append((event_type, fields))
+
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(enabled=True),
+        audit_event=audit_event,
+    )
+    record = _proposed(ledger)
+
+    assert len(events) == 1
+    event_type, fields = events[0]
+    assert event_type == "REPAIR_ROLLOUT_TRANSITION"
+    assert fields["scope"]["rollout_id"] == str(record.rollout_id)
+    assert fields["scope"]["transition_id"]
+    assert fields["outcome"]["state"] == "proposed"
+    assert fields["details"]["transition_hash"]

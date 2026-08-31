@@ -189,6 +189,17 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
         minimum_priority=EvidencePriority.CRITICAL,
         example={"state": "PLANNED_ONLY", "action": "ROLLBACK_TO_DEPLOYED_CODE"},
     ),
+    "REPAIR_ROLLOUT_TRANSITION": _event_definition(
+        description="A policy-authorized Repair rollout lifecycle transition was recorded.",
+        minimum_priority=EvidencePriority.CRITICAL,
+        required_fields=("scope.rollout_id", "scope.transition_id", "outcome.state"),
+        example={
+            "rollout_id": "rollout-uuid",
+            "transition_id": "transition-uuid",
+            "state": "validated",
+            "action": "advance",
+        },
+    ),
 })
 
 
