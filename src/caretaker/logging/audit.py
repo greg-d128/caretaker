@@ -384,6 +384,10 @@ class AuditStreamWriter:
             raise AuditStreamError("Audit event signature is malformed") from exc
         if artifact.artifact_kind != "caretaker-audit-event":
             raise AuditStreamError("Audit event signature has the wrong artifact kind")
+        if artifact.run_id != UUID(str(event.get("run_id") or "")):
+            raise AuditStreamError("Audit event signature runtime identity does not match")
+        if artifact.process_start_id != UUID(str(event.get("process_start_id") or "")):
+            raise AuditStreamError("Audit event signature process identity does not match")
         if artifact.content_hash != content_hash:
             raise AuditStreamError("Audit event signature content hash does not match")
         expected_context = {
@@ -503,6 +507,14 @@ class AuditStreamWriter:
                     self._sequence -= 1
                     raise AuditStreamError(
                         "Audit event signing was required but the configured signer returned no signature"
+                    )
+                if (
+                    signed.run_id != self.run_id
+                    or signed.process_start_id != self.process_start_id
+                ):
+                    self._sequence -= 1
+                    raise AuditStreamError(
+                        "Audit event signer identity does not match the audit runtime"
                     )
                 event["integrity"].update({
                     "artifact_signature": serialize_signed_artifact(signed),

@@ -129,36 +129,40 @@ def test_signed_audit_events_verify_across_restart(tmp_path: Path) -> None:
         run_signer_in_separate_process=False,
     )
     audit_policy = AuditStreamPolicy(sign_events=True)
+    first_run_id = uuid4()
+    first_process_start_id = uuid4()
     first_signer = RuntimeArtifactSigningService(
         policy=signing_policy,
         application_id="demo",
-        run_id=uuid4(),
-        process_start_id=uuid4(),
+        run_id=first_run_id,
+        process_start_id=first_process_start_id,
         root=tmp_path,
     )
     first = AuditStreamWriter(
         audit_policy,
         directory=tmp_path,
-        run_id=uuid4(),
-        process_start_id=uuid4(),
+        run_id=first_run_id,
+        process_start_id=first_process_start_id,
         artifact_signer=first_signer,
     )
     first_event = first.emit("INCIDENT_CAPTURED")
     first.close()
     first_signer.close()
 
+    second_run_id = uuid4()
+    second_process_start_id = uuid4()
     second_signer = RuntimeArtifactSigningService(
         policy=signing_policy,
         application_id="demo",
-        run_id=uuid4(),
-        process_start_id=uuid4(),
+        run_id=second_run_id,
+        process_start_id=second_process_start_id,
         root=tmp_path,
     )
     restarted = AuditStreamWriter(
         audit_policy,
         directory=tmp_path,
-        run_id=uuid4(),
-        process_start_id=uuid4(),
+        run_id=second_run_id,
+        process_start_id=second_process_start_id,
         artifact_signer=second_signer,
     )
     second_event = restarted.emit("RECOVERY_DECISION", priority=EvidencePriority.CRITICAL)
@@ -174,21 +178,23 @@ def test_signed_audit_events_verify_across_restart(tmp_path: Path) -> None:
 def test_signed_audit_events_reject_tampered_signature(tmp_path: Path) -> None:
     from caretaker.logging import RuntimeArtifactSigningService, RuntimeRecordIntegrityMode, RuntimeSigningPolicy
 
+    run_id = uuid4()
+    process_start_id = uuid4()
     signer = RuntimeArtifactSigningService(
         policy=RuntimeSigningPolicy(
             mode=RuntimeRecordIntegrityMode.EPHEMERAL_SIGNED,
             run_signer_in_separate_process=False,
         ),
         application_id="demo",
-        run_id=uuid4(),
-        process_start_id=uuid4(),
+        run_id=run_id,
+        process_start_id=process_start_id,
         root=tmp_path,
     )
     writer = AuditStreamWriter(
         AuditStreamPolicy(sign_events=True),
         directory=tmp_path,
-        run_id=uuid4(),
-        process_start_id=uuid4(),
+        run_id=run_id,
+        process_start_id=process_start_id,
         artifact_signer=signer,
     )
     writer.emit("INCIDENT_CAPTURED")
@@ -228,6 +234,32 @@ def test_signed_audit_events_require_a_signer(tmp_path: Path) -> None:
             run_id=uuid4(),
             process_start_id=uuid4(),
         )
+
+
+def test_signed_audit_events_reject_a_cross_runtime_signer(tmp_path: Path) -> None:
+    from caretaker.logging import RuntimeArtifactSigningService, RuntimeRecordIntegrityMode, RuntimeSigningPolicy
+
+    signer = RuntimeArtifactSigningService(
+        policy=RuntimeSigningPolicy(
+            mode=RuntimeRecordIntegrityMode.EPHEMERAL_SIGNED,
+            run_signer_in_separate_process=False,
+        ),
+        application_id="demo",
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        root=tmp_path,
+    )
+    writer = AuditStreamWriter(
+        AuditStreamPolicy(sign_events=True),
+        directory=tmp_path,
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        artifact_signer=signer,
+    )
+    with pytest.raises(AuditStreamError, match="does not match"):
+        writer.emit("INCIDENT_CAPTURED")
+    writer.close()
+    signer.close()
 
 
 def test_audit_registry_is_complete_and_exposes_redaction_contract() -> None:

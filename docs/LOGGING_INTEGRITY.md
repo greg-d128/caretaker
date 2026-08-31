@@ -66,6 +66,9 @@ context binds the event ID, event type, and stream sequence. The writer verifies
 retained signatures during restart recovery using the public signing-identity
 journal. Missing, malformed, mismatched, or unverifiable signatures fail
 recovery; no signed configuration silently falls back to hash-only output.
+The signed artifact must also carry the audit event's exact runtime and process
+identifiers, preventing a valid signature from another runtime from being
+attached to this stream.
 The default is `sign_events = false` and `signing.mode = HASH_CHAINED`.
 
 The current console records a UUID-scoped invocation, OS UID/GID, and peer

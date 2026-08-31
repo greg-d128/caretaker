@@ -163,7 +163,10 @@ the registered minimum priority and required envelope paths. Unknown future
 uppercase names remain forward-compatible evidence without registered
 semantics or command meaning.
 
-Audit integrity is policy controlled. `logging.audit.hash_chain` controls the
+The signed artifact also repeats and signs the event's `run_id` and
+`process_start_id`; readers must require those values to match the enclosing
+event before accepting the signature. Audit integrity is policy controlled.
+`logging.audit.hash_chain` controls the
 local event chain and `logging.audit.sign_events` controls per-event runtime
 artifact signatures. Signing may use runtime-ephemeral keys or an independently
 managed external signer through `logging.signing.mode`; signed mode requires a
