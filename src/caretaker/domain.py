@@ -68,6 +68,16 @@ class ReplaySafety(Enum):
     APPLICATION_MANAGED = auto()
 
 
+class SideEffectClass(Enum):
+    """Application-declared side-effect boundary for a registered function."""
+
+    UNKNOWN = auto()
+    PURE = auto()
+    READ_ONLY = auto()
+    IDEMPOTENT = auto()
+    SIDE_EFFECTING = auto()
+
+
 class SnapshotStrategy(Enum):
     DEEPCOPY = auto()
     PICKLE = auto()

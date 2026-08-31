@@ -19,6 +19,7 @@ from ..domain import (
     ValidatorErrorBehavior,
 )
 from ..engine import RepairEngine, ResolutionKind
+from ..execution import FunctionExecutionContract
 from ..integrity.models import IntegrityClass
 from ..logging.handler import get_runtime as get_logging_runtime
 from ..logging.masking import MaskFunction, apply_mask
@@ -102,6 +103,7 @@ def repair(
     tags: frozenset[str] = frozenset(),
     integrity_class: IntegrityClass = IntegrityClass.ORDINARY,
     mask: MaskFunction | None = None,
+    execution_contract: FunctionExecutionContract | None = None,
 ) -> Callable[[F], F]: ...
 
 
@@ -115,6 +117,7 @@ def repair(
     tags: frozenset[str] = frozenset(),
     integrity_class: IntegrityClass = IntegrityClass.ORDINARY,
     mask: MaskFunction | None = None,
+    execution_contract: FunctionExecutionContract | None = None,
 ) -> F | Callable[[F], F]:
     """Register a synchronous function for incident capture and in-memory repair."""
 
@@ -134,6 +137,7 @@ def repair(
             tags=tags,
             integrity_class=integrity_class,
             mask_function=mask,
+            execution_contract=execution_contract,
         )
         selected_engine.register(target, declared_policy=declared_policy)
 

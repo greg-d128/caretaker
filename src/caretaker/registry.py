@@ -13,13 +13,15 @@ from .domain import (
     CallableContract,
     CallableKind,
     RegisteredCase,
+    ReplaySafety,
     SourceLocation,
     TargetCapability,
     TargetSupportAssessment,
 )
+from .execution import FunctionExecutionContract
 from .integrity.models import IntegrityClass
 from .logging.masking import MaskFunction
-from .policy import RepairPolicy, validate_policy
+from .policy import PolicyConfigurationError, RepairPolicy, validate_policy
 from .slot import FunctionSlot
 
 
@@ -32,6 +34,7 @@ class RepairTarget:
     support: TargetSupportAssessment
     policy: RepairPolicy
     slot: FunctionSlot
+    execution_contract: FunctionExecutionContract
     registered_cases: tuple[RegisteredCase, ...] = ()
     tags: frozenset[str] = frozenset()
     metadata: Mapping[str, str] = field(default_factory=dict)
@@ -76,6 +79,7 @@ def build_target(
     metadata: Mapping[str, str] | None = None,
     integrity_class: IntegrityClass = IntegrityClass.ORDINARY,
     mask_function: MaskFunction | None = None,
+    execution_contract: FunctionExecutionContract | None = None,
 ) -> RepairTarget:
     validate_policy(policy)
     resolved_id = target_id or f"{function.__module__}:{function.__qualname__}"
@@ -140,11 +144,38 @@ def build_target(
         str(key): _annotation_text(value)
         for key, value in getattr(function, "__annotations__", {}).items()
     }
+    resolved_execution_contract = execution_contract or FunctionExecutionContract.from_policy(
+        retry_safety=policy.retry.safety,
+        pure_function_confirmed=policy.observation.differential_execution.pure_function_confirmed,
+    )
+    differential = policy.observation.differential_execution
+    if (
+        differential.mode.name == "PURE_FUNCTION"
+        and resolved_execution_contract.side_effects.name != "PURE"
+    ):
+        raise PolicyConfigurationError(
+            "PURE_FUNCTION differential execution requires a PURE "
+            "FunctionExecutionContract; side-effecting or unknown targets "
+            "need an isolation adapter"
+        )
+    if (
+        execution_contract is not None
+        and policy.retry.max_attempts > 0
+        and resolved_execution_contract.retry_safety not in {
+            policy.retry.safety,
+            ReplaySafety.UNKNOWN,
+        }
+    ):
+        raise PolicyConfigurationError(
+            "FunctionExecutionContract.retry_safety conflicts with the "
+            "effective Repair retry policy"
+        )
     slot = FunctionSlot(
         target_id=resolved_id,
         original=function,
         original_source=source_text,
         original_source_hash=source_hash,
+        execution_contract=resolved_execution_contract,
     )
     return RepairTarget(
         target_id=resolved_id,
@@ -166,6 +197,7 @@ def build_target(
         support=TargetSupportAssessment(capability=capability, reasons=tuple(reasons)),
         policy=policy,
         slot=slot,
+        execution_contract=resolved_execution_contract,
         registered_cases=registered_cases,
         tags=tags,
         metadata=metadata or {},

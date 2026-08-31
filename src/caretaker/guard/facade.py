@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Any, Mapping, Protocol
 from uuid import UUID
 
+from ..execution import EffectObservation, FunctionExecutionContract, ShadowEligibility
 from .models import (
     BehavioralCandidateScore,
     BehaviorProfileSummary,
@@ -49,6 +50,18 @@ class GuardFacade(Protocol):
     ) -> None: ...
 
     def recent_summary(self, target_id: str, *, calls: int = 20) -> BehaviorProfileSummary | None: ...
+
+    def execution_effect_observation(
+        self, target_id: str, *, calls: int = 20
+    ) -> EffectObservation | None: ...
+
+    def assess_shadow_eligibility(
+        self,
+        target_id: str,
+        contract: FunctionExecutionContract,
+        *,
+        calls: int = 20,
+    ) -> ShadowEligibility: ...
 
     def evidence_bundle(self, target_id: str, *, calls: int = 20) -> GuardEvidenceBundle | None: ...
 

@@ -173,6 +173,7 @@ from .domain import (
     RegisteredCase,
     RepairMode,
     ReplaySafety,
+    SideEffectClass,
     SnapshotStrategy,
     TimeoutMode,
     ValidationBackendUnavailableAction,
@@ -180,6 +181,13 @@ from .domain import (
     ValidationIsolationLevel,
     ValidationResult,
     ValidatorErrorBehavior,
+)
+from .execution import (
+    EffectObservation,
+    ExecutionEffectCategory,
+    FunctionExecutionContract,
+    ShadowEligibility,
+    assess_shadow_eligibility,
 )
 from .engine import RepairEngine, RepairResolution, ResolutionKind
 from .integrity import (
@@ -586,6 +594,12 @@ __all__ = [
     "validate_supervisor_time",
     "verify_recovery_authority_packet",
     "ReplaySafety",
+    "SideEffectClass",
+    "EffectObservation",
+    "ExecutionEffectCategory",
+    "FunctionExecutionContract",
+    "ShadowEligibility",
+    "assess_shadow_eligibility",
     "SnapshotStrategy",
     "TimeoutMode",
     "repair_and_retry",

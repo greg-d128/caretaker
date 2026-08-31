@@ -28,6 +28,46 @@ After activation, a candidate starts in `ACTIVE_PROBATION`. Successful execution
 
 Failures are counted separately from successes. During probation, automatic rollback occurs only after the configured failure budget is exceeded. Long-term acceptance uses count and rate budgets and does not automatically roll back unless configured.
 
+## Function execution contracts and effect evidence
+
+Registered targets may declare a `FunctionExecutionContract`:
+
+```python
+from caretaker import FunctionExecutionContract, ReplaySafety, SideEffectClass
+
+@repair(
+    execution_contract=FunctionExecutionContract(
+        side_effects=SideEffectClass.READ_ONLY,
+        retry_safety=ReplaySafety.IDEMPOTENT,
+    )
+)
+def lookup(value):
+    ...
+```
+
+The contract is an application declaration, not proof and not an authority
+grant. The effective `RepairPolicy.retry` settings still decide whether a retry
+is permitted. `UNKNOWN` is the least-assumption default. `PURE_FUNCTION`
+differential execution requires an explicitly pure contract; side-effecting or
+unknown targets require an isolation adapter before both implementations may be
+run.
+
+Guard behavior evidence can record imports, network/DNS and socket activity,
+filesystem reads and writes, subprocesses, dynamic code, and environment reads.
+`EffectObservation` summarizes those observations and
+`assess_shadow_eligibility()` applies a conservative gate:
+
+- an observed effect can disqualify a pure or read-only declaration;
+- a network connection is treated as externally visible activity even when it
+  is not a write;
+- incomplete or sampled coverage never proves that a function is pure;
+- idempotence permits a policy to consider retries, but does not by itself make
+  duplicate shadow execution safe.
+
+The result is rollout evidence, not authorization. A rollout policy must still
+authorize the execution strategy, preserve validation and authority gates, and
+record the decision.
+
 ## Differential execution
 
 For explicitly pure functions, Caretaker may run the previous and candidate versions against independent deep-copied arguments.

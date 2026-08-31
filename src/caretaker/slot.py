@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 from .acceptance import long_term_accepted, short_term_accepted
 from .domain import CandidateState, SlotRole, SlotState, utcnow
+from .execution import FunctionExecutionContract
 from .policy import AcceptanceCriteria
 
 
@@ -62,11 +63,13 @@ class FunctionSlot:
         original: Callable[..., object],
         original_source: str | None = None,
         original_source_hash: str | None = None,
+        execution_contract: FunctionExecutionContract | None = None,
         role: SlotRole = SlotRole.TARGET_IMPLEMENTATION,
         history_limit: int = 20,
     ) -> None:
         self.target_id = target_id
         self.role = role
+        self.execution_contract = execution_contract or FunctionExecutionContract()
         self._lock = RLock()
         self._condition = Condition(self._lock)
         self._current = FunctionVersion(

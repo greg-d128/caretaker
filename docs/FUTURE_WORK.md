@@ -914,7 +914,7 @@ Future work may export a signed review bundle containing a unified diff, origina
 
 ## Policy-controlled Repair rollout, mirroring, and shadow execution
 
-**Status: Proposed future functionality pending detailed design.**
+**Status: Design clarified; effect-aware contract and evidence gate implemented; rollout orchestration remains future work.**
 
 Caretaker currently supports candidate probation and a narrow
 `PURE_FUNCTION` differential-execution mode. For explicitly confirmed pure

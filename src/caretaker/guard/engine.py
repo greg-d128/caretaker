@@ -34,6 +34,12 @@ from ..evidence.models import (
     RuntimeInspection,
 )
 from ..evidence.store import EvidenceStore, InMemoryEvidenceStore
+from ..execution import (
+    EffectObservation,
+    FunctionExecutionContract,
+    ShadowEligibility,
+    assess_shadow_eligibility,
+)
 from ..runtime import snapshot_context
 from ..behavior import (
     BehaviorCollectionScheduler,
@@ -776,6 +782,32 @@ class GuardEngine(GuardFacade):
             imports=tuple(sorted(imports)),
             dynamic_code_operations=tuple(sorted(dynamic)),
         )
+
+    def execution_effect_observation(
+        self, target_id: str, *, calls: int = 20
+    ) -> EffectObservation | None:
+        """Summarize bounded Guard events for a rollout safety decision.
+
+        The in-process event cache is intentionally reported as incomplete: it
+        may be sampled or bounded, and therefore cannot establish that no effect
+        occurred. A trusted complete observation must come from a dedicated
+        collector or isolation adapter.
+        """
+
+        if target_id not in self._targets:
+            return None
+        events = _tail(self._events_by_target.get(target_id, ()), max(1, calls * 10))
+        return EffectObservation.from_events(events, complete=False)
+
+    def assess_shadow_eligibility(
+        self,
+        target_id: str,
+        contract: FunctionExecutionContract,
+        *,
+        calls: int = 20,
+    ) -> ShadowEligibility:
+        observation = self.execution_effect_observation(target_id, calls=calls)
+        return assess_shadow_eligibility(contract, observation)
 
     def current_behavior_summary(
         self, target_id: str, *, calls: int = 50
