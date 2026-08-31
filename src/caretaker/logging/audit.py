@@ -56,7 +56,7 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
         example={"segment_id": "segment-42", "content_sha256": "sha256:..."},
     ),
     "AUDIT_DELIVERY_STATUS": _event_definition(
-        description="External audit delivery status changed.",
+        description="Audit delivery or local-retention status changed.",
         minimum_priority=EvidencePriority.IMPORTANT,
         example={"sink_id": "monitoring-primary", "state": "DELIVERED"},
     ),

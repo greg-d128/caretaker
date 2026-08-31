@@ -178,6 +178,22 @@ class LoggingRuntime:
                 },
                 priority=EvidencePriority.CRITICAL,
             )
+        self.audit.emit(
+            "AUDIT_DELIVERY_STATUS",
+            actor={"type": "supervisor" if self.supervised else "system"},
+            policy={
+                "policy_id": str(self.snapshot.snapshot_id),
+                "fingerprint": self.snapshot.content_hash,
+                "authority_generation": self.effective.generation,
+            },
+            outcome={"state": "LOCAL_ONLY"},
+            details={
+                "sink_id": "local-file",
+                "external_delivery": False,
+                "state": "ACTIVE",
+            },
+            priority=EvidencePriority.IMPORTANT,
+        )
         self.event(
             logger_name="caretaker.logging.policy",
             severity=logging.INFO,

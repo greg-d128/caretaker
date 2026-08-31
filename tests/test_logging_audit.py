@@ -187,6 +187,13 @@ def test_logging_runtime_emits_separate_audit_stream(tmp_path: Path) -> None:
         runtime.close()
     rows = [json.loads(line) for line in (tmp_path / "caretaker_audit.log").read_text().splitlines()]
     assert rows[0]["event_type"] == "AUDIT_STREAM_STARTED"
+    delivery = [row for row in rows if row["event_type"] == "AUDIT_DELIVERY_STATUS"][-1]
+    assert delivery["outcome"]["state"] == "LOCAL_ONLY"
+    assert delivery["details"] == {
+        "external_delivery": False,
+        "sink_id": "local-file",
+        "state": "ACTIVE",
+    }
     assert all("control" not in row["event_type"].lower() for row in rows)
 
 

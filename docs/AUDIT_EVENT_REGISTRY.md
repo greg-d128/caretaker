@@ -24,7 +24,7 @@ All event types share these redaction rules:
 | --- | --- | --- | --- |
 | `AUDIT_STREAM_STARTED` | `CRITICAL` | `policy.policy_id`, `policy.fingerprint`, `details.hash_chain` | `{"hash_chain": true}` |
 | `AUDIT_STREAM_ROTATED` | `IMPORTANT` | — | `{"segment_id": "segment-42", "content_sha256": "sha256:..."}` |
-| `AUDIT_DELIVERY_STATUS` | `IMPORTANT` | — | `{"sink_id": "monitoring-primary", "state": "DELIVERED"}` |
+| `AUDIT_DELIVERY_STATUS` | `IMPORTANT` | — | `{"sink_id": "local-file", "state": "ACTIVE", "external_delivery": false}` |
 | `AUDIT_DATA_LOSS` | `CRITICAL` | — | `{"category": "ordinary_metrics", "count": 1, "reason": "sampling_policy"}` |
 | `CONSOLE_INVOCATION_STARTED` | `CRITICAL` | — | `{"console_invocation_id": "console-uuid"}` |
 | `CONSOLE_INVOCATION_ENDED` | `IMPORTANT` | — | `{"console_invocation_id": "console-uuid", "reason": "operator_exit"}` |
