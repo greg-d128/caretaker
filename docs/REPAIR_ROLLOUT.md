@@ -130,11 +130,20 @@ successful evidence. The response explicitly reports `read_only: true` and
 advance a rollout, change routing percentages, activate a FunctionSlot, or
 grant execution authority.
 
-The Caretaker Console's `Rollouts` tab requests this projection, displays the
+The Caretaker Console's `Rollouts` tab requests this projection and displays the
 current stage, bounded candidate/shadow counts, current worker
-acknowledgement counts, and readiness state, and lets an operator inspect the
-complete returned record as read-only evidence. It provides no pause,
-resume, percentage-change, activation, or rollback action yet.
+acknowledgement counts, and readiness state. An operator can select a rollout
+and request one of the legal next lifecycle stages through the authenticated
+control plane. The form requires a non-empty reason and explicit confirmation;
+it offers no validation bypass for proposed rollouts, requires a separate
+incident UUID when revoking an active rollout, and exposes readiness override as
+an explicit operator choice. The console refreshes the projection after a
+recorded transition and shows the returned signed/audited transition evidence.
+
+This is intentionally narrower than general rollout control. The console does
+not change routing percentages, pause/resume traffic, activate a FunctionSlot,
+or grant execution authority. The supervisor and ledger remain authoritative
+for policy, readiness, lifecycle, expiry, and incident checks.
 
 ## Supervisor worker coordination
 

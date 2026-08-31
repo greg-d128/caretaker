@@ -24,6 +24,7 @@ from textual.widgets import (
     Header,
     Input,
     RichLog,
+    Select,
     Static,
     TabbedContent,
     TabPane,
@@ -112,6 +113,22 @@ class ControlRequestError(RuntimeError):
 class CaretakerConsoleApp(App):
     TITLE = "Caretaker Console"
     SUB_TITLE = "Runtime inspection and operator control"
+
+    _ROLLOUT_NEXT_STAGES: dict[str, tuple[str, ...]] = {
+        # Validation is deliberately excluded: the runtime command refuses to
+        # let an operator use the console to bypass the validation workflow.
+        "validated": ("shadow", "canary", "active", "revoked"),
+        "shadow": ("canary", "revoked"),
+        "canary": ("active", "revoked"),
+        "active": ("retired", "revoked"),
+    }
+    _ROLLOUT_STAGE_LABELS: dict[str, str] = {
+        "shadow": "SHADOW (sample only)",
+        "canary": "CANARY (candidate may be authoritative)",
+        "active": "ACTIVE (field repair)",
+        "retired": "RETIRED",
+        "revoked": "REVOKED",
+    }
 
     CSS = """
     Screen {
@@ -319,6 +336,16 @@ class CaretakerConsoleApp(App):
         align-vertical: middle;
     }
     #rollout-toolbar Button { width: auto; min-width: 12; }
+    #rollout-advance-fields, #rollout-advance-actions {
+        height: 4;
+        padding: 0 1;
+        align-vertical: middle;
+    }
+    #rollout-advance-fields Select { width: 20; min-width: 18; }
+    #rollout-advance-fields Input { width: 1fr; min-width: 20; margin-left: 1; }
+    #rollout-advance-actions Checkbox { margin-right: 1; }
+    #rollout-advance-actions Button { width: auto; min-width: 22; margin-left: 1; }
+    #rollout-advance-status { height: auto; padding: 0 2; color: $text-muted; }
     #rollout-table { height: 1fr; }
     #rollout-output {
         height: 12;
@@ -672,6 +699,7 @@ class CaretakerConsoleApp(App):
         self._selected_adaptive_transition_request_id: str | None = None
         self._rollout_records: list[dict[str, Any]] = []
         self._rollout_transitions: list[dict[str, Any]] = []
+        self._selected_rollout_id: str | None = None
         self._selected_target: str | None = None
         self._attention_records: list[dict[str, Any]] = []
         self._selected_attention_record: dict[str, Any] | None = None
@@ -1122,6 +1150,43 @@ class CaretakerConsoleApp(App):
                 )
                 with Horizontal(id="rollout-toolbar"):
                     yield Button("Refresh", id="rollout-refresh", variant="primary")
+                with Horizontal(id="rollout-advance-fields"):
+                    yield Select(
+                        [],
+                        prompt="Next lifecycle stage",
+                        allow_blank=True,
+                        id="rollout-advance-stage",
+                        disabled=True,
+                    )
+                    yield Input(
+                        placeholder="Operator reason (required)",
+                        id="rollout-advance-reason",
+                    )
+                    yield Input(
+                        placeholder="New incident UUID (required for active revocation)",
+                        id="rollout-advance-incident",
+                    )
+                with Horizontal(id="rollout-advance-actions"):
+                    yield Checkbox(
+                        "Override unmet readiness",
+                        id="rollout-advance-override",
+                        disabled=True,
+                    )
+                    yield Checkbox(
+                        "I confirm this transition",
+                        id="rollout-advance-confirm",
+                        disabled=True,
+                    )
+                    yield Button(
+                        "Advance selected rollout",
+                        id="rollout-advance",
+                        variant="warning",
+                        disabled=True,
+                    )
+                yield Static(
+                    "Select a rollout to review available lifecycle transitions.",
+                    id="rollout-advance-status",
+                )
                 yield Static("Repair rollout status not loaded", id="rollout-status")
                 table = DataTable(id="rollout-table")
                 table.cursor_type = "row"
@@ -2263,11 +2328,18 @@ class CaretakerConsoleApp(App):
                 record = self._rollout_records[int(row[0]) - 1]
             except (TypeError, ValueError, IndexError):
                 return
+            self._selected_rollout_id = str(record.get("rollout_id") or "") or None
+            self.query_one("#rollout-advance-stage", Select).value = Select.NULL
+            self.query_one("#rollout-advance-reason", Input).value = ""
+            self.query_one("#rollout-advance-incident", Input).value = ""
+            self.query_one("#rollout-advance-confirm", Checkbox).value = False
+            self.query_one("#rollout-advance-override", Checkbox).value = False
             self._set_operator_context(
                 target=str(record.get("target_id") or "") or None,
                 incident=str(record.get("incident_id") or "") or None,
             )
             self._write_json("#rollout-output", record)
+            self._refresh_rollout_advance_controls()
             return
 
         if event.data_table.id == "attention-table":
@@ -3335,6 +3407,17 @@ class CaretakerConsoleApp(App):
         }:
             self.query_one("#adaptive-threshold-proposal-confirm", Checkbox).value = False
             self._refresh_adaptive_threshold_proposal_actions()
+        elif event.input.id in {
+            "rollout-advance-reason",
+            "rollout-advance-incident",
+        }:
+            self.query_one("#rollout-advance-confirm", Checkbox).value = False
+            self._refresh_rollout_advance_controls()
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "rollout-advance-stage":
+            self.query_one("#rollout-advance-confirm", Checkbox).value = False
+            self._refresh_rollout_advance_controls()
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         if event.text_area.id == "adaptive-threshold-proposal-changes":
@@ -3392,6 +3475,11 @@ class CaretakerConsoleApp(App):
             self._refresh_adaptive_threshold_proposal_actions()
         elif event.checkbox.id == "worker-failure-recovery-apply-confirm":
             self._refresh_worker_failure_recovery_actions()
+        elif event.checkbox.id in {
+            "rollout-advance-confirm",
+            "rollout-advance-override",
+        }:
+            self._refresh_rollout_advance_controls()
 
     @staticmethod
     def _log_level(severity: Any) -> str:
@@ -3949,6 +4037,126 @@ class CaretakerConsoleApp(App):
             actionable and confirm.value
         )
 
+    def _selected_rollout(self) -> dict[str, Any] | None:
+        if not self._selected_rollout_id:
+            return None
+        return next(
+            (
+                record
+                for record in self._rollout_records
+                if str(record.get("rollout_id") or "") == self._selected_rollout_id
+            ),
+            None,
+        )
+
+    def _refresh_rollout_advance_controls(self) -> None:
+        """Keep the operator action form bounded by the ledger lifecycle."""
+        record = self._selected_rollout()
+        stage = str(record.get("stage") or "").strip().lower() if record else ""
+        allowed = self._ROLLOUT_NEXT_STAGES.get(stage, ())
+        options = [
+            (self._ROLLOUT_STAGE_LABELS[value], value)
+            for value in allowed
+        ]
+        selector = self.query_one("#rollout-advance-stage", Select)
+        selected_value = selector.value if isinstance(selector.value, str) else None
+        selector.set_options(options)
+        if selected_value in allowed:
+            selector.value = selected_value
+        else:
+            selector.value = Select.NULL
+
+        form_enabled = bool(
+            record
+            and allowed
+            and self._application_running is True
+        )
+        selector.disabled = not form_enabled
+        reason = self.query_one("#rollout-advance-reason", Input)
+        incident = self.query_one("#rollout-advance-incident", Input)
+        reason.disabled = not form_enabled
+        incident.disabled = not form_enabled
+        override = self.query_one("#rollout-advance-override", Checkbox)
+        confirm = self.query_one("#rollout-advance-confirm", Checkbox)
+        override.disabled = not form_enabled
+        confirm.disabled = not form_enabled
+        if not form_enabled:
+            override.value = False
+            confirm.value = False
+
+        selected_stage = selector.value if isinstance(selector.value, str) else ""
+        requires_incident = stage == "active" and selected_stage == "revoked"
+        has_required_incident = bool(incident.value.strip()) or not requires_incident
+        can_submit = bool(
+            form_enabled
+            and selected_stage in allowed
+            and reason.value.strip()
+            and confirm.value
+            and has_required_incident
+        )
+        self.query_one("#rollout-advance", Button).disabled = not can_submit
+
+        status = self.query_one("#rollout-advance-status", Static)
+        if record is None:
+            status.update(
+                "Select a rollout to review available lifecycle transitions."
+            )
+        elif not allowed:
+            status.update(
+                f"Selected rollout is {stage or 'unknown'}; no operator transition is available here. "
+                "Proposed rollouts must enter validated through the validation workflow."
+            )
+        elif self._application_running is not True:
+            status.update(
+                "A live supervised application is required to request an authenticated rollout transition."
+            )
+        else:
+            status.update(
+                f"Selected {record.get('rollout_id', '-')} at {stage}. "
+                f"Allowed next stages: {', '.join(allowed)}. "
+                "Readiness is checked by the supervisor; override it only with explicit justification."
+            )
+
+    async def _advance_selected_rollout(self) -> None:
+        record = self._selected_rollout()
+        if record is None:
+            raise ValueError("Select a rollout before requesting advancement")
+        selector = self.query_one("#rollout-advance-stage", Select)
+        to_stage = selector.value if isinstance(selector.value, str) else ""
+        current_stage = str(record.get("stage") or "").strip().lower()
+        if to_stage not in self._ROLLOUT_NEXT_STAGES.get(current_stage, ()):
+            raise ValueError("The selected lifecycle stage is not allowed for this rollout")
+        if self._application_running is not True:
+            raise RuntimeError("Rollout advancement requires a live supervised application")
+        reason = self.query_one("#rollout-advance-reason", Input).value.strip()
+        if not reason:
+            raise ValueError("Rollout advancement requires an operator reason")
+        if not self.query_one("#rollout-advance-confirm", Checkbox).value:
+            raise ValueError("Confirm the rollout transition before dispatching it")
+        incident_id = self.query_one("#rollout-advance-incident", Input).value.strip()
+        if current_stage == "active" and to_stage == "revoked" and not incident_id:
+            raise ValueError("Active rollout revocation requires a new incident UUID")
+
+        request: dict[str, Any] = {
+            "rollout_id": record.get("rollout_id"),
+            "to_stage": to_stage,
+            "reason": reason,
+            "confirm": True,
+            "override_readiness": self.query_one(
+                "#rollout-advance-override", Checkbox
+            ).value,
+        }
+        if incident_id:
+            request["incident_id"] = incident_id
+        response = await self._request("repair-rollout-advance", **request)
+        await self.refresh_rollouts()
+        self._write_json("#rollout-output", response)
+        self.notify(
+            f"Rollout advanced to {to_stage}",
+            title="Rollout transition recorded",
+            timeout=10,
+        )
+
     async def refresh_rollouts(self) -> None:
         """Refresh the bounded, read-only supervisor rollout projection."""
         table = self.query_one("#rollout-table", DataTable)
@@ -3957,6 +4165,10 @@ class CaretakerConsoleApp(App):
         output.clear()
         self._rollout_records = []
         self._rollout_transitions = []
+        self._selected_rollout_id = None
+        self.query_one("#rollout-advance-reason", Input).value = ""
+        self.query_one("#rollout-advance-incident", Input).value = ""
+        self._refresh_rollout_advance_controls()
         if self._application_running is not True:
             self.query_one("#rollout-status", Static).update(
                 "Rollout status unavailable while the supervised application is stopped"
@@ -5197,6 +5409,9 @@ class CaretakerConsoleApp(App):
                 return
             if button == "rollout-refresh":
                 await self.refresh_rollouts()
+                return
+            if button == "rollout-advance":
+                await self._advance_selected_rollout()
                 return
             if button == "worker-failure-recovery-refresh":
                 await self.refresh_worker_failure_recovery()

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from caretaker.console import CaretakerConsoleApp
 from rich.text import Text
-from textual.widgets import Button, Checkbox, DataTable, Input, RichLog, Static, TextArea
+from textual.widgets import Button, Checkbox, DataTable, Input, RichLog, Select, Static, TextArea
 
 
 def test_target_runtime_state_marks_candidate_probation_as_validating():
@@ -1364,6 +1364,103 @@ def test_console_displays_read_only_rollout_execution_status(tmp_path):
             assert "READY" in str(app.query_one("#rollout-table", DataTable).get_row_at(0))
             app._rollout_records[0]["execution_summary_status"] = "STALE_OR_UNAVAILABLE"
             assert app._rollout_records[0]["execution_summary_status"] == "STALE_OR_UNAVAILABLE"
+
+    asyncio.run(exercise())
+
+
+def test_console_rollout_advancement_requires_guarded_operator_inputs(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            requests = []
+
+            async def request(command: str, **payload):
+                requests.append((command, payload))
+                if command == "repair-rollout-status":
+                    return {
+                        "ok": True,
+                        "available": True,
+                        "records": [{
+                            "rollout_id": "rollout-1",
+                            "target_id": "app:charge",
+                            "stage": "validated",
+                            "candidate_id": "candidate-1",
+                            "execution_summary_status": "AVAILABLE",
+                            "execution_summary": {},
+                        }],
+                        "worker_coordination": {
+                            "rollouts": [{
+                                "rollout_id": "rollout-1",
+                                "readiness": {"status": "READY"},
+                            }],
+                        },
+                        "transitions": [],
+                    }
+                if command == "repair-rollout-advance":
+                    return {
+                        "ok": True,
+                        "read_only": False,
+                        "authority_granted": True,
+                        "record": {"rollout_id": "rollout-1", "stage": "shadow"},
+                    }
+                raise AssertionError(command)
+
+            app._request = request  # type: ignore[method-assign]
+            app._application_running = True
+            await app.refresh_rollouts()
+
+            advance = app.query_one("#rollout-advance", Button)
+            assert advance.disabled is True
+
+            app._selected_rollout_id = "rollout-1"
+            app._refresh_rollout_advance_controls()
+            selector = app.query_one("#rollout-advance-stage", Select)
+            assert selector.disabled is False
+            assert selector.value == Select.NULL
+
+            selector.value = "shadow"
+            app.query_one("#rollout-advance-reason", Input).value = "begin reviewed shadow"
+            app.query_one("#rollout-advance-confirm", Checkbox).value = True
+            app._refresh_rollout_advance_controls()
+            assert advance.disabled is False
+
+            await app._advance_selected_rollout()
+
+            assert requests[1] == (
+                "repair-rollout-advance",
+                {
+                    "rollout_id": "rollout-1",
+                    "to_stage": "shadow",
+                    "reason": "begin reviewed shadow",
+                    "confirm": True,
+                    "override_readiness": False,
+                },
+            )
+            assert requests[2][0] == "repair-rollout-status"
+
+    asyncio.run(exercise())
+
+
+def test_console_does_not_offer_validation_bypass_for_proposed_rollout(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            app._application_running = True
+            app._rollout_records = [{
+                "rollout_id": "rollout-proposed",
+                "stage": "proposed",
+            }]
+            app._selected_rollout_id = "rollout-proposed"
+            app._refresh_rollout_advance_controls()
+
+            selector = app.query_one("#rollout-advance-stage", Select)
+            assert selector.disabled is True
+            assert app.query_one("#rollout-advance", Button).disabled is True
+            assert "validation workflow" in str(
+                app.query_one("#rollout-advance-status", Static).render()
+            )
 
     asyncio.run(exercise())
 
