@@ -21,12 +21,13 @@ PYPI_UPLOAD_URL ?= https://upload.pypi.org/legacy/
 TEST_PYPI_UPLOAD_URL ?= https://test.pypi.org/legacy/
 PODMAN ?= podman
 PODMAN_IMAGE ?= localhost/caretaker-replay-base:$(PACKAGE_VERSION)
+PODMAN_FAILURE_CORPUS_IMAGE ?= localhost/caretaker-failure-corpus-lab:$(PACKAGE_VERSION)
 PODMAN_BASE_IMAGE ?= python:3.13-slim
 PODMAN_CGROUP_MANAGER ?= cgroupfs
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup test compile check wheel podman-image podman-verify build package-check verify-wheel publish-testpypi publish-pypi publish-test publish root-check signing-check signing-status signing-bundle release-check release-manifest protected-manifest manifests generate-release-manifest generate-protected-manifest generate-manifests wheel-manifests inspect-integrity sign-check sign-all verify-signature verify-all verify-publication lab lab-verified lab-console profile clean distclean
+.PHONY: help setup test compile check wheel podman-image podman-failure-corpus-image podman-verify build package-check verify-wheel publish-testpypi publish-pypi publish-test publish root-check signing-check signing-status signing-bundle release-check release-manifest protected-manifest manifests generate-release-manifest generate-protected-manifest generate-manifests wheel-manifests inspect-integrity sign-check sign-all verify-signature verify-all verify-publication lab lab-verified lab-console profile clean distclean
 
 help: ## Show commands grouped by operator role
 	@printf '%s\n' \
@@ -39,6 +40,7 @@ help: ## Show commands grouped by operator role
 	  '  verify-wheel             Install and test the built wheel' '' \
 	  'Isolation:' \
 	  '  podman-image             Build the Caretaker rootless replay worker image' \
+	  '  podman-failure-corpus-image Build the application laboratory image' \
 	  '  podman-verify            Verify rootless Podman and the worker image' '' \
 	  'Release coordinator:' \
 	  '  release-check            Check root policy, clean source, and release inputs' \
@@ -89,6 +91,17 @@ podman-image: wheel ## Build the Caretaker rootless replay worker image
 	  --build-arg "CARETAKER_WHEEL=caretaker-$(PACKAGE_VERSION)-py3-none-any.whl" \
 	  --tag "$(PODMAN_IMAGE)" \
 	  dist
+
+podman-failure-corpus-image: ## Build the repository-owned application laboratory image
+	@test -n "$(PODMAN_BASE_IMAGE)" || { echo 'PODMAN_BASE_IMAGE must not be empty' >&2; exit 2; }
+	case "$(PODMAN_BASE_IMAGE)" in *REVIEWED_DIGEST*) echo 'Replace REVIEWED_DIGEST with a real digest or omit PODMAN_BASE_IMAGE for the local quick-start default' >&2; exit 2;; esac
+	case "$(PODMAN_BASE_IMAGE)" in *@sha256:*) ;; *) echo 'Warning: PODMAN_BASE_IMAGE is tag-based; pin it by digest for reviewed or production use.' >&2;; esac
+	$(PODMAN) --cgroup-manager="$(PODMAN_CGROUP_MANAGER)" build \
+	  --file isolated/podman/FailureCorpus.Containerfile \
+	  --ignorefile examples/failure_corpus/.containerignore \
+	  --build-arg "PYTHON_BASE_IMAGE=$(PODMAN_BASE_IMAGE)" \
+	  --tag "$(PODMAN_FAILURE_CORPUS_IMAGE)" \
+	  examples/failure_corpus
 
 podman-verify: ## Verify rootless Podman and a previously built worker image
 	sh isolated/podman/verify-rootless.sh "$(PODMAN_IMAGE)"

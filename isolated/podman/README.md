@@ -87,6 +87,48 @@ the host intentionally provides a working systemd user session, use
 for verification, and `cgroup_manager="systemd"` when constructing the Python
 replay backend.
 
+## Build the application laboratory image
+
+The failure-corpus application laboratory is a separate, smaller image. It
+contains only the repository-owned stdlib stimulus runner; it does not contain
+the Caretaker wheel, a live application, policy, incident capsules, or
+credentials. The ordinary failure-corpus path remains the least-friction
+process runner. Use this image when policy explicitly requires CONTAINER
+isolation for laboratory coverage:
+
+```sh
+make podman-failure-corpus-image
+```
+
+For reviewed or production use, pass the same digest-pinned
+`PODMAN_BASE_IMAGE` used for the Caretaker worker image:
+
+```sh
+make podman-failure-corpus-image \
+  PODMAN_BASE_IMAGE="$BASE_IMAGE" \
+  PODMAN_FAILURE_CORPUS_IMAGE='localhost/caretaker-failure-corpus-lab:0.6.1'
+```
+
+The image runs as UID/GID `10001:10001`. The existing
+`FailureCorpusPodmanRunner` supplies `--network=none`, a read-only root
+filesystem, dropped capabilities, no-new-privileges, bounded resources, and
+JSON over standard input. It never mounts the checkout or the application
+workspace. To run all laboratory scenarios through the non-interactive CLI:
+
+```sh
+caretaker-failure-corpus-run \
+  --isolation CONTAINER \
+  --minimum-isolation CONTAINER \
+  --image localhost/caretaker-failure-corpus-lab:0.6.1 \
+  --runner-command python /opt/caretaker/application_laboratory.py \
+  --data-directory ./caretaker-data
+```
+
+The command vector is trusted operator configuration; it is not read from the
+metadata-only manifest. If Podman is unavailable or cannot prove rootless
+execution, the runner records `ISOLATION_UNAVAILABLE` and does not fall back to
+process execution.
+
 Review the resulting image identity before using it:
 
 ```sh

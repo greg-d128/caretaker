@@ -1,0 +1,3 @@
+# The container image copies only application_laboratory.py explicitly.
+*
+!application_laboratory.py

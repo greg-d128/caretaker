@@ -52,6 +52,11 @@ repository of captured real incidents, production-like applications, and
 broader container/VM observed coverage remain future work.
 The runner-selection CLI exposes the same policy boundary for repeatable local
 or isolated runs without turning manifest data into an execution channel.
+Beneath that interface, a repository-owned non-root application-laboratory
+Podman image and reproducible Make target now provide the same ten stimuli at
+the CONTAINER tier when a host has a working rootless runtime. Live container
+execution and broader production-like application coverage remain required
+before this priority can be considered complete.
 Bounded observations can now be stored separately from the manifest, with a
 content hash for corruption detection; that hash is not a substitute for
 external authenticated shipping. Expected metadata must remain separate from actual evidence; loading or listing

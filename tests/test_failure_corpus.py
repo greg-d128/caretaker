@@ -291,6 +291,26 @@ def test_process_runner_uses_explicit_json_command_and_cleans_workspace(tmp_path
     assert tuple(tmp_path.iterdir()) == ()
 
 
+def test_application_laboratory_container_contract_is_non_root_and_stdlib_only() -> None:
+    containerfile = ROOT / "isolated" / "podman" / "FailureCorpus.Containerfile"
+    ignorefile = ROOT / "examples" / "failure_corpus" / ".containerignore"
+    makefile = ROOT / "Makefile"
+
+    text = containerfile.read_text(encoding="utf-8")
+    assert "ARG PYTHON_BASE_IMAGE" in text
+    assert "FROM ${PYTHON_BASE_IMAGE}" in text
+    assert "COPY application_laboratory.py /opt/caretaker/application_laboratory.py" in text
+    assert "USER 10001:10001" in text
+    assert 'ENTRYPOINT ["python", "/opt/caretaker/application_laboratory.py"]' in text
+    assert "pip install" not in text
+    assert ignorefile.read_text(encoding="utf-8").splitlines()[-1] == "!application_laboratory.py"
+
+    make_text = makefile.read_text(encoding="utf-8")
+    assert "podman-failure-corpus-image" in make_text
+    assert "PODMAN_FAILURE_CORPUS_IMAGE" in make_text
+    assert "examples/failure_corpus" in make_text
+
+
 def test_process_runner_fails_closed_when_policy_requires_stronger_isolation() -> None:
     corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
     runner = FailureCorpusProcessRunner(
