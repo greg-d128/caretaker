@@ -675,8 +675,11 @@ collection requests record bounded observed duration; the soft limit is exposed
 as an advisory status, while the hard limit leaves queued work intact and
 defers new claims until the window clears. Optional soft and hard observed-call
 budgets provide the same boundary for call volume, and status reports rolling
-observed call rate plus observed/requested sampling density. Queue-pressure,
-host-resource-aware, and density-aware cost budgeting remain future work.
+observed call rate plus observed/requested sampling density. Queue pressure is
+also reported as pending-request utilization, available slots, and a full or
+available state; full queues retain the request and apply explicit
+backpressure. Host-resource-aware and density-aware cost budgeting remain
+future work.
 
 Sealed behavioral snapshots should inform later lightweight anomaly triggers.
 Candidate signals include expected duration ranges, failure/return categories,

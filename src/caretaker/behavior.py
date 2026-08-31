@@ -2011,6 +2011,10 @@ class BehaviorCollectionScheduler:
                 for path in self.request_directory.glob("*.json")
                 if path.name not in valid_paths
             )
+            active_count = counts.get("active", 0)
+            queued_count = counts.get("queued", 0)
+            pending_count = active_count + queued_count
+            pending_utilization = min(1.0, pending_count / self.maximum_pending)
             automatic_last_subject = None
             try:
                 cursor = json.loads(self.automatic_cursor_path.read_text(encoding="utf-8"))
@@ -2027,11 +2031,20 @@ class BehaviorCollectionScheduler:
                 "maximum_pending": self.maximum_pending,
                 "maximum_calls": self.maximum_calls,
                 "resource_budget": self._budget_status(),
+                "queue_pressure": {
+                    "state": "FULL" if pending_count >= self.maximum_pending else "AVAILABLE",
+                    "pending": pending_count,
+                    "queued": queued_count,
+                    "active": active_count,
+                    "maximum_pending": self.maximum_pending,
+                    "available_slots": max(0, self.maximum_pending - pending_count),
+                    "utilization": pending_utilization,
+                },
                 "automatic_fairness": "PERSISTED_ROUND_ROBIN",
                 "automatic_last_subject": automatic_last_subject,
-                "active": counts.get("active", 0),
-                "queued": counts.get("queued", 0),
-                "pending": counts.get("active", 0) + counts.get("queued", 0),
+                "active": active_count,
+                "queued": queued_count,
+                "pending": pending_count,
                 "counts": counts,
                 "invalid_request_count": invalid_count,
             }

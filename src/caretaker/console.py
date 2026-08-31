@@ -2688,8 +2688,15 @@ class CaretakerConsoleApp(App):
             return "collection scheduler unavailable"
         active = sum(int(item.get("active") or 0) for item in enabled)
         queued = sum(int(item.get("queued") or 0) for item in enabled)
+        pending = sum(int(item.get("pending") or 0) for item in enabled)
         pending_limit = sum(int(item.get("maximum_pending") or 0) for item in enabled)
         active_limit = sum(int(item.get("maximum_active") or 0) for item in enabled)
+        pressure = min(1.0, pending / pending_limit) if pending_limit else 0.0
+        pressure_state = "FULL" if pending_limit and pending >= pending_limit else "AVAILABLE"
+        budget_states = sorted({
+            str((item.get("resource_budget") or {}).get("state") or "NORMAL")
+            for item in enabled
+        })
         counts: dict[str, int] = {}
         for item in enabled:
             for status, count in dict(item.get("counts") or {}).items():
@@ -2710,7 +2717,8 @@ class CaretakerConsoleApp(App):
             for item in enabled
         )
         return (
-            f"collection queue active {active}/{active_limit}, queued {queued}/{pending_limit}"
+            f"collection queue active {active}/{active_limit}, queued {queued}, pending {pending}/{pending_limit}"
+            f" (pressure {pressure:.0%}, {pressure_state.lower()}; budget {'/'.join(budget_states).lower()})"
             f"{'; terminal ' + terminal if terminal else ''}"
             f"{'; backlog ' + ', '.join(f'{status} {backlog_counts[status]}' for status in sorted(backlog_counts)) if backlog_counts else ''}"
             f"; automatic {automatic}"

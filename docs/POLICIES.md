@@ -81,7 +81,10 @@ collection calls. Scheduler status reports the rolling observed call rate,
 requested-call total, and observed/requested sampling density. A hard limit
 from either budget leaves queued work intact; it does not interrupt an active
 collection. Host resource pressure, queue pressure, and density-aware cost
-accounting are not yet included.
+accounting are not yet included. The scheduler separately reports queue
+pressure as pending-request utilization, available slots, and a full/available
+state; reaching `collection_max_pending` applies backpressure and preserves the
+request rather than dropping it.
 
 `BehaviorSnapshotPolicy.collection_auto_promote` is disabled by default. When
 enabled, the supervisor health cycle may promote only current-generation,

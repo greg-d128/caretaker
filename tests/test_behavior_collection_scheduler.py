@@ -273,6 +273,45 @@ def test_scheduler_call_budget_expires_with_time_window(tmp_path: Path) -> None:
     assert scheduler.status()["resource_budget"]["state"] == "NORMAL"
 
 
+def test_scheduler_reports_queue_pressure_and_available_slots(tmp_path: Path) -> None:
+    scheduler = BehaviorCollectionScheduler(tmp_path, maximum_pending=2)
+    first = scheduler.enqueue(
+        scope="function",
+        subject="target-a",
+        requested_calls=1,
+        requested_by="uid:1001",
+        reason="queue pressure test",
+    )
+    scheduler.enqueue(
+        scope="function",
+        subject="target-b",
+        requested_calls=1,
+        requested_by="uid:1001",
+        reason="queue pressure test",
+    )
+
+    pressure = scheduler.status()["queue_pressure"]
+    assert pressure == {
+        "state": "FULL",
+        "pending": 2,
+        "queued": 2,
+        "active": 0,
+        "maximum_pending": 2,
+        "available_slots": 0,
+        "utilization": 1.0,
+    }
+    with pytest.raises(BehaviorCollectionQueueFull):
+        scheduler.enqueue(
+            scope="function",
+            subject="target-c",
+            requested_calls=1,
+            requested_by="uid:1001",
+            reason="queue pressure test",
+        )
+    assert scheduler.cancel(first["request_id"], reason="free queue slot")["status"] == "CANCELLED"
+    assert scheduler.status()["queue_pressure"]["available_slots"] == 1
+
+
 def test_scheduler_expires_deadline_without_claiming_request(tmp_path: Path) -> None:
     now = [datetime(2026, 8, 30, tzinfo=timezone.utc)]
     scheduler = BehaviorCollectionScheduler(tmp_path, clock=lambda: now[0])

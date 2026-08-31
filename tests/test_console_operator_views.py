@@ -1825,7 +1825,13 @@ def test_behavior_title_exposes_collection_queue_state(tmp_path):
                     "active": 1,
                     "maximum_active": 2,
                     "queued": 3,
+                    "pending": 4,
                     "maximum_pending": 10,
+                    "queue_pressure": {
+                        "state": "AVAILABLE",
+                        "utilization": 0.4,
+                    },
+                    "resource_budget": {"state": "NORMAL"},
                     "counts": {"failed": 1, "cancelled": 2},
                     "backlog": {"counts": {"armed_waiting": 4, "sufficiently_covered": 2}},
                 }]
@@ -1833,7 +1839,7 @@ def test_behavior_title_exposes_collection_queue_state(tmp_path):
             app._behavior_records = []
             app._apply_behavior_filter()
             title = str(app.query_one("#behavior-list-title", Static).render())
-            assert "collection queue active 1/2, queued 3/10; terminal failed 1, cancelled 2; backlog armed_waiting 4, sufficiently_covered 2" in title
+            assert "collection queue active 1/2, queued 3, pending 4/10 (pressure 40%, available; budget normal); terminal failed 1, cancelled 2; backlog armed_waiting 4, sufficiently_covered 2" in title
 
     asyncio.run(exercise())
 
