@@ -74,6 +74,7 @@ The local high-value audit stream is configured independently under
 enabled = true
 file_name = "caretaker_audit.log"
 hash_chain = true
+sign_events = false
 flush_critical = true
 maximum_event_bytes = 4096
 ```
@@ -88,8 +89,14 @@ the output-only supervisor control socket as bounded, allow-listed evidence;
 the supervisor binds the submitting application PID and derives the worker
 actor. The submitted validation context cannot modify policy or authority.
 Audit settings are run-bound; a reload records the attempted change but requires
-a new run to change the stream configuration. External delivery and per-event
-signatures remain future capabilities. See
+a new run to change the stream configuration. Per-event signatures are
+independently controlled. Set `sign_events = true` only with
+`[logging.signing].mode = "EPHEMERAL_SIGNED"` or `"EXTERNAL_SIGNED"`; Caretaker
+rejects a missing or incompatible signer rather than silently downgrading to a
+hash-only stream. Signed events contain a runtime artifact signature over the
+canonical event body, event identity, and stream sequence, and retained signed
+events are verified on restart. The default remains hash chaining without
+per-event signatures. External delivery remains a future capability. See
 [`LOGGING_RECORD_FORMAT.md`](LOGGING_RECORD_FORMAT.md) for the proposed envelope
 and event registry.
 

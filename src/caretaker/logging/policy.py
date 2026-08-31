@@ -203,6 +203,7 @@ class AuditStreamPolicy:
     enabled: bool = True
     file_name: str = "caretaker_audit.log"
     hash_chain: bool = True
+    sign_events: bool = False
     flush_critical: bool = True
     maximum_event_bytes: int = 4096
 
@@ -353,6 +354,15 @@ def validate_operator_logging_policy(policy: OperatorLoggingPolicy) -> None:
         or policy.audit.maximum_event_bytes > policy.codec.maximum_record_bytes
     ):
         errors.append("logging.audit.maximum_event_bytes must be between 512 and codec.maximum_record_bytes")
+    if policy.audit.sign_events and not policy.audit.enabled:
+        errors.append("logging.audit.sign_events requires logging.audit.enabled=True")
+    if (
+        policy.audit.sign_events
+        and policy.signing.mode is RuntimeRecordIntegrityMode.HASH_CHAINED
+    ):
+        errors.append(
+            "logging.audit.sign_events requires signing.mode=EPHEMERAL_SIGNED or EXTERNAL_SIGNED"
+        )
     if policy.interrogation.maximum_records <= 0:
         errors.append("interrogation.maximum_records must be greater than zero")
     if policy.interrogation.maximum_representative_records <= 0:

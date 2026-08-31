@@ -121,6 +121,115 @@ def test_audit_stream_can_be_disabled(tmp_path: Path) -> None:
     assert not (tmp_path / "caretaker_audit.log").exists()
 
 
+def test_signed_audit_events_verify_across_restart(tmp_path: Path) -> None:
+    from caretaker.logging import RuntimeArtifactSigningService, RuntimeRecordIntegrityMode, RuntimeSigningPolicy
+
+    signing_policy = RuntimeSigningPolicy(
+        mode=RuntimeRecordIntegrityMode.EPHEMERAL_SIGNED,
+        run_signer_in_separate_process=False,
+    )
+    audit_policy = AuditStreamPolicy(sign_events=True)
+    first_signer = RuntimeArtifactSigningService(
+        policy=signing_policy,
+        application_id="demo",
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        root=tmp_path,
+    )
+    first = AuditStreamWriter(
+        audit_policy,
+        directory=tmp_path,
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        artifact_signer=first_signer,
+    )
+    first_event = first.emit("INCIDENT_CAPTURED")
+    first.close()
+    first_signer.close()
+
+    second_signer = RuntimeArtifactSigningService(
+        policy=signing_policy,
+        application_id="demo",
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        root=tmp_path,
+    )
+    restarted = AuditStreamWriter(
+        audit_policy,
+        directory=tmp_path,
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        artifact_signer=second_signer,
+    )
+    second_event = restarted.emit("RECOVERY_DECISION", priority=EvidencePriority.CRITICAL)
+    restarted.close()
+    second_signer.close()
+
+    assert first_event["integrity"]["signature_state"] == "EPHEMERAL_SIGNED"
+    assert second_event["integrity"]["signature_state"] == "EPHEMERAL_SIGNED"
+    rows = [json.loads(line) for line in (tmp_path / "caretaker_audit.log").read_text().splitlines()]
+    assert all("artifact_signature" in row["integrity"] for row in rows)
+
+
+def test_signed_audit_events_reject_tampered_signature(tmp_path: Path) -> None:
+    from caretaker.logging import RuntimeArtifactSigningService, RuntimeRecordIntegrityMode, RuntimeSigningPolicy
+
+    signer = RuntimeArtifactSigningService(
+        policy=RuntimeSigningPolicy(
+            mode=RuntimeRecordIntegrityMode.EPHEMERAL_SIGNED,
+            run_signer_in_separate_process=False,
+        ),
+        application_id="demo",
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        root=tmp_path,
+    )
+    writer = AuditStreamWriter(
+        AuditStreamPolicy(sign_events=True),
+        directory=tmp_path,
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        artifact_signer=signer,
+    )
+    writer.emit("INCIDENT_CAPTURED")
+    writer.close()
+    signer.close()
+    path = tmp_path / "caretaker_audit.log"
+    row = json.loads(path.read_text())
+    row["integrity"]["artifact_signature"]["signature"] = "AA=="
+    path.write_text(json.dumps(row) + "\n")
+
+    verifier = RuntimeArtifactSigningService(
+        policy=RuntimeSigningPolicy(
+            mode=RuntimeRecordIntegrityMode.EPHEMERAL_SIGNED,
+            run_signer_in_separate_process=False,
+        ),
+        application_id="demo",
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        root=tmp_path,
+    )
+    with pytest.raises(AuditStreamError, match="signature"):
+        AuditStreamWriter(
+            AuditStreamPolicy(sign_events=True),
+            directory=tmp_path,
+            run_id=uuid4(),
+            process_start_id=uuid4(),
+            artifact_signer=verifier,
+        )
+    verifier.close()
+
+
+def test_signed_audit_events_require_a_signer(tmp_path: Path) -> None:
+    with pytest.raises(AuditStreamError, match="no runtime artifact signer"):
+        AuditStreamWriter(
+            AuditStreamPolicy(sign_events=True),
+            directory=tmp_path,
+            run_id=uuid4(),
+            process_start_id=uuid4(),
+        )
+
+
 def test_audit_registry_is_complete_and_exposes_redaction_contract() -> None:
     expected = {
         "AUDIT_STREAM_STARTED", "AUDIT_STREAM_ROTATED", "AUDIT_DELIVERY_STATUS",
@@ -195,6 +304,30 @@ def test_logging_runtime_emits_separate_audit_stream(tmp_path: Path) -> None:
         "state": "ACTIVE",
     }
     assert all("control" not in row["event_type"].lower() for row in rows)
+
+
+def test_logging_runtime_can_sign_audit_stream_with_runtime_identity(tmp_path: Path) -> None:
+    from caretaker.logging import RuntimeRecordIntegrityMode, RuntimeSigningPolicy
+    from caretaker.logging.handler import LoggingRuntime
+    from caretaker.logging.policy import CompressionPolicy, OperatorLoggingPolicy
+
+    policy = OperatorLoggingPolicy(
+        directory=str(tmp_path),
+        compression=CompressionPolicy(enabled=False),
+        signing=RuntimeSigningPolicy(
+            mode=RuntimeRecordIntegrityMode.EPHEMERAL_SIGNED,
+            run_signer_in_separate_process=False,
+        ),
+        audit=AuditStreamPolicy(sign_events=True),
+    )
+    runtime = LoggingRuntime(policy, supervised=True)
+    try:
+        runtime.flush()
+    finally:
+        runtime.close()
+    rows = [json.loads(line) for line in (tmp_path / "caretaker_audit.log").read_text().splitlines()]
+    assert rows
+    assert all(row["integrity"]["signature_state"] == "EPHEMERAL_SIGNED" for row in rows)
 
 
 def test_policy_reload_audit_binds_prior_and_resulting_snapshots(tmp_path: Path) -> None:

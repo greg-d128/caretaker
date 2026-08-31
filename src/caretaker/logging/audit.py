@@ -6,6 +6,7 @@ import os
 import re
 import threading
 import time
+import base64
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,12 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from .models import EvidencePriority
+from .signing import (
+    RuntimeArtifactSigningService,
+    deserialize_signed_artifact,
+    serialize_signed_artifact,
+    verify_signed_artifact,
+)
 
 
 AUDIT_SCHEMA_VERSION = 1
@@ -238,11 +245,13 @@ class AuditStreamWriter:
         run_id: UUID,
         process_start_id: UUID,
         supervisor_id: UUID | str | None = None,
+        artifact_signer: RuntimeArtifactSigningService | None = None,
     ) -> None:
         self.policy = policy
         self.run_id = run_id
         self.process_start_id = process_start_id
         self.supervisor_id = str(supervisor_id) if supervisor_id is not None else None
+        self._artifact_signer = artifact_signer
         self.path = Path(directory) / policy.file_name
         self._lock = threading.RLock()
         self._closed = False
@@ -252,6 +261,10 @@ class AuditStreamWriter:
         self._file = None
         if not policy.enabled:
             return
+        if policy.sign_events and artifact_signer is None:
+            raise AuditStreamError(
+                "Audit event signing is enabled but no runtime artifact signer was provided"
+            )
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._recover_existing()
         self._file = self.path.open("ab", buffering=0)
@@ -324,6 +337,65 @@ class AuditStreamWriter:
         expected_content = hashlib.sha256(_canonical(body)).hexdigest()
         if integrity.get("content_sha256") != expected_content:
             raise AuditStreamError("Audit record content hash does not match")
+        if self.policy.sign_events:
+            self._validate_existing_signature(
+                event,
+                integrity,
+                content_hash=expected_content,
+            )
+
+    def _public_key_for_artifact(self, artifact: Any) -> bytes | None:
+        signer = self._artifact_signer
+        if signer is None:
+            return None
+        journal = getattr(signer, "journal", None)
+        fingerprint = artifact.public_key_fingerprint
+        if journal is not None and fingerprint:
+            public_key = journal.public_key(fingerprint)
+            if public_key is not None:
+                return public_key
+        identity = getattr(signer, "identity", None)
+        if isinstance(identity, Mapping):
+            value = identity.get("public_key")
+            if isinstance(value, bytes):
+                return value
+            if isinstance(value, str):
+                try:
+                    return base64.b64decode(value)
+                except Exception:
+                    return None
+        return None
+
+    def _validate_existing_signature(
+        self,
+        event: Mapping[str, Any],
+        integrity: Mapping[str, Any],
+        *,
+        content_hash: str,
+    ) -> None:
+        value = integrity.get("artifact_signature")
+        if not isinstance(value, Mapping):
+            raise AuditStreamError(
+                "Audit event signing is required but the retained record has no signature"
+            )
+        try:
+            artifact = deserialize_signed_artifact(value)
+        except Exception as exc:
+            raise AuditStreamError("Audit event signature is malformed") from exc
+        if artifact.artifact_kind != "caretaker-audit-event":
+            raise AuditStreamError("Audit event signature has the wrong artifact kind")
+        if artifact.content_hash != content_hash:
+            raise AuditStreamError("Audit event signature content hash does not match")
+        expected_context = {
+            "event_id": str(event.get("event_id") or ""),
+            "event_type": str(event.get("event_type") or ""),
+            "stream_sequence": event.get("stream_sequence"),
+        }
+        if dict(artifact.context) != expected_context:
+            raise AuditStreamError("Audit event signature context does not match")
+        public_key = self._public_key_for_artifact(artifact)
+        if public_key is None or not verify_signed_artifact(artifact, public_key):
+            raise AuditStreamError("Audit event signature could not be verified")
 
     def update_policy(self, policy: Any) -> tuple[str, ...]:
         warnings: list[str] = []
@@ -333,6 +405,8 @@ class AuditStreamWriter:
             warnings.append("logging.audit.enabled is run-bound; a new run is required")
         if policy.hash_chain != self.policy.hash_chain:
             warnings.append("logging.audit.hash_chain is run-bound; a new run is required")
+        if policy.sign_events != self.policy.sign_events:
+            warnings.append("logging.audit.sign_events is run-bound; a new run is required")
         if policy.maximum_event_bytes != self.policy.maximum_event_bytes:
             warnings.append("logging.audit.maximum_event_bytes is startup-bound; the existing limit remains active")
         return tuple(warnings)
@@ -408,6 +482,33 @@ class AuditStreamWriter:
                 "content_sha256": content_hash,
                 "hash_chain": self.policy.hash_chain,
             }
+            if self.policy.sign_events:
+                if self._artifact_signer is None:
+                    self._sequence -= 1
+                    raise AuditStreamError(
+                        "Audit event signing is enabled but no runtime artifact signer is available"
+                    )
+                signed = self._artifact_signer.sign_artifact(
+                    artifact_kind="caretaker-audit-event",
+                    content_hash=content_hash,
+                    previous_artifact_hash=self._previous_hash,
+                    context={
+                        "event_id": body["event_id"],
+                        "event_type": event_type,
+                        "stream_sequence": self._sequence,
+                    },
+                    next_event_sequence=self._sequence,
+                )
+                if signed is None:
+                    self._sequence -= 1
+                    raise AuditStreamError(
+                        "Audit event signing was required but the configured signer returned no signature"
+                    )
+                event["integrity"].update({
+                    "artifact_signature": serialize_signed_artifact(signed),
+                    "signature_state": signed.signer_mode.name,
+                    "signer_fingerprint": signed.public_key_fingerprint,
+                })
             encoded = _canonical(event) + b"\n"
             if len(encoded) > self.policy.maximum_event_bytes:
                 self._sequence -= 1

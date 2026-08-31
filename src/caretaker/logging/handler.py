@@ -86,13 +86,6 @@ class LoggingRuntime:
         self.effective = self.leases.effective
         self.run_id = uuid4()
         self.process_start_id = uuid4()
-        self.audit = AuditStreamWriter(
-            policy.audit,
-            directory=policy.directory,
-            run_id=self.run_id,
-            process_start_id=self.process_start_id,
-            supervisor_id=os.environ.get("CARETAKER_SUPERVISOR_ID"),
-        )
         self.attachments = AttachmentStore(policy.directory, policy.attachments)
         self.writer = SegmentWriter(
             policy,
@@ -100,6 +93,14 @@ class LoggingRuntime:
             process_start_id=self.process_start_id,
             external_signer=external_signer,
             attachment_checkpoint=self._attachment_manifest_checkpoint_hash,
+        )
+        self.audit = AuditStreamWriter(
+            policy.audit,
+            directory=policy.directory,
+            run_id=self.run_id,
+            process_start_id=self.process_start_id,
+            supervisor_id=os.environ.get("CARETAKER_SUPERVISOR_ID"),
+            artifact_signer=self.writer.signing_service,
         )
         self.sink = BufferedSegmentSink(self.writer, policy)
         self._sequence = 0

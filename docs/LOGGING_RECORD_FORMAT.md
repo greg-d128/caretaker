@@ -116,10 +116,19 @@ Example:
   "integrity": {
     "previous_event_hash": "sha256:...",
     "content_sha256": "sha256:...",
-    "signing_mode": "RUNTIME_EPHEMERAL",
-    "signature_status": "VERIFIED",
-    "signer_public_key_fingerprint": "sha256:...",
-    "signature": "base64:..."
+    "hash_chain": true,
+    "signature_state": "EPHEMERAL_SIGNED",
+    "signer_fingerprint": "sha256:...",
+    "artifact_signature": {
+      "artifact_kind": "caretaker-audit-event",
+      "content_hash": "sha256:...",
+      "context": {
+        "event_id": "2dc1f50b-5f66-4b8f-a8ca-1f8b5e4ab2d1",
+        "event_type": "POLICY_APPLIED",
+        "stream_sequence": 42
+      },
+      "signature": "base64:..."
+    }
   },
   "details": {"worker_acknowledgements": {"accepted": 3, "required": 3}}
 }
@@ -154,10 +163,13 @@ the registered minimum priority and required envelope paths. Unknown future
 uppercase names remain forward-compatible evidence without registered
 semantics or command meaning.
 
-Audit integrity is policy controlled. The policy may require no signature,
-runtime-ephemeral signatures, or an independently managed external signer. When
-hash chaining is enabled, each event commits to the previous event and each
-segment commits to the previous segment using the existing segment mechanism.
+Audit integrity is policy controlled. `logging.audit.hash_chain` controls the
+local event chain and `logging.audit.sign_events` controls per-event runtime
+artifact signatures. Signing may use runtime-ephemeral keys or an independently
+managed external signer through `logging.signing.mode`; signed mode requires a
+compatible signer and fails closed if one is unavailable. When hash chaining is
+enabled, each event commits to the previous event and each segment commits to
+the previous segment using the existing segment mechanism.
 Signing and chaining prove continuity of the retained local stream; immediate
 external shipping is required for stronger protection against an attacker who can
 rewrite local storage. External delivery is a replica, not an authority source.

@@ -50,16 +50,23 @@ The referenced attribute may be a signer instance, class, or zero-argument facto
 
 `publish_public_key_to_control_clients` controls whether the current public signing identity is returned by supervisor status/health requests. The independently retained Signing Identity Journal remains the durable verification source for ephemeral artifact history.
 
-## Proposed audit-stream signing policy
+## Audit-stream signing policy
 
 The `caretaker_audit.log` local stream currently uses canonical JSON and a
-policy-controlled hash chain. Future signing will use the same canonicalization
-and signer interfaces as runtime artifact manifests, with the signing decision
-controlled per deployment. A least-friction deployment may use a local stream
-with checksums; a reviewed deployment may require a hash chain and
-`EPHEMERAL_SIGNED`; a high-assurance deployment may require an external signer
-and immediate external delivery. These modes are assurance choices, not
-authority grants.
+policy-controlled hash chain. Per-event signing uses the same canonicalization
+and signer interfaces as runtime artifact manifests, with the decision
+controlled by `logging.audit.sign_events`. A least-friction deployment may use
+a local stream with checksums; a reviewed deployment may require a hash chain
+and `EPHEMERAL_SIGNED`; a high-assurance deployment may require an external
+signer. These modes are assurance choices, not authority grants.
+
+When `sign_events = true`, every newly written event carries an
+`artifact_signature` whose `artifact_kind` is `caretaker-audit-event` and whose
+context binds the event ID, event type, and stream sequence. The writer verifies
+retained signatures during restart recovery using the public signing-identity
+journal. Missing, malformed, mismatched, or unverifiable signatures fail
+recovery; no signed configuration silently falls back to hash-only output.
+The default is `sign_events = false` and `signing.mode = HASH_CHAINED`.
 
 The current console records a UUID-scoped invocation, OS UID/GID, and peer
 process identity in the audit stream so an action can be attributed to a

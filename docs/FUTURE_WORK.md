@@ -1258,7 +1258,7 @@ Until this exists, restart is a rollback to deployed application code, not conti
 
 ## Other logging and storage work
 
-**Status: Implemented in development tree for the local hash-chained stream; external delivery and signing remain future work.**
+**Status: Implemented in development tree for the local hash-chained stream and optional per-event runtime signing; external delivery remains future work.**
 
 - Extract the writer, attachment store, and system collector into independently restartable worker processes while preserving the current IPC and evidence contracts.
 - Add external `LogSink` implementations and reliable store-and-forward delivery to independent log collection systems.
@@ -1276,10 +1276,12 @@ Until this exists, restart is a rollback to deployed application code, not conti
   supervisor and the submitted policy context remains evidence. Remaining work
   is to connect every registry type to its producer and complete
   policy-controlled critical/important/ordinary/debug delivery semantics.
-  Accepted adaptive policy transitions are now also signed as runtime artifacts
-  when a runtime signer is configured; hash-chained mode remains explicitly
-  unsigned and externally secured audit signing remains future work.
-- Make audit hash chaining and signing mode policy controlled. Critical policy,
+  Accepted adaptive policy transitions and, when `logging.audit.sign_events` is
+  enabled, every audit event are now signed as runtime artifacts when a runtime
+  signer is configured; hash-chained mode remains explicitly unsigned. Signed
+  audit records are verified during restart recovery using the retained public
+  identity journal.
+- Complete policy-controlled audit integrity and delivery semantics. Critical policy,
   authority, worker-lifecycle, supervisor-state, and audit-delivery events must
   be retained before their effects are reported complete; ordinary metrics may
   use policy-approved sampling or loss with an explicit loss event.
