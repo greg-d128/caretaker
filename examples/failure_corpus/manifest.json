@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "corpus_id": "caretaker-default-failure-corpus-v1",
+  "description": "Reviewable metadata for deterministic Caretaker application failure scenarios.",
+  "scenarios": [
+    {
+      "scenario_id": "exception.unhandled",
+      "category": "exception",
+      "description": "A configured application target raises an unexpected exception.",
+      "stimulus": "invoke target with the exception-producing laboratory input",
+      "expected": {
+        "signal": "EXCEPTION",
+        "caretaker_action": "CAPTURE_INCIDENT",
+        "authority_effect": "NO_AUTHORITY_CHANGE",
+        "minimum_isolation": "PROCESS"
+      },
+      "tags": ["incident", "baseline"]
+    },
+    {
+      "scenario_id": "timeout.soft",
+      "category": "timeout",
+      "description": "A target exceeds its policy soft-timeout budget without a hard interruption.",
+      "stimulus": "invoke the bounded slow-operation laboratory input",
+      "expected": {
+        "signal": "TIMEOUT",
+        "caretaker_action": "RECORD_EVIDENCE",
+        "authority_effect": "NO_AUTHORITY_CHANGE",
+        "minimum_isolation": "PROCESS"
+      },
+      "tags": ["timing", "behavior"]
+    },
+    {
+      "scenario_id": "output.invalid",
+      "category": "invalid-output",
+      "description": "A target returns a value that violates its declared output contract.",
+      "stimulus": "invoke the target with the invalid-output laboratory variant",
+      "expected": {
+        "signal": "INVALID_OUTPUT",
+        "caretaker_action": "ROLLBACK_REPAIR",
+        "authority_effect": "ROLLBACK",
+        "minimum_isolation": "PROCESS"
+      },
+      "tags": ["repair", "validation"]
+    },
+    {
+      "scenario_id": "dependency.changed",
+      "category": "dependency",
+      "description": "A selected dependency changes behavior while the application target remains unchanged.",
+      "stimulus": "run the dependency-routing laboratory variant after changing its configured response",
+      "expected": {
+        "signal": "DEPENDENCY_FAILURE",
+        "caretaker_action": "CAPTURE_INCIDENT",
+        "authority_effect": "NO_AUTHORITY_CHANGE",
+        "minimum_isolation": "CONTAINER"
+      },
+      "tags": ["dependency", "generation"]
+    },
+    {
+      "scenario_id": "configuration.changed",
+      "category": "configuration",
+      "description": "A configuration change causes a previously stable target to diverge.",
+      "stimulus": "reload a laboratory configuration value and repeat the same input",
+      "expected": {
+        "signal": "CONFIGURATION_FAILURE",
+        "caretaker_action": "CAPTURE_INCIDENT",
+        "authority_effect": "NO_AUTHORITY_CHANGE",
+        "minimum_isolation": "PROCESS"
+      },
+      "tags": ["configuration", "generation"]
+    },
+    {
+      "scenario_id": "resource.pressure",
+      "category": "resource",
+      "description": "A bounded operation approaches its configured resource budget.",
+      "stimulus": "run the resource-pressure laboratory input within the configured budget",
+      "expected": {
+        "signal": "RESOURCE_PRESSURE",
+        "caretaker_action": "CONTINUE_DEGRADED",
+        "authority_effect": "DEGRADED",
+        "minimum_isolation": "CONTAINER"
+      },
+      "tags": ["resource", "backpressure"]
+    },
+    {
+      "scenario_id": "worker.failed",
+      "category": "worker",
+      "description": "An application-scoped Caretaker worker fails during an in-flight transaction.",
+      "stimulus": "terminate the controlled worker at a declared transaction milestone",
+      "expected": {
+        "signal": "WORKER_FAILURE",
+        "caretaker_action": "REPLACE_WORKER",
+        "authority_effect": "NO_AUTHORITY_CHANGE",
+        "minimum_isolation": "PROCESS"
+      },
+      "tags": ["worker", "recovery"]
+    },
+    {
+      "scenario_id": "repair.validation-fails",
+      "category": "repair",
+      "description": "A proposed candidate fails a mandatory validation gate.",
+      "stimulus": "submit a candidate with a deliberately failing mandatory check",
+      "expected": {
+        "signal": "REPAIR_FAILURE",
+        "caretaker_action": "ROLLBACK_REPAIR",
+        "authority_effect": "ROLLBACK",
+        "minimum_isolation": "PROCESS"
+      },
+      "tags": ["repair", "validation", "fail-closed"]
+    },
+    {
+      "scenario_id": "evidence.malicious",
+      "category": "malicious-evidence",
+      "description": "Evidence contains prompt-injection text or forged provenance.",
+      "stimulus": "submit bounded evidence with conflicting identity and instruction-like fields",
+      "expected": {
+        "signal": "MALICIOUS_EVIDENCE",
+        "caretaker_action": "REQUIRE_OPERATOR_REVIEW",
+        "authority_effect": "OPERATOR_REVIEW",
+        "minimum_isolation": "VM"
+      },
+      "tags": ["security", "prompt-injection", "provenance"]
+    },
+    {
+      "scenario_id": "llm.unavailable",
+      "category": "llm",
+      "description": "The configured advisory LLM is unavailable during incident analysis.",
+      "stimulus": "run an advisory query while the configured local model endpoint is unavailable",
+      "expected": {
+        "signal": "LLM_UNAVAILABLE",
+        "caretaker_action": "RECORD_EVIDENCE",
+        "authority_effect": "NO_AUTHORITY_CHANGE",
+        "minimum_isolation": "PROCESS"
+      },
+      "tags": ["llm", "availability", "advisory"]
+    }
+  ]
+}

@@ -53,6 +53,13 @@ misleading repairs, malicious evidence, unavailable LLM/network services, and
 secondary repair failures. Every useful scenario should become a regression
 case, including historical and adversarial incidents.
 
+The first repository slice now provides a bounded, metadata-only scenario
+manifest and read-only loader in `examples/failure_corpus/` and
+`caretaker.failure_corpus`. It does not execute scenarios or claim observed
+coverage. Executable harness mappings, isolated lifecycle tooling, captured
+incident fixtures, and outcome reports remain required before this priority can
+be considered complete.
+
 ### Incident Capsules and post-mortem capture
 
 Extend the initial bounded, immutable **Incident Capsule** implementation for

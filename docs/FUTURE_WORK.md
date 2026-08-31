@@ -19,6 +19,24 @@ installable, independently governed, and independently trusted. Cross-Caretaker
 requests are evidence rather than authorization, and broader authority is gated
 on demonstrated Application Caretaker maturity.
 
+## Testing environments and failure corpus
+
+**Status: Implemented in development tree for the initial metadata-only corpus; executable scenario harnesses and isolated lifecycle tooling remain future work.**
+
+The repository now contains a bounded, schema-validated failure scenario
+manifest in [`examples/failure_corpus/manifest.json`](../examples/failure_corpus/manifest.json)
+and the read-only `FailureCorpus` loader documented in
+[`FAILURE_CORPUS.md`](FAILURE_CORPUS.md). It provides reviewed expected
+signals, policy actions, authority effects, and minimum isolation levels for a
+small set of representative application-scoped failures. The manifest cannot
+name or execute code, commands, URLs, or network actions.
+
+Remaining work is to add trusted test-harness mappings, isolated launch/reset/
+destroy tooling, captured historical incident fixtures, and deterministic
+observed-outcome reports. Expected metadata must remain separate from actual
+evidence; loading or listing a scenario must never run it or authorize an
+action.
+
 ## Status vocabulary
 
 - **Implemented in development tree**: code, policy semantics, tests, and documentation exist in the current development tree; retained here for review traceability until release.
