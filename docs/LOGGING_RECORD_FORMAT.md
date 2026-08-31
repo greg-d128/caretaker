@@ -139,6 +139,12 @@ implementation is considered complete. Registry additions require a schema
 version or a backward-compatible event version; they must not silently reuse a
 different event's meaning.
 
+The executable registry and per-event examples are maintained in
+[`AUDIT_EVENT_REGISTRY.md`](AUDIT_EVENT_REGISTRY.md). The local writer applies
+the registered minimum priority and required envelope paths. Unknown future
+uppercase names remain forward-compatible evidence without registered
+semantics or command meaning.
+
 Audit integrity is policy controlled. The policy may require no signature,
 runtime-ephemeral signatures, or an independently managed external signer. When
 hash chaining is enabled, each event commits to the previous event and each
