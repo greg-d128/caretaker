@@ -130,6 +130,42 @@ def test_replay_result_store_is_bounded_content_addressed_and_separate_from_caps
     path.write_text(path.read_text(encoding="utf-8").replace("PASSED", "FAILED"), encoding="utf-8")
     with pytest.raises(ReplayExecutionError, match="content hash"):
         store.load(first["content_sha256"])
+    with pytest.raises(ReplayExecutionError, match="content hash is invalid"):
+        store.load("../" + "a" * 61)
+
+
+def test_replay_result_cli_lists_and_loads_verified_results(tmp_path: Path, capsys) -> None:
+    from caretaker import capsule_replay_results_cli
+
+    store = ReplayResultStore(tmp_path)
+    recorded = store.record({
+        "fixture_count": 1,
+        "completed_count": 1,
+        "results": [{"fixture_id": "fixture-1", "outcome": "PASSED"}],
+    })
+
+    assert capsule_replay_results_cli.main([
+        "--data-directory", str(tmp_path),
+        "--limit", "10",
+    ]) == 0
+    listed = capsys.readouterr().out
+    assert recorded["content_sha256"] in listed
+    assert '"read_only": true' in listed
+
+    assert capsule_replay_results_cli.main([
+        "--data-directory", str(tmp_path),
+        "--content-sha256", recorded["content_sha256"],
+    ]) == 0
+    loaded = capsys.readouterr().out
+    assert '"integrity_verified": true' in loaded
+    assert '"outcome": "PASSED"' in loaded
+
+
+def test_replay_result_read_only_store_does_not_create_missing_directory(tmp_path: Path) -> None:
+    store = ReplayResultStore(tmp_path, create_directory=False)
+
+    assert store.list_summaries() == ()
+    assert not store.directory.exists()
 
 
 def test_replay_rejects_process_backend_and_dispatches_only_to_isolated_backend(tmp_path: Path) -> None:

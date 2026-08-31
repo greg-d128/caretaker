@@ -725,6 +725,7 @@ class CaretakerConsoleApp(App):
                                 yield Input(placeholder="Incident-linked fixture ID", id="incident-capsule-replay-fixture")
                                 yield Input(placeholder="Entrypoint (for example charge)", id="incident-capsule-replay-entrypoint")
                                 yield Button("Replay isolated", id="incident-capsule-replay", disabled=True)
+                                yield Button("Replay history", id="incident-capsule-replay-results")
                             yield TextArea(
                                 id="incident-capsule-replay-source",
                                 language="python",
@@ -5101,6 +5102,17 @@ class CaretakerConsoleApp(App):
                 )
                 self.query_one("#incident-capsule-detail-title", Static).update(
                     f"Isolated replay | {response.get('outcome', 'UNKNOWN')}"
+                )
+                self._write_json("#incident-capsule-output", response)
+                return
+            if button == "incident-capsule-replay-results":
+                response = await self._request(
+                    "incident-capsule-replay-results",
+                    limit=100,
+                )
+                summaries = response.get("results", ())
+                self.query_one("#incident-capsule-detail-title", Static).update(
+                    f"Persisted replay history | {len(summaries)} result(s)"
                 )
                 self._write_json("#incident-capsule-output", response)
                 return

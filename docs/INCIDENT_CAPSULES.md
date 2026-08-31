@@ -168,6 +168,12 @@ separate evidence and does not create a capsule revision, modify Repair state,
 or grant authority. Persistence is opt-in and fails explicitly if the response
 cannot be safely retained.
 
+The Explorer's **Replay history** action and the read-only
+`caretaker-capsule-replay-results` command list integrity-verified replay
+summaries. A result can be loaded by its content hash for detailed inspection;
+invalid or tampered files are reported as invalid evidence. Listing and loading
+never dispatches replay, changes a capsule, or changes Repair state.
+
 ## Remaining work
 
 Incident Capsules do not yet provide policy-specific capture levels for every

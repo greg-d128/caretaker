@@ -943,6 +943,19 @@ def test_console_incident_explorer_requests_read_only_isolated_replay(tmp_path):
                         "capsule_modified": False,
                         "integrity_verified": True,
                     }
+                if command == "incident-capsule-replay-results":
+                    return {
+                        "ok": True,
+                        "read_only": True,
+                        "results": [{
+                            "content_sha256": "c" * 64,
+                            "recorded_at": "2026-08-29T12:03:00+00:00",
+                            "fixture_count": 1,
+                            "completed_count": 1,
+                            "result_count": 1,
+                            "integrity_verified": True,
+                        }],
+                    }
                 raise AssertionError(command)
 
             app._request = request  # type: ignore[method-assign]
@@ -964,6 +977,15 @@ def test_console_incident_explorer_requests_read_only_isolated_replay(tmp_path):
                 },
             )
             assert "PASSED" in str(
+                app.query_one("#incident-capsule-detail-title", Static).render()
+            )
+            history_button = app.query_one("#incident-capsule-replay-results", Button)
+            await app.on_button_pressed(Button.Pressed(history_button))
+            assert requests[-1] == (
+                "incident-capsule-replay-results",
+                {"limit": 100},
+            )
+            assert "Persisted replay history" in str(
                 app.query_one("#incident-capsule-detail-title", Static).render()
             )
 

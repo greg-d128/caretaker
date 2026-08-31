@@ -40,6 +40,12 @@ supervisor enforces the effective regression policy, source-hash check,
 capsule/fixture incident binding, and configured isolated backend. Replay is
 read-only with respect to capsules and Repair state.
 
+The read-only `incident-capsule-replay-results` command lists persisted replay
+summaries or loads one verified result by content hash. It only reads the
+separate `replay-results/` evidence store; it does not dispatch replay or
+modify capsules, Repair state, policy, or authority. The console's **Replay
+history** action uses this command for the same inspection path.
+
 The runtime command `runtime-repair-recovery-plan` exposes a read-only plan for
 persisted Repair attempts that did not durably complete before process loss.
 The plan reports the last milestone and recommends rollback to deployed code;

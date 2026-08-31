@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -38,6 +39,7 @@ class ReplayExecutionError(ValueError):
 
 REPLAY_RESULT_SCHEMA_VERSION = 1
 MAX_REPLAY_RESULT_BYTES = 512 * 1024
+_REPLAY_RESULT_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 
 
 class ReplayResultStore:
@@ -48,13 +50,15 @@ class ReplayResultStore:
         directory: str | Path,
         *,
         maximum_bytes: int = MAX_REPLAY_RESULT_BYTES,
+        create_directory: bool = True,
     ) -> None:
         if int(maximum_bytes) <= 0:
             raise ValueError("maximum_bytes must be greater than zero")
         self.maximum_bytes = int(maximum_bytes)
         self.directory = Path(directory).expanduser().resolve() / "replay-results"
-        self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.directory.chmod(0o700)
+        if create_directory:
+            self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            self.directory.chmod(0o700)
 
     def _payload(self, result: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(result, Mapping):
@@ -121,7 +125,7 @@ class ReplayResultStore:
 
     def load(self, digest: str) -> dict[str, Any]:
         """Load and verify one content-addressed replay response."""
-        if not isinstance(digest, str) or len(digest) != 64:
+        if not isinstance(digest, str) or _REPLAY_RESULT_DIGEST.fullmatch(digest) is None:
             raise ReplayExecutionError("replay result content hash is invalid")
         path = self.directory / f"{digest}.json"
         try:

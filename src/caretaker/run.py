@@ -64,6 +64,7 @@ from .repair_recovery import worker_failure_recovery_status
 from .replay import (
     IsolatedReplayCoordinator,
     RootlessPodmanReplayBackend,
+    ReplayResultStore,
     execute_capsule_replay,
     execute_historical_capsule_replays,
 )
@@ -1584,6 +1585,22 @@ def main(argv: list[str] | None = None) -> int:
                     incident_id=incident_id,
                     limit=limit,
                 ),
+            }
+        if command == "incident-capsule-replay-results":
+            replay_results = ReplayResultStore(policy.directory, create_directory=False)
+            digest = str(request.get("content_sha256") or "").strip() or None
+            if digest is not None:
+                return {
+                    "ok": True,
+                    "read_only": True,
+                    "integrity_verified": True,
+                    "result": replay_results.load(digest),
+                }
+            limit = max(1, min(int(request.get("limit", 100)), 500))
+            return {
+                "ok": True,
+                "read_only": True,
+                "results": replay_results.list_summaries(limit=limit),
             }
         if command == "regression-fixture-list":
             target_id = str(request.get("target_id") or "").strip() or None
