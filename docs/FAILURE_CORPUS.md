@@ -30,11 +30,35 @@ normal policy, isolation, authority, and cleanup rules. A corpus declaration is
 not proof that its stimulus has been executed, and its expected action is not
 an instruction to Caretaker.
 
+For deterministic trusted tests, `FailureCorpusHarness` accepts that mapping
+explicitly:
+
+```python
+from caretaker.failure_corpus import FailureCorpus, FailureCorpusHarness
+
+corpus = FailureCorpus.load("examples/failure_corpus/manifest.json")
+harness = FailureCorpusHarness(
+    corpus,
+    runners={"exception.unhandled": run_exception_case},
+    isolation="PROCESS",
+)
+observation = harness.run("exception.unhandled")
+```
+
+The harness invokes only the supplied callable and only after checking its
+declared isolation against the scenario minimum. It does not provide a
+sandbox, timeout, process lifecycle, or cleanup guarantee. An unavailable
+mapping or insufficient isolation is recorded without invoking user code.
+Observed results are bounded JSON and are classified separately from expected
+metadata as `MATCHED`, `MISMATCHED`, `INVALID_RESULT`, `ERROR`, `NOT_MAPPED`, or
+`ISOLATION_UNAVAILABLE`.
+
 ## Current status and next work
 
-The loader and manifest provide the initial reviewable contract. Executable
-launch/reset/destroy tooling, isolated scenario runners, captured incident
-fixtures, and cross-version/adversarial execution reports remain future work.
+The loader, manifest, and explicit trusted harness provide the initial
+reviewable contract. Executable launch/reset/destroy tooling, isolated scenario
+runners, captured incident fixtures, and cross-version/adversarial execution
+reports remain future work.
 Those additions must record actual observed outcomes separately from expected
 metadata and must not turn a corpus file into an execution or authority
 channel.

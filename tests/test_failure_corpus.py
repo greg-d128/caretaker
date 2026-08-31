@@ -8,6 +8,7 @@ import pytest
 from caretaker.failure_corpus import (
     FailureCorpus,
     FailureCorpusError,
+    FailureCorpusHarness,
     MAX_CORPUS_BYTES,
 )
 
@@ -111,3 +112,81 @@ def test_failure_corpus_rejects_executable_manifest_fields(tmp_path: Path) -> No
 
     with pytest.raises(FailureCorpusError, match="manifest fields"):
         FailureCorpus.load(path)
+
+
+def test_trusted_harness_records_observed_result_separately() -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    harness = FailureCorpusHarness(
+        corpus,
+        runners={
+            "exception.unhandled": lambda _scenario: {
+                "signal": "EXCEPTION",
+                "caretaker_action": "CAPTURE_INCIDENT",
+                "authority_effect": "NO_AUTHORITY_CHANGE",
+            },
+        },
+    )
+
+    observation = harness.run("exception.unhandled")
+
+    assert observation.status == "MATCHED"
+    assert observation.executed is True
+    assert observation.summary()["expected"]["signal"] == "EXCEPTION"
+    assert observation.summary()["observed"]["signal"] == "EXCEPTION"
+
+
+def test_trusted_harness_refuses_runner_below_declared_isolation() -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    called = False
+
+    def runner(_scenario):
+        nonlocal called
+        called = True
+        return {
+            "signal": "DEPENDENCY_FAILURE",
+            "caretaker_action": "CAPTURE_INCIDENT",
+            "authority_effect": "NO_AUTHORITY_CHANGE",
+        }
+
+    harness = FailureCorpusHarness(
+        corpus,
+        runners={"dependency.changed": runner},
+        isolation="PROCESS",
+    )
+
+    observation = harness.run("dependency.changed")
+
+    assert observation.status == "ISOLATION_UNAVAILABLE"
+    assert observation.executed is False
+    assert called is False
+
+
+def test_trusted_harness_distinguishes_mismatched_and_invalid_results() -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    harness = FailureCorpusHarness(
+        corpus,
+        runners={
+            "exception.unhandled": lambda _scenario: {
+                "signal": "TIMEOUT",
+                "caretaker_action": "RECORD_EVIDENCE",
+                "authority_effect": "NO_AUTHORITY_CHANGE",
+            },
+            "worker.failed": lambda _scenario: {"signal": "WORKER_FAILURE"},
+        },
+    )
+
+    mismatched = harness.run("exception.unhandled")
+    invalid = harness.run("worker.failed")
+
+    assert mismatched.status == "MISMATCHED"
+    assert invalid.status == "INVALID_RESULT"
+
+
+def test_trusted_harness_run_all_is_bounded_and_preserves_unmapped_scenarios() -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    harness = FailureCorpusHarness(corpus, runners={})
+
+    observations = harness.run_all(limit=2)
+
+    assert len(observations) == 2
+    assert all(item.status == "NOT_MAPPED" for item in observations)

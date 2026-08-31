@@ -42,7 +42,13 @@ from .adaptive_aggregation import (
 )
 from .behavior import observed_return_shape
 from .console_identity import ConsoleIdentityStore, normalize_console_public_identity
-from .failure_corpus import FailureCorpus, FailureCorpusError, FailureScenario
+from .failure_corpus import (
+    FailureCorpus,
+    FailureCorpusError,
+    FailureCorpusHarness,
+    FailureObservation,
+    FailureScenario,
+)
 from .authority import (
     AuthorityKind,
     AuthorityLayerSource,

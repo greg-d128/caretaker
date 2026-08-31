@@ -12,6 +12,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any, Mapping
 
 
@@ -20,6 +21,7 @@ MAX_CORPUS_BYTES = 1_048_576
 MAX_SCENARIOS = 500
 MAX_TEXT_CHARS = 2_048
 MAX_TAGS = 32
+MAX_OBSERVATION_BYTES = 16_384
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9_.-]{1,127}$")
 
 FAILURE_CATEGORIES = frozenset({
@@ -117,6 +119,39 @@ class FailureScenario:
             "minimum_isolation": self.minimum_isolation,
             "tags": list(self.tags),
             "executable": False,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class FailureObservation:
+    """The bounded result of one explicitly mapped trusted-harness run."""
+
+    scenario_id: str
+    status: str
+    executed: bool
+    required_isolation: str
+    used_isolation: str
+    expected_signal: str
+    expected_caretaker_action: str
+    expected_authority_effect: str
+    observed: Mapping[str, Any] | None = None
+    error: str | None = None
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "schema_version": FAILURE_CORPUS_SCHEMA_VERSION,
+            "scenario_id": self.scenario_id,
+            "status": self.status,
+            "executed": self.executed,
+            "required_isolation": self.required_isolation,
+            "used_isolation": self.used_isolation,
+            "expected": {
+                "signal": self.expected_signal,
+                "caretaker_action": self.expected_caretaker_action,
+                "authority_effect": self.expected_authority_effect,
+            },
+            "observed": dict(self.observed) if self.observed is not None else None,
+            "error": self.error,
         }
 
 
@@ -238,3 +273,121 @@ class FailureCorpus:
             for scenario in self.scenarios
             if category is None or scenario.category == category
         )[:bounded_limit]
+
+
+class FailureCorpusHarness:
+    """Run only explicitly supplied trusted mappings for a validated corpus.
+
+    This harness does not discover imports, commands, or entrypoints from the
+    manifest.  The caller supplies each runner and declares the isolation it
+    actually provides.  Isolation is checked before the runner is called; the
+    harness itself is not a sandbox and must be used only by a trusted test
+    environment.
+    """
+
+    def __init__(
+        self,
+        corpus: FailureCorpus,
+        runners: Mapping[str, Callable[[FailureScenario], Mapping[str, Any]]],
+        *,
+        isolation: str = "PROCESS",
+    ) -> None:
+        normalized_isolation = str(isolation).strip().upper()
+        if normalized_isolation not in ISOLATION_LEVELS:
+            raise FailureCorpusError(f"unknown harness isolation {isolation!r}")
+        self.corpus = corpus
+        self.runners = dict(runners)
+        self.isolation = normalized_isolation
+
+    def _base_observation(self, scenario: FailureScenario, *, status: str, executed: bool, error: str | None = None, observed: Mapping[str, Any] | None = None) -> FailureObservation:
+        return FailureObservation(
+            scenario_id=scenario.scenario_id,
+            status=status,
+            executed=executed,
+            required_isolation=scenario.minimum_isolation,
+            used_isolation=self.isolation,
+            expected_signal=scenario.expected_signal,
+            expected_caretaker_action=scenario.caretaker_action,
+            expected_authority_effect=scenario.authority_effect,
+            observed=observed,
+            error=error[:512] if error else None,
+        )
+
+    def run(self, scenario_id: str) -> FailureObservation:
+        scenario = self.corpus.get(scenario_id)
+        if scenario.scenario_id not in self.runners:
+            return self._base_observation(scenario, status="NOT_MAPPED", executed=False)
+        if ISOLATION_LEVELS_ORDER[self.isolation] < ISOLATION_LEVELS_ORDER[scenario.minimum_isolation]:
+            return self._base_observation(
+                scenario,
+                status="ISOLATION_UNAVAILABLE",
+                executed=False,
+                error="trusted harness isolation is below the scenario minimum",
+            )
+        runner = self.runners[scenario.scenario_id]
+        try:
+            observed = runner(scenario)
+        except Exception as exc:
+            return self._base_observation(
+                scenario,
+                status="ERROR",
+                executed=True,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        if not isinstance(observed, Mapping):
+            return self._base_observation(
+                scenario,
+                status="INVALID_RESULT",
+                executed=True,
+                error="trusted scenario runner must return a mapping",
+            )
+        observed_copy = dict(observed)
+        try:
+            encoded = json.dumps(observed_copy, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            return self._base_observation(
+                scenario,
+                status="INVALID_RESULT",
+                executed=True,
+                error=f"observed result is not bounded JSON: {exc}",
+            )
+        if len(encoded) > MAX_OBSERVATION_BYTES:
+            return self._base_observation(
+                scenario,
+                status="INVALID_RESULT",
+                executed=True,
+                error=f"observed result exceeds {MAX_OBSERVATION_BYTES} bytes",
+            )
+        signal = observed_copy.get("signal")
+        action = observed_copy.get("caretaker_action")
+        effect = observed_copy.get("authority_effect")
+        if signal not in EXPECTED_SIGNALS or action not in CARETAKER_ACTIONS or effect not in AUTHORITY_EFFECTS:
+            return self._base_observation(
+                scenario,
+                status="INVALID_RESULT",
+                executed=True,
+                observed=observed_copy,
+                error="observed result has an unknown or missing signal, action, or authority effect",
+            )
+        status = "MATCHED" if (
+            signal == scenario.expected_signal
+            and action == scenario.caretaker_action
+            and effect == scenario.authority_effect
+        ) else "MISMATCHED"
+        return self._base_observation(
+            scenario,
+            status=status,
+            executed=True,
+            observed=observed_copy,
+        )
+
+    def run_all(self, *, category: str | None = None, limit: int = 100) -> tuple[FailureObservation, ...]:
+        bounded_limit = max(1, min(int(limit), MAX_SCENARIOS))
+        selected = [
+            scenario for scenario in self.corpus.scenarios
+            if category is None or scenario.category == category
+        ][:bounded_limit]
+        return tuple(self.run(scenario.scenario_id) for scenario in selected)
+
+
+ISOLATION_LEVELS_ORDER = {name: index for index, name in enumerate(("PROCESS", "CONTAINER", "VM"), start=1)}
