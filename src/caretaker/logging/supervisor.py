@@ -106,13 +106,19 @@ class WorkerRegistry:
         *,
         heartbeat_timeout_seconds: float = 15.0,
         acceptance_store: WorkerAcceptanceStore | None = None,
+        audit_event: Callable[..., Any] | None = None,
     ) -> None:
         self.heartbeat_timeout_seconds = heartbeat_timeout_seconds
         self.acceptance_store = acceptance_store
+        self.audit_event = audit_event
         self._workers: dict[UUID, WorkerHealth] = {}
         self._acceptance_policies: dict[UUID, WorkerAcceptancePolicy] = {}
         self._replacement_requests: set[UUID] = set()
         self._lock = threading.RLock()
+
+    def _emit_audit(self, event_type: str, **fields: Any) -> None:
+        if self.audit_event is not None:
+            self.audit_event(event_type, **fields)
 
     def register(self, kind: WorkerKind, pid: int) -> WorkerHealth:
         now = datetime.now(timezone.utc)
@@ -215,7 +221,26 @@ class WorkerRegistry:
             self._workers[health.worker_id] = admitted
             if resolved_acceptance_policy is not None:
                 self._acceptance_policies[health.worker_id] = resolved_acceptance_policy
-            return admitted
+        self._emit_audit(
+            "WORKER_AUTHORITY_ISSUED",
+            actor={"type": "supervisor"},
+            scope={
+                "worker_id": str(admitted.worker_id),
+                "target_id": admitted.target_id,
+            },
+            policy={
+                "fingerprint": admitted.policy_fingerprint,
+                "authority_policy_generation": authority_policy_generation,
+                "authority_policy_fingerprint": authority_policy_fingerprint,
+            },
+            outcome={"state": "ISSUED"},
+            details={
+                "authority_packet_id": str(packet.packet_id),
+                "authority_packet_expires_at": packet.expires_at.isoformat(),
+                "acceptance_state": admitted.acceptance_state.name,
+            },
+        )
+        return admitted
 
     def refresh_authorized(
         self,
@@ -315,7 +340,26 @@ class WorkerRegistry:
                 authority_packet_expires_at=packet.expires_at,
             )
             self._workers[worker_id] = updated
-            return updated
+        self._emit_audit(
+            "WORKER_AUTHORITY_REFRESHED",
+            actor={"type": "supervisor"},
+            scope={
+                "worker_id": str(updated.worker_id),
+                "target_id": updated.target_id,
+            },
+            policy={
+                "fingerprint": updated.policy_fingerprint,
+                "authority_policy_generation": authority_policy_generation,
+                "authority_policy_fingerprint": authority_policy_fingerprint,
+            },
+            outcome={"state": "REFRESHED"},
+            details={
+                "prior_authority_packet_id": str(observed_packet_id),
+                "authority_packet_id": str(packet.packet_id),
+                "authority_packet_expires_at": packet.expires_at.isoformat(),
+            },
+        )
+        return updated
 
     def prepare_replacement(
         self,
@@ -506,6 +550,7 @@ class WorkerRegistry:
         diagnostic_context: Mapping[str, Any] | None = None,
         supervisor_time: datetime | None = None,
     ) -> WorkerHealth:
+        authority_expired = False
         with self._lock:
             current = self._workers[worker_id]
             expired = (
@@ -523,6 +568,8 @@ class WorkerRegistry:
                     else dict(diagnostic_context)
                 ),
             )
+            if expired and current.state is not WorkerState.UNAUTHORIZED:
+                authority_expired = True
             if expired:
                 updated = replace(
                     updated,
@@ -530,7 +577,30 @@ class WorkerRegistry:
                     last_error_fingerprint="authority-expired",
                 )
             self._workers[worker_id] = updated
-            return updated
+        if authority_expired:
+            self._emit_audit(
+                "WORKER_AUTHORITY_EXPIRED",
+                actor={"type": "supervisor"},
+                scope={
+                    "worker_id": str(updated.worker_id),
+                    "target_id": updated.target_id,
+                },
+                policy={"fingerprint": updated.policy_fingerprint},
+                outcome={"state": "EXPIRED"},
+                details={
+                    "authority_packet_id": (
+                        str(current.authority_packet_id)
+                        if current.authority_packet_id is not None
+                        else None
+                    ),
+                    "authority_packet_expires_at": (
+                        current.authority_packet_expires_at.isoformat()
+                        if current.authority_packet_expires_at is not None
+                        else None
+                    ),
+                },
+            )
+        return updated
 
     def mark_failed(
         self,
@@ -666,7 +736,10 @@ class CaretakerApplicationSupervisor:
             acceptance_store = WorkerAcceptanceStore(acceptance_store_path)
         self.work = WorkRegistry()
         self.failure_store = failure_store
-        self.workers = WorkerRegistry(acceptance_store=acceptance_store)
+        self.workers = WorkerRegistry(
+            acceptance_store=acceptance_store,
+            audit_event=self._audit_event,
+        )
         self.supervisor_health = self.workers.register(WorkerKind.SUPERVISOR, os.getpid())
         self.watchdog = Watchdog(self.workers, on_unhealthy=self._worker_unhealthy)
         self._stop = threading.Event()

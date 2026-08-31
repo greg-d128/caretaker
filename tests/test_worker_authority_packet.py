@@ -61,6 +61,64 @@ def test_worker_registry_requires_exact_authority_packet_context() -> None:
     assert len(registry.all()) == 1
 
 
+def test_worker_authority_lifecycle_emits_bounded_audit_events() -> None:
+    events = []
+    registry = WorkerRegistry(
+        audit_event=lambda event_type, **fields: events.append(
+            {"event_type": event_type, **fields}
+        )
+    )
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    packet = _packet(supervisor_time=supervisor_time)
+    worker = registry.register_authorized(
+        WorkerKind.REPAIR_ANALYZER,
+        1234,
+        packet,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+    )
+    refresh_time = supervisor_time + timedelta(seconds=60)
+    refreshed_packet = create_recovery_authority_packet(
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-9",
+        authority_policy_fingerprint="authority-hash-new",
+        capabilities=("observe",),
+        supervisor_time=refresh_time,
+    )
+    registry.refresh_authorized(
+        worker.worker_id,
+        refreshed_packet,
+        supervisor_time=refresh_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-9",
+        authority_policy_fingerprint="authority-hash-new",
+        allowed_capabilities={"observe"},
+    )
+    registry.heartbeat(worker.worker_id, supervisor_time=refreshed_packet.expires_at)
+
+    assert [event["event_type"] for event in events] == [
+        "WORKER_AUTHORITY_ISSUED",
+        "WORKER_AUTHORITY_REFRESHED",
+        "WORKER_AUTHORITY_EXPIRED",
+    ]
+    assert events[0]["outcome"]["state"] == "ISSUED"
+    assert events[1]["details"]["prior_authority_packet_id"] == str(packet.packet_id)
+    assert events[2]["outcome"]["state"] == "EXPIRED"
+    assert "capabilities" not in events[0]["details"]
+
+
 def test_expired_worker_becomes_unauthorized_and_restart_clears_packet() -> None:
     registry = WorkerRegistry()
     supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
