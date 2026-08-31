@@ -289,6 +289,10 @@ class FunctionSlot:
                 "state": self._state.name,
                 "current_version": self._current.number,
                 "current_source_hash": self._current.source_hash,
+                "execution_contract": {
+                    "side_effects": self.execution_contract.side_effects.name,
+                    "retry_safety": self.execution_contract.retry_safety.name,
+                },
                 "candidate_id": str(self._current.candidate_id) if self._current.candidate_id else None,
                 "candidate_state": self._current.candidate_state.name if self._current.candidate_state else None,
                 "history_versions": [version.number for version in self._history],

@@ -68,6 +68,11 @@ The result is rollout evidence, not authorization. A rollout policy must still
 authorize the execution strategy, preserve validation and authority gates, and
 record the decision.
 
+The read-only target/slot snapshot exposes the effective contract as
+`execution_contract.side_effects` and `execution_contract.retry_safety`, so
+operator projections can show the duplicate-execution boundary alongside the
+candidate lifecycle.
+
 ## Original-authoritative shadow execution
 
 `shadow_execute()` is a bounded evidence primitive for a future rollout adapter.

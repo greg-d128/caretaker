@@ -64,6 +64,10 @@ def test_function_execution_contract_is_attached_to_target_and_slot() -> None:
 
     assert registered.execution_contract is declared
     assert registered.slot.execution_contract is declared
+    assert registered.slot.snapshot()["execution_contract"] == {
+        "side_effects": "READ_ONLY",
+        "retry_safety": "IDEMPOTENT",
+    }
 
 
 def test_authority_policy_refresh_preserves_execution_contract() -> None:
