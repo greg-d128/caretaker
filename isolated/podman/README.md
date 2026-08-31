@@ -120,7 +120,7 @@ caretaker-failure-corpus-run \
   --isolation CONTAINER \
   --minimum-isolation CONTAINER \
   --image localhost/caretaker-failure-corpus-lab:0.6.1 \
-  --runner-command python /opt/caretaker/application_laboratory.py \
+  --application-laboratory \
   --data-directory ./caretaker-data
 ```
 

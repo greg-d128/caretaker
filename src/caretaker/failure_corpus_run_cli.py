@@ -59,6 +59,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--scenario-id", action="append", help="run only this scenario; repeatable")
     parser.add_argument("--runner-command", nargs="+", help="explicit trusted command for CONTAINER or VM")
+    parser.add_argument(
+        "--application-laboratory",
+        action="store_true",
+        help="use the repository application laboratory command for PROCESS or CONTAINER",
+    )
     parser.add_argument("--image", help="pre-provisioned local Podman image for CONTAINER")
     parser.add_argument("--multipass-instance", default="caretaker-validator", help="pre-provisioned VM name")
     parser.add_argument("--timeout-seconds", type=float, default=30.0)
@@ -75,6 +80,12 @@ def main(argv: list[str] | None = None) -> int:
     policy = FailureCorpusExecutionPolicy(minimum_isolation=minimum)
     environment = _environment(args.environment)
     default_laboratory = manifest.parent / "application_laboratory.py"
+    if args.application_laboratory and args.runner_command:
+        parser.error("--application-laboratory cannot be combined with --runner-command")
+    if args.application_laboratory and args.isolation == "VM":
+        parser.error(
+            "--application-laboratory does not select a VM guest command; use --runner-command"
+        )
 
     if args.isolation == "PROCESS":
         command = args.runner_command or [sys.executable, str(default_laboratory)]
@@ -89,12 +100,16 @@ def main(argv: list[str] | None = None) -> int:
     elif args.isolation == "CONTAINER":
         if not args.image:
             parser.error("--image is required for CONTAINER isolation")
-        if not args.runner_command:
+        if args.application_laboratory:
+            command = ["python", "/opt/caretaker/application_laboratory.py"]
+        elif not args.runner_command:
             parser.error("--runner-command is required for CONTAINER isolation")
+        else:
+            command = args.runner_command
         runner = FailureCorpusPodmanRunner(
             corpus,
             args.image,
-            {scenario_id: args.runner_command for scenario_id in selected_ids},
+            {scenario_id: command for scenario_id in selected_ids},
             policy=policy,
             timeout_seconds=args.timeout_seconds,
             environment=environment,

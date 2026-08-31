@@ -12,6 +12,7 @@ from caretaker.failure_corpus import (
     FailureCorpusError,
     FailureCorpusExecutionPolicy,
     FailureCorpusHarness,
+    FailureObservation,
     FailureCorpusObservationStore,
     FailureCorpusPodmanRunner,
     FailureCorpusMultipassRunner,
@@ -301,7 +302,7 @@ def test_application_laboratory_container_contract_is_non_root_and_stdlib_only()
     assert "FROM ${PYTHON_BASE_IMAGE}" in text
     assert "COPY application_laboratory.py /opt/caretaker/application_laboratory.py" in text
     assert "USER 10001:10001" in text
-    assert 'ENTRYPOINT ["python", "/opt/caretaker/application_laboratory.py"]' in text
+    assert 'CMD ["python", "/opt/caretaker/application_laboratory.py"]' in text
     assert "pip install" not in text
     assert ignorefile.read_text(encoding="utf-8").splitlines()[-1] == "!application_laboratory.py"
 
@@ -309,6 +310,54 @@ def test_application_laboratory_container_contract_is_non_root_and_stdlib_only()
     assert "podman-failure-corpus-image" in make_text
     assert "PODMAN_FAILURE_CORPUS_IMAGE" in make_text
     assert "examples/failure_corpus" in make_text
+
+
+def test_failure_corpus_run_cli_selects_the_fixed_container_laboratory_command(monkeypatch, tmp_path: Path) -> None:
+    manifest = ROOT / "examples" / "failure_corpus" / "manifest.json"
+    captured: dict[str, object] = {}
+
+    class FakeRunner:
+        def __init__(self, corpus, _image, commands, **_kwargs):
+            self.corpus = corpus
+            captured["commands"] = commands
+
+        def run(self, scenario_id):
+            scenario = self.corpus.get(scenario_id)
+            return FailureObservation(
+                scenario_id=scenario_id,
+                status="MATCHED",
+                executed=True,
+                required_isolation=scenario.minimum_isolation,
+                used_isolation="CONTAINER",
+                expected_signal=scenario.expected_signal,
+                expected_caretaker_action=scenario.caretaker_action,
+                expected_authority_effect=scenario.authority_effect,
+                observed={"signal": scenario.expected_signal},
+            )
+
+    monkeypatch.setattr("caretaker.failure_corpus_run_cli.FailureCorpusPodmanRunner", FakeRunner)
+    assert failure_corpus_run_main([
+        "--manifest", str(manifest),
+        "--data-directory", str(tmp_path),
+        "--isolation", "CONTAINER",
+        "--minimum-isolation", "CONTAINER",
+        "--application-laboratory",
+        "--image", "localhost/caretaker-failure-corpus-lab:test",
+        "--scenario-id", "exception.unhandled",
+    ]) == 0
+
+    assert captured["commands"] == {
+        "exception.unhandled": ["python", "/opt/caretaker/application_laboratory.py"]
+    }
+
+
+def test_failure_corpus_run_cli_rejects_application_laboratory_for_vm() -> None:
+    with pytest.raises(SystemExit):
+        failure_corpus_run_main([
+            "--isolation", "VM",
+            "--application-laboratory",
+            "--runner-command", "/opt/trusted-runner",
+        ])
 
 
 def test_process_runner_fails_closed_when_policy_requires_stronger_isolation() -> None:

@@ -22,4 +22,4 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 USER 10001:10001
 WORKDIR /opt/caretaker/work
-ENTRYPOINT ["python", "/opt/caretaker/application_laboratory.py"]
+CMD ["python", "/opt/caretaker/application_laboratory.py"]

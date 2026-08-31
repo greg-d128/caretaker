@@ -218,11 +218,13 @@ changes capsule, policy, repair, or authority state.
 The `caretaker-failure-corpus-run` command provides the execution entrypoint.
 It defaults to the repository application laboratory and `PROCESS` policy,
 accepts repeated `--scenario-id` filters, records each bounded observation,
-and emits the resulting report. `--isolation CONTAINER` requires both
-`--image` and an explicit `--runner-command`; `--isolation VM` requires an
-explicit `--runner-command` and a pre-provisioned Multipass guest. The command
-does not infer or execute commands from the manifest, and `--persist-report`
-retains the report by content hash:
+and emits the resulting report. `--isolation CONTAINER` requires `--image` and
+either an explicit `--runner-command` or `--application-laboratory`, which uses
+the fixed `/opt/caretaker/application_laboratory.py` path in the repository
+image. `--isolation VM` requires an explicit guest `--runner-command` and a
+pre-provisioned Multipass guest. The command does not infer or execute
+commands from the manifest, and `--persist-report` retains the report by
+content hash:
 
 ```sh
 caretaker-failure-corpus-run \
