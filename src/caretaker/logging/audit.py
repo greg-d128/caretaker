@@ -25,6 +25,9 @@ from .signing import (
 
 AUDIT_SCHEMA_VERSION = 1
 _EVENT_TYPE = re.compile(r"^[A-Z][A-Z0-9_]{2,63}$")
+_DEFAULT_AUDIT_SECRET_FIELD_NAMES = frozenset({
+    "password", "passwd", "token", "secret", "authorization", "api_key", "apikey",
+})
 
 
 def _event_definition(
@@ -227,6 +230,49 @@ def _copy_mapping(value: Mapping[str, Any] | None) -> dict[str, Any]:
     return {str(key): item for key, item in value.items()}
 
 
+def _redact_audit_value(
+    value: Any,
+    *,
+    secret_field_names: frozenset[str],
+    replacement: str,
+    key: str | None = None,
+) -> Any:
+    """Redact bounded audit values before they are hashed or signed."""
+    if key is not None and key.lower() in secret_field_names:
+        return replacement
+    if isinstance(value, Mapping):
+        return {
+            str(item_key): _redact_audit_value(
+                item,
+                secret_field_names=secret_field_names,
+                replacement=replacement,
+                key=str(item_key),
+            )
+            for item_key, item in value.items()
+        }
+    if isinstance(value, (tuple, list)):
+        return [
+            _redact_audit_value(
+                item,
+                secret_field_names=secret_field_names,
+                replacement=replacement,
+            )
+            for item in value
+        ]
+    if isinstance(value, str):
+        result = re.sub(
+            r"(?i)(password|passwd|token|secret|api[_-]?key|authorization)\s*[:=]\s*([^\s,;]+)",
+            lambda match: f"{match.group(1)}={replacement}",
+            value,
+        )
+        return re.sub(
+            r"(?i)\bbearer\s+[A-Za-z0-9._~+/-]+=*",
+            f"Bearer {replacement}",
+            result,
+        )
+    return value
+
+
 def verify_audit_stream(
     path: str | Path,
     *,
@@ -423,12 +469,17 @@ class AuditStreamWriter:
         process_start_id: UUID,
         supervisor_id: UUID | str | None = None,
         artifact_signer: RuntimeArtifactSigningService | None = None,
+        redaction_policy: Any | None = None,
     ) -> None:
         self.policy = policy
         self.run_id = run_id
         self.process_start_id = process_start_id
         self.supervisor_id = str(supervisor_id) if supervisor_id is not None else None
         self._artifact_signer = artifact_signer
+        self._redaction_enabled = True
+        self._secret_field_names = _DEFAULT_AUDIT_SECRET_FIELD_NAMES
+        self._redaction_replacement = "<redacted>"
+        self._set_redaction_policy(redaction_policy)
         self.path = Path(directory) / policy.file_name
         self._lock = threading.RLock()
         self._closed = False
@@ -458,6 +509,29 @@ class AuditStreamWriter:
     def recovered_truncated_bytes(self) -> int:
         """Bytes discarded from one incomplete final record during recovery."""
         return self._recovered_truncated_bytes
+
+    def _set_redaction_policy(self, redaction_policy: Any | None) -> None:
+        if redaction_policy is None:
+            return
+        self._redaction_enabled = bool(getattr(redaction_policy, "enabled", True))
+        configured_names = getattr(redaction_policy, "secret_field_names", None)
+        if configured_names is not None:
+            self._secret_field_names = frozenset(
+                str(name).lower() for name in configured_names
+            )
+        replacement = getattr(redaction_policy, "replacement", None)
+        if replacement is not None:
+            self._redaction_replacement = str(replacement)
+
+    def _safe_mapping(self, value: Mapping[str, Any] | None) -> dict[str, Any]:
+        copied = _copy_mapping(value)
+        if not self._redaction_enabled:
+            return copied
+        return _redact_audit_value(
+            copied,
+            secret_field_names=self._secret_field_names,
+            replacement=self._redaction_replacement,
+        )
 
     def _recover_existing(self) -> None:
         if not self.path.exists():
@@ -578,7 +652,12 @@ class AuditStreamWriter:
         if public_key is None or not verify_signed_artifact(artifact, public_key):
             raise AuditStreamError("Audit event signature could not be verified")
 
-    def update_policy(self, policy: Any) -> tuple[str, ...]:
+    def update_policy(
+        self,
+        policy: Any,
+        *,
+        redaction_policy: Any | None = None,
+    ) -> tuple[str, ...]:
         warnings: list[str] = []
         if policy.file_name != self.policy.file_name:
             warnings.append("logging.audit.file_name is startup-bound; the existing file remains active")
@@ -590,6 +669,7 @@ class AuditStreamWriter:
             warnings.append("logging.audit.sign_events is run-bound; a new run is required")
         if policy.maximum_event_bytes != self.policy.maximum_event_bytes:
             warnings.append("logging.audit.maximum_event_bytes is startup-bound; the existing limit remains active")
+        self._set_redaction_policy(redaction_policy)
         return tuple(warnings)
 
     def emit(
@@ -650,11 +730,11 @@ class AuditStreamWriter:
                 "run_id": str(self.run_id),
                 "supervisor_id": self.supervisor_id,
                 "priority": priority.name,
-                "actor": _copy_mapping(actor),
-                "scope": _copy_mapping(scope),
-                "policy": _copy_mapping(policy),
-                "outcome": _copy_mapping(outcome),
-                "details": _copy_mapping(details),
+                "actor": self._safe_mapping(actor),
+                "scope": self._safe_mapping(scope),
+                "policy": self._safe_mapping(policy),
+                "outcome": self._safe_mapping(outcome),
+                "details": self._safe_mapping(details),
             }
             content_hash = hashlib.sha256(_canonical(body)).hexdigest()
             event = dict(body)

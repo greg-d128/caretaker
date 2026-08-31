@@ -100,6 +100,13 @@ per-event signatures. External delivery remains a future capability. See
 [`LOGGING_RECORD_FORMAT.md`](LOGGING_RECORD_FORMAT.md) for the proposed envelope
 and event registry.
 
+Audit event mappings are redacted again inside `AuditStreamWriter` before their
+canonical content hash or runtime signature is calculated. The writer uses the
+active logging redaction policy supplied by `LoggingRuntime`; a directly
+constructed writer also applies the standard secret-field and credential-string
+redaction defaults. Redaction policy changes affect subsequent events, while
+previously written hashes remain immutable.
+
 ## Incident communication drafts
 
 Communication drafting is controlled by `[logging.communications]`. Each

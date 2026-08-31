@@ -101,6 +101,7 @@ class LoggingRuntime:
             process_start_id=self.process_start_id,
             supervisor_id=os.environ.get("CARETAKER_SUPERVISOR_ID"),
             artifact_signer=self.writer.signing_service,
+            redaction_policy=policy.redaction,
         )
         self.sink = BufferedSegmentSink(self.writer, policy)
         self._sequence = 0
@@ -131,7 +132,9 @@ class LoggingRuntime:
     def _apply_effective_runtime_policy(self) -> tuple[str, ...]:
         active = self.active_policy
         warnings_out = list(self.sink.update_policy(active))
-        warnings_out.extend(self.audit.update_policy(active.audit))
+        warnings_out.extend(
+            self.audit.update_policy(active.audit, redaction_policy=active.redaction)
+        )
         self.attachments.update_policy(active.attachments)
         return tuple(warnings_out)
 

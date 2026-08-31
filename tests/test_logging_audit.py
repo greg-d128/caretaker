@@ -14,6 +14,7 @@ from caretaker.logging import (
     EvidencePriority,
     verify_audit_stream,
 )
+from caretaker.logging.policy import RedactionPolicy
 
 
 def _writer(path: Path, **changes):
@@ -45,6 +46,66 @@ def test_audit_stream_is_hash_chained_and_recovers_across_restart(tmp_path: Path
     assert [row["stream_sequence"] for row in rows] == [1, 2]
     assert rows[1]["integrity"]["previous_event_hash"] == rows[0]["integrity"]["content_sha256"]
     assert second["stream_sequence"] == 2
+
+
+def test_audit_writer_redacts_event_values_before_hashing(tmp_path: Path) -> None:
+    writer = AuditStreamWriter(
+        AuditStreamPolicy(),
+        directory=tmp_path,
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        redaction_policy=RedactionPolicy(),
+    )
+    event = writer.emit(
+        "INCIDENT_CAPTURED",
+        actor={"type": "operator", "token": "private-token"},
+        details={
+            "nested": {"password": "private-password"},
+            "message": "authorization=private-authorization",
+        },
+    )
+    writer.close()
+
+    assert event["actor"]["token"] == "<redacted>"
+    assert event["details"] == {
+        "nested": {"password": "<redacted>"},
+        "message": "authorization=<redacted>",
+    }
+    raw = (tmp_path / "caretaker_audit.log").read_text()
+    assert "private-token" not in raw
+    assert "private-password" not in raw
+    assert "private-authorization" not in raw
+    assert verify_audit_stream(tmp_path / "caretaker_audit.log")["valid"] is True
+
+
+def test_logging_runtime_passes_active_redaction_policy_to_audit_writer(tmp_path: Path) -> None:
+    from caretaker.logging.handler import LoggingRuntime
+    from caretaker.logging.policy import CompressionPolicy, OperatorLoggingPolicy
+
+    policy = OperatorLoggingPolicy(
+        directory=str(tmp_path),
+        compression=CompressionPolicy(enabled=False),
+        redaction=RedactionPolicy(
+            secret_field_names=("customer_secret",),
+            replacement="<masked>",
+        ),
+    )
+    runtime = LoggingRuntime(policy, supervised=True)
+    try:
+        runtime.audit.emit(
+            "INCIDENT_CAPTURED",
+            details={"customer_secret": "sensitive-value"},
+        )
+    finally:
+        runtime.close()
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "caretaker_audit.log").read_text().splitlines()
+    ]
+    event = rows[-1]
+    assert event["details"] == {"customer_secret": "<masked>"}
+    assert "sensitive-value" not in (tmp_path / "caretaker_audit.log").read_text()
 
 
 def test_audit_stream_discards_only_an_incomplete_final_line(tmp_path: Path) -> None:
