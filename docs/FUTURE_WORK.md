@@ -289,8 +289,13 @@ supervisor-generated transaction ID bound to the candidate artifact hash, base
 code hash, target and callable contract, policy and authority fingerprints,
 requested isolation, backend identity, and mandatory check set. Persisted repair
 attempts retain the selected backend, isolation tier, and capability details.
-Remaining work is to have external validators authenticate the result
-envelope.
+The validation module now defines an optional Ed25519-authenticated result
+envelope. A configured verifier pins the validator key ID and public-key
+fingerprint, and required mode fails closed when the envelope is absent,
+malformed, or invalid. The default local backends remain unsigned for least
+friction. Remaining work is the dedicated EXTERNAL backend and deployment
+provisioning for independent validator identities, key rotation, revocation,
+and remote transport/replay semantics.
 
 Registered cases that require domain types need explicit trusted codecs or fixture references; arbitrary object deserialization should not be part of the validator protocol.
 

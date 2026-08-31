@@ -8,7 +8,7 @@ The PROCESS worker may still inherit access available to the operating-system ac
 
 ## Current validation trust boundaries
 
-Validation reports are trusted backend input. The parent currently rejects reported mandatory failures, but it does not prove that a backend returned every mandatory successful check. A custom, defective, or compromised backend can therefore overstate completion. Backend results must not be treated as independently attested evidence.
+Validation reports are trusted backend input. The parent currently rejects reported mandatory failures, but it does not prove that a backend returned every mandatory successful check. A custom, defective, or compromised backend can therefore overstate completion. Backend results must not be treated as independently attested evidence unless the configured backend also uses the authenticated result envelope described below.
 
 Validation requests use a versioned JSON envelope and an explicit data-only
 codec. Registered cases may contain bounded JSON-compatible primitives,
@@ -18,6 +18,50 @@ deserialize these requests, and the request/result channel is not an
 authenticated protocol for mutually untrusted peers.
 
 When the requested isolation backend is unavailable, `REQUIRE_OPERATOR_APPROVAL` retains the candidate for explicit operator review but cannot authorize activation without that isolation. Use `FAIL_REPAIR` when missing isolation should also prevent a pending review item.
+
+### Authenticated validator result envelopes
+
+An external or otherwise independently managed validator may authenticate its
+result with an Ed25519 envelope. The verifier is configured with a pinned public
+key and key ID; the result itself carries the key fingerprint for an explicit
+identity check. The signed bytes are the canonical JSON representation of:
+
+```json
+{"protocol_version":1,"result":{...}}
+```
+
+where `result` contains the complete decoded result, including the supervisor's
+validation transaction ID, candidate and base hashes, target/callable contract,
+policy and authority fingerprints, requested isolation, backend identity, and
+mandatory check set. The `result_authentication` field is excluded from the
+signed body so it cannot recursively sign itself. A worker-result file places
+the authentication object beside `result`:
+
+```json
+{
+  "protocol_version": 1,
+  "result": {"...": "encoded validation result"},
+  "authentication": {
+    "version": 1,
+    "scheme": "Ed25519",
+    "key_id": "validator-1",
+    "public_key_fingerprint": "...",
+    "signature": "...base64..."
+  }
+}
+```
+
+`Ed25519ValidationResultAuthenticator` verifies this envelope, and
+`require_result_authentication=True` makes missing, malformed, or invalid
+authentication a hard validation failure. The default process, Podman, and VM
+paths remain compatible with existing unsigned operation; deployments that
+need independent validator provenance must configure a verifier and require the
+envelope. Authentication proves result provenance only. It does not grant
+authority, replace policy checks, or make a candidate eligible by itself.
+
+Validator private keys belong to the separately managed validator. Caretaker
+does not persist, distribute, or infer them. A public-key pin is an operational
+trust decision and should be provisioned independently of the result channel.
 
 ## Hard static gates
 

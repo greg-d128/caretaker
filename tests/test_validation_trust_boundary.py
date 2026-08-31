@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import json
+import subprocess
 import time
 from pathlib import Path
 from uuid import uuid4
@@ -38,6 +40,8 @@ from caretaker.logging import (
 )
 from caretaker.validation import (
     SubprocessValidationBackend,
+    _encode_validation_data,
+    _load_worker_result,
     _write_worker_request,
     assess_candidate_source,
 )
@@ -162,6 +166,39 @@ def test_worker_result_must_prove_all_mandatory_validation_checks() -> None:
     )
 
     assert report.eligible is False
+
+
+def test_worker_result_loader_preserves_top_level_authentication() -> None:
+    result = {"eligible": True, "checks": [], "measurements": {}}
+    authentication = {
+        "version": 1,
+        "scheme": "Ed25519",
+        "key_id": "validator-1",
+        "public_key_fingerprint": "a" * 64,
+        "signature": "c2lnbmF0dXJl",
+    }
+    # Keep the test independent of the validation worker process while
+    # exercising the same JSON envelope used by external validators.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as directory:
+        output_path = Path(directory) / "result.json"
+        output_path.write_text(
+            json.dumps(
+                {
+                    "protocol_version": 1,
+                    "result": _encode_validation_data(result),
+                    "authentication": authentication,
+                }
+            ),
+            encoding="utf-8",
+        )
+        loaded = _load_worker_result(
+            output_path,
+            subprocess.CompletedProcess(["validator"], 0, "", ""),
+        )
+
+    assert loaded["result_authentication"] == authentication
 
 
 def test_static_gate_rejects_dynamic_dunder_attribute_access() -> None:

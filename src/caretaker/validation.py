@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .adaptive import lightweight_dependency
 import ast
+import base64
 import hashlib
 import json
 import math
@@ -40,6 +41,174 @@ class StaticAssessment:
     risk_findings: tuple[str, ...]
 
 
+VALIDATION_RESULT_AUTHENTICATION_VERSION = 1
+_VALIDATION_RESULT_AUTHENTICATION_KEY = "result_authentication"
+
+
+class ValidationResultAuthenticator(Protocol):
+    """Verify provenance attached to a validation result.
+
+    Authenticity is evidence about the validator, not authority to activate a
+    candidate.  The parent still validates the result protocol and applies all
+    policy and authority gates after authentication succeeds.
+    """
+
+    def verify(
+        self,
+        result: Mapping[str, Any],
+        authentication: Mapping[str, Any],
+    ) -> tuple[bool, str | None]: ...
+
+
+def _canonical_validation_value(value: Any) -> Any:
+    """Return the strict JSON vocabulary used for result signatures."""
+
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("validation result signatures do not accept non-finite floats")
+        return value
+    if isinstance(value, Mapping):
+        normalized: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError("validation result signatures require string mapping keys")
+            normalized[key] = _canonical_validation_value(item)
+        return {key: normalized[key] for key in sorted(normalized)}
+    if isinstance(value, (tuple, list)):
+        return [_canonical_validation_value(item) for item in value]
+    raise TypeError(
+        "validation result signatures reject unsupported values: "
+        f"{type(value).__module__}.{type(value).__qualname__}"
+    )
+
+
+def validation_result_signing_payload(result: Mapping[str, Any]) -> bytes:
+    """Canonical bytes an external validator must sign.
+
+    The authentication field is deliberately excluded so the signature binds
+    the complete result body, including the supervisor-provided transaction
+    binding, without recursively signing itself.
+    """
+
+    unsigned = {
+        key: value
+        for key, value in result.items()
+        if key != _VALIDATION_RESULT_AUTHENTICATION_KEY
+    }
+    payload = {
+        "protocol_version": VALIDATION_RESULT_AUTHENTICATION_VERSION,
+        "result": _canonical_validation_value(unsigned),
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode(
+        "utf-8"
+    )
+
+
+def _ed25519():
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+            Ed25519PrivateKey,
+            Ed25519PublicKey,
+        )
+    except ImportError as exc:
+        raise RuntimeError(
+            "Ed25519 validation-result authentication requires the optional "
+            "'cryptography' package; install Caretaker[signing]"
+        ) from exc
+    return Ed25519PrivateKey, Ed25519PublicKey, serialization
+
+
+@dataclass(frozen=True, slots=True)
+class Ed25519ValidationResultAuthenticator:
+    """Pin one external validator identity for result verification."""
+
+    public_key: bytes
+    key_id: str
+
+    def __post_init__(self) -> None:
+        if len(self.public_key) != 32:
+            raise ValueError("Ed25519 validation public keys must contain 32 bytes")
+        if not self.key_id.strip():
+            raise ValueError("validation authenticator key_id cannot be empty")
+
+    @property
+    def public_key_fingerprint(self) -> str:
+        return hashlib.sha256(self.public_key).hexdigest()
+
+    def verify(
+        self,
+        result: Mapping[str, Any],
+        authentication: Mapping[str, Any],
+    ) -> tuple[bool, str | None]:
+        required = {
+            "version",
+            "scheme",
+            "key_id",
+            "public_key_fingerprint",
+            "signature",
+        }
+        if set(authentication) != required:
+            return False, "validation result authentication fields are incomplete or unexpected"
+        if authentication.get("version") != VALIDATION_RESULT_AUTHENTICATION_VERSION:
+            return False, "unsupported validation result authentication version"
+        if authentication.get("scheme") != "Ed25519":
+            return False, "unsupported validation result authentication scheme"
+        if authentication.get("key_id") != self.key_id:
+            return False, "validation result was signed by an unexpected key ID"
+        if authentication.get("public_key_fingerprint") != self.public_key_fingerprint:
+            return False, "validation result public-key fingerprint does not match the pinned key"
+        encoded_signature = authentication.get("signature")
+        if not isinstance(encoded_signature, str):
+            return False, "validation result signature must be base64 text"
+        try:
+            signature = base64.b64decode(encoded_signature, validate=True)
+            _Ed25519PrivateKey, Ed25519PublicKey, _serialization = _ed25519()
+            Ed25519PublicKey.from_public_bytes(self.public_key).verify(
+                signature,
+                validation_result_signing_payload(result),
+            )
+        except Exception:
+            return False, "validation result signature verification failed"
+        return True, None
+
+
+def sign_validation_result(
+    result: Mapping[str, Any],
+    *,
+    private_key: Any,
+    key_id: str,
+) -> dict[str, Any]:
+    """Create the authentication object for an external validator result.
+
+    This helper is intended for the separately managed validator process. It
+    accepts an Ed25519 private-key object or raw 32-byte private-key material;
+    Caretaker does not persist or distribute that private material.
+    """
+
+    if not key_id.strip():
+        raise ValueError("validation signer key_id cannot be empty")
+    Ed25519PrivateKey, _Ed25519PublicKey, serialization = _ed25519()
+    if isinstance(private_key, (bytes, bytearray)):
+        private_key = Ed25519PrivateKey.from_private_bytes(bytes(private_key))
+    if not hasattr(private_key, "sign") or not hasattr(private_key, "public_key"):
+        raise TypeError("private_key must be an Ed25519 private-key object or 32 bytes")
+    public_key = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    signature = private_key.sign(validation_result_signing_payload(result))
+    return {
+        "version": VALIDATION_RESULT_AUTHENTICATION_VERSION,
+        "scheme": "Ed25519",
+        "key_id": key_id,
+        "public_key_fingerprint": hashlib.sha256(public_key).hexdigest(),
+        "signature": base64.b64encode(signature).decode("ascii"),
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class ValidationReport:
     candidate_id: object
@@ -57,6 +226,7 @@ class ValidationReport:
     backend_details: dict[str, Any] = field(default_factory=dict)
     requires_operator_approval: bool = False
     proposal_only: bool = False
+    result_authentication_status: str = "NOT_REQUIRED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,8 +325,20 @@ _VALIDATION_BINDING_FIELDS = (
 
 
 class SubprocessValidationBackend:
-    def __init__(self, python_executable: str | None = None) -> None:
+    def __init__(
+        self,
+        python_executable: str | None = None,
+        *,
+        result_authenticator: ValidationResultAuthenticator | None = None,
+        require_result_authentication: bool = False,
+    ) -> None:
         self.python_executable = python_executable or sys.executable
+        if require_result_authentication and result_authenticator is None:
+            raise ValueError(
+                "require_result_authentication requires a result_authenticator"
+            )
+        self.result_authenticator = result_authenticator
+        self.require_result_authentication = bool(require_result_authentication)
 
     def capabilities(self) -> ValidationBackendCapabilities:
         return ValidationBackendCapabilities(
@@ -324,8 +506,56 @@ class SubprocessValidationBackend:
             "run_generated_tests": target.policy.validation.run_generated_tests,
             **validation_binding,
         }
-        result = self._run_worker(payload, timeout_seconds=timeout_seconds)
+        result = dict(self._run_worker(payload, timeout_seconds=timeout_seconds))
         protocol_findings: list[str] = []
+        result_authentication = result.pop(_VALIDATION_RESULT_AUTHENTICATION_KEY, None)
+        result_authentication_status = "NOT_REQUIRED"
+
+        def add_risk_finding(finding: str) -> None:
+            existing = result.get("risk_findings", ())
+            if isinstance(existing, (list, tuple)):
+                result["risk_findings"] = [*existing, finding]
+            else:
+                result["risk_findings"] = [finding]
+
+        if result_authentication is None:
+            if self.result_authenticator is not None:
+                result_authentication_status = "MISSING"
+                if self.require_result_authentication:
+                    protocol_findings.append(
+                        "validation worker omitted required result authentication"
+                    )
+                else:
+                    add_risk_finding("validation result authentication was not provided")
+        elif self.result_authenticator is None:
+            result_authentication_status = "UNVERIFIED"
+            if self.require_result_authentication:
+                protocol_findings.append(
+                    "validation result authentication cannot be verified"
+                )
+            else:
+                add_risk_finding("validation result authentication could not be verified")
+        elif not isinstance(result_authentication, Mapping):
+            result_authentication_status = "INVALID"
+            protocol_findings.append(
+                "validation worker returned a malformed result authentication object"
+            )
+        else:
+            try:
+                authenticated, reason = self.result_authenticator.verify(
+                    result,
+                    result_authentication,
+                )
+            except Exception as exc:
+                authenticated, reason = False, f"authenticator raised {type(exc).__name__}"
+            if not authenticated:
+                result_authentication_status = "INVALID"
+                protocol_findings.append(
+                    "validation result authentication failed"
+                    + (f": {reason}" if reason else "")
+                )
+            else:
+                result_authentication_status = "VERIFIED"
         for field in _VALIDATION_BINDING_FIELDS:
             if field not in result:
                 protocol_findings.append(
@@ -426,6 +656,7 @@ class SubprocessValidationBackend:
             isolation_level=capabilities.isolation_level,
             backend_available=True,
             backend_details=dict(capabilities.details or {}),
+            result_authentication_status=result_authentication_status,
         )
 
     def validate_auxiliary(
@@ -1344,6 +1575,13 @@ def _load_worker_result(
         result = _decode_validation_data(envelope["result"])
         if not isinstance(result, dict):
             raise ValueError("validation worker result must be an object")
+        authentication = envelope.get("authentication")
+        if authentication is not None:
+            if not isinstance(authentication, dict):
+                raise ValueError("validation worker authentication must be an object")
+            if _VALIDATION_RESULT_AUTHENTICATION_KEY in result:
+                raise ValueError("validation worker returned duplicate result authentication")
+            result[_VALIDATION_RESULT_AUTHENTICATION_KEY] = dict(authentication)
     except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
         result = _worker_protocol_error(
             completed,

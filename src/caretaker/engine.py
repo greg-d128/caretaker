@@ -1866,7 +1866,10 @@ class RepairEngine:
                 validation_results=report.checks,
                 validation_backend_name=report.backend_name,
                 validation_isolation_level=report.isolation_level,
-                validation_backend_details=dict(report.backend_details or {}),
+                validation_backend_details={
+                    **dict(report.backend_details or {}),
+                    "result_authentication_status": report.result_authentication_status,
+                },
                 score_card=score,
                 outcome=(
                     RepairAttemptOutcome.PENDING
@@ -1919,6 +1922,7 @@ class RepairEngine:
                         "validation_backend": report.backend_name,
                         "validation_isolation": report.isolation_level.name,
                         "backend_available": report.backend_available,
+                        "result_authentication_status": report.result_authentication_status,
                         "check_count": len(report.checks),
                         "passed_check_count": passed_checks,
                         "failed_check_count": failed_checks,

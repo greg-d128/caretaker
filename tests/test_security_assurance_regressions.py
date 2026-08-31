@@ -34,7 +34,9 @@ from caretaker.domain import (
 )
 from caretaker.guard.policy import BaselinePolicy, GuardPolicy, validate_guard_policy
 from caretaker.validation import (
+    Ed25519ValidationResultAuthenticator,
     MultipassValidationBackend,
+    sign_validation_result,
     SubprocessValidationBackend,
     ValidationBackendCapabilities,
 )
@@ -152,6 +154,161 @@ def test_validation_result_rejects_candidate_identity_mismatch() -> None:
     )
 
     assert report.eligible is False
+
+
+def _bound_successful_result(payload):
+    result = _successful_worker_result()
+    result.update(
+        {
+            field: payload[field]
+            for field in (
+                "protocol_version",
+                "validation_transaction_id",
+                "candidate_artifact_hash",
+                "base_source_hash",
+                "target_id",
+                "entrypoint",
+                "module_name",
+                "qualified_name",
+                "signature_text",
+                "callable_kind",
+                "policy_fingerprint",
+                "authority_policy_generation",
+                "authority_policy_fingerprint",
+                "requested_isolation",
+                "backend_name",
+                "mandatory_checks",
+            )
+        }
+    )
+    return result
+
+
+def test_required_external_validation_result_authentication_verifies() -> None:
+    cryptography = pytest.importorskip("cryptography")
+    del cryptography
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives import serialization
+
+    private_key = Ed25519PrivateKey.generate()
+    authenticator = Ed25519ValidationResultAuthenticator(
+        private_key.public_key().public_bytes(
+            serialization.Encoding.Raw,
+            serialization.PublicFormat.Raw,
+        ),
+        "validator-1",
+    )
+
+    class AuthenticatedBackend(SubprocessValidationBackend):
+        def __init__(self):
+            super().__init__(
+                result_authenticator=authenticator,
+                require_result_authentication=True,
+            )
+
+        def _run_worker(self, payload, *, timeout_seconds):
+            result = _bound_successful_result(payload)
+            result["result_authentication"] = sign_validation_result(
+                result,
+                private_key=private_key,
+                key_id="validator-1",
+            )
+            return result
+
+    engine = RepairEngine(provider=StaticRepairProvider([]))
+    wrapped = repair(policy=RepairPolicy.automatic(), engine=engine)(broken_divide)
+    target = wrapped.__caretaker_target__
+    report = AuthenticatedBackend().validate_candidate(
+        _repair_candidate(target),
+        target,
+        timeout_seconds=1.0,
+    )
+
+    assert report.eligible is True
+    assert report.result_authentication_status == "VERIFIED"
+
+
+def test_required_external_validation_result_authentication_rejects_tampering() -> None:
+    pytest.importorskip("cryptography")
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives import serialization
+
+    private_key = Ed25519PrivateKey.generate()
+    authenticator = Ed25519ValidationResultAuthenticator(
+        private_key.public_key().public_bytes(
+            serialization.Encoding.Raw,
+            serialization.PublicFormat.Raw,
+        ),
+        "validator-1",
+    )
+
+    class TamperedBackend(SubprocessValidationBackend):
+        def __init__(self):
+            super().__init__(
+                result_authenticator=authenticator,
+                require_result_authentication=True,
+            )
+
+        def _run_worker(self, payload, *, timeout_seconds):
+            result = _bound_successful_result(payload)
+            result["result_authentication"] = sign_validation_result(
+                result,
+                private_key=private_key,
+                key_id="validator-1",
+            )
+            result["eligible"] = False
+            return result
+
+    engine = RepairEngine(provider=StaticRepairProvider([]))
+    wrapped = repair(policy=RepairPolicy.automatic(), engine=engine)(broken_divide)
+    target = wrapped.__caretaker_target__
+    report = TamperedBackend().validate_candidate(
+        _repair_candidate(target),
+        target,
+        timeout_seconds=1.0,
+    )
+
+    assert report.eligible is False
+    assert report.result_authentication_status == "INVALID"
+    assert any("authentication failed" in finding for finding in report.hard_disqualifications)
+
+
+def test_required_external_validation_result_authentication_rejects_missing_envelope() -> None:
+    pytest.importorskip("cryptography")
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives import serialization
+
+    private_key = Ed25519PrivateKey.generate()
+    authenticator = Ed25519ValidationResultAuthenticator(
+        private_key.public_key().public_bytes(
+            serialization.Encoding.Raw,
+            serialization.PublicFormat.Raw,
+        ),
+        "validator-1",
+    )
+
+    class UnsignedBackend(SubprocessValidationBackend):
+        def __init__(self):
+            super().__init__(
+                result_authenticator=authenticator,
+                require_result_authentication=True,
+            )
+
+        def _run_worker(self, payload, *, timeout_seconds):
+            return _bound_successful_result(payload)
+
+    engine = RepairEngine(provider=StaticRepairProvider([]))
+    wrapped = repair(policy=RepairPolicy.automatic(), engine=engine)(broken_divide)
+    target = wrapped.__caretaker_target__
+    report = UnsignedBackend().validate_candidate(
+        _repair_candidate(target),
+        target,
+        timeout_seconds=1.0,
+    )
+
+    assert report.eligible is False
+    assert report.result_authentication_status == "MISSING"
+    assert any("required result authentication" in finding for finding in report.hard_disqualifications)
 
 
 def test_validation_protocol_rejects_non_finite_numeric_evidence() -> None:
