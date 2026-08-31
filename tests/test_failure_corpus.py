@@ -19,6 +19,7 @@ from caretaker.failure_corpus import (
     MAX_CORPUS_BYTES,
 )
 from caretaker.failure_corpus_cli import main as failure_corpus_report_main
+from caretaker.failure_corpus_run_cli import main as failure_corpus_run_main
 from caretaker.capsule import IncidentCapsuleStore
 from examples.failure_corpus.trusted_mappings import build_reviewed_harness
 
@@ -722,6 +723,34 @@ def test_failure_corpus_report_cli_is_read_only_and_can_persist(tmp_path: Path, 
     assert output["records_available"] == 1
     assert output["status_counts"] == {"NOT_MAPPED": 1}
     assert len(tuple((tmp_path / "failure-corpus-reports").glob("*.json"))) == 1
+
+
+def test_failure_corpus_run_cli_defaults_to_process_laboratory(tmp_path: Path, capsys) -> None:
+    manifest = ROOT / "examples" / "failure_corpus" / "manifest.json"
+    assert failure_corpus_run_main([
+        "--manifest", str(manifest),
+        "--data-directory", str(tmp_path),
+        "--scenario-id", "exception.unhandled",
+        "--persist-report",
+    ]) == 0
+    output = json.loads(capsys.readouterr().out)
+
+    assert output["isolation"] == "PROCESS"
+    assert output["policy"]["minimum_isolation"] == "PROCESS"
+    assert output["observations"][0]["status"] == "MATCHED"
+    assert output["report"]["records_available"] == 1
+    assert len(tuple((tmp_path / "failure-corpus-reports").glob("*.json"))) == 1
+
+
+def test_failure_corpus_run_cli_requires_explicit_stronger_runner_configuration(tmp_path: Path) -> None:
+    manifest = ROOT / "examples" / "failure_corpus" / "manifest.json"
+    with pytest.raises(SystemExit):
+        failure_corpus_run_main([
+            "--manifest", str(manifest),
+            "--data-directory", str(tmp_path),
+            "--isolation", "CONTAINER",
+            "--scenario-id", "exception.unhandled",
+        ])
 
 
 def test_trusted_harness_run_all_is_bounded_and_preserves_unmapped_scenarios() -> None:

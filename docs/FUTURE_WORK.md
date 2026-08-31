@@ -50,6 +50,8 @@ process protocol against all reviewed mappings and provides a bounded
 application laboratory for ten process-tier stimuli, while a curated
 repository of captured real incidents, production-like applications, and
 broader container/VM observed coverage remain future work.
+The runner-selection CLI exposes the same policy boundary for repeatable local
+or isolated runs without turning manifest data into an execution channel.
 Bounded observations can now be stored separately from the manifest, with a
 content hash for corruption detection; that hash is not a substitute for
 external authenticated shipping. Expected metadata must remain separate from actual evidence; loading or listing

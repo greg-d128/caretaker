@@ -215,6 +215,28 @@ caretaker-failure-corpus-report \
 The command never discovers or invokes a runner, contacts a supervisor, or
 changes capsule, policy, repair, or authority state.
 
+The `caretaker-failure-corpus-run` command provides the execution entrypoint.
+It defaults to the repository application laboratory and `PROCESS` policy,
+accepts repeated `--scenario-id` filters, records each bounded observation,
+and emits the resulting report. `--isolation CONTAINER` requires both
+`--image` and an explicit `--runner-command`; `--isolation VM` requires an
+explicit `--runner-command` and a pre-provisioned Multipass guest. The command
+does not infer or execute commands from the manifest, and `--persist-report`
+retains the report by content hash:
+
+```sh
+caretaker-failure-corpus-run \
+  --manifest examples/failure_corpus/manifest.json \
+  --data-directory ./caretaker-data \
+  --scenario-id exception.unhandled \
+  --persist-report
+```
+
+The process default is intended for quick starts and local application
+laboratory work. Select a stronger tier when the scenario or threat model
+requires it; unavailable prerequisites remain explicit evidence rather than a
+silent downgrade.
+
 ## Current status and next work
 
 The loader, manifest, explicit trusted harness, bounded observation store, and

@@ -73,6 +73,8 @@ Incident-Capsule reference without mutating the capsule; a curated repository
 of captured real incidents remains future work. A bounded application
 laboratory now exercises ten process-tier stimuli; it is explicitly distinct
 from historical incident evidence and production-like application coverage.
+The runner-selection CLI keeps process as the least-friction default and
+requires explicit stronger-tier configuration.
 
 ### Incident Capsules and post-mortem capture
 
