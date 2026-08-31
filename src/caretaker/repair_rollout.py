@@ -185,6 +185,7 @@ class RolloutRoutingDecision:
 
     rollout_id: UUID
     target_id: str
+    candidate_id: UUID
     stage: RepairRolloutStage
     routing_scope: str
     routing_key_digest: str
@@ -209,6 +210,35 @@ class RolloutExecutionResult:
     candidate_executed: bool
     candidate_authoritative: bool
     shadow_result: ShadowExecutionResult | None = None
+    execution_observation: "RolloutExecutionObservation | None" = None
+
+
+@dataclass(frozen=True, slots=True)
+class RolloutExecutionObservation:
+    """Bounded evidence for one rollout invocation.
+
+    This record intentionally contains no return values or exception messages.
+    It is an observation ledger, not a source of rollout authority.
+    """
+
+    observation_id: UUID
+    rollout_id: UUID
+    target_id: str
+    candidate_id: UUID
+    stage: RepairRolloutStage
+    strategy: str
+    authoritative_implementation: RepairAuthoritativeImplementation
+    candidate_executed: bool
+    candidate_authoritative: bool
+    original_succeeded: bool | None
+    candidate_succeeded: bool | None
+    equivalent: bool | None
+    execution_state: str
+    exception_type: str | None
+    decision_hash: str
+    policy_fingerprint: str
+    created_at: datetime
+    content_hash: str
 
 
 class RepairRolloutStore(Protocol):
@@ -216,6 +246,8 @@ class RepairRolloutStore(Protocol):
     def all_rollouts(self) -> tuple[Any, ...]: ...
     def record_rollout_transition(self, record: RepairRolloutTransition) -> None: ...
     def all_rollout_transitions(self) -> tuple[Any, ...]: ...
+    def record_rollout_execution(self, record: RolloutExecutionObservation) -> None: ...
+    def all_rollout_executions(self) -> tuple[Any, ...]: ...
 
 
 class RolloutArtifactSigner(Protocol):
@@ -740,6 +772,7 @@ def decide_rollout_routing(
     evidence = {
         "rollout_id": str(record.rollout_id),
         "target_id": record.target_id,
+        "candidate_id": str(record.candidate_id),
         "stage": record.stage.value,
         "routing_scope": scope,
         "routing_key_digest": key_digest,
@@ -756,6 +789,7 @@ def decide_rollout_routing(
     decision = RolloutRoutingDecision(
         rollout_id=record.rollout_id,
         target_id=record.target_id,
+        candidate_id=record.candidate_id,
         stage=record.stage,
         routing_scope=scope,
         routing_key_digest=key_digest,
@@ -817,6 +851,8 @@ def execute_rollout(
     isolation_adapter: ShadowExecutionAdapter | None = None,
     comparator: Comparator | None = None,
     audit_event: Callable[..., Any] | None = None,
+    execution_store: RepairRolloutStore | None = None,
+    execution_id: UUID | None = None,
 ) -> RolloutExecutionResult:
     """Invoke an already-authorized rollout path.
 
@@ -842,7 +878,7 @@ def execute_rollout(
         routing_key=routing_key,
         audit_event=audit_event,
     )
-    return _execute_rollout_decision(
+    return _execute_and_record(
         decision,
         deployed=deployed,
         candidate=candidate,
@@ -853,6 +889,8 @@ def execute_rollout(
         isolation_adapter=isolation_adapter,
         comparator=comparator,
         audit_event=audit_event,
+        execution_store=execution_store,
+        execution_id=execution_id,
     )
 
 
@@ -875,6 +913,8 @@ def execute_slot_rollout(
     observation_manager: "ObservationManager | None" = None,
     observation_policy: "ObservationPolicy | None" = None,
     call_id: UUID | None = None,
+    execution_store: RepairRolloutStore | None = None,
+    execution_id: UUID | None = None,
 ) -> RolloutExecutionResult:
     """Execute a rollout bound to one slot's current candidate.
 
@@ -954,7 +994,7 @@ def execute_slot_rollout(
         audit_event=audit_event,
     )
     try:
-        result = _execute_rollout_decision(
+        result = _execute_and_record(
             decision,
             deployed=deployed,
             candidate=candidate,
@@ -965,6 +1005,8 @@ def execute_slot_rollout(
             isolation_adapter=isolation_adapter,
             comparator=comparator,
             audit_event=audit_event,
+            execution_store=execution_store,
+            execution_id=execution_id,
         )
     except BaseException as exc:
         if decision.candidate_authoritative and observation_manager is not None:
@@ -1017,6 +1059,128 @@ def _resolve_effect_observation(
         raise RepairRolloutExecutionError(
             f"invalid behavior capture for effect assessment: {exc}"
         ) from exc
+
+
+def _execute_and_record(
+    decision: RolloutRoutingDecision,
+    *,
+    deployed: Callable[..., Any],
+    candidate: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    contract: FunctionExecutionContract,
+    effect_observation: EffectObservation | None,
+    isolation_adapter: ShadowExecutionAdapter | None,
+    comparator: Comparator | None,
+    audit_event: Callable[..., Any] | None,
+    execution_store: RepairRolloutStore | None,
+    execution_id: UUID | None,
+) -> RolloutExecutionResult:
+    try:
+        result = _execute_rollout_decision(
+            decision,
+            deployed=deployed,
+            candidate=candidate,
+            args=args,
+            kwargs=kwargs,
+            contract=contract,
+            effect_observation=effect_observation,
+            isolation_adapter=isolation_adapter,
+            comparator=comparator,
+            audit_event=audit_event,
+        )
+    except BaseException as exc:
+        observation = _build_execution_observation(
+            decision,
+            execution_id=execution_id,
+            error=exc,
+        )
+        _persist_execution_observation(execution_store, observation)
+        raise
+    observation = _build_execution_observation(
+        decision,
+        execution_id=execution_id,
+        result=result,
+    )
+    _persist_execution_observation(execution_store, observation)
+    return replace(result, execution_observation=observation)
+
+
+def _build_execution_observation(
+    decision: RolloutRoutingDecision,
+    *,
+    execution_id: UUID | None,
+    result: RolloutExecutionResult | None = None,
+    error: BaseException | None = None,
+) -> RolloutExecutionObservation:
+    shadow = result.shadow_result if result is not None else None
+    candidate_executed = (
+        result.candidate_executed
+        if result is not None
+        else decision.strategy == "shadow" or decision.candidate_authoritative
+    )
+    candidate_succeeded = (
+        shadow.candidate_succeeded
+        if shadow is not None
+        else (True if result is not None and decision.candidate_authoritative else None)
+    )
+    original_succeeded = shadow.original_succeeded if shadow is not None else None
+    equivalent = shadow.equivalent if shadow is not None else None
+    execution_state = "COMPLETED" if result is not None else "FAILED"
+    content = {
+        "observation_id": str(execution_id or uuid4()),
+        "rollout_id": str(decision.rollout_id),
+        "target_id": decision.target_id,
+        "candidate_id": str(decision.candidate_id),
+        "stage": decision.stage.value,
+        "strategy": decision.strategy,
+        "authoritative_implementation": decision.authoritative_implementation.value,
+        "candidate_executed": candidate_executed,
+        "candidate_authoritative": decision.candidate_authoritative,
+        "original_succeeded": original_succeeded,
+        "candidate_succeeded": candidate_succeeded,
+        "equivalent": equivalent,
+        "execution_state": execution_state,
+        "exception_type": type(error).__name__ if error is not None else None,
+        "decision_hash": decision.decision_hash,
+        "policy_fingerprint": decision.policy_fingerprint,
+    }
+    observation_id = execution_id or uuid4()
+    content["observation_id"] = str(observation_id)
+    return RolloutExecutionObservation(
+        observation_id=observation_id,
+        rollout_id=decision.rollout_id,
+        target_id=decision.target_id,
+        candidate_id=decision.candidate_id,
+        stage=decision.stage,
+        strategy=decision.strategy,
+        authoritative_implementation=decision.authoritative_implementation,
+        candidate_executed=bool(candidate_executed),
+        candidate_authoritative=decision.candidate_authoritative,
+        original_succeeded=original_succeeded,
+        candidate_succeeded=candidate_succeeded,
+        equivalent=equivalent,
+        execution_state=execution_state,
+        exception_type=type(error).__name__ if error is not None else None,
+        decision_hash=decision.decision_hash,
+        policy_fingerprint=decision.policy_fingerprint,
+        created_at=_utcnow(),
+        content_hash=_digest(content),
+    )
+
+
+def _persist_execution_observation(
+    store: RepairRolloutStore | None,
+    observation: RolloutExecutionObservation,
+) -> None:
+    if store is None:
+        return
+    recorder = getattr(store, "record_rollout_execution", None)
+    if not callable(recorder):
+        raise RepairRolloutExecutionError(
+            "rollout execution store does not support execution observations"
+        )
+    recorder(observation)
 
 
 def _execute_rollout_decision(

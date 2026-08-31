@@ -109,6 +109,16 @@ shadow outcomes also emit bounded execution-outcome evidence. It records the
 implementation class, selection state, decision hash, and exception type when
 present; raw outputs and exception messages are never included.
 
+Callers may also supply a `RepairStore` as `execution_store` to retain one
+bounded `RolloutExecutionObservation` per invocation. The record binds the
+rollout, candidate, stage, routing decision hash, policy fingerprint, selected
+implementation, success state, and shadow equivalence without retaining return
+values or exception messages. An optional `execution_id` identifies an
+observation for idempotent re-submission; conflicting reuse is rejected. These
+observations are evidence for
+operator review and future staged decisions only. They do not advance a stage,
+activate a slot, or grant authority.
+
 The invocation helpers also accept a Guard behavior capture directly through
 `behavior_capture`. Caretaker converts its retained event and resource
 evidence into the shadow eligibility check before execution. A normal capture
