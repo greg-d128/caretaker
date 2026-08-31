@@ -1111,10 +1111,25 @@ class GuardEngine(GuardFacade):
         )
         promoted: list[dict[str, Any]] = []
         if waiting_available:
-            for item in backlog.get("items", ()):
-                if waiting_available <= 0 or item.get("status") != "armed_waiting":
-                    continue
+            waiting_items = [
+                item for item in backlog.get("items", ())
+                if item.get("status") == "armed_waiting"
+            ]
+            selected_targets = set(
+                self.behavior_collection_scheduler.select_fair_automatic_subjects(
+                    (
+                        str(item.get("target_id") or "")
+                        for item in waiting_items
+                    ),
+                    limit=waiting_available,
+                )
+            )
+            for item in waiting_items:
+                if waiting_available <= 0:
+                    break
                 target_id = str(item.get("target_id") or "")
+                if target_id not in selected_targets:
+                    continue
                 controller = controllers.get(target_id)
                 if controller is None:
                     continue

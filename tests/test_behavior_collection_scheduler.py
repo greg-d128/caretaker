@@ -101,6 +101,37 @@ def test_scheduler_recovers_active_request_after_restart(tmp_path: Path) -> None
     assert restarted.status()["queued"] == 1
 
 
+def test_scheduler_round_robin_cursor_prevents_automatic_subject_starvation(
+    tmp_path: Path,
+) -> None:
+    scheduler = BehaviorCollectionScheduler(tmp_path)
+
+    first = scheduler.select_fair_automatic_subjects(
+        ("target-a", "target-b", "target-c"),
+        limit=2,
+    )
+    assert first == ("target-a", "target-b")
+
+    restarted = BehaviorCollectionScheduler(tmp_path)
+    second = restarted.select_fair_automatic_subjects(
+        ("target-a", "target-b", "target-c"),
+        limit=2,
+    )
+    assert second == ("target-c", "target-a")
+    assert restarted.status()["automatic_fairness"] == "PERSISTED_ROUND_ROBIN"
+    assert restarted.status()["automatic_last_subject"] == "target-a"
+
+
+def test_scheduler_fair_selection_handles_subjects_added_or_removed(tmp_path: Path) -> None:
+    scheduler = BehaviorCollectionScheduler(tmp_path)
+    assert scheduler.select_fair_automatic_subjects(("target-a", "target-b"), limit=1) == (
+        "target-a",
+    )
+    assert scheduler.select_fair_automatic_subjects(("target-b", "target-c"), limit=1) == (
+        "target-b",
+    )
+
+
 def test_scheduler_expires_deadline_without_claiming_request(tmp_path: Path) -> None:
     now = [datetime(2026, 8, 30, tzinfo=timezone.utc)]
     scheduler = BehaviorCollectionScheduler(tmp_path, clock=lambda: now[0])

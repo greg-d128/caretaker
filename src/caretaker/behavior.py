@@ -1431,6 +1431,7 @@ class BehaviorCollectionScheduler:
             raise ValueError("maximum_calls must be greater than zero")
         self.root = Path(root)
         self.request_directory = self.root / "behavior" / "collection" / "requests"
+        self.automatic_cursor_path = self.root / "behavior" / "collection" / "automatic-cursor.json"
         self.request_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         try:
             self.request_directory.chmod(0o700)
@@ -1481,6 +1482,52 @@ class BehaviorCollectionScheduler:
         except (TypeError, ValueError) as exc:
             raise ValueError("collection request ID is invalid") from exc
         return self.request_directory / f"{identifier}.json"
+
+    def select_fair_automatic_subjects(
+        self,
+        subjects: Iterable[str],
+        *,
+        limit: int,
+    ) -> tuple[str, ...]:
+        """Select automatic subjects with a restart-safe round-robin cursor.
+
+        Automatic promotion is opt-in and bounded separately from explicit
+        operator requests. The cursor is scheduling metadata only; it cannot
+        authorize collection or change a target's policy.
+        """
+        bounded_limit = max(0, int(limit))
+        if bounded_limit == 0:
+            return ()
+        normalized = sorted({
+            self._text(subject, name="subject", limit=500, required=True)
+            for subject in subjects
+        })
+        if not normalized:
+            return ()
+        with self._lock:
+            last_subject: str | None = None
+            try:
+                cursor = json.loads(self.automatic_cursor_path.read_text(encoding="utf-8"))
+                if (
+                    isinstance(cursor, dict)
+                    and int(cursor.get("schema_version") or 0) == self._SCHEMA_VERSION
+                    and isinstance(cursor.get("last_subject"), str)
+                ):
+                    last_subject = cursor["last_subject"]
+            except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                last_subject = None
+            start = normalized.index(last_subject) + 1 if last_subject in normalized else 0
+            rotated = normalized[start:] + normalized[:start]
+            selected = tuple(rotated[:bounded_limit])
+            self._write(
+                self.automatic_cursor_path,
+                {
+                    "schema_version": self._SCHEMA_VERSION,
+                    "last_subject": selected[-1],
+                    "updated_at": self._now().isoformat(),
+                },
+            )
+            return selected
 
     @staticmethod
     def _read(path: Path) -> dict[str, Any]:
@@ -1807,10 +1854,23 @@ class BehaviorCollectionScheduler:
                 for path in self.request_directory.glob("*.json")
                 if path.name not in valid_paths
             )
+            automatic_last_subject = None
+            try:
+                cursor = json.loads(self.automatic_cursor_path.read_text(encoding="utf-8"))
+                if (
+                    isinstance(cursor, dict)
+                    and int(cursor.get("schema_version") or 0) == self._SCHEMA_VERSION
+                    and isinstance(cursor.get("last_subject"), str)
+                ):
+                    automatic_last_subject = cursor["last_subject"]
+            except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                pass
             return {
                 "maximum_active": self.maximum_active,
                 "maximum_pending": self.maximum_pending,
                 "maximum_calls": self.maximum_calls,
+                "automatic_fairness": "PERSISTED_ROUND_ROBIN",
+                "automatic_last_subject": automatic_last_subject,
                 "active": counts.get("active", 0),
                 "queued": counts.get("queued", 0),
                 "pending": counts.get("active", 0) + counts.get("queued", 0),

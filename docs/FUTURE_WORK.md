@@ -629,7 +629,9 @@ wall-clock measurements; application-wide measured overhead budgets remain
 future work. Automatic promotion now separates bounded no-call waiting targets from
 targets that have begun collecting calls, so a rare function does not consume
 the same automatic collection slot as a hot function. The console reports both
-counts. Fairness across hot and rare functions remains future work. The console
+counts. Automatic promotion now uses a bounded, restart-safe round-robin
+cursor so hot and rare functions do not remain tied to fixed target ordering;
+measured resource budgets remain future work. The console
 and operator control plane can also promote one
 registered adaptive lightweight target into pre-repair Behavior. This request
 is fixed to Behavior, records the operator reason and authority generation, and
@@ -663,7 +665,8 @@ bounded number of adaptive `armed_waiting` targets rather than promoting all
 functions at startup. The console distinguishes queued, armed/waiting, actively
 collecting, sufficiently covered, deferred, and failed collection states and
 explains why a subject is in that state; stale/suspicious prioritization,
-measured resource budgets, and fairness remain future work.
+measured resource budgets remain future work; explicit operator requests
+continue to use their priority/deadline ordering.
 
 Sealed behavioral snapshots should inform later lightweight anomaly triggers.
 Candidate signals include expected duration ranges, failure/return categories,
