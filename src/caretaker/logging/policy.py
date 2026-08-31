@@ -220,6 +220,8 @@ class AuditStreamPolicy:
     # External delivery is an output-only integration supplied by the host
     # application. It is optional for the least-friction profile.
     external_delivery_required: bool = False
+    external_delivery_max_pending_records: int = 1024
+    external_delivery_max_pending_bytes: int = 8 * 1024 * 1024
 
 
 def runtime_integrity_assurance(policy: RuntimeSigningPolicy) -> dict[str, object]:
@@ -396,6 +398,15 @@ def validate_operator_logging_policy(policy: OperatorLoggingPolicy) -> None:
         )
     if not isinstance(policy.audit.external_delivery_required, bool):
         errors.append("logging.audit.external_delivery_required must be a boolean")
+    if policy.audit.external_delivery_required and not policy.audit.enabled:
+        errors.append("logging.audit.external_delivery_required requires logging.audit.enabled=True")
+    for name in (
+        "external_delivery_max_pending_records",
+        "external_delivery_max_pending_bytes",
+    ):
+        value = getattr(policy.audit, name)
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            errors.append(f"logging.audit.{name} must be a positive integer")
     if policy.interrogation.maximum_records <= 0:
         errors.append("interrogation.maximum_records must be greater than zero")
     if policy.interrogation.maximum_representative_records <= 0:

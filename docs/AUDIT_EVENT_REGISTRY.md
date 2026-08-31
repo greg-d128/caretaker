@@ -25,7 +25,12 @@ persistence, and reports delivery as `ACTIVE`, `DEGRADED`, or `LOCAL_ONLY`.
 `logging.audit.external_delivery_required=true` makes a missing or failed sink
 fail closed after preserving the local record. The adapter has no read or
 command interface; transport authentication, remote retention, replay
-protection, and durable store-and-forward remain external responsibilities.
+protection, and remote acknowledgement remain external responsibilities.
+Failed deliveries are retained in a bounded local store-and-forward queue and
+retried in order during writer startup, flush, and the next retained event.
+`external_delivery_max_pending_records` and
+`external_delivery_max_pending_bytes` bound that queue; exhaustion raises an
+explicit error and never removes the local audit record.
 
 All event types share these redaction rules:
 

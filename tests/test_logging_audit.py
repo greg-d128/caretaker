@@ -621,6 +621,8 @@ def test_audit_writer_delivers_exact_local_record_to_output_only_sink(tmp_path: 
         "delivered_events": 1,
         "failed_events": 0,
         "last_error_type": None,
+        "pending_records": 0,
+        "pending_bytes": 0,
     }
 
 
@@ -661,7 +663,7 @@ def test_required_external_audit_delivery_fails_closed_after_local_persistence(
     assert writer.delivery_status()["state"] == "DEGRADED"
     assert writer.delivery_status()["failed_events"] == 1
     assert verify_audit_stream(tmp_path / "caretaker_audit.log")["valid"] is True
-    with pytest.raises(AuditStreamError, match="required external audit flush"):
+    with pytest.raises(AuditStreamError, match="required external audit delivery"):
         writer.close()
 
 
@@ -688,6 +690,74 @@ def test_audit_policy_validates_external_delivery_requirement() -> None:
                 audit=AuditStreamPolicy(external_delivery_required="yes"),
             )
         )
+    with pytest.raises(LoggingPolicyConfigurationError, match="max_pending_records"):
+        validate_operator_logging_policy(
+            OperatorLoggingPolicy(
+                audit=AuditStreamPolicy(external_delivery_max_pending_records=0),
+            )
+        )
+    with pytest.raises(LoggingPolicyConfigurationError, match="max_pending_bytes"):
+        validate_operator_logging_policy(
+            OperatorLoggingPolicy(
+                audit=AuditStreamPolicy(external_delivery_max_pending_bytes=0),
+            )
+        )
+    with pytest.raises(LoggingPolicyConfigurationError, match="max_pending_records"):
+        validate_operator_logging_policy(
+            OperatorLoggingPolicy(
+                audit=AuditStreamPolicy(external_delivery_max_pending_records="many"),
+            )
+        )
+
+
+def test_audit_delivery_queue_retries_in_order_after_restart(tmp_path: Path) -> None:
+    failing = FailingAuditSink()
+    first = AuditStreamWriter(
+        AuditStreamPolicy(),
+        directory=tmp_path,
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        external_sink=failing,
+    )
+    first.emit("INCIDENT_CAPTURED")
+    first.close()
+    assert first.delivery_status()["pending_records"] == 1
+
+    recovered = RecordingAuditSink()
+    second = AuditStreamWriter(
+        AuditStreamPolicy(),
+        directory=tmp_path,
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        external_sink=recovered,
+    )
+    assert second.delivery_status()["pending_records"] == 0
+    second.emit("RECOVERY_DECISION", priority=EvidencePriority.CRITICAL)
+    second.close()
+
+    local_records = (tmp_path / "caretaker_audit.log").read_bytes().splitlines(keepends=True)
+    assert recovered.records == [local_records[0], local_records[1]]
+    assert verify_audit_stream(tmp_path / "caretaker_audit.log")["valid"] is True
+
+
+def test_audit_delivery_queue_is_bounded_without_dropping_local_records(
+    tmp_path: Path,
+) -> None:
+    writer = AuditStreamWriter(
+        AuditStreamPolicy(external_delivery_max_pending_records=1),
+        directory=tmp_path,
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        external_sink=FailingAuditSink(),
+    )
+    writer.emit("INCIDENT_CAPTURED")
+    with pytest.raises(AuditStreamError, match="delivery queue is full"):
+        writer.emit("RECOVERY_DECISION", priority=EvidencePriority.CRITICAL)
+
+    assert writer.delivery_status()["pending_records"] == 1
+    assert len((tmp_path / "caretaker_audit.log").read_bytes().splitlines()) == 2
+    assert verify_audit_stream(tmp_path / "caretaker_audit.log")["valid"] is True
+    writer.close()
 
 
 def test_logging_runtime_can_sign_audit_stream_with_runtime_identity(tmp_path: Path) -> None:

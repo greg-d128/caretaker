@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import binascii
 import hashlib
 import json
 import os
@@ -25,6 +26,7 @@ from .signing import (
 
 
 AUDIT_SCHEMA_VERSION = 1
+AUDIT_DELIVERY_QUEUE_SCHEMA_VERSION = 1
 _EVENT_TYPE = re.compile(r"^[A-Z][A-Z0-9_]{2,63}$")
 _DEFAULT_AUDIT_SECRET_FIELD_NAMES = frozenset({
     "password", "passwd", "token", "secret", "authorization", "api_key", "apikey",
@@ -493,6 +495,9 @@ class AuditStreamWriter:
         self._redaction_replacement = "<redacted>"
         self._set_redaction_policy(redaction_policy)
         self.path = Path(directory) / policy.file_name
+        self.delivery_queue_path = self.path.with_name(
+            f"{self.path.name}.delivery.queue"
+        )
         self._lock = threading.RLock()
         self._closed = False
         self._sequence = 0
@@ -526,6 +531,15 @@ class AuditStreamWriter:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._recover_existing()
         self._file = self.path.open("ab", buffering=0)
+        if self._external_sink is not None:
+            delivered = self._drain_external_queue()
+            if not delivered and getattr(policy, "external_delivery_required", False):
+                self._file.close()
+                self._file = None
+                self._closed = True
+                raise AuditStreamError(
+                    "required external audit delivery is unavailable during startup"
+                )
 
     @property
     def enabled(self) -> bool:
@@ -550,11 +564,13 @@ class AuditStreamWriter:
         """Return bounded external-delivery state without exposing sink data."""
         with self._lock:
             required = bool(getattr(self.policy, "external_delivery_required", False))
+            pending_records = self._read_delivery_queue()
+            pending_bytes = sum(len(record) for record in pending_records)
             if self._external_sink is None:
                 state = "LOCAL_ONLY"
                 sink_id = None
             else:
-                state = "DEGRADED" if self._external_failed_events else "ACTIVE"
+                state = "DEGRADED" if self._external_failed_events or pending_records else "ACTIVE"
                 sink_id = str(
                     getattr(self._external_sink, "sink_id", None)
                     or type(self._external_sink).__name__
@@ -566,6 +582,8 @@ class AuditStreamWriter:
                 "delivered_events": self._external_delivered_events,
                 "failed_events": self._external_failed_events,
                 "last_error_type": self._external_last_error,
+                "pending_records": len(pending_records),
+                "pending_bytes": pending_bytes,
             }
 
     def _validate_delivery_policy(self) -> None:
@@ -587,6 +605,13 @@ class AuditStreamWriter:
                 )
         if not isinstance(getattr(self.policy, "external_delivery_required", False), bool):
             raise AuditStreamError("logging.audit.external_delivery_required must be a boolean")
+        for name in (
+            "external_delivery_max_pending_records",
+            "external_delivery_max_pending_bytes",
+        ):
+            value = getattr(self.policy, name, None)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise AuditStreamError(f"logging.audit.{name} must be a positive integer")
 
     def _set_redaction_policy(self, redaction_policy: Any | None) -> None:
         if redaction_policy is None:
@@ -758,6 +783,14 @@ class AuditStreamWriter:
             if getattr(policy, field_name) != getattr(self.policy, field_name):
                 warnings.append(
                     f"logging.audit.{field_name} is run-bound; the existing delivery policy remains active"
+                )
+        for field_name in (
+            "external_delivery_max_pending_records",
+            "external_delivery_max_pending_bytes",
+        ):
+            if getattr(policy, field_name) != getattr(self.policy, field_name):
+                warnings.append(
+                    f"logging.audit.{field_name} is run-bound; the existing queue bound remains active"
                 )
         self._set_redaction_policy(redaction_policy)
         return tuple(warnings)
@@ -966,17 +999,127 @@ class AuditStreamWriter:
         sink = self._external_sink
         if sink is None:
             return
+        if not self._drain_external_queue():
+            self._queue_external(encoded)
+            if getattr(self.policy, "external_delivery_required", False):
+                raise AuditStreamError(
+                    "required external audit delivery remains unavailable"
+                )
+            return
         try:
             sink.deliver(encoded)
         except Exception as exc:
             self._external_failed_events += 1
             self._external_last_error = type(exc).__name__
+            self._queue_external(encoded)
             if getattr(self.policy, "external_delivery_required", False):
                 raise AuditStreamError(
                     "required external audit delivery failed after local persistence"
                 ) from exc
             return
         self._external_delivered_events += 1
+
+    def _read_delivery_queue(self) -> list[bytes]:
+        path = self.delivery_queue_path
+        if not path.exists():
+            return []
+        try:
+            lines = path.read_bytes().splitlines()
+        except OSError as exc:
+            raise AuditStreamError("Unable to read external audit delivery queue") from exc
+        records: list[bytes] = []
+        for line in lines:
+            try:
+                item = json.loads(line.decode("utf-8"))
+                if not isinstance(item, Mapping):
+                    raise ValueError("queue item is not an object")
+                if int(item.get("schema_version") or 0) != AUDIT_DELIVERY_QUEUE_SCHEMA_VERSION:
+                    raise ValueError("unsupported queue schema")
+                encoded = base64.b64decode(
+                    str(item.get("record_base64") or ""), validate=True
+                )
+                if not encoded.endswith(b"\n"):
+                    raise ValueError("queued record is not newline terminated")
+                if hashlib.sha256(encoded).hexdigest() != item.get("record_sha256"):
+                    raise ValueError("queued record hash does not match")
+                if len(encoded) > self.policy.maximum_event_bytes:
+                    raise ValueError("queued record exceeds maximum event bytes")
+            except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError, binascii.Error) as exc:
+                raise AuditStreamError("External audit delivery queue is corrupt") from exc
+            records.append(encoded)
+        return records
+
+    def _rewrite_delivery_queue(self, records: list[bytes]) -> None:
+        path = self.delivery_queue_path
+        if not records:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                raise AuditStreamError("Unable to clear external audit delivery queue") from exc
+            return
+        temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+        try:
+            with temporary.open("wb") as stream:
+                for record in records:
+                    item = {
+                        "schema_version": AUDIT_DELIVERY_QUEUE_SCHEMA_VERSION,
+                        "record_sha256": hashlib.sha256(record).hexdigest(),
+                        "record_base64": base64.b64encode(record).decode("ascii"),
+                    }
+                    stream.write(_canonical(item) + b"\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            temporary.chmod(0o600)
+            temporary.replace(path)
+        except OSError as exc:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+            raise AuditStreamError("Unable to update external audit delivery queue") from exc
+
+    def _queue_external(self, encoded: bytes) -> None:
+        records = self._read_delivery_queue()
+        pending_bytes = sum(len(record) for record in records)
+        if (
+            len(records) >= self.policy.external_delivery_max_pending_records
+            or pending_bytes + len(encoded) > self.policy.external_delivery_max_pending_bytes
+        ):
+            self._external_last_error = "AuditDeliveryQueueFull"
+            raise AuditStreamError("external audit delivery queue is full")
+        item = {
+            "schema_version": AUDIT_DELIVERY_QUEUE_SCHEMA_VERSION,
+            "record_sha256": hashlib.sha256(encoded).hexdigest(),
+            "record_base64": base64.b64encode(encoded).decode("ascii"),
+        }
+        try:
+            with self.delivery_queue_path.open("ab") as stream:
+                stream.write(_canonical(item) + b"\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            self.delivery_queue_path.chmod(0o600)
+        except OSError as exc:
+            raise AuditStreamError("Unable to persist external audit delivery queue") from exc
+
+    def _drain_external_queue(self) -> bool:
+        sink = self._external_sink
+        records = self._read_delivery_queue()
+        if sink is None or not records:
+            return not records
+        remaining = list(records)
+        while remaining:
+            try:
+                sink.deliver(remaining[0])
+            except Exception as exc:
+                self._external_failed_events += 1
+                self._external_last_error = type(exc).__name__
+                return False
+            self._external_delivered_events += 1
+            remaining.pop(0)
+            self._rewrite_delivery_queue(remaining)
+        return True
 
     def flush(self) -> None:
         with self._lock:
@@ -988,6 +1131,10 @@ class AuditStreamWriter:
     def _flush_external(self) -> None:
         sink = self._external_sink
         if sink is None:
+            return
+        if not self._drain_external_queue():
+            if getattr(self.policy, "external_delivery_required", False):
+                raise AuditStreamError("required external audit delivery remains unavailable")
             return
         try:
             sink.flush()
