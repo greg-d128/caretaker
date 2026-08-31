@@ -843,7 +843,12 @@ class RepairRolloutCoordinator:
         )
 
     def status(self, rollout_id: UUID | None = None) -> dict[str, Any]:
-        """Return bounded worker-context status for supervisor/operator review."""
+        """Return bounded worker and execution status for supervisor review.
+
+        Execution evidence is summarized from the supervisor's durable store;
+        raw observations are never returned by this projection.  The summary
+        is evidence only and cannot advance the rollout.
+        """
 
         records = self.ledger.all()
         if rollout_id is not None:
@@ -871,6 +876,7 @@ class RepairRolloutCoordinator:
                 "current_worker_count": len({item.worker_id for item in current}),
                 "stale_acknowledgement_count": stale,
                 "invalid_acknowledgement_count": invalid,
+                "execution_evidence": self._execution_evidence(record),
                 "workers": [
                     {
                         "worker_id": item.worker_id,
@@ -886,6 +892,34 @@ class RepairRolloutCoordinator:
             "authority_granted": False,
             "policy_fingerprint": self.policy_fingerprint,
             "rollouts": output,
+        }
+
+    def _execution_evidence(self, record: RepairRolloutRecord) -> dict[str, Any]:
+        if self.store is None:
+            return {
+                "status": "UNAVAILABLE",
+                "reason": "rollout execution store is not configured",
+            }
+        reader = getattr(self.store, "all_rollout_executions", None)
+        if not callable(reader):
+            return {
+                "status": "UNAVAILABLE",
+                "reason": "rollout store does not support execution observations",
+            }
+        try:
+            self._check_context(record)
+            summary = self.ledger.execution_summary(
+                record.rollout_id,
+                policy_fingerprint=self.policy_fingerprint,
+            )
+        except RepairRolloutError as exc:
+            return {
+                "status": "STALE_OR_UNAVAILABLE",
+                "reason": str(exc),
+            }
+        return {
+            "status": "AVAILABLE",
+            "summary": _json_safe(summary),
         }
 
     def _check_context(self, record: RepairRolloutRecord) -> None:

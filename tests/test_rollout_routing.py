@@ -721,6 +721,8 @@ def test_supervisor_rollout_coordinator_requires_current_worker_ack() -> None:
     status = coordinator.status(record.rollout_id)
     assert status["rollouts"][0]["current_worker_count"] == 1
     assert status["rollouts"][0]["stale_acknowledgement_count"] == 0
+    assert status["rollouts"][0]["execution_evidence"]["status"] == "AVAILABLE"
+    assert status["rollouts"][0]["execution_evidence"]["summary"]["observation_count"] == 0
 
     _advance(ledger, record, RepairRolloutStage.ACTIVE)
     with pytest.raises(PermissionError, match="not acknowledged"):
@@ -734,6 +736,18 @@ def test_supervisor_rollout_coordinator_requires_current_worker_ack() -> None:
     status = coordinator.status(record.rollout_id)
     assert status["rollouts"][0]["current_worker_count"] == 0
     assert status["rollouts"][0]["stale_acknowledgement_count"] == 1
+
+
+def test_rollout_coordinator_does_not_treat_missing_execution_store_as_progress() -> None:
+    ledger = _ledger()
+    record = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    status = RepairRolloutCoordinator(
+        ledger,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+    ).status(record.rollout_id)
+
+    assert status["rollouts"][0]["execution_evidence"]["status"] == "UNAVAILABLE"
 
 
 def test_sqlite_rollout_worker_acknowledgement_survives_coordinator_restart(tmp_path) -> None:

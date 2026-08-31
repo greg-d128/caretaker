@@ -976,6 +976,9 @@ acknowledgement matches the rollout's target, candidate, stage, policy, and
 authority fingerprints. Acknowledgements are durable, process-bound by the
 supervised control plane, retained as stale evidence after a stage transition,
 and explicitly do not grant authority or advance lifecycle state.
+The same read-only coordination projection now includes an integrity-checked
+summary of durable application-wide rollout execution evidence, while missing
+or stale evidence is reported as unavailable rather than counted as progress.
 
 Future Repair should provide more operator and policy control over how a validated
 candidate is introduced. Potential execution strategies include:

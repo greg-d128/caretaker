@@ -154,6 +154,12 @@ Neither request advances a rollout, changes policy, activates a FunctionSlot,
 or grants execution authority. These requests are a coordination/evidence
 boundary; the application still owns invocation and failure handling.
 
+The coordinator status projection also includes a bounded execution-evidence
+summary from the durable rollout store: completed and failed calls, candidate
+and shadow counts, comparison outcomes, invalid evidence, and an evidence hash.
+If the store is unavailable or the policy/authority context is stale, the
+projection reports that state instead of treating missing evidence as success.
+
 The current runtime's built-in writer, event server, control server, and system
 collector are not automatically admitted as rollout workers because they do
 not yet receive deployment-specific worker authority packets. Deployment-owned
