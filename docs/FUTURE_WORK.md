@@ -37,7 +37,10 @@ isolated launch/reset/destroy tooling, captured historical incident fixtures,
 and broader observed-outcome coverage. The current harness requires
 callers to supply runners and does not provide a sandbox or process lifecycle.
 The harness has a policy gate with least-friction `PROCESS` as its default and
-can fail closed when a configured `CONTAINER` or `VM` minimum is not met.
+can fail closed when a configured `CONTAINER` or `VM` minimum is not met. An
+explicit trusted process runner now provides per-invocation temporary-workspace
+cleanup and process-group timeout handling; it is not a sandbox or substitute
+for container/VM lifecycle tooling.
 Bounded observations can now be stored separately from the manifest, with a
 content hash for corruption detection; that hash is not a substitute for
 external authenticated shipping. Expected metadata must remain separate from actual evidence; loading or listing

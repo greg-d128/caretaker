@@ -60,7 +60,9 @@ observed results separately in a content-hashed local store when a caller
 supplies a runner, and can produce bounded deterministic outcome reports, but
 its policy gate defaults to least-friction PROCESS execution and can require a
 stronger declared isolation tier. It does not provide a sandbox or claim broad
-observed coverage. Repository-owned mappings, isolated lifecycle tooling,
+observed coverage. An explicit process runner now provides temporary-workspace
+and process-group lifecycle handling, while repository-owned mappings, stronger
+isolated lifecycle tooling,
 captured incident fixtures, and broad cross-version outcome coverage remain
 required before this priority can be considered complete.
 

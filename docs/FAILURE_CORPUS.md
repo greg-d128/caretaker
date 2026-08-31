@@ -67,9 +67,35 @@ harness = FailureCorpusHarness(
     corpus,
     runners={"worker.failed": run_worker_case},
     isolation="CONTAINER",
-    policy=FailureCorpusExecutionPolicy(minimum_isolation="CONTAINER"),
+policy=FailureCorpusExecutionPolicy(minimum_isolation="CONTAINER"),
 )
 ```
+
+For a concrete process-level lifecycle, trusted infrastructure can use
+`FailureCorpusProcessRunner` with an explicit argument vector for each mapped
+scenario. The command is never taken from the manifest, is run without a
+shell, receives a single scenario-summary JSON request, and must return a
+single bounded JSON observation object. Each invocation gets a temporary
+workspace that is removed after completion; timeouts terminate the process
+group. This provides process isolation and cleanup boundaries only. It does
+not provide container/VM sandboxing, hard resource quotas, or hostile-code
+containment, and a policy requiring `CONTAINER` or `VM` refuses to launch it.
+
+```python
+from caretaker.failure_corpus import FailureCorpusProcessRunner
+
+runner = FailureCorpusProcessRunner(
+    corpus,
+    {"exception.unhandled": ["/path/to/trusted-runner", "--json"]},
+    policy=FailureCorpusExecutionPolicy(minimum_isolation="PROCESS"),
+    timeout_seconds=30,
+)
+observation = runner.run("exception.unhandled")
+```
+
+The command mapping is trusted test infrastructure and must be reviewed and
+managed separately from corpus data. Caretaker does not treat a successful
+observation as authority, validation, or permission to change an application.
 
 Trusted test infrastructure can persist those observations for later review
 without persisting a runner or executable instruction:

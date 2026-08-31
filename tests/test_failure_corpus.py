@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from caretaker.failure_corpus import (
     FailureCorpusExecutionPolicy,
     FailureCorpusHarness,
     FailureCorpusObservationStore,
+    FailureCorpusProcessRunner,
     MAX_CORPUS_BYTES,
 )
 from caretaker.failure_corpus_cli import main as failure_corpus_report_main
@@ -195,6 +197,65 @@ def test_trusted_harness_applies_policy_minimum_and_disabled_state() -> None:
     assert disabled.status == "POLICY_DISABLED"
     assert disabled.executed is False
     assert called is False
+
+
+def test_process_runner_uses_explicit_json_command_and_cleans_workspace(tmp_path: Path) -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    command = [
+        sys.executable,
+        "-c",
+        (
+            "import json,sys; json.load(sys.stdin); "
+            "print(json.dumps({'signal':'EXCEPTION','caretaker_action':'CAPTURE_INCIDENT',"
+            "'authority_effect':'NO_AUTHORITY_CHANGE'}))"
+        ),
+    ]
+    runner = FailureCorpusProcessRunner(
+        corpus,
+        {"exception.unhandled": command},
+        workspace_root=tmp_path,
+    )
+
+    observation = runner.run("exception.unhandled")
+
+    assert observation.status == "MATCHED"
+    assert observation.executed is True
+    assert tuple(tmp_path.iterdir()) == ()
+
+
+def test_process_runner_fails_closed_when_policy_requires_stronger_isolation() -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    runner = FailureCorpusProcessRunner(
+        corpus,
+        {"exception.unhandled": [sys.executable, "-c", "raise SystemExit(99)"]},
+        policy=FailureCorpusExecutionPolicy(minimum_isolation="CONTAINER"),
+    )
+
+    observation = runner.run("exception.unhandled")
+
+    assert observation.status == "ISOLATION_UNAVAILABLE"
+    assert observation.executed is False
+
+
+def test_process_runner_records_command_failure_and_kills_timeout_process_group(tmp_path: Path) -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    failed = FailureCorpusProcessRunner(
+        corpus,
+        {"exception.unhandled": [sys.executable, "-c", "raise SystemExit(7)"]},
+        workspace_root=tmp_path,
+    ).run("exception.unhandled")
+    timed_out = FailureCorpusProcessRunner(
+        corpus,
+        {"exception.unhandled": [sys.executable, "-c", "import time; time.sleep(10)"]},
+        timeout_seconds=0.05,
+        workspace_root=tmp_path,
+    ).run("exception.unhandled")
+
+    assert failed.status == "ERROR"
+    assert "status 7" in (failed.error or "")
+    assert timed_out.status == "ERROR"
+    assert "timeout" in (timed_out.error or "")
+    assert tuple(tmp_path.iterdir()) == ()
 
 
 def test_trusted_harness_distinguishes_mismatched_and_invalid_results() -> None:

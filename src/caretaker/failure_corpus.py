@@ -10,11 +10,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import signal
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, Mapping
 from uuid import UUID, uuid4
 
@@ -459,6 +463,132 @@ class FailureCorpusHarness:
             if category is None or scenario.category == category
         ][:bounded_limit]
         return tuple(self.run(scenario.scenario_id) for scenario in selected)
+
+
+class FailureCorpusProcessRunner:
+    """Run explicit trusted scenario commands in short-lived processes.
+
+    Commands are supplied by trusted code and never read from a corpus
+    manifest. Each invocation receives one JSON scenario summary on stdin,
+    runs in a fresh temporary workspace, and must return one JSON observation
+    mapping on stdout. This is process isolation only, not a hostile-code
+    sandbox; container or VM policy requirements fail closed before launch.
+    """
+
+    def __init__(
+        self,
+        corpus: FailureCorpus,
+        commands: Mapping[str, Sequence[str]],
+        *,
+        policy: FailureCorpusExecutionPolicy | None = None,
+        timeout_seconds: float = 30.0,
+        workspace_root: str | Path | None = None,
+        environment: Mapping[str, str] | None = None,
+    ) -> None:
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be greater than zero")
+        self.corpus = corpus
+        self.policy = policy or FailureCorpusExecutionPolicy()
+        self.timeout_seconds = float(timeout_seconds)
+        self.workspace_root = Path(workspace_root).expanduser().resolve() if workspace_root else None
+        if self.workspace_root is not None:
+            self.workspace_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            try:
+                self.workspace_root.chmod(0o700)
+            except OSError:
+                pass
+        self.environment = {"PATH": os.defpath, "LANG": "C.UTF-8"}
+        if environment is not None:
+            if any(
+                not isinstance(key, str)
+                or not isinstance(value, str)
+                or "\x00" in key
+                or "\x00" in value
+                for key, value in environment.items()
+            ):
+                raise FailureCorpusError("process runner environment must contain string keys and values")
+            self.environment.update(environment)
+        normalized: dict[str, tuple[str, ...]] = {}
+        for scenario_id, command in commands.items():
+            scenario_name = _identifier(scenario_id, field="scenario_id")
+            if not isinstance(command, Sequence) or isinstance(command, (str, bytes)) or not command:
+                raise FailureCorpusError(f"process runner command for {scenario_name!r} must be a non-empty sequence")
+            values = tuple(command)
+            if any(not isinstance(item, str) or not item or "\x00" in item for item in values):
+                raise FailureCorpusError(f"process runner command for {scenario_name!r} contains an invalid argument")
+            if len(values) > 64 or sum(len(item) for item in values) > MAX_TEXT_CHARS:
+                raise FailureCorpusError(f"process runner command for {scenario_name!r} is too large")
+            normalized[scenario_name] = values
+        self.commands = normalized
+        self.harness = FailureCorpusHarness(
+            corpus,
+            runners={
+                scenario_id: (lambda scenario, command=command: self._invoke(command, scenario))
+                for scenario_id, command in normalized.items()
+            },
+            isolation="PROCESS",
+            policy=self.policy,
+        )
+
+    def _invoke(self, command: tuple[str, ...], scenario: FailureScenario) -> Mapping[str, Any]:
+        request = json.dumps(
+            {"schema_version": FAILURE_CORPUS_SCHEMA_VERSION, "scenario": scenario.summary()},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        with tempfile.TemporaryDirectory(
+            prefix="caretaker-failure-corpus-",
+            dir=str(self.workspace_root) if self.workspace_root else None,
+        ) as workspace:
+            try:
+                process = subprocess.Popen(
+                    list(command),
+                    cwd=workspace,
+                    env=dict(self.environment),
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    close_fds=True,
+                    start_new_session=True,
+                )
+                try:
+                    stdout, stderr = process.communicate(
+                        input=request,
+                        timeout=self.timeout_seconds,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except OSError:
+                        process.kill()
+                    stdout, stderr = process.communicate()
+                    raise RuntimeError(
+                        f"process runner exceeded {self.timeout_seconds:g}s timeout"
+                    ) from exc
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise RuntimeError(f"process runner failed: {type(exc).__name__}: {exc}") from exc
+        if process.returncode != 0:
+            detail = (stderr or "").strip()[-512:]
+            raise RuntimeError(
+                f"process runner exited with status {process.returncode}"
+                + (f": {detail}" if detail else "")
+            )
+        if len((stdout or "").encode("utf-8")) > MAX_OBSERVATION_BYTES:
+            raise RuntimeError(f"process runner output exceeds {MAX_OBSERVATION_BYTES} bytes")
+        try:
+            observed = json.loads(stdout or "")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("process runner stdout is not valid JSON") from exc
+        if not isinstance(observed, Mapping):
+            raise RuntimeError("process runner stdout must be a JSON object")
+        return observed
+
+    def run(self, scenario_id: str) -> FailureObservation:
+        return self.harness.run(scenario_id)
+
+    def run_all(self, *, category: str | None = None, limit: int = 100) -> tuple[FailureObservation, ...]:
+        return self.harness.run_all(category=category, limit=limit)
 
 
 class FailureCorpusObservationStore:
