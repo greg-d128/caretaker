@@ -196,3 +196,25 @@ The external sink is write-only from Caretaker's perspective. Incoming records,
 alerts, or suggested actions are untrusted input and cannot be routed back into
 the control plane. Sink authentication, confidentiality, replay handling,
 redaction, rate limits, and retention remain separate policy requirements.
+
+### Offline verification
+
+An exported stream can be checked without opening it for append:
+
+```python
+from caretaker.logging import verify_audit_stream
+
+report = verify_audit_stream(
+    "caretaker_audit.log",
+    require_signatures=True,
+    identity_public_keys={fingerprint: public_key_bytes},
+)
+assert report["valid"] is True
+```
+
+The verifier never truncates or repairs a file. It reports an incomplete final
+line as invalid, checks sequence continuity, canonical content hashes, the
+configured hash-chain mode, and (when requested and keyed) every artifact
+signature. Missing public keys are reported as `UNAVAILABLE` for optional
+verification and fail a `require_signatures=True` report. The returned report
+is evidence only and is not an authority or command interface.

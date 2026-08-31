@@ -227,6 +227,183 @@ def _copy_mapping(value: Mapping[str, Any] | None) -> dict[str, Any]:
     return {str(key): item for key, item in value.items()}
 
 
+def verify_audit_stream(
+    path: str | Path,
+    *,
+    hash_chain: bool = True,
+    require_signatures: bool = False,
+    identity_public_keys: Mapping[str, bytes | str] | None = None,
+    maximum_event_bytes: int = 4096,
+) -> dict[str, Any]:
+    """Verify an exported audit stream without opening it for append.
+
+    ``identity_public_keys`` maps a signed artifact's public-key fingerprint to
+    its public key.  Public keys may be raw bytes or base64 text.  When
+    signatures are optional, a valid signature whose key is unavailable is
+    reported as ``UNAVAILABLE`` rather than treated as cryptographically
+    verified.  ``require_signatures=True`` makes that condition, unsigned
+    records, and invalid signatures fail the report.
+
+    The verifier never truncates, repairs, executes, or sends records.  An
+    incomplete final line is reported as invalid; recovery/truncation remains
+    an explicit writer-start operation.
+    """
+    if maximum_event_bytes <= 0:
+        raise ValueError("maximum_event_bytes must be greater than zero")
+    stream_path = Path(path)
+    report: dict[str, Any] = {
+        "schema_version": AUDIT_SCHEMA_VERSION,
+        "path": str(stream_path),
+        "valid": False,
+        "hash_chain_valid": False,
+        "signature_verification": "NOT_REQUIRED" if not require_signatures else "FAILED",
+        "event_count": 0,
+        "first_sequence": None,
+        "last_sequence": None,
+        "signed_event_count": 0,
+        "unsigned_event_count": 0,
+        "unverified_signature_count": 0,
+        "errors": [],
+    }
+    errors: list[str] = report["errors"]
+    if not stream_path.is_file():
+        errors.append("audit stream does not exist")
+        return report
+
+    keys = dict(identity_public_keys or {})
+    previous_hash: str | None = None
+    previous_sequence = 0
+    signature_failures = 0
+    signature_unavailable = 0
+    hash_failures = 0
+    try:
+        stream = stream_path.open("rb")
+    except OSError as exc:
+        errors.append(f"audit stream cannot be read: {exc}")
+        return report
+    with stream:
+        for line_number, line in enumerate(stream, start=1):
+            if len(line) > maximum_event_bytes:
+                errors.append(
+                    f"line {line_number}: audit record exceeds maximum_event_bytes"
+                )
+                hash_failures += 1
+                continue
+            if not line.endswith(b"\n"):
+                errors.append(f"line {line_number}: incomplete final audit record")
+                hash_failures += 1
+                break
+            try:
+                event = json.loads(line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                errors.append(f"line {line_number}: malformed audit record: {exc}")
+                hash_failures += 1
+                continue
+            if not isinstance(event, Mapping):
+                errors.append(f"line {line_number}: audit record is not an object")
+                hash_failures += 1
+                continue
+            sequence = event.get("stream_sequence")
+            if not isinstance(sequence, int) or sequence != previous_sequence + 1:
+                errors.append(f"line {line_number}: audit stream sequence is not contiguous")
+                hash_failures += 1
+            else:
+                previous_sequence = sequence
+                report["event_count"] += 1
+                if report["first_sequence"] is None:
+                    report["first_sequence"] = sequence
+                report["last_sequence"] = sequence
+            integrity = event.get("integrity")
+            if not isinstance(integrity, Mapping):
+                errors.append(f"line {line_number}: audit record has no integrity object")
+                hash_failures += 1
+                continue
+            if "hash_chain" in integrity and integrity.get("hash_chain") is not hash_chain:
+                errors.append(f"line {line_number}: audit hash-chain mode does not match policy")
+                hash_failures += 1
+            if hash_chain and integrity.get("previous_event_hash") != previous_hash:
+                errors.append(f"line {line_number}: previous-event hash does not match")
+                hash_failures += 1
+            body = dict(event)
+            body.pop("integrity", None)
+            expected_content = hashlib.sha256(_canonical(body)).hexdigest()
+            if integrity.get("content_sha256") != expected_content:
+                errors.append(f"line {line_number}: audit record content hash does not match")
+                hash_failures += 1
+            else:
+                previous_hash = expected_content
+
+            signature_value = integrity.get("artifact_signature")
+            if not isinstance(signature_value, Mapping):
+                report["unsigned_event_count"] += 1
+                if require_signatures:
+                    signature_failures += 1
+                    errors.append(f"line {line_number}: required audit signature is missing")
+                continue
+            report["signed_event_count"] += 1
+            try:
+                artifact = deserialize_signed_artifact(signature_value)
+                if artifact.artifact_kind != "caretaker-audit-event":
+                    raise ValueError("wrong artifact kind")
+                if artifact.run_id != UUID(str(event.get("run_id") or "")):
+                    raise ValueError("runtime identity does not match")
+                if artifact.process_start_id != UUID(str(event.get("process_start_id") or "")):
+                    raise ValueError("process identity does not match")
+                if artifact.content_hash != expected_content:
+                    raise ValueError("content hash does not match")
+                expected_context = {
+                    "event_id": str(event.get("event_id") or ""),
+                    "event_type": str(event.get("event_type") or ""),
+                    "stream_sequence": event.get("stream_sequence"),
+                }
+                if dict(artifact.context) != expected_context:
+                    raise ValueError("context does not match")
+                if integrity.get("signature_state") != artifact.signer_mode.name:
+                    raise ValueError("signature state does not match")
+                if integrity.get("signer_fingerprint") != artifact.public_key_fingerprint:
+                    raise ValueError("signer fingerprint does not match")
+            except Exception as exc:
+                signature_failures += 1
+                errors.append(f"line {line_number}: malformed audit signature: {exc}")
+                continue
+            fingerprint = artifact.public_key_fingerprint
+            key = keys.get(fingerprint) if fingerprint else None
+            if key is None:
+                signature_unavailable += 1
+                if require_signatures:
+                    signature_failures += 1
+                    errors.append(f"line {line_number}: public key is unavailable")
+                continue
+            if isinstance(key, str):
+                try:
+                    key = base64.b64decode(key)
+                except Exception as exc:
+                    signature_failures += 1
+                    errors.append(f"line {line_number}: public key is malformed: {exc}")
+                    continue
+            try:
+                verified = verify_signed_artifact(artifact, key)
+            except Exception as exc:
+                verified = False
+                errors.append(f"line {line_number}: signature verification failed: {exc}")
+            if not verified:
+                signature_failures += 1
+                errors.append(f"line {line_number}: audit signature is invalid")
+
+    report["hash_chain_valid"] = hash_failures == 0
+    report["unverified_signature_count"] = signature_unavailable
+    if signature_failures:
+        report["signature_verification"] = "FAILED"
+    elif signature_unavailable:
+        report["signature_verification"] = "UNAVAILABLE"
+    elif report["signed_event_count"]:
+        report["signature_verification"] = "VERIFIED"
+    else:
+        report["signature_verification"] = "NOT_REQUIRED"
+    report["valid"] = not errors
+    return report
+
+
 class AuditStreamWriter:
     """Small append-only writer for high-value Caretaker decisions.
 

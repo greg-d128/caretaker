@@ -12,6 +12,7 @@ from caretaker.logging import (
     AuditStreamPolicy,
     AuditStreamWriter,
     EvidencePriority,
+    verify_audit_stream,
 )
 
 
@@ -234,6 +235,108 @@ def test_signed_audit_events_require_a_signer(tmp_path: Path) -> None:
             run_id=uuid4(),
             process_start_id=uuid4(),
         )
+
+
+def test_read_only_audit_verifier_validates_hash_chain(tmp_path: Path) -> None:
+    writer = _writer(tmp_path)
+    writer.emit("INCIDENT_CAPTURED")
+    writer.close()
+
+    report = verify_audit_stream(tmp_path / "caretaker_audit.log")
+
+    assert report["valid"] is True
+    assert report["hash_chain_valid"] is True
+    assert report["event_count"] == 1
+    assert report["unsigned_event_count"] == 1
+
+
+def test_read_only_audit_verifier_validates_signed_events_with_public_key(tmp_path: Path) -> None:
+    from caretaker.logging import RuntimeArtifactSigningService, RuntimeRecordIntegrityMode, RuntimeSigningPolicy
+
+    run_id = uuid4()
+    process_start_id = uuid4()
+    signer = RuntimeArtifactSigningService(
+        policy=RuntimeSigningPolicy(
+            mode=RuntimeRecordIntegrityMode.EPHEMERAL_SIGNED,
+            run_signer_in_separate_process=False,
+        ),
+        application_id="demo",
+        run_id=run_id,
+        process_start_id=process_start_id,
+        root=tmp_path,
+    )
+    writer = AuditStreamWriter(
+        AuditStreamPolicy(sign_events=True),
+        directory=tmp_path,
+        run_id=run_id,
+        process_start_id=process_start_id,
+        artifact_signer=signer,
+    )
+    writer.emit("INCIDENT_CAPTURED")
+    writer.close()
+    identity = signer.identity
+    report = verify_audit_stream(
+        tmp_path / "caretaker_audit.log",
+        require_signatures=True,
+        identity_public_keys={identity.public_key_fingerprint: identity.public_key},
+    )
+    signer.close()
+
+    assert report["valid"] is True
+    assert report["signature_verification"] == "VERIFIED"
+    assert report["unverified_signature_count"] == 0
+
+
+def test_read_only_audit_verifier_reports_unavailable_signature_key(tmp_path: Path) -> None:
+    from caretaker.logging import RuntimeArtifactSigningService, RuntimeRecordIntegrityMode, RuntimeSigningPolicy
+
+    run_id = uuid4()
+    process_start_id = uuid4()
+    signer = RuntimeArtifactSigningService(
+        policy=RuntimeSigningPolicy(
+            mode=RuntimeRecordIntegrityMode.EPHEMERAL_SIGNED,
+            run_signer_in_separate_process=False,
+        ),
+        application_id="demo",
+        run_id=run_id,
+        process_start_id=process_start_id,
+        root=tmp_path,
+    )
+    writer = AuditStreamWriter(
+        AuditStreamPolicy(sign_events=True),
+        directory=tmp_path,
+        run_id=run_id,
+        process_start_id=process_start_id,
+        artifact_signer=signer,
+    )
+    writer.emit("INCIDENT_CAPTURED")
+    writer.close()
+    signer.close()
+
+    optional = verify_audit_stream(tmp_path / "caretaker_audit.log")
+    required = verify_audit_stream(
+        tmp_path / "caretaker_audit.log", require_signatures=True
+    )
+
+    assert optional["valid"] is True
+    assert optional["signature_verification"] == "UNAVAILABLE"
+    assert optional["unverified_signature_count"] == 1
+    assert required["valid"] is False
+    assert required["signature_verification"] == "FAILED"
+
+
+def test_read_only_audit_verifier_rejects_incomplete_tail(tmp_path: Path) -> None:
+    writer = _writer(tmp_path)
+    writer.emit("INCIDENT_CAPTURED")
+    writer.close()
+    with (tmp_path / "caretaker_audit.log").open("ab") as stream:
+        stream.write(b'{"incomplete":')
+
+    report = verify_audit_stream(tmp_path / "caretaker_audit.log")
+
+    assert report["valid"] is False
+    assert report["hash_chain_valid"] is False
+    assert any("incomplete final" in error for error in report["errors"])
 
 
 def test_signed_audit_events_reject_a_cross_runtime_signer(tmp_path: Path) -> None:

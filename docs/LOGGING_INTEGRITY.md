@@ -71,6 +71,11 @@ identifiers, preventing a valid signature from another runtime from being
 attached to this stream.
 The default is `sign_events = false` and `signing.mode = HASH_CHAINED`.
 
+Operators and external collectors can use the read-only
+`caretaker.logging.verify_audit_stream()` API to validate an exported stream.
+It does not truncate, repair, execute, or transmit records. Public keys are
+supplied separately; private signing keys are never needed for verification.
+
 The current console records a UUID-scoped invocation, OS UID/GID, and peer
 process identity in the audit stream so an action can be attributed to a
 console session. When the signing extra is available, it also creates an

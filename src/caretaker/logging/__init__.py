@@ -5,6 +5,7 @@ from .audit import (
     AuditStreamError,
     AuditStreamWriter,
     audit_event_definition,
+    verify_audit_stream,
 )
 from .attachments import AttachmentStore
 from .baselines import BaselineBuilder, BaselineComparator, BaselineStore
