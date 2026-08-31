@@ -962,9 +962,10 @@ already-authorized callables and delegates sampled shadow work to the
 original-authoritative primitive. FunctionSlot activation, application-specific
 failure/fallback policy, and supervisor-wide coordination remain future work.
 `execute_slot_rollout()` now adds strict binding to an installed FunctionSlot
-candidate and its preceding deployed version without mutating slot state;
-candidate acceptance accounting and application-specific failure handling
-remain future work. The supervised application also exposes a bounded,
+candidate and its preceding deployed version without mutating slot state. When
+the application supplies its `ObservationManager`, authoritative candidate
+calls are recorded through the existing acceptance and rollback policy, while
+shadow calls remain excluded. The supervised application also exposes a bounded,
 read-only `repair-rollout-status` projection containing lifecycle records,
 transition history, and integrity-checked execution summaries. Stale or
 unavailable summaries remain visibly unresolved and cannot advance authority.
@@ -972,8 +973,9 @@ unavailable summaries remain visibly unresolved and cannot advance authority.
 The first supervisor coordination slice is now implemented through
 `RepairRolloutCoordinator`. An authenticated worker can acknowledge the exact
 current rollout context and request a deterministic route only while its
-acknowledgement matches the rollout's target, candidate, stage, policy, and
-authority fingerprints. Acknowledgements are durable, process-bound by the
+acknowledgement matches the rollout's target, candidate, stage, policy,
+authority, and effective routing-policy fingerprints. Acknowledgements are
+durable, process-bound by the
 supervised control plane, retained as stale evidence after a stage transition,
 and explicitly do not grant authority or advance lifecycle state.
 The same read-only coordination projection now includes an integrity-checked
