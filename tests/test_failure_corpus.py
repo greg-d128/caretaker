@@ -19,6 +19,7 @@ from caretaker.failure_corpus import (
     MAX_CORPUS_BYTES,
 )
 from caretaker.failure_corpus_cli import main as failure_corpus_report_main
+from examples.failure_corpus.trusted_mappings import build_reviewed_harness
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,13 +29,24 @@ def test_repository_failure_corpus_is_bounded_metadata_only() -> None:
     corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
 
     assert corpus.corpus_id == "caretaker-default-failure-corpus-v1"
-    assert len(corpus.scenarios) == 10
+    assert len(corpus.scenarios) == 17
     assert {item.category for item in corpus.scenarios} == {
         "exception", "timeout", "invalid-output", "dependency", "configuration",
-        "resource", "worker", "repair", "malicious-evidence", "llm",
+        "corruption", "concurrency", "deployment", "intermittent", "resource",
+        "worker", "repair", "malicious-evidence", "llm",
     }
     assert all(item.summary()["executable"] is False for item in corpus.scenarios)
     assert all("stimulus" in item.summary() for item in corpus.scenarios)
+
+
+def test_repository_owned_reviewed_mappings_cover_every_scenario() -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    harness = build_reviewed_harness(corpus, isolation="VM")
+
+    observations = harness.run_all()
+
+    assert len(observations) == 17
+    assert all(item.status == "MATCHED" for item in observations)
 
 
 def test_failure_corpus_is_read_only_and_bounded(tmp_path: Path) -> None:

@@ -69,6 +69,58 @@
       "tags": ["configuration", "generation"]
     },
     {
+      "scenario_id": "corruption.capsule",
+      "category": "corruption",
+      "description": "A persisted Incident Capsule revision fails its content-integrity check.",
+      "stimulus": "replace bounded capsule content without updating its integrity record",
+      "expected": {
+        "signal": "CORRUPT_CAPSULE",
+        "caretaker_action": "REQUIRE_OPERATOR_REVIEW",
+        "authority_effect": "OPERATOR_REVIEW",
+        "minimum_isolation": "VM"
+      },
+      "tags": ["capsule", "integrity", "forensics"]
+    },
+    {
+      "scenario_id": "concurrency.conflict",
+      "category": "concurrency",
+      "description": "Concurrent evidence streams disagree about a transition or resource state.",
+      "stimulus": "submit overlapping worker observations with incompatible transaction lineage",
+      "expected": {
+        "signal": "CONCURRENCY_CONFLICT",
+        "caretaker_action": "REQUIRE_OPERATOR_REVIEW",
+        "authority_effect": "OPERATOR_REVIEW",
+        "minimum_isolation": "CONTAINER"
+      },
+      "tags": ["concurrency", "provenance", "worker"]
+    },
+    {
+      "scenario_id": "deployment.bad",
+      "category": "deployment",
+      "description": "A deployment introduces a known behavioral regression in an application target.",
+      "stimulus": "activate a deployment whose verified target behavior differs from the accepted baseline",
+      "expected": {
+        "signal": "DEPLOYMENT_FAILURE",
+        "caretaker_action": "ROLLBACK_REPAIR",
+        "authority_effect": "ROLLBACK",
+        "minimum_isolation": "CONTAINER"
+      },
+      "tags": ["deployment", "rollback", "baseline"]
+    },
+    {
+      "scenario_id": "behavior.intermittent",
+      "category": "intermittent",
+      "description": "A target intermittently deviates from its accepted behavior without an identified change.",
+      "stimulus": "repeat a stable input until a statistically significant behavior deviation is observed",
+      "expected": {
+        "signal": "BEHAVIOR_DEVIATION",
+        "caretaker_action": "RECORD_EVIDENCE",
+        "authority_effect": "NO_AUTHORITY_CHANGE",
+        "minimum_isolation": "PROCESS"
+      },
+      "tags": ["behavior", "baseline", "intermittent"]
+    },
+    {
       "scenario_id": "resource.pressure",
       "category": "resource",
       "description": "A bounded operation approaches its configured resource budget.",
@@ -80,6 +132,19 @@
         "minimum_isolation": "CONTAINER"
       },
       "tags": ["resource", "backpressure"]
+    },
+    {
+      "scenario_id": "resource.storage-full",
+      "category": "resource",
+      "description": "Evidence storage reaches its configured capacity while a critical incident is active.",
+      "stimulus": "fill the bounded evidence store during a policy-selected critical capture",
+      "expected": {
+        "signal": "RESOURCE_PRESSURE",
+        "caretaker_action": "STOP_APPLICATION",
+        "authority_effect": "APPLICATION_STOP",
+        "minimum_isolation": "PROCESS"
+      },
+      "tags": ["resource", "storage", "backpressure", "critical"]
     },
     {
       "scenario_id": "worker.failed",
@@ -106,6 +171,32 @@
         "minimum_isolation": "PROCESS"
       },
       "tags": ["repair", "validation", "fail-closed"]
+    },
+    {
+      "scenario_id": "repair.secondary-failure",
+      "category": "repair",
+      "description": "A repair is accepted provisionally but fails during post-repair observation.",
+      "stimulus": "allow a candidate past initial validation and trigger its secondary failure during probation",
+      "expected": {
+        "signal": "REPAIR_FAILURE",
+        "caretaker_action": "ROLLBACK_REPAIR",
+        "authority_effect": "ROLLBACK",
+        "minimum_isolation": "PROCESS"
+      },
+      "tags": ["repair", "probation", "rollback"]
+    },
+    {
+      "scenario_id": "dependency.version-drift",
+      "category": "dependency",
+      "description": "A dependency version changes while the application source remains unchanged.",
+      "stimulus": "replay a target after upgrading a selected dependency without changing application code",
+      "expected": {
+        "signal": "DEPENDENCY_FAILURE",
+        "caretaker_action": "CAPTURE_INCIDENT",
+        "authority_effect": "NO_AUTHORITY_CHANGE",
+        "minimum_isolation": "CONTAINER"
+      },
+      "tags": ["dependency", "version", "generation"]
     },
     {
       "scenario_id": "evidence.malicious",

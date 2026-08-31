@@ -4,9 +4,10 @@ Caretaker includes a small reviewed scenario manifest at
 [`examples/failure_corpus/manifest.json`](../examples/failure_corpus/manifest.json).
 It is a bounded inventory of failure conditions for test planning and
 historical evidence review. The manifest currently covers exceptions, timeouts,
-invalid output, dependency and configuration changes, resource pressure,
-worker failure, failed validation, malicious evidence, and unavailable LLM
-services.
+invalid output, dependency and configuration changes, corruption, concurrency,
+deployment regressions, intermittent behavior, resource pressure, worker
+failure, failed validation, secondary repair failure, malicious evidence, and
+unavailable LLM services.
 
 ## Safety contract
 
@@ -29,6 +30,14 @@ That mapping is outside the manifest and must remain subject to the harness's
 normal policy, isolation, authority, and cleanup rules. A corpus declaration is
 not proof that its stimulus has been executed, and its expected action is not
 an instruction to Caretaker.
+
+The repository also includes explicit oracle mappings in
+[`examples/failure_corpus/trusted_mappings.py`](../examples/failure_corpus/trusted_mappings.py).
+They cover every scenario in the reviewed default manifest and return the
+declared expected observation so the harness, isolation gates, and reporting
+pipeline can be regression-tested together. They do not perform the stated
+stimuli and must not be counted as observed application coverage; real
+scenario runners remain separately reviewed test infrastructure.
 
 For deterministic trusted tests, `FailureCorpusHarness` accepts that mapping
 explicitly:

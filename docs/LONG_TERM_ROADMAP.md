@@ -66,7 +66,9 @@ isolated lifecycle tooling, and reviewed container/VM scenario mappings,
 captured incident fixtures, and broad cross-version outcome coverage remain
 required before this priority can be considered complete. The current
 container and VM runners require pre-provisioned trusted environments and do
-not discover or execute commands from corpus metadata.
+not discover or execute commands from corpus metadata. Repository-owned oracle
+mappings now cover the reviewed manifest, but do not establish real observed
+application coverage.
 
 ### Incident Capsules and post-mortem capture
 
