@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Protocol
@@ -52,6 +52,39 @@ class RepairAuthoritativeImplementation(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class RolloutRoutingPolicy:
+    """Policy inputs for deterministic, process-local rollout selection.
+
+    Percentages describe the population identified by the caller's routing
+    scope and key.  They do not imply an exact fleet-wide percentage: that
+    requires a supervisor-owned coordinator, which is not part of this helper.
+    """
+
+    shadow_sample_percentage: int = 100
+    canary_percentage: int = 0
+    active_candidate_percentage: int = 100
+    bucket_count: int = 10_000
+
+    def __post_init__(self) -> None:
+        for name in (
+            "shadow_sample_percentage",
+            "canary_percentage",
+            "active_candidate_percentage",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 100:
+                raise ValueError(f"rollout.routing.{name} must be an integer from 0 through 100")
+        if (
+            isinstance(self.bucket_count, bool)
+            or not isinstance(self.bucket_count, int)
+            or not 100 <= self.bucket_count <= 1_000_000
+        ):
+            raise ValueError(
+                "rollout.routing.bucket_count must be an integer from 100 through 1000000"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class RepairRolloutPolicy:
     """Controls the ledger's authority and lifecycle boundaries.
 
@@ -68,6 +101,7 @@ class RepairRolloutPolicy:
     allow_adaptive_stage_progression: bool = False
     require_deployment_authority_for_permanent: bool = True
     require_incident_for_active_revocation: bool = True
+    routing: RolloutRoutingPolicy = field(default_factory=RolloutRoutingPolicy)
 
     def __post_init__(self) -> None:
         for name in (
@@ -82,6 +116,8 @@ class RepairRolloutPolicy:
         ):
             if not isinstance(getattr(self, name), bool):
                 raise ValueError(f"rollout.{name} must be a boolean")
+        if not isinstance(self.routing, RolloutRoutingPolicy):
+            raise ValueError("rollout.routing must be a RolloutRoutingPolicy")
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +166,27 @@ class RepairRolloutTransition:
     signature: Mapping[str, Any] | None
     signature_status: str
     created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class RolloutRoutingDecision:
+    """Evidence-only result of one deterministic rollout selection."""
+
+    rollout_id: UUID
+    target_id: str
+    stage: RepairRolloutStage
+    routing_scope: str
+    routing_key_digest: str
+    bucket: int
+    bucket_count: int
+    configured_percentage: int
+    candidate_selected: bool
+    candidate_authoritative: bool
+    authoritative_implementation: RepairAuthoritativeImplementation
+    strategy: str
+    policy_fingerprint: str
+    decision_hash: str
+    reason: str
 
 
 class RepairRolloutStore(Protocol):
@@ -557,6 +614,171 @@ class RepairRolloutLedger:
         for raw in self.store.all_rollout_transitions():
             transition = _coerce_transition(raw)
             self._transitions[transition.transition_id] = transition
+
+
+def decide_rollout_routing(
+    record: RepairRolloutRecord,
+    *,
+    policy: RepairRolloutPolicy,
+    policy_fingerprint: str,
+    routing_scope: str,
+    routing_key: str,
+    audit_event: Callable[..., Any] | None = None,
+) -> RolloutRoutingDecision:
+    """Select a rollout implementation for one scoped invocation.
+
+    The result is deterministic for the same rollout, scope, and key.  It is
+    only a routing decision: callers remain responsible for invoking the
+    selected implementation under the normal Repair, Integrity, Guard, and
+    authority checks.  Shadow selection never makes the candidate authoritative.
+    """
+
+    if not policy.enabled:
+        raise RepairRolloutError("rollout routing is disabled by policy")
+    if not policy_fingerprint.strip():
+        raise RepairRolloutError("current rollout policy fingerprint is required")
+    if record.policy_fingerprint != policy_fingerprint:
+        raise RepairRolloutError("rollout policy fingerprint is stale")
+    scope = routing_scope.strip()
+    if not scope:
+        raise RepairRolloutError("rollout routing scope is required")
+    if not isinstance(routing_key, str) or not routing_key:
+        raise RepairRolloutError("rollout routing key is required")
+    if record.authority_expired:
+        raise RepairRolloutError("rollout authority has expired")
+    if record.stage in {RepairRolloutStage.RETIRED, RepairRolloutStage.REVOKED}:
+        raise RepairRolloutError(f"rollout is terminal in stage {record.stage.value}")
+
+    routing = policy.routing
+    key_digest = hashlib.sha256(
+        b"caretaker.rollout.routing.key\0"
+        + scope.encode("utf-8")
+        + b"\0"
+        + routing_key.encode("utf-8")
+    ).hexdigest()
+    bucket = int.from_bytes(
+        hashlib.sha256(
+            b"caretaker.rollout.routing.bucket\0"
+            + str(record.rollout_id).encode("ascii")
+            + b"\0"
+            + scope.encode("utf-8")
+            + b"\0"
+            + routing_key.encode("utf-8")
+        ).digest()[:8],
+        "big",
+    ) % routing.bucket_count
+
+    percentage = 0
+    candidate_selected = False
+    candidate_authoritative = False
+    strategy = "deployed"
+    reason = "rollout stage keeps the deployed implementation authoritative"
+    if record.stage is RepairRolloutStage.SHADOW:
+        if not policy.allow_shadow_stage:
+            raise RepairRolloutError("shadow stage is disabled by rollout policy")
+        percentage = routing.shadow_sample_percentage
+        candidate_selected = _bucket_selected(bucket, routing.bucket_count, percentage)
+        strategy = "shadow" if candidate_selected else "deployed"
+        reason = (
+            "candidate selected for non-authoritative shadow execution"
+            if candidate_selected
+            else "candidate not selected by shadow sampling percentage"
+        )
+    elif record.stage is RepairRolloutStage.CANARY:
+        if not policy.allow_canary_stage:
+            raise RepairRolloutError("canary stage is disabled by rollout policy")
+        percentage = routing.canary_percentage
+        candidate_selected = _bucket_selected(bucket, routing.bucket_count, percentage)
+        candidate_authoritative = candidate_selected
+        strategy = "canary" if candidate_selected else "deployed"
+        reason = (
+            "candidate selected as authoritative canary implementation"
+            if candidate_selected
+            else "deployed implementation retained by canary percentage"
+        )
+    elif record.stage is RepairRolloutStage.ACTIVE:
+        if record.authoritative_implementation is RepairAuthoritativeImplementation.CANDIDATE:
+            percentage = routing.active_candidate_percentage
+            candidate_selected = _bucket_selected(bucket, routing.bucket_count, percentage)
+            candidate_authoritative = candidate_selected
+            strategy = "active-candidate" if candidate_selected else "deployed"
+            reason = (
+                "active field-repair candidate selected as authoritative implementation"
+                if candidate_selected
+                else "deployed implementation retained by active candidate percentage"
+            )
+        else:
+            reason = "permanent deployment record is already authoritative as deployed"
+
+    implementation = (
+        RepairAuthoritativeImplementation.CANDIDATE
+        if candidate_authoritative
+        else RepairAuthoritativeImplementation.DEPLOYED
+    )
+    evidence = {
+        "rollout_id": str(record.rollout_id),
+        "target_id": record.target_id,
+        "stage": record.stage.value,
+        "routing_scope": scope,
+        "routing_key_digest": key_digest,
+        "bucket": bucket,
+        "bucket_count": routing.bucket_count,
+        "configured_percentage": percentage,
+        "candidate_selected": candidate_selected,
+        "candidate_authoritative": candidate_authoritative,
+        "authoritative_implementation": implementation.value,
+        "strategy": strategy,
+        "policy_fingerprint": policy_fingerprint,
+        "reason": reason,
+    }
+    decision = RolloutRoutingDecision(
+        rollout_id=record.rollout_id,
+        target_id=record.target_id,
+        stage=record.stage,
+        routing_scope=scope,
+        routing_key_digest=key_digest,
+        bucket=bucket,
+        bucket_count=routing.bucket_count,
+        configured_percentage=percentage,
+        candidate_selected=candidate_selected,
+        candidate_authoritative=candidate_authoritative,
+        authoritative_implementation=implementation,
+        strategy=strategy,
+        policy_fingerprint=policy_fingerprint,
+        decision_hash=_digest(evidence),
+        reason=reason,
+    )
+    if audit_event is not None:
+        audit_event(
+            "REPAIR_ROLLOUT_ROUTING_DECISION",
+            actor={"type": "caretaker", "id": "rollout-router"},
+            scope={
+                "target_id": record.target_id,
+                "rollout_id": str(record.rollout_id),
+                "routing_scope": scope,
+                "routing_key_digest": key_digest,
+            },
+            policy={"fingerprint": policy_fingerprint},
+            outcome={
+                "state": "SELECTED",
+                "stage": record.stage.value,
+                "strategy": strategy,
+                "candidate_selected": candidate_selected,
+                "candidate_authoritative": candidate_authoritative,
+                "authoritative_implementation": implementation.value,
+            },
+            details={
+                "bucket": bucket,
+                "bucket_count": routing.bucket_count,
+                "configured_percentage": percentage,
+                "decision_hash": decision.decision_hash,
+            },
+        )
+    return decision
+
+
+def _bucket_selected(bucket: int, bucket_count: int, percentage: int) -> bool:
+    return bucket < (bucket_count * percentage // 100)
 
 
 def _sign(

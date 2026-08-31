@@ -267,6 +267,9 @@ from .repair_rollout import (
     RepairRolloutRecord,
     RepairRolloutStage,
     RepairRolloutTransition,
+    RolloutRoutingDecision,
+    RolloutRoutingPolicy,
+    decide_rollout_routing,
 )
 from .shadow import (
     ShadowExecutionAdapter,

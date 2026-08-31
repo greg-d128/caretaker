@@ -211,6 +211,18 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
             "isolation_verified": True,
         },
     ),
+    "REPAIR_ROLLOUT_ROUTING_DECISION": _event_definition(
+        description="A deterministic policy-bound Repair rollout routing decision was recorded.",
+        minimum_priority=EvidencePriority.IMPORTANT,
+        required_fields=("scope.rollout_id", "scope.routing_scope", "outcome.state"),
+        example={
+            "state": "SELECTED",
+            "stage": "canary",
+            "strategy": "canary",
+            "candidate_selected": True,
+            "candidate_authoritative": True,
+        },
+    ),
 })
 
 

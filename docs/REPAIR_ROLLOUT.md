@@ -73,6 +73,47 @@ cannot advance a rollout under the default policy. Active revocation requires a
 new incident by default because reversing an accepted runtime change is a new
 transaction.
 
+## Deterministic routing decisions
+
+`decide_rollout_routing()` provides the policy-controlled selection boundary for
+an embedding application. It hashes a caller-provided routing key together with
+an explicit population scope and rollout ID, then selects from the configured
+percentage using a bounded bucket. The raw key is never included in the result;
+only its digest is retained as evidence.
+
+The routing policy is deliberately conservative:
+
+- shadow sampling selects whether the candidate should run, but the deployed
+  implementation remains authoritative;
+- canary percentage may select the candidate as authoritative for that call;
+- active candidate percentage applies only to a field repair whose record says
+  the candidate is authoritative;
+- a permanent deployment record remains deployed-authoritative even if an old
+  candidate percentage is configured.
+
+The decision checks that the current policy fingerprint matches the rollout,
+rejects expired or terminal records, and returns a decision hash with the
+selected implementation. It does not invoke either implementation, activate a
+function slot, or provide fleet-wide percentage guarantees. The caller must
+still apply normal Repair, Integrity, Guard, isolation, and authority checks.
+
+For example:
+
+```python
+from caretaker import decide_rollout_routing
+
+decision = decide_rollout_routing(
+    field_fix,
+    policy=policy,
+    policy_fingerprint=current_policy_fingerprint,
+    routing_scope="tenant",
+    routing_key=tenant_id,
+)
+if decision.candidate_selected:
+    # The embedding application invokes its already-authorized path here.
+    ...
+```
+
 ## Transition evidence
 
 Each transition records:
@@ -94,6 +135,7 @@ explicitly marked `UNSIGNED`.
 `RepairRolloutPolicy` is disabled by default so existing Repair behavior does
 not change. When enabled, validation is required, direct field activation is
 allowed only for an operator, active revocation requires a new incident, and
-permanent promotion requires deployment authority. Shadow execution, canary
-routing, side-effect isolation, and supervisor-wide traffic coordination are
-separate capabilities and are not implied by this ledger.
+permanent promotion requires deployment authority. The routing decision itself
+is implemented, while application traffic integration, side-effect isolation,
+and supervisor-wide traffic coordination remain separate capabilities and are
+not implied by this ledger.

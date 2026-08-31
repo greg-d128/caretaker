@@ -76,6 +76,7 @@ All event types share these redaction rules:
 | `RECOVERY_DECISION` | `CRITICAL` | — | `{"state": "PLANNED_ONLY", "action": "ROLLBACK_TO_DEPLOYED_CODE"}` |
 | `REPAIR_ROLLOUT_TRANSITION` | `CRITICAL` | `scope.rollout_id`, `scope.transition_id`, `outcome.state` | `{"rollout_id": "rollout-uuid", "transition_id": "transition-uuid", "state": "validated", "action": "advance"}` |
 | `SHADOW_EXECUTION_DECISION` | `IMPORTANT` | — | `{"state": "COMPLETED", "candidate_authoritative": false, "candidate_succeeded": true, "equivalent": true, "isolation_verified": true}` |
+| `REPAIR_ROLLOUT_ROUTING_DECISION` | `IMPORTANT` | `scope.rollout_id`, `scope.routing_scope`, `outcome.state` | `{"state": "SELECTED", "stage": "canary", "strategy": "canary", "candidate_selected": true, "candidate_authoritative": true}` |
 
 In a supervised run, the application process may submit only a bounded
 `VALIDATION_DECISION` through the supervisor control socket. The supervisor
