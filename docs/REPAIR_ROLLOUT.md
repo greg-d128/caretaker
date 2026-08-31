@@ -141,9 +141,36 @@ an explicit operator choice. The console refreshes the projection after a
 recorded transition and shows the returned signed/audited transition evidence.
 
 This is intentionally narrower than general rollout control. The console does
-not change routing percentages, activate a FunctionSlot, or grant execution
-authority. The supervisor and ledger remain authoritative for policy,
-readiness, lifecycle, expiry, and incident checks.
+not activate a FunctionSlot or grant execution authority. The supervisor and
+ledger remain authoritative for policy, readiness, lifecycle, expiry, and
+incident checks.
+
+## Policy-governed routing percentage changes
+
+An operator may change the shadow, canary, and active-candidate percentages
+only when `allow_operator_routing_changes` is enabled in the rollout policy.
+The policy separately controls whether an increase is allowed through
+`allow_operator_routing_increases`; both settings default to `false`. The
+bucket count and routing scope do not change as part of this operation, so an
+update cannot silently reshuffle the population by changing the hashing
+space.
+
+The supervisor accepts only an explicitly confirmed request with a reason and
+the current policy and authority fingerprints. Increases additionally require
+ready rollout evidence by default, or an explicitly recorded operator
+readiness override. The ledger stores the effective percentages on the
+rollout record and records the prior and new values in a same-stage,
+hash-chained `routing-update` transition. A percentage update does not change
+the lifecycle stage, activate a FunctionSlot, or make the candidate
+authoritative outside the existing stage rules. The percentages remain
+process-local routing configuration; exact application-wide percentages still
+require supervisor-wide atomic coordination.
+
+The Rollouts console displays the bound percentages and enables the update
+control only when the supervisor policy advertises operator routing changes.
+The same reason and confirmation controls are shared with lifecycle and
+pause/resume actions, and the response is refreshed from the supervisor after
+the transition.
 
 Pause and resume are separate control actions over an executable stage. A
 paused rollout retains its lifecycle stage and transition history, but routing

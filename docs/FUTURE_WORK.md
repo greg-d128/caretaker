@@ -988,8 +988,10 @@ validation, readiness override is explicit, and the supervisor/ledger remain
 authoritative. It also supports separate pause/resume controls over executable
 stages: pause is fail-closed and readiness-free, resume requires readiness or
 an explicit override, and a paused rollout cannot advance or become permanent
-until resumed. Percentage changes, FunctionSlot activation, and deployment-
-owned worker orchestration remain future work.
+until resumed. Policy-authorized operator percentage changes are recorded as
+same-stage transitions; increases require explicit policy permission and
+readiness or an override. FunctionSlot activation, atomic fleet percentages,
+and deployment-owned worker orchestration remain future work.
 Optional `RolloutReadinessRequirements` now evaluates explicit evidence
 thresholds for the next stage and reports each passing or failing check without
 advancing the rollout. Thresholds remain disabled by default; staged authority,

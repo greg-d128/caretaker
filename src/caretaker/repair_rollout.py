@@ -171,6 +171,9 @@ class RepairRolloutPolicy:
     allow_adaptive_stage_progression: bool = False
     require_deployment_authority_for_permanent: bool = True
     require_incident_for_active_revocation: bool = True
+    allow_operator_routing_changes: bool = False
+    allow_operator_routing_increases: bool = False
+    require_readiness_for_routing_increase: bool = True
     routing: RolloutRoutingPolicy = field(default_factory=RolloutRoutingPolicy)
     readiness: RolloutReadinessRequirements = field(
         default_factory=RolloutReadinessRequirements
@@ -186,6 +189,9 @@ class RepairRolloutPolicy:
             "allow_adaptive_stage_progression",
             "require_deployment_authority_for_permanent",
             "require_incident_for_active_revocation",
+            "allow_operator_routing_changes",
+            "allow_operator_routing_increases",
+            "require_readiness_for_routing_increase",
         ):
             if not isinstance(getattr(self, name), bool):
                 raise ValueError(f"rollout.{name} must be a boolean")
@@ -218,6 +224,7 @@ class RepairRolloutRecord:
     last_transition_id: UUID | None = None
     transition_count: int = 0
     paused: bool = False
+    routing_policy: RolloutRoutingPolicy | None = None
 
     @property
     def authority_expired(self) -> bool:
@@ -244,6 +251,7 @@ class RepairRolloutTransition:
     signature: Mapping[str, Any] | None
     signature_status: str
     created_at: datetime
+    details: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -476,6 +484,7 @@ class RepairRolloutLedger:
             updated_at=now,
             expires_at=expires_at,
             validation_evidence_hash=validation_evidence_hash,
+            routing_policy=self.policy.routing,
         )
         self._records[record.rollout_id] = record
         self._persist_record(record)
@@ -565,6 +574,119 @@ class RepairRolloutLedger:
             authority_id=authority_id,
             incident_id=incident_id,
             reason=reason,
+        )
+        return self._records[rollout_id]
+
+    def update_routing_percentages(
+        self,
+        rollout_id: UUID,
+        *,
+        shadow_sample_percentage: int,
+        canary_percentage: int,
+        active_candidate_percentage: int,
+        authority_type: RepairRolloutAuthority,
+        authority_id: str,
+        reason: str,
+        policy_fingerprint: str,
+        authority_fingerprint: str,
+        readiness_status: str | None = None,
+        override_readiness: bool = False,
+    ) -> RepairRolloutRecord:
+        """Update the authorized process-local routing percentages.
+
+        This operation changes routing configuration only; it never changes a
+        lifecycle stage or activates a FunctionSlot.  Percentages are bound to
+        the rollout record so a later policy change cannot silently rewrite an
+        already-authorized rollout.
+        """
+
+        self._require_enabled()
+        record = self._get(rollout_id)
+        self._check_context(record, policy_fingerprint, authority_fingerprint)
+        self._require_actor(authority_type, authority_id)
+        if authority_type is not RepairRolloutAuthority.OPERATOR:
+            raise RepairRolloutError(
+                "routing percentage changes require operator authority"
+            )
+        if not self.policy.allow_operator_routing_changes:
+            raise RepairRolloutError(
+                "operator routing percentage changes are disabled by policy"
+            )
+        if not reason.strip():
+            raise RepairRolloutError("routing percentage change reason is required")
+        if record.stage in {
+            RepairRolloutStage.PROPOSED,
+            RepairRolloutStage.RETIRED,
+            RepairRolloutStage.REVOKED,
+        }:
+            raise RepairRolloutError(
+                f"rollout stage {record.stage.value} cannot change routing percentages"
+            )
+        if self._authority_expired(record):
+            raise RepairRolloutError("rollout authority has expired")
+
+        previous_routing = record.routing_policy or self.policy.routing
+        new_routing = RolloutRoutingPolicy(
+            shadow_sample_percentage=shadow_sample_percentage,
+            canary_percentage=canary_percentage,
+            active_candidate_percentage=active_candidate_percentage,
+            bucket_count=previous_routing.bucket_count,
+        )
+        if new_routing == previous_routing:
+            return record
+        increased = any(
+            new > old
+            for new, old in zip(
+                (
+                    new_routing.shadow_sample_percentage,
+                    new_routing.canary_percentage,
+                    new_routing.active_candidate_percentage,
+                ),
+                (
+                    previous_routing.shadow_sample_percentage,
+                    previous_routing.canary_percentage,
+                    previous_routing.active_candidate_percentage,
+                ),
+            )
+        )
+        if increased and not self.policy.allow_operator_routing_increases:
+            raise RepairRolloutError(
+                "routing percentage increases are disabled by policy"
+            )
+        readiness = str(readiness_status or "").strip().upper()
+        if (
+            increased
+            and self.policy.require_readiness_for_routing_increase
+            and readiness not in {"READY", "NOT_CONFIGURED"}
+            and not override_readiness
+        ):
+            raise RepairRolloutError(
+                "routing percentage increase requires ready evidence or an explicit override"
+            )
+
+        now = self._clock()
+        updated = replace(
+            record,
+            routing_policy=new_routing,
+            updated_at=now,
+        )
+        self._records[rollout_id] = updated
+        self._persist_record(updated)
+        self._record_transition(
+            updated,
+            from_stage=record.stage,
+            to_stage=record.stage,
+            action="routing-update",
+            authority_type=authority_type,
+            authority_id=authority_id,
+            incident_id=None,
+            reason=reason,
+            details={
+                "prior_routing": _routing_policy_payload(previous_routing),
+                "new_routing": _routing_policy_payload(new_routing),
+                "readiness_status": readiness or None,
+                "readiness_overridden": bool(override_readiness),
+            },
         )
         return self._records[rollout_id]
 
@@ -787,6 +909,11 @@ class RepairRolloutLedger:
             "read_only": True,
             "authority_granted": False,
             "policy_fingerprint": policy_fingerprint,
+            "routing_control": {
+                "operator_changes_allowed": self.policy.allow_operator_routing_changes,
+                "operator_increases_allowed": self.policy.allow_operator_routing_increases,
+                "readiness_required_for_increase": self.policy.require_readiness_for_routing_increase,
+            },
             "records": record_payloads,
             "transitions": [
                 _json_safe(item)
@@ -1304,6 +1431,7 @@ class RepairRolloutCoordinator:
         authority_id: str,
         incident_id: UUID | None,
         reason: str,
+        details: Mapping[str, Any] | None = None,
     ) -> RepairRolloutTransition:
         previous = self.transitions(record.rollout_id)
         previous_hash = previous[-1].transition_hash if previous else None
@@ -1319,6 +1447,7 @@ class RepairRolloutCoordinator:
             "policy_fingerprint": record.policy_fingerprint,
             "authority_fingerprint": record.authority_fingerprint,
             "reason": reason,
+            "details": _json_safe(details) if details is not None else None,
             "created_at": self._clock().isoformat(),
             "previous_transition_hash": previous_hash,
         }
@@ -1349,6 +1478,7 @@ class RepairRolloutCoordinator:
             signature=signature,
             signature_status=signature_status,
             created_at=self._clock(),
+            details=_json_safe(details) if details is not None else None,
         )
         updated = replace(
             record,
@@ -1381,6 +1511,9 @@ class RepairRolloutCoordinator:
                             "content_hash": content_hash,
                             "transition_hash": transition_hash,
                             "signature_status": signature_status,
+                            "transition_details": _json_safe(details)
+                            if details is not None
+                            else None,
                         },
                     )
                 )
@@ -1412,6 +1545,9 @@ class RepairRolloutCoordinator:
                     "transition_hash": transition_hash,
                     "signature_status": signature_status,
                     "reason": reason,
+                    "transition_details": _json_safe(details)
+                    if details is not None
+                    else None,
                 },
             )
         return transition
@@ -1462,7 +1598,7 @@ def decide_rollout_routing(
     if record.stage in {RepairRolloutStage.RETIRED, RepairRolloutStage.REVOKED}:
         raise RepairRolloutError(f"rollout is terminal in stage {record.stage.value}")
 
-    routing = policy.routing
+    routing = record.routing_policy or policy.routing
     key_digest = hashlib.sha256(
         b"caretaker.rollout.routing.key\0"
         + scope.encode("utf-8")
@@ -2327,6 +2463,15 @@ def _digest(value: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _routing_policy_payload(routing: RolloutRoutingPolicy) -> dict[str, int]:
+    return {
+        "shadow_sample_percentage": routing.shadow_sample_percentage,
+        "canary_percentage": routing.canary_percentage,
+        "active_candidate_percentage": routing.active_candidate_percentage,
+        "bucket_count": routing.bucket_count,
+    }
+
+
 def _json_safe(value: Any) -> Any:
     """Convert rollout dataclasses to stable JSON-compatible values."""
 
@@ -2353,6 +2498,9 @@ def _coerce_record(raw: Any) -> RepairRolloutRecord:
     paused = raw.get("paused", False)
     if not isinstance(paused, bool):
         raise RepairRolloutError("rollout paused state must be a boolean")
+    routing_policy = raw.get("routing_policy")
+    if routing_policy is not None:
+        routing_policy = _coerce_routing_policy(routing_policy)
     return RepairRolloutRecord(
         rollout_id=UUID(str(raw["rollout_id"])),
         target_id=str(raw["target_id"]),
@@ -2383,7 +2531,32 @@ def _coerce_record(raw: Any) -> RepairRolloutRecord:
         ),
         transition_count=int(raw.get("transition_count") or 0),
         paused=paused,
+        routing_policy=routing_policy,
     )
+
+
+def _coerce_routing_policy(raw: Any) -> RolloutRoutingPolicy:
+    if isinstance(raw, RolloutRoutingPolicy):
+        return raw
+    if not isinstance(raw, Mapping):
+        raise RepairRolloutError("rollout routing policy must be an object")
+    required = {
+        "shadow_sample_percentage",
+        "canary_percentage",
+        "active_candidate_percentage",
+        "bucket_count",
+    }
+    if not required.issubset(raw):
+        raise RepairRolloutError("rollout routing policy is incomplete")
+    try:
+        return RolloutRoutingPolicy(
+            shadow_sample_percentage=raw["shadow_sample_percentage"],
+            canary_percentage=raw["canary_percentage"],
+            active_candidate_percentage=raw["active_candidate_percentage"],
+            bucket_count=raw["bucket_count"],
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RepairRolloutError("rollout routing policy is invalid") from exc
 
 
 def _coerce_transition(raw: Any) -> RepairRolloutTransition:
@@ -2412,6 +2585,7 @@ def _coerce_transition(raw: Any) -> RepairRolloutTransition:
         signature=raw.get("signature"),
         signature_status=str(raw["signature_status"]),
         created_at=datetime.fromisoformat(str(raw["created_at"])),
+        details=raw.get("details"),
     )
 
 

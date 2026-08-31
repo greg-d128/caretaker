@@ -408,6 +408,73 @@ def _handle_rollout_pause_request(
     }
 
 
+def _handle_rollout_percentage_request(
+    ledger: RepairRolloutLedger,
+    coordinator: RepairRolloutCoordinator,
+    request: Mapping[str, Any],
+    credentials: tuple[int, int, int],
+    *,
+    policy_fingerprint: str,
+    authority_fingerprint: str,
+) -> dict[str, Any]:
+    """Apply one explicitly confirmed operator routing update."""
+
+    if request.get("confirm") is not True:
+        raise PermissionError("repair-rollout-routing-update requires confirm=true")
+    reason = str(request.get("reason") or "").strip()
+    if not reason:
+        raise ValueError("repair rollout routing update requires an operator reason")
+    try:
+        rollout_id = UUID(str(request["rollout_id"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            "repair-rollout-routing-update requires a valid rollout_id"
+        ) from exc
+
+    percentages: dict[str, int] = {}
+    for name in (
+        "shadow_sample_percentage",
+        "canary_percentage",
+        "active_candidate_percentage",
+    ):
+        value = request.get(name)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(
+                f"repair-rollout-routing-update requires integer {name}"
+            )
+        percentages[name] = value
+
+    record = ledger.get(rollout_id)
+    readiness = coordinator.readiness(rollout_id)
+    override_readiness = request.get("override_readiness") is True
+    updated = ledger.update_routing_percentages(
+        rollout_id,
+        **percentages,
+        authority_type=RepairRolloutAuthority.OPERATOR,
+        authority_id=f"uid:{credentials[1]}",
+        reason=reason,
+        policy_fingerprint=policy_fingerprint,
+        authority_fingerprint=authority_fingerprint,
+        readiness_status=str(readiness.get("status") or ""),
+        override_readiness=override_readiness,
+    )
+    transition = ledger.transitions(rollout_id)[-1] if updated != record else None
+    return {
+        "ok": True,
+        "read_only": False,
+        "authority_granted": True,
+        "action": "routing-update",
+        "readiness": readiness,
+        "readiness_overridden": override_readiness,
+        "record": json.loads(json.dumps(asdict(updated), default=str)),
+        "transition": (
+            json.loads(json.dumps(asdict(transition), default=str))
+            if transition is not None
+            else None
+        ),
+    }
+
+
 def _handle_adaptive_observation_submission(
     store: Any,
     request: Mapping[str, Any],
@@ -1313,6 +1380,19 @@ def main(argv: list[str] | None = None) -> int:
                 request,
                 credentials,
                 paused=command == "repair-rollout-pause",
+                policy_fingerprint=runtime.effective.fingerprint,
+                authority_fingerprint=authority.effective.fingerprint,
+            )
+        if command == "repair-rollout-routing-update":
+            ledger = rollout_ledger_holder.get("ledger")
+            coordinator = rollout_coordinator_holder.get("coordinator")
+            if ledger is None or coordinator is None:
+                raise RuntimeError("rollout coordinator is not initialized")
+            return _handle_rollout_percentage_request(
+                ledger,
+                coordinator,
+                request,
+                credentials,
                 policy_fingerprint=runtime.effective.fingerprint,
                 authority_fingerprint=authority.effective.fingerprint,
             )

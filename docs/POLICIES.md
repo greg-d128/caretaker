@@ -1,5 +1,18 @@
 # Repair policies
 
+## Repair rollout routing policy
+
+`RepairRolloutPolicy` keeps rollout percentage changes disabled by default.
+`allow_operator_routing_changes` permits an authenticated, explicitly
+confirmed operator to change the shadow, canary, and active-candidate
+percentages for a non-terminal rollout. `allow_operator_routing_increases`
+must also be enabled before any percentage is increased. By default, an
+increase additionally requires the supervisor's readiness evidence to be
+ready; the operator may use an explicit, auditable readiness override when
+the control policy permits that workflow. These settings change routing
+configuration only and do not activate a FunctionSlot or grant candidate
+authority.
+
 ## Incident communication policy
 
 `IncidentCommunicationPolicy.llm_tailoring_enabled` defaults to `false`.

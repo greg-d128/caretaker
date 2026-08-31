@@ -30,6 +30,7 @@ from caretaker.observation import ObservationManager
 from caretaker.run import (
     _handle_rollout_advance_request,
     _handle_rollout_pause_request,
+    _handle_rollout_percentage_request,
 )
 from caretaker.repair_rollout import _coerce_record
 from caretaker.slot import FunctionSlot
@@ -595,6 +596,39 @@ def test_sqlite_rollout_execution_observation_round_trip(tmp_path) -> None:
     assert summary.stage_counts == {"canary": 1}
 
 
+def test_sqlite_routing_percentage_update_survives_restart(tmp_path) -> None:
+    store = SQLiteRepairStore(tmp_path / "repair.sqlite")
+    policy = RepairRolloutPolicy(
+        enabled=True,
+        allow_operator_routing_changes=True,
+        allow_operator_routing_increases=True,
+        require_readiness_for_routing_increase=False,
+        routing=RolloutRoutingPolicy(canary_percentage=10),
+    )
+    ledger = RepairRolloutLedger(policy=policy, store=store)
+    record = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    updated = ledger.update_routing_percentages(
+        record.rollout_id,
+        shadow_sample_percentage=40,
+        canary_percentage=30,
+        active_candidate_percentage=90,
+        authority_type=RepairRolloutAuthority.OPERATOR,
+        authority_id="operator-1",
+        reason="persist reviewed routing change",
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+    )
+
+    reopened = RepairRolloutLedger(policy=policy, store=store)
+    persisted = reopened.get(updated.rollout_id)
+    assert persisted.routing_policy == updated.routing_policy
+    assert reopened.transitions(updated.rollout_id)[-1].details["new_routing"][
+        "active_candidate_percentage"
+    ] == 90
+    shadow = _advance(reopened, persisted, RepairRolloutStage.SHADOW)
+    assert _decide(reopened, shadow).configured_percentage == 40
+
+
 def test_rollout_execution_summary_counts_candidate_failures_without_messages() -> None:
     store = InMemoryRepairStore()
     ledger = RepairRolloutLedger(
@@ -956,6 +990,141 @@ def test_operator_rollout_resume_requires_readiness_or_explicit_override() -> No
     assert response["record"]["paused"] is False
     assert response["readiness"]["status"] == "NOT_READY"
     assert response["readiness_overridden"] is True
+
+
+def test_operator_routing_percentage_update_is_bound_and_audited() -> None:
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            allow_operator_routing_changes=True,
+            allow_operator_routing_increases=True,
+            require_readiness_for_routing_increase=False,
+            routing=RolloutRoutingPolicy(
+                shadow_sample_percentage=50,
+                canary_percentage=10,
+                active_candidate_percentage=50,
+            ),
+        )
+    )
+    record = _record(ledger)
+    validated = _advance(ledger, record, RepairRolloutStage.VALIDATED)
+
+    updated = ledger.update_routing_percentages(
+        validated.rollout_id,
+        shadow_sample_percentage=75,
+        canary_percentage=25,
+        active_candidate_percentage=50,
+        authority_type=RepairRolloutAuthority.OPERATOR,
+        authority_id="operator-1",
+        reason="increase after reviewed evidence",
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+    )
+
+    assert updated.routing_policy == RolloutRoutingPolicy(
+        shadow_sample_percentage=75,
+        canary_percentage=25,
+        active_candidate_percentage=50,
+    )
+    transition = ledger.transitions(updated.rollout_id)[-1]
+    assert transition.action == "routing-update"
+    assert transition.from_stage is RepairRolloutStage.VALIDATED
+    assert transition.to_stage is RepairRolloutStage.VALIDATED
+    assert transition.details["prior_routing"]["canary_percentage"] == 10
+    assert transition.details["new_routing"]["canary_percentage"] == 25
+
+    shadow = _advance(ledger, updated, RepairRolloutStage.SHADOW)
+    decision = _decide(ledger, shadow)
+    assert decision.configured_percentage == 75
+
+
+def test_routing_percentage_increase_requires_policy_and_readiness() -> None:
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            allow_operator_routing_changes=True,
+            routing=RolloutRoutingPolicy(
+                shadow_sample_percentage=50,
+                canary_percentage=10,
+                active_candidate_percentage=50,
+            ),
+        )
+    )
+    validated = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+
+    with pytest.raises(RepairRolloutError, match="increases are disabled"):
+        ledger.update_routing_percentages(
+            validated.rollout_id,
+            shadow_sample_percentage=100,
+            canary_percentage=10,
+            active_candidate_percentage=100,
+            authority_type=RepairRolloutAuthority.OPERATOR,
+            authority_id="operator-1",
+            reason="unsafe increase",
+            policy_fingerprint="policy-hash",
+            authority_fingerprint="authority-hash",
+            readiness_status="READY",
+        )
+
+    ready_policy = replace(
+        ledger.policy,
+        allow_operator_routing_increases=True,
+    )
+    ready_ledger = RepairRolloutLedger(policy=ready_policy)
+    ready_record = _advance(
+        ready_ledger,
+        _record(ready_ledger),
+        RepairRolloutStage.VALIDATED,
+    )
+    with pytest.raises(RepairRolloutError, match="requires ready evidence"):
+        ready_ledger.update_routing_percentages(
+            ready_record.rollout_id,
+            shadow_sample_percentage=100,
+            canary_percentage=10,
+            active_candidate_percentage=100,
+            authority_type=RepairRolloutAuthority.OPERATOR,
+            authority_id="operator-1",
+            reason="increase without evidence",
+            policy_fingerprint="policy-hash",
+            authority_fingerprint="authority-hash",
+            readiness_status="NOT_READY",
+        )
+
+
+def test_operator_routing_percentage_control_uses_supervisor_readiness() -> None:
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            allow_operator_routing_changes=True,
+            allow_operator_routing_increases=True,
+            routing=RolloutRoutingPolicy(canary_percentage=10),
+        )
+    )
+    record = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    coordinator = RepairRolloutCoordinator(
+        ledger,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+    )
+    response = _handle_rollout_percentage_request(
+        ledger,
+        coordinator,
+        {
+            "rollout_id": str(record.rollout_id),
+            "shadow_sample_percentage": 50,
+            "canary_percentage": 20,
+            "active_candidate_percentage": 100,
+            "reason": "operator reviewed canary increase",
+            "confirm": True,
+        },
+        (1234, 1001, 1001),
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+    )
+    assert response["authority_granted"] is True
+    assert response["action"] == "routing-update"
+    assert response["record"]["routing_policy"]["canary_percentage"] == 20
+    assert response["transition"]["details"]["new_routing"]["canary_percentage"] == 20
 
 
 def test_operator_rollout_safety_actions_do_not_require_readiness() -> None:

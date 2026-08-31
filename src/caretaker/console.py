@@ -343,6 +343,8 @@ class CaretakerConsoleApp(App):
     }
     #rollout-advance-fields Select { width: 20; min-width: 18; }
     #rollout-advance-fields Input { width: 1fr; min-width: 20; margin-left: 1; }
+    #rollout-routing-fields { height: 4; padding: 0 1; align-vertical: middle; }
+    #rollout-routing-fields Input { width: 1fr; min-width: 16; margin-left: 1; }
     #rollout-advance-actions Checkbox { margin-right: 1; }
     #rollout-advance-actions Button { width: auto; min-width: 22; margin-left: 1; }
     #rollout-advance-status { height: auto; padding: 0 2; color: $text-muted; }
@@ -699,6 +701,7 @@ class CaretakerConsoleApp(App):
         self._selected_adaptive_transition_request_id: str | None = None
         self._rollout_records: list[dict[str, Any]] = []
         self._rollout_transitions: list[dict[str, Any]] = []
+        self._rollout_routing_control: dict[str, Any] = {}
         self._selected_rollout_id: str | None = None
         self._selected_target: str | None = None
         self._attention_records: list[dict[str, Any]] = []
@@ -1145,7 +1148,7 @@ class CaretakerConsoleApp(App):
             with TabPane("Rollouts", id="rollouts"):
                 yield Static(
                     "Read-only Repair rollout lifecycle and execution evidence. "
-                    "Summaries are integrity-checked; this view cannot advance a rollout or grant authority.",
+                    "Explicitly confirmed controls remain policy- and supervisor-authorized.",
                     id="rollout-help",
                 )
                 with Horizontal(id="rollout-toolbar"):
@@ -1165,6 +1168,19 @@ class CaretakerConsoleApp(App):
                     yield Input(
                         placeholder="New incident UUID (required for active revocation)",
                         id="rollout-advance-incident",
+                    )
+                with Horizontal(id="rollout-routing-fields"):
+                    yield Input(
+                        placeholder="Shadow %",
+                        id="rollout-shadow-percentage",
+                    )
+                    yield Input(
+                        placeholder="Canary %",
+                        id="rollout-canary-percentage",
+                    )
+                    yield Input(
+                        placeholder="Active candidate %",
+                        id="rollout-active-percentage",
                     )
                 with Horizontal(id="rollout-advance-actions"):
                     yield Checkbox(
@@ -1193,6 +1209,12 @@ class CaretakerConsoleApp(App):
                         "Resume rollout",
                         id="rollout-resume",
                         variant="success",
+                        disabled=True,
+                    )
+                    yield Button(
+                        "Update percentages",
+                        id="rollout-routing-update",
+                        variant="warning",
                         disabled=True,
                     )
                 yield Static(
@@ -2344,6 +2366,7 @@ class CaretakerConsoleApp(App):
             self.query_one("#rollout-advance-stage", Select).value = Select.NULL
             self.query_one("#rollout-advance-reason", Input).value = ""
             self.query_one("#rollout-advance-incident", Input).value = ""
+            self._set_rollout_routing_inputs(record)
             self.query_one("#rollout-advance-confirm", Checkbox).value = False
             self.query_one("#rollout-advance-override", Checkbox).value = False
             self._set_operator_context(
@@ -3422,6 +3445,9 @@ class CaretakerConsoleApp(App):
         elif event.input.id in {
             "rollout-advance-reason",
             "rollout-advance-incident",
+            "rollout-shadow-percentage",
+            "rollout-canary-percentage",
+            "rollout-active-percentage",
         }:
             self.query_one("#rollout-advance-confirm", Checkbox).value = False
             self._refresh_rollout_advance_controls()
@@ -4061,6 +4087,17 @@ class CaretakerConsoleApp(App):
             None,
         )
 
+    def _set_rollout_routing_inputs(self, record: Mapping[str, Any] | None) -> None:
+        routing = record.get("routing_policy") if record is not None else None
+        routing = routing if isinstance(routing, Mapping) else {}
+        for field_id, key in (
+            ("#rollout-shadow-percentage", "shadow_sample_percentage"),
+            ("#rollout-canary-percentage", "canary_percentage"),
+            ("#rollout-active-percentage", "active_candidate_percentage"),
+        ):
+            value = routing.get(key)
+            self.query_one(field_id, Input).value = "" if value is None else str(value)
+
     def _refresh_rollout_advance_controls(self) -> None:
         """Keep the operator action form bounded by the ledger lifecycle."""
         record = self._selected_rollout()
@@ -4083,6 +4120,12 @@ class CaretakerConsoleApp(App):
             record
             and executable_stage
             and self._application_running is True
+        )
+        routing_enabled = bool(
+            record
+            and stage in {"validated", "shadow", "canary", "active"}
+            and self._application_running is True
+            and self._rollout_routing_control.get("operator_changes_allowed") is True
         )
         advance_enabled = bool(
             record
@@ -4129,6 +4172,36 @@ class CaretakerConsoleApp(App):
         )
         self.query_one("#rollout-pause", Button).disabled = not can_pause
         self.query_one("#rollout-resume", Button).disabled = not can_resume
+        routing_values: list[int] = []
+        routing_valid = True
+        for field_id in (
+            "#rollout-shadow-percentage",
+            "#rollout-canary-percentage",
+            "#rollout-active-percentage",
+        ):
+            value = self.query_one(field_id, Input).value.strip()
+            try:
+                parsed = int(value)
+            except ValueError:
+                routing_valid = False
+                continue
+            if str(parsed) != value or not 0 <= parsed <= 100:
+                routing_valid = False
+            routing_values.append(parsed)
+        can_update_routing = bool(
+            routing_enabled
+            and routing_valid
+            and len(routing_values) == 3
+            and reason.value.strip()
+            and confirm.value
+        )
+        for field_id in (
+            "#rollout-shadow-percentage",
+            "#rollout-canary-percentage",
+            "#rollout-active-percentage",
+        ):
+            self.query_one(field_id, Input).disabled = not routing_enabled
+        self.query_one("#rollout-routing-update", Button).disabled = not can_update_routing
 
         status = self.query_one("#rollout-advance-status", Static)
         if record is None:
@@ -4235,6 +4308,49 @@ class CaretakerConsoleApp(App):
             timeout=10,
         )
 
+    async def _update_selected_rollout_routing(self) -> None:
+        record = self._selected_rollout()
+        if record is None:
+            raise ValueError("Select a rollout before changing routing percentages")
+        if self._application_running is not True:
+            raise RuntimeError("Routing percentage changes require a live supervised application")
+        reason = self.query_one("#rollout-advance-reason", Input).value.strip()
+        if not reason:
+            raise ValueError("Routing percentage changes require an operator reason")
+        if not self.query_one("#rollout-advance-confirm", Checkbox).value:
+            raise ValueError("Confirm the routing percentage change before dispatching it")
+        percentages: dict[str, int] = {}
+        for field_id, key in (
+            ("#rollout-shadow-percentage", "shadow_sample_percentage"),
+            ("#rollout-canary-percentage", "canary_percentage"),
+            ("#rollout-active-percentage", "active_candidate_percentage"),
+        ):
+            value = self.query_one(field_id, Input).value.strip()
+            try:
+                parsed = int(value)
+            except ValueError as exc:
+                raise ValueError(f"{key} must be an integer from 0 through 100") from exc
+            if str(parsed) != value or not 0 <= parsed <= 100:
+                raise ValueError(f"{key} must be an integer from 0 through 100")
+            percentages[key] = parsed
+        response = await self._request(
+            "repair-rollout-routing-update",
+            rollout_id=record.get("rollout_id"),
+            reason=reason,
+            confirm=True,
+            override_readiness=self.query_one(
+                "#rollout-advance-override", Checkbox
+            ).value,
+            **percentages,
+        )
+        await self.refresh_rollouts()
+        self._write_json("#rollout-output", response)
+        self.notify(
+            "Rollout routing percentages updated",
+            title="Routing transition recorded",
+            timeout=10,
+        )
+
     async def refresh_rollouts(self) -> None:
         """Refresh the bounded, read-only supervisor rollout projection."""
         table = self.query_one("#rollout-table", DataTable)
@@ -4243,9 +4359,11 @@ class CaretakerConsoleApp(App):
         output.clear()
         self._rollout_records = []
         self._rollout_transitions = []
+        self._rollout_routing_control = {}
         self._selected_rollout_id = None
         self.query_one("#rollout-advance-reason", Input).value = ""
         self.query_one("#rollout-advance-incident", Input).value = ""
+        self._set_rollout_routing_inputs(None)
         self._refresh_rollout_advance_controls()
         if self._application_running is not True:
             self.query_one("#rollout-status", Static).update(
@@ -4282,6 +4400,12 @@ class CaretakerConsoleApp(App):
             for item in response.get("records", ())
             if isinstance(item, Mapping)
         ]
+        routing_control = response.get("routing_control")
+        self._rollout_routing_control = (
+            dict(routing_control)
+            if isinstance(routing_control, Mapping)
+            else {}
+        )
         worker_coordination = response.get("worker_coordination")
         worker_records = (
             worker_coordination.get("rollouts", ())
@@ -5497,6 +5621,9 @@ class CaretakerConsoleApp(App):
                 return
             if button == "rollout-resume":
                 await self._set_selected_rollout_paused(False)
+                return
+            if button == "rollout-routing-update":
+                await self._update_selected_rollout_routing()
                 return
             if button == "worker-failure-recovery-refresh":
                 await self.refresh_worker_failure_recovery()

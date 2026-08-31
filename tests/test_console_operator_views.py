@@ -1499,6 +1499,7 @@ def test_console_rollout_pause_and_resume_are_explicit_control_actions(tmp_path)
             app._application_running = True
             await app.refresh_rollouts()
             app._selected_rollout_id = "rollout-1"
+            app._set_rollout_routing_inputs(status_record)
             app._refresh_rollout_advance_controls()
             app.query_one("#rollout-advance-reason", Input).value = "hold canary for investigation"
             app.query_one("#rollout-advance-confirm", Checkbox).value = True
@@ -1517,6 +1518,92 @@ def test_console_rollout_pause_and_resume_are_explicit_control_actions(tmp_path)
                     "reason": "hold canary for investigation",
                     "confirm": True,
                     "override_readiness": False,
+                },
+            )
+
+    asyncio.run(exercise())
+
+
+def test_console_rollout_percentage_update_is_explicit_and_policy_gated(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            requests = []
+            status_record = {
+                "rollout_id": "rollout-1",
+                "target_id": "app:charge",
+                "stage": "canary",
+                "paused": False,
+                "candidate_id": "candidate-1",
+                "routing_policy": {
+                    "shadow_sample_percentage": 50,
+                    "canary_percentage": 10,
+                    "active_candidate_percentage": 100,
+                    "bucket_count": 10000,
+                },
+                "execution_summary_status": "AVAILABLE",
+                "execution_summary": {},
+            }
+
+            async def request(command: str, **payload):
+                requests.append((command, payload))
+                if command == "repair-rollout-status":
+                    return {
+                        "ok": True,
+                        "available": True,
+                        "routing_control": {
+                            "operator_changes_allowed": True,
+                            "operator_increases_allowed": True,
+                            "readiness_required_for_increase": True,
+                        },
+                        "records": [dict(status_record)],
+                        "worker_coordination": {"rollouts": []},
+                        "transitions": [],
+                    }
+                if command == "repair-rollout-routing-update":
+                    return {
+                        "ok": True,
+                        "record": {
+                            "routing_policy": {
+                                "shadow_sample_percentage": 60,
+                                "canary_percentage": 20,
+                                "active_candidate_percentage": 100,
+                                "bucket_count": 10000,
+                            }
+                        },
+                    }
+                raise AssertionError(command)
+
+            app._request = request  # type: ignore[method-assign]
+            app._application_running = True
+            await app.refresh_rollouts()
+            app._selected_rollout_id = "rollout-1"
+            app._set_rollout_routing_inputs(status_record)
+            app._refresh_rollout_advance_controls()
+            assert app.query_one("#rollout-routing-update", Button).disabled is True
+            assert app.query_one("#rollout-canary-percentage", Input).value == "10"
+
+            app.query_one("#rollout-shadow-percentage", Input).value = "60"
+            app.query_one("#rollout-canary-percentage", Input).value = "20"
+            app.query_one("#rollout-active-percentage", Input).value = "100"
+            app.query_one("#rollout-advance-reason", Input).value = "increase canary after review"
+            app.query_one("#rollout-advance-confirm", Checkbox).value = True
+            app.query_one("#rollout-advance-override", Checkbox).value = True
+            app._refresh_rollout_advance_controls()
+            assert app.query_one("#rollout-routing-update", Button).disabled is False
+            await app._update_selected_rollout_routing()
+
+            assert requests[1] == (
+                "repair-rollout-routing-update",
+                {
+                    "rollout_id": "rollout-1",
+                    "reason": "increase canary after review",
+                    "confirm": True,
+                    "override_readiness": True,
+                    "shadow_sample_percentage": 60,
+                    "canary_percentage": 20,
+                    "active_candidate_percentage": 100,
                 },
             )
 
