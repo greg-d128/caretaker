@@ -37,6 +37,7 @@ from .behavior import (
 )
 from .logging import (
     CaretakerApplicationSupervisor,
+    EvidencePriority,
     LogChannel,
     LoggingMode,
     InterrogationRequest,
@@ -839,6 +840,28 @@ def main(argv: list[str] | None = None) -> int:
                 },
                 origin="caretaker",
             )
+            runtime.audit.emit(
+                "POLICY_REVIEWED",
+                actor={"type": "operator", "id": f"uid:{credentials[1]}"},
+                scope={
+                    "target_id": proposal.get("target_id"),
+                    "aggregation_scope": proposal.get("aggregation_scope"),
+                    "transition_id": request_id,
+                },
+                policy={
+                    "fingerprint": proposal.get("policy_fingerprint"),
+                    "authority_type": "operator",
+                },
+                outcome={
+                    "state": review.get("review_decision") or review.get("review_status"),
+                },
+                details={
+                    "review_status": review.get("review_status"),
+                    "policy_applied": False,
+                    "authority_granted": False,
+                },
+                priority=EvidencePriority.CRITICAL,
+            )
             return {"ok": True, "review": review}
         if command == "adaptive-threshold-apply":
             request_id = str(request.get("request_id") or "").strip()
@@ -1047,6 +1070,38 @@ def main(argv: list[str] | None = None) -> int:
                 },
                 origin="caretaker",
             )
+            runtime.audit.emit(
+                "POLICY_APPLIED",
+                actor={"type": "operator", "id": f"uid:{credentials[1]}"},
+                scope={
+                    "target_id": proposal.get("target_id"),
+                    "aggregation_scope": proposal.get("aggregation_scope"),
+                    "transition_id": transition.get("transition_id"),
+                },
+                policy={
+                    "prior_policy_id": transition.get("prior_policy_id"),
+                    "policy_id": transition.get("policy_id"),
+                    "prior_fingerprint": transition.get("previous_policy_fingerprint"),
+                    "fingerprint": transition.get("policy_fingerprint"),
+                    "authority_type": transition.get("authority_type"),
+                    "authority_generation": authority.effective.generation,
+                    "fields_affected": sorted(
+                        str(field) for field in (proposal.get("changes") or {})
+                    ),
+                },
+                outcome={
+                    "state": "APPLIED",
+                    "effective_at": transition.get("effective_at"),
+                    "reason": transition.get("change_description"),
+                },
+                details={
+                    "proposal_request_id": request_id,
+                    "lease_id": str(lease.lease_id),
+                    "required_worker_count": len(required_workers),
+                    "authority_granted": False,
+                },
+                priority=EvidencePriority.CRITICAL,
+            )
             return {
                 "ok": True,
                 "proposal_request_id": request_id,
@@ -1128,6 +1183,31 @@ def main(argv: list[str] | None = None) -> int:
                     "authority_granted": False,
                 },
                 origin="caretaker",
+            )
+            runtime.audit.emit(
+                "POLICY_ROLLED_BACK",
+                actor={"type": "operator", "id": f"uid:{credentials[1]}"},
+                scope={
+                    "target_id": transition.get("target_id"),
+                    "aggregation_scope": transition.get("aggregation_scope"),
+                    "transition_id": request_id,
+                },
+                policy={
+                    "prior_policy_id": transition.get("prior_policy_id"),
+                    "policy_id": transition.get("policy_id"),
+                    "prior_fingerprint": transition.get("previous_policy_fingerprint"),
+                    "fingerprint": transition.get("policy_fingerprint"),
+                    "authority_type": transition.get("authority_type"),
+                },
+                outcome={
+                    "state": "ROLLED_BACK",
+                    "reason": reason,
+                },
+                details={
+                    "rollback_recorded": True,
+                    "authority_granted": False,
+                },
+                priority=EvidencePriority.CRITICAL,
             )
             return {
                 "ok": True,
