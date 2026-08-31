@@ -2069,6 +2069,7 @@ def apply_repair_recovery_plan(
     # writing a recovery record. A stale decision later in the batch must not
     # leave an earlier decision partially applied.
     for decision in validated_decisions:
+        attempt_id = str(decision.get("attempt_id") or "")
         action_execution = dispatch_recovery_action(decision, handlers=handlers)
         record = RepairRecoveryRecord(
             recovery_id=uuid4(),

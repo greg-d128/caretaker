@@ -274,6 +274,13 @@ def test_recovery_plan_validates_all_decisions_before_writing() -> None:
         apply_repair_recovery_plan(store, tampered)
     assert store.all_recoveries() == ()
 
+    applied = apply_repair_recovery_plan(store, plan)
+    assert applied["applied_count"] == 2
+    assert {item.attempt_id for item in store.all_recoveries()} == {
+        str(first.attempt_id),
+        str(second.attempt_id),
+    }
+
 
 def test_recovery_plan_projects_linked_lifecycle_records_without_mutating_them() -> None:
     store = InMemoryRepairStore()
