@@ -8,6 +8,8 @@ import pytest
 from caretaker import (
     EffectObservation,
     FunctionExecutionContract,
+    InMemoryRepairStore,
+    ObservationPolicy,
     RepairRolloutAuthority,
     RepairRolloutError,
     RepairRolloutExecutionError,
@@ -20,6 +22,7 @@ from caretaker import (
     execute_slot_rollout,
 )
 from caretaker.domain import ReplaySafety, SideEffectClass
+from caretaker.observation import ObservationManager
 from caretaker.slot import FunctionSlot
 
 
@@ -239,6 +242,122 @@ def test_execute_slot_rollout_rejects_stale_candidate_binding() -> None:
             args=(4,),
             kwargs={},
         )
+
+
+def test_execute_slot_rollout_counts_only_authoritative_candidate_calls() -> None:
+    ledger = _ledger(canary_percentage=100)
+    slot, record = _slot_and_record(ledger)
+    record = _advance(ledger, record, RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, record, RepairRolloutStage.CANARY)
+    store = InMemoryRepairStore()
+    manager = ObservationManager(store)
+
+    result = execute_slot_rollout(
+        slot,
+        record,
+        policy=ledger.policy,
+        policy_fingerprint="policy-hash",
+        routing_scope="tenant",
+        routing_key="tenant-1",
+        args=(4,),
+        kwargs={},
+        observation_manager=manager,
+        observation_policy=ObservationPolicy(),
+        call_id=uuid4(),
+    )
+
+    assert result.result == 5
+    assert slot.observation() is not None
+    assert slot.observation().successful_executions == 1
+    assert len(store.observations) == 1
+    assert next(iter(store.observations.values())).mode == "canary"
+
+
+def test_execute_slot_rollout_does_not_count_shadow_as_acceptance() -> None:
+    ledger = _ledger(shadow_sample_percentage=100)
+    slot, record = _slot_and_record(ledger)
+    record = _advance(ledger, record, RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, record, RepairRolloutStage.SHADOW)
+    store = InMemoryRepairStore()
+    manager = ObservationManager(store)
+
+    result = execute_slot_rollout(
+        slot,
+        record,
+        policy=ledger.policy,
+        policy_fingerprint="policy-hash",
+        routing_scope="tenant",
+        routing_key="tenant-1",
+        args=(4,),
+        kwargs={},
+        effect_observation=EffectObservation(complete=True),
+        observation_manager=manager,
+        observation_policy=ObservationPolicy(),
+        call_id=uuid4(),
+    )
+
+    assert result.result == 4
+    assert slot.observation() is not None
+    assert slot.observation().successful_executions == 0
+    assert store.observations == {}
+
+
+def test_execute_slot_rollout_applies_existing_failure_rollback_policy() -> None:
+    ledger = _ledger(canary_percentage=100)
+    candidate_id = uuid4()
+    slot = FunctionSlot(
+        target_id="example.target",
+        original=lambda value: value,
+        original_source_hash="base-hash",
+        execution_contract=_pure_contract(),
+    )
+    lease = slot.begin_repair()
+
+    def failing_candidate(value: int) -> int:
+        raise ValueError(f"bad candidate: {value}")
+
+    slot.activate(
+        lease=lease,
+        implementation=failing_candidate,
+        source="candidate-source",
+        source_hash="candidate-hash",
+        repair_attempt_id=uuid4(),
+        candidate_id=candidate_id,
+    )
+    record = ledger.create(
+        target_id="example.target",
+        incident_id=uuid4(),
+        candidate_id=candidate_id,
+        candidate_source_hash="candidate-hash",
+        base_source_hash="base-hash",
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        proposed_by="advisory-engine",
+    )
+    record = _advance(ledger, record, RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, record, RepairRolloutStage.CANARY)
+    store = InMemoryRepairStore()
+
+    with pytest.raises(ValueError, match="bad candidate"):
+        execute_slot_rollout(
+            slot,
+            record,
+            policy=ledger.policy,
+            policy_fingerprint="policy-hash",
+            routing_scope="tenant",
+            routing_key="tenant-1",
+            args=(4,),
+            kwargs={},
+            observation_manager=ObservationManager(store),
+            observation_policy=ObservationPolicy(),
+            call_id=uuid4(),
+        )
+
+    assert slot.load().number == 0
+    assert len(store.observations) == 1
+    failure = next(iter(store.observations.values()))
+    assert failure.counted_as_failure is True
+    assert failure.comparison["rolled_back"] is True
 
 
 def test_canary_and_active_field_repair_can_select_candidate_explicitly() -> None:

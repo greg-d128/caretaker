@@ -14,13 +14,17 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID, uuid4
 
 from .contracts import Comparator
 from .domain import RepairEvent
 from .execution import EffectObservation, FunctionExecutionContract
 from .shadow import ShadowExecutionAdapter, ShadowExecutionResult, shadow_execute
+
+if TYPE_CHECKING:
+    from .observation import ObservationManager
+    from .policy import ObservationPolicy
 
 
 class RepairRolloutError(RuntimeError):
@@ -830,37 +834,17 @@ def execute_rollout(
         routing_key=routing_key,
         audit_event=audit_event,
     )
-    if decision.strategy == "shadow":
-        shadow = shadow_execute(
-            original=deployed,
-            candidate=candidate,
-            args=args,
-            kwargs=kwargs,
-            contract=contract,
-            effect_observation=effect_observation,
-            isolation_adapter=isolation_adapter,
-            comparator=comparator,
-            audit_event=audit_event,
-        )
-        return RolloutExecutionResult(
-            result=shadow.result,
-            decision=decision,
-            candidate_executed=True,
-            candidate_authoritative=False,
-            shadow_result=shadow,
-        )
-    if decision.candidate_authoritative:
-        return RolloutExecutionResult(
-            result=candidate(*args, **kwargs),
-            decision=decision,
-            candidate_executed=True,
-            candidate_authoritative=True,
-        )
-    return RolloutExecutionResult(
-        result=deployed(*args, **kwargs),
-        decision=decision,
-        candidate_executed=False,
-        candidate_authoritative=False,
+    return _execute_rollout_decision(
+        decision,
+        deployed=deployed,
+        candidate=candidate,
+        args=args,
+        kwargs=kwargs,
+        contract=contract,
+        effect_observation=effect_observation,
+        isolation_adapter=isolation_adapter,
+        comparator=comparator,
+        audit_event=audit_event,
     )
 
 
@@ -878,6 +862,9 @@ def execute_slot_rollout(
     isolation_adapter: ShadowExecutionAdapter | None = None,
     comparator: Comparator | None = None,
     audit_event: Callable[..., Any] | None = None,
+    observation_manager: "ObservationManager | None" = None,
+    observation_policy: "ObservationPolicy | None" = None,
+    call_id: UUID | None = None,
 ) -> RolloutExecutionResult:
     """Execute a rollout bound to one slot's current candidate.
 
@@ -885,8 +872,12 @@ def execute_slot_rollout(
     candidate currently installed in the slot and the immediately preceding
     version as its deployed counterpart.  A permanent record treats the
     current slot version as deployed code and cannot re-route it as a field
-    candidate.  This function never mutates the slot or records observation
-    acceptance; those remain owned by the normal application lifecycle.
+    candidate.  Observation accounting is opt-in. When an
+    ``ObservationManager``, its policy, and a call ID are supplied, only
+    authoritative candidate calls are counted. Candidate failures are passed
+    to the manager's existing policy-driven rollback logic and then re-raised;
+    there is no silent fallback. Shadow executions are never counted as
+    acceptance observations.
     """
 
     if record.stage not in {
@@ -896,6 +887,15 @@ def execute_slot_rollout(
     }:
         raise RepairRolloutExecutionError(
             f"rollout stage {record.stage.value} is not executable"
+        )
+    if observation_manager is None:
+        if observation_policy is not None or call_id is not None:
+            raise RepairRolloutExecutionError(
+                "observation policy and call ID require an observation manager"
+            )
+    elif observation_policy is None or call_id is None:
+        raise RepairRolloutExecutionError(
+            "observation manager requires an observation policy and call ID"
         )
     if record.target_id != slot.target_id:
         raise RepairRolloutExecutionError("rollout target does not match function slot")
@@ -929,21 +929,95 @@ def execute_slot_rollout(
         deployed = previous.implementation
         candidate = current.implementation
 
-    return execute_rollout(
+    decision = decide_rollout_routing(
         record,
         policy=policy,
         policy_fingerprint=policy_fingerprint,
         routing_scope=routing_scope,
         routing_key=routing_key,
-        deployed=deployed,
-        candidate=candidate,
-        args=args,
-        kwargs=kwargs,
-        contract=slot.execution_contract,
-        effect_observation=effect_observation,
-        isolation_adapter=isolation_adapter,
-        comparator=comparator,
         audit_event=audit_event,
+    )
+    try:
+        result = _execute_rollout_decision(
+            decision,
+            deployed=deployed,
+            candidate=candidate,
+            args=args,
+            kwargs=kwargs,
+            contract=slot.execution_contract,
+            effect_observation=effect_observation,
+            isolation_adapter=isolation_adapter,
+            comparator=comparator,
+            audit_event=audit_event,
+        )
+    except BaseException as exc:
+        if decision.candidate_authoritative and observation_manager is not None:
+            try:
+                observation_manager.record_failure(
+                    slot=slot,
+                    call_id=call_id,
+                    exception=exc,
+                    policy=observation_policy,
+                    mode=decision.strategy,
+                )
+            except BaseException as accounting_error:
+                raise exc from accounting_error
+        raise
+    if decision.candidate_authoritative and observation_manager is not None:
+        observation_manager.record_success(
+            slot=slot,
+            call_id=call_id,
+            policy=observation_policy,
+            output=result.result,
+            mode=decision.strategy,
+        )
+    return result
+
+
+def _execute_rollout_decision(
+    decision: RolloutRoutingDecision,
+    *,
+    deployed: Callable[..., Any],
+    candidate: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    contract: FunctionExecutionContract,
+    effect_observation: EffectObservation | None,
+    isolation_adapter: ShadowExecutionAdapter | None,
+    comparator: Comparator | None,
+    audit_event: Callable[..., Any] | None,
+) -> RolloutExecutionResult:
+    if decision.strategy == "shadow":
+        shadow = shadow_execute(
+            original=deployed,
+            candidate=candidate,
+            args=args,
+            kwargs=kwargs,
+            contract=contract,
+            effect_observation=effect_observation,
+            isolation_adapter=isolation_adapter,
+            comparator=comparator,
+            audit_event=audit_event,
+        )
+        return RolloutExecutionResult(
+            result=shadow.result,
+            decision=decision,
+            candidate_executed=True,
+            candidate_authoritative=False,
+            shadow_result=shadow,
+        )
+    if decision.candidate_authoritative:
+        return RolloutExecutionResult(
+            result=candidate(*args, **kwargs),
+            decision=decision,
+            candidate_executed=True,
+            candidate_authoritative=True,
+        )
+    return RolloutExecutionResult(
+        result=deployed(*args, **kwargs),
+        decision=decision,
+        candidate_executed=False,
+        candidate_authoritative=False,
     )
 
 
