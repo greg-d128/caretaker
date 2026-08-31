@@ -49,6 +49,7 @@ from .failure_corpus import (
     FailureCorpusExecutionPolicy,
     FailureCorpusObservationStore,
     FailureCorpusPodmanRunner,
+    FailureCorpusMultipassRunner,
     FailureCorpusProcessRunner,
     FailureObservation,
     FailureScenario,

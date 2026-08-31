@@ -14,6 +14,7 @@ from caretaker.failure_corpus import (
     FailureCorpusHarness,
     FailureCorpusObservationStore,
     FailureCorpusPodmanRunner,
+    FailureCorpusMultipassRunner,
     FailureCorpusProcessRunner,
     MAX_CORPUS_BYTES,
 )
@@ -333,6 +334,76 @@ def test_podman_runner_fails_closed_when_rootless_or_image_preflight_fails(monke
         "localhost/caretaker-replay-base:0.6.1",
         {"exception.unhandled": ["trusted-runner"]},
     )
+
+    observation = runner.run("exception.unhandled")
+
+    assert observation.status == "ISOLATION_UNAVAILABLE"
+    assert observation.executed is False
+
+
+def test_multipass_runner_transfers_request_and_cleans_disposable_clone(monkeypatch, tmp_path: Path) -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    host_calls: list[list[str]] = []
+    guest_calls: list[list[str]] = []
+    runner = FailureCorpusMultipassRunner(
+        corpus,
+        {"exception.unhandled": ["/opt/trusted-runner", "--json"]},
+        policy=FailureCorpusExecutionPolicy(minimum_isolation="VM"),
+        instance_name="caretaker-template",
+        clean_snapshot=None,
+        disposable_clone=True,
+        require_network_isolation=False,
+        timeout_seconds=5,
+    )
+    monkeypatch.setattr(runner, "available", lambda: (True, None))
+    monkeypatch.setattr(
+        runner,
+        "_create_disposable_clone",
+        lambda: ("caretaker-clone", None),
+    )
+    monkeypatch.setattr(runner, "_verify_guest_prerequisites", lambda _instance: (True, None))
+    monkeypatch.setattr(runner, "_destroy_disposable_clone", lambda instance: host_calls.append(["delete", instance]))
+
+    def fake_host(command, timeout=None):
+        host_calls.append(list(command))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def fake_guest(instance, command, timeout=None):
+        guest_calls.append([instance, *command])
+        if command[0] == "/opt/trusted-runner":
+            assert command[-1].startswith("/tmp/caretaker-failure-corpus-")
+            return SimpleNamespace(
+                returncode=0,
+                stdout=(
+                    '{"signal":"EXCEPTION","caretaker_action":"CAPTURE_INCIDENT",'
+                    '"authority_effect":"NO_AUTHORITY_CHANGE"}'
+                ),
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(runner, "_host_command", fake_host)
+    monkeypatch.setattr(runner, "_guest_command", fake_guest)
+
+    observation = runner.run("exception.unhandled")
+
+    assert observation.status == "MATCHED"
+    assert host_calls[0][0:2] == ["multipass", "transfer"]
+    assert host_calls[-1] == ["delete", "caretaker-clone"]
+    assert guest_calls[0][0] == "caretaker-clone"
+    assert guest_calls[-1][1:3] == ["rm", "-f"]
+    assert not any("mount" in call for call in host_calls)
+
+
+def test_multipass_runner_fails_closed_when_vm_preflight_is_unavailable(monkeypatch) -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    runner = FailureCorpusMultipassRunner(
+        corpus,
+        {"exception.unhandled": ["/opt/trusted-runner"]},
+        policy=FailureCorpusExecutionPolicy(minimum_isolation="VM"),
+        require_network_isolation=False,
+    )
+    monkeypatch.setattr(runner, "available", lambda: (False, "validator guest is unavailable"))
 
     observation = runner.run("exception.unhandled")
 

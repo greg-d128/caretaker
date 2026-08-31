@@ -64,7 +64,9 @@ observed coverage. An explicit process runner now provides temporary-workspace
 and process-group lifecycle handling, while repository-owned mappings, stronger
 isolated lifecycle tooling, and reviewed container/VM scenario mappings,
 captured incident fixtures, and broad cross-version outcome coverage remain
-required before this priority can be considered complete.
+required before this priority can be considered complete. The current
+container and VM runners require pre-provisioned trusted environments and do
+not discover or execute commands from corpus metadata.
 
 ### Incident Capsules and post-mortem capture
 

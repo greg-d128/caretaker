@@ -23,6 +23,8 @@ from collections.abc import Callable, Sequence
 from typing import Any, Mapping
 from uuid import UUID, uuid4
 
+from .validation import MultipassValidationBackend
+
 
 FAILURE_CORPUS_SCHEMA_VERSION = 1
 MAX_CORPUS_BYTES = 1_048_576
@@ -792,6 +794,144 @@ class FailureCorpusPodmanRunner:
                 reason or "Podman container execution is unavailable",
             )
         return self.harness.run(scenario_id)
+
+    def run_all(self, *, category: str | None = None, limit: int = 100) -> tuple[FailureObservation, ...]:
+        bounded_limit = max(1, min(int(limit), MAX_SCENARIOS))
+        selected = [
+            scenario for scenario in self.corpus.scenarios
+            if category is None or scenario.category == category
+        ][:bounded_limit]
+        return tuple(self.run(scenario.scenario_id) for scenario in selected)
+
+
+class FailureCorpusMultipassRunner(MultipassValidationBackend):
+    """Run explicit trusted scenario commands in a pre-provisioned VM.
+
+    The inherited backend verifies the configured guest, optional clean
+    snapshot, and network-isolation attestation. A command receives the
+    transferred JSON request path as its final argument and returns one JSON
+    observation object on stdout. The guest is restored or cloned according to
+    the inherited lifecycle policy; no host directory is mounted.
+    """
+
+    def __init__(
+        self,
+        corpus: FailureCorpus,
+        commands: Mapping[str, Sequence[str]],
+        *,
+        policy: FailureCorpusExecutionPolicy | None = None,
+        timeout_seconds: float = 60.0,
+        **backend_kwargs: Any,
+    ) -> None:
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be greater than zero")
+        super().__init__(operation_timeout_seconds=timeout_seconds, **backend_kwargs)
+        self.corpus = corpus
+        self.commands = _normalize_runner_commands(commands)
+        self.policy = policy or FailureCorpusExecutionPolicy()
+        self.timeout_seconds = float(timeout_seconds)
+        self.harness = FailureCorpusHarness(
+            corpus,
+            runners={
+                scenario_id: (lambda scenario, command=command: self._invoke(command, scenario))
+                for scenario_id, command in self.commands.items()
+            },
+            isolation="VM",
+            policy=self.policy,
+        )
+
+    def _invoke(self, command: tuple[str, ...], scenario: FailureScenario) -> Mapping[str, Any]:
+        token = uuid4().hex
+        guest_input = f"/tmp/caretaker-failure-corpus-{token}.json"
+        request = json.dumps(
+            {"schema_version": FAILURE_CORPUS_SCHEMA_VERSION, "scenario": scenario.summary()},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        with tempfile.TemporaryDirectory(prefix="caretaker-multipass-failure-corpus-") as temporary:
+            input_path = Path(temporary) / "request.json"
+            input_path.write_text(request, encoding="utf-8")
+            transfer = self._host_command(
+                [self.multipass_executable, "transfer", str(input_path), f"{self.instance_name}:{guest_input}"]
+            )
+            if transfer.returncode != 0:
+                raise RuntimeError(
+                    "Multipass request transfer failed: " + (transfer.stderr or "")[-512:]
+                )
+            try:
+                completed = self._guest_command(
+                    self.instance_name,
+                    [*command, guest_input],
+                    timeout=self.timeout_seconds,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(
+                    f"Multipass runner exceeded {self.timeout_seconds:g}s timeout"
+                ) from exc
+            finally:
+                self._guest_command(self.instance_name, ["rm", "-f", guest_input])
+        if completed.returncode != 0:
+            detail = (completed.stderr or "").strip()[-512:]
+            raise RuntimeError(
+                f"Multipass runner exited with status {completed.returncode}"
+                + (f": {detail}" if detail else "")
+            )
+        if len((completed.stdout or "").encode("utf-8")) > MAX_OBSERVATION_BYTES:
+            raise RuntimeError(f"Multipass runner output exceeds {MAX_OBSERVATION_BYTES} bytes")
+        try:
+            observed = json.loads(completed.stdout or "")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("Multipass runner stdout is not valid JSON") from exc
+        if not isinstance(observed, Mapping):
+            raise RuntimeError("Multipass runner stdout must be a JSON object")
+        return observed
+
+    def run(self, scenario_id: str) -> FailureObservation:
+        scenario = self.corpus.get(scenario_id)
+        if not self.policy.enabled or scenario_id not in self.commands:
+            return self.harness.run(scenario_id)
+        available, reason = self.available()
+        if not available:
+            return self.harness.isolation_unavailable(
+                scenario_id,
+                reason or "Multipass VM execution is unavailable",
+            )
+        with self._lock:
+            instance = self.instance_name
+            disposable = False
+            try:
+                if self.disposable_clone:
+                    instance, reason = self._create_disposable_clone()
+                    if instance is None:
+                        return self.harness.isolation_unavailable(
+                            scenario_id,
+                            reason or "Multipass disposable clone could not be created",
+                        )
+                    disposable = True
+                else:
+                    restored, reason = self._restore_clean_instance(instance)
+                    if not restored:
+                        return self.harness.isolation_unavailable(
+                            scenario_id,
+                            reason or "Multipass VM could not be restored",
+                        )
+                ready, reason = self._verify_guest_prerequisites(instance)
+                if not ready:
+                    return self.harness.isolation_unavailable(
+                        scenario_id,
+                        reason or "Multipass guest prerequisites are unavailable",
+                    )
+                if instance != self.instance_name:
+                    original = self.instance_name
+                    self.instance_name = instance
+                    try:
+                        return self.harness.run(scenario_id)
+                    finally:
+                        self.instance_name = original
+                return self.harness.run(scenario_id)
+            finally:
+                if disposable and instance:
+                    self._destroy_disposable_clone(instance)
 
     def run_all(self, *, category: str | None = None, limit: int = 100) -> tuple[FailureObservation, ...]:
         bounded_limit = max(1, min(int(limit), MAX_SCENARIOS))

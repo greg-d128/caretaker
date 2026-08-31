@@ -124,6 +124,15 @@ observation = runner.run("exception.unhandled")
 If Podman is unavailable, not rootless, or the image is absent locally, the
 observation is `ISOLATION_UNAVAILABLE` and the command is not launched.
 
+For a separate-kernel boundary, `FailureCorpusMultipassRunner` reuses the
+existing pre-provisioned Multipass validation contract. It can restore a clean
+snapshot or use a disposable clone, transfers each request into the guest,
+passes the request path as the final argument to the trusted command, captures
+bounded JSON stdout, and removes the transferred request. It inherits guest
+mount refusal and, when enabled, root-owned network-isolation attestation. It
+does not create a VM, install software, or obtain credentials automatically;
+the guest must be provisioned separately.
+
 Trusted test infrastructure can persist those observations for later review
 without persisting a runner or executable instruction:
 

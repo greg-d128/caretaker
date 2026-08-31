@@ -42,7 +42,9 @@ explicit trusted process runner now provides per-invocation temporary-workspace
 cleanup and process-group timeout handling; it is not a sandbox or substitute
 for container/VM lifecycle tooling. An explicit rootless Podman runner now
 provides the container-level contract when a pre-provisioned image is present;
-VM lifecycle tooling and repository-owned mappings remain future work.
+an explicit Multipass runner now provides the separate-kernel request-transfer
+contract when a pre-provisioned guest is present. Repository-owned mappings and
+broader fixture coverage remain future work.
 Bounded observations can now be stored separately from the manifest, with a
 content hash for corruption detection; that hash is not a substitute for
 external authenticated shipping. Expected metadata must remain separate from actual evidence; loading or listing
