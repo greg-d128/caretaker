@@ -60,6 +60,43 @@ def test_audit_stream_discards_only_an_incomplete_final_line(tmp_path: Path) -> 
     assert len(path.read_text().splitlines()) == 2
 
 
+def test_logging_runtime_audits_recovered_incomplete_tail(tmp_path: Path) -> None:
+    from caretaker.logging.handler import LoggingRuntime
+    from caretaker.logging.policy import CompressionPolicy, OperatorLoggingPolicy
+
+    policy = OperatorLoggingPolicy(
+        directory=str(tmp_path),
+        compression=CompressionPolicy(enabled=False),
+    )
+    writer = AuditStreamWriter(
+        policy.audit,
+        directory=tmp_path,
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+    )
+    writer.emit("INCIDENT_CAPTURED")
+    writer.close()
+    audit_path = tmp_path / "caretaker_audit.log"
+    incomplete = b'{"incomplete":'
+    with audit_path.open("ab") as stream:
+        stream.write(incomplete)
+
+    runtime = LoggingRuntime(policy, supervised=True)
+    try:
+        assert runtime.audit.recovered_truncated_bytes == len(incomplete)
+    finally:
+        runtime.close()
+    rows = [json.loads(line) for line in audit_path.read_text().splitlines()]
+    loss = [row for row in rows if row["event_type"] == "AUDIT_DATA_LOSS"][-1]
+    assert loss["outcome"]["state"] == "RECOVERED_INCOMPLETE_TAIL"
+    assert loss["details"] == {
+        "bytes": len(incomplete),
+        "category": "audit_stream",
+        "reason": "incomplete_final_record",
+        "records_preserved": True,
+    }
+
+
 def test_audit_stream_rejects_tampered_existing_record(tmp_path: Path) -> None:
     writer = _writer(tmp_path)
     writer.emit(

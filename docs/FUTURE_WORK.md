@@ -1260,7 +1260,7 @@ Until this exists, restart is a rollback to deployed application code, not conti
   checks, and redaction rules described in
   [`AUDIT_EVENT_REGISTRY.md`](AUDIT_EVENT_REGISTRY.md). The current local
   slice emits startup, policy, authority-snapshot, worker-authority,
-  supervisor-state, worker-failure, incident, policy-rejection,
+  supervisor-state, worker-failure, incident, audit-data-loss, policy-rejection,
   policy-supersession, console-invocation, validation-decision, replacement,
   and recovery-decision events and preserves a policy-controlled hash chain.
   Supervised application validation decisions cross an output-only, PID-bound,

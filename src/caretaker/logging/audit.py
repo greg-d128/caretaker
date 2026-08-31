@@ -241,6 +241,7 @@ class AuditStreamWriter:
         self._closed = False
         self._sequence = 0
         self._previous_hash: str | None = None
+        self._recovered_truncated_bytes = 0
         self._file = None
         if not policy.enabled:
             return
@@ -255,6 +256,11 @@ class AuditStreamWriter:
     @property
     def previous_hash(self) -> str | None:
         return self._previous_hash
+
+    @property
+    def recovered_truncated_bytes(self) -> int:
+        """Bytes discarded from one incomplete final record during recovery."""
+        return self._recovered_truncated_bytes
 
     def _recover_existing(self) -> None:
         if not self.path.exists():
@@ -283,6 +289,7 @@ class AuditStreamWriter:
                 last_sequence = int(event["stream_sequence"])
                 previous_hash = str(event["integrity"]["content_sha256"])
         if last_valid_offset != self.path.stat().st_size:
+            self._recovered_truncated_bytes = self.path.stat().st_size - last_valid_offset
             with self.path.open("r+b") as stream:
                 stream.truncate(last_valid_offset)
         self._sequence = last_sequence

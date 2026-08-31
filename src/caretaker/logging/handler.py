@@ -160,6 +160,24 @@ class LoggingRuntime:
             details={"hash_chain": self.active_policy.audit.hash_chain},
             priority=EvidencePriority.CRITICAL,
         )
+        if self.audit.recovered_truncated_bytes:
+            self.audit.emit(
+                "AUDIT_DATA_LOSS",
+                actor={"type": "supervisor" if self.supervised else "system"},
+                policy={
+                    "policy_id": str(self.snapshot.snapshot_id),
+                    "fingerprint": self.snapshot.content_hash,
+                    "authority_generation": self.effective.generation,
+                },
+                outcome={"state": "RECOVERED_INCOMPLETE_TAIL"},
+                details={
+                    "category": "audit_stream",
+                    "bytes": self.audit.recovered_truncated_bytes,
+                    "reason": "incomplete_final_record",
+                    "records_preserved": True,
+                },
+                priority=EvidencePriority.CRITICAL,
+            )
         self.event(
             logger_name="caretaker.logging.policy",
             severity=logging.INFO,
