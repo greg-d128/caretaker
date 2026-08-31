@@ -3,7 +3,10 @@
 **Applies to:** Caretaker `0.6.1`
 **Status:** operator, validation-backend, and research deployment guidance
 **Scope:** candidate-validation isolation plus isolation of the complete application and Caretaker runtime
-**Built-in validation backends:** PROCESS, rootless Podman CONTAINER, and Multipass VM. Docker-rootless and EXTERNAL adapters remain future work.
+**Available validation adapters:** PROCESS, rootless Podman and Docker CONTAINER,
+Multipass VM, and a transport-neutral authenticated EXTERNAL adapter. PROCESS is
+the least-friction default; remote provisioning and deployment assurance remain
+deployment-specific.
 
 ## 1. Purpose
 
@@ -91,9 +94,10 @@ codec. Registered cases support bounded JSON-compatible primitives, tuples,
 mappings with string keys, and the `RegisteredCase` record; arbitrary
 application objects are rejected before the worker starts. The parent also
 checks the worker result's transaction binding and mandatory evidence. The
-transport is still not an authenticated, independently attested protocol for
-mutually untrusted validators; external result authentication remains future
-work.
+local transport is not an independently attested protocol for mutually
+untrusted validators. The EXTERNAL adapter can require an authenticated result
+envelope with a pinned validator identity; remote transport provisioning,
+attestation, and replay semantics remain deployment-specific.
 
 `RootlessPodmanValidationBackend` requires a locally present image and verified rootless Podman. It does not pull images automatically. The validation container uses no network, a read-only root filesystem, dropped Linux capabilities, `no-new-privileges`, bounded PID/CPU/memory settings, a private writable request/result directory, and read-only source inputs.
 
@@ -141,7 +145,9 @@ The environment described here does not change these `0.6.1` properties:
 - subprocesses create a new observation and containment problem;
 - generated Repair cannot modify `caretaker.*`;
 - general replacement of already imported third-party modules uses quarantine plus supervised restart;
-- reliable remote `LogSink` delivery remains future work;
+- independently authenticated remote `LogSink` transport remains future work;
+  the local output-only sink supports bounded store-and-forward and optional
+  record-hash acknowledgements;
 - accepted executable regression cases are bounded and remain in memory; an
   opt-in persistent store now retains only integrity-checked, bounded,
   data-only fixture evidence marked `DATA_ONLY_NOT_EXECUTABLE`;
@@ -1045,7 +1051,7 @@ Export the runtime public-key fingerprint or manifest commitment to a location t
 
 ### Strongest supported architecture
 
-Use the external signer protocol or independent evidence witnessing. The built-in `0.6.1` event writer remains local, so reliable remote shipping requires an operator-supplied process or future `LogSink`.
+Use the external signer protocol or independent evidence witnessing. The built-in `0.6.1` event writer remains local; reliable remote shipping still requires an operator-supplied, independently secured `LogSink` transport.
 
 ## 31. Incident workflow in an isolated environment
 
