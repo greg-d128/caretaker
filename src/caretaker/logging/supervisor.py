@@ -30,6 +30,7 @@ from ..repair_recovery import (
 from .models import (
     ActiveWork,
     CaretakerComponent,
+    EvidencePriority,
     LoggingMode,
     WorkState,
     WorkerFailureAction,
@@ -892,10 +893,32 @@ class CaretakerApplicationSupervisor:
         else:
             failure_persistence_status = "NOT_CONFIGURED"
         incident_error = None
+        incident_result: Mapping[str, Any] | None = None
         if create_incident is not None:
             try:
-                create_incident(envelope)
+                captured = create_incident(envelope)
+                if isinstance(captured, Mapping):
+                    incident_result = captured
                 incident_status = "RECORDED"
+                self._audit_event(
+                    "INCIDENT_CAPTURED",
+                    actor={"type": "supervisor", "id": str(self.supervisor_health.worker_id)},
+                    scope={
+                        "worker_id": str(worker.worker_id),
+                        "target_id": worker.target_id,
+                        "incident_id": incident_result.get("incident_id") if incident_result else None,
+                    },
+                    outcome={"state": "RECORDED"},
+                    details={
+                        "capsule_id": incident_result.get("capsule_id") if incident_result else None,
+                        "incident_recorded": bool(
+                            incident_result.get("incident_recorded")
+                            if incident_result
+                            else True
+                        ),
+                    },
+                    priority=EvidencePriority.IMPORTANT,
+                )
             except Exception as exc:
                 incident_status = "FAILED"
                 incident_error = f"{type(exc).__name__}: {exc}"[:256]

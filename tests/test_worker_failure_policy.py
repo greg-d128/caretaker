@@ -82,12 +82,14 @@ def test_worker_failure_records_incident_and_uses_callback_owned_restart() -> No
     assert result["restart"]["backoff_seconds"] == 0.5
     assert [item["event_type"] for item in runtime.audit.events] == [
         "WORKER_FAILED",
+        "INCIDENT_CAPTURED",
         "WORKER_REPLACEMENT_REQUESTED",
         "WORKER_REPLACED",
     ]
     assert runtime.audit.events[0]["outcome"]["state"] == "ROLLED_BACK"
-    assert runtime.audit.events[1]["outcome"]["state"] == "REQUESTED"
-    assert runtime.audit.events[2]["outcome"]["state"] == "RESTARTED"
+    assert runtime.audit.events[1]["outcome"]["state"] == "RECORDED"
+    assert runtime.audit.events[2]["outcome"]["state"] == "REQUESTED"
+    assert runtime.audit.events[3]["outcome"]["state"] == "RESTARTED"
 
 
 def test_worker_failure_scope_uses_transaction_or_incident_and_does_not_use_target_alone() -> None:
