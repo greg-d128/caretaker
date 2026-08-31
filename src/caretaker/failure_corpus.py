@@ -13,6 +13,7 @@ import json
 import os
 import re
 import signal
+import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -456,6 +457,15 @@ class FailureCorpusHarness:
             observed=observed_copy,
         )
 
+    def isolation_unavailable(self, scenario_id: str, error: str) -> FailureObservation:
+        """Return a non-executed result for an unavailable isolated backend."""
+        return self._base_observation(
+            self.corpus.get(scenario_id),
+            status="ISOLATION_UNAVAILABLE",
+            executed=False,
+            error=error,
+        )
+
     def run_all(self, *, category: str | None = None, limit: int = 100) -> tuple[FailureObservation, ...]:
         bounded_limit = max(1, min(int(limit), MAX_SCENARIOS))
         selected = [
@@ -463,6 +473,25 @@ class FailureCorpusHarness:
             if category is None or scenario.category == category
         ][:bounded_limit]
         return tuple(self.run(scenario.scenario_id) for scenario in selected)
+
+
+def _normalize_runner_commands(commands: Mapping[str, Sequence[str]]) -> dict[str, tuple[str, ...]]:
+    normalized: dict[str, tuple[str, ...]] = {}
+    for scenario_id, command in commands.items():
+        scenario_name = _identifier(scenario_id, field="scenario_id")
+        if not isinstance(command, Sequence) or isinstance(command, (str, bytes)) or not command:
+            raise FailureCorpusError(
+                f"runner command for {scenario_name!r} must be a non-empty sequence"
+            )
+        values = tuple(command)
+        if any(not isinstance(item, str) or not item or "\x00" in item for item in values):
+            raise FailureCorpusError(
+                f"runner command for {scenario_name!r} contains an invalid argument"
+            )
+        if len(values) > 64 or sum(len(item) for item in values) > MAX_TEXT_CHARS:
+            raise FailureCorpusError(f"runner command for {scenario_name!r} is too large")
+        normalized[scenario_name] = values
+    return normalized
 
 
 class FailureCorpusProcessRunner:
@@ -508,17 +537,7 @@ class FailureCorpusProcessRunner:
             ):
                 raise FailureCorpusError("process runner environment must contain string keys and values")
             self.environment.update(environment)
-        normalized: dict[str, tuple[str, ...]] = {}
-        for scenario_id, command in commands.items():
-            scenario_name = _identifier(scenario_id, field="scenario_id")
-            if not isinstance(command, Sequence) or isinstance(command, (str, bytes)) or not command:
-                raise FailureCorpusError(f"process runner command for {scenario_name!r} must be a non-empty sequence")
-            values = tuple(command)
-            if any(not isinstance(item, str) or not item or "\x00" in item for item in values):
-                raise FailureCorpusError(f"process runner command for {scenario_name!r} contains an invalid argument")
-            if len(values) > 64 or sum(len(item) for item in values) > MAX_TEXT_CHARS:
-                raise FailureCorpusError(f"process runner command for {scenario_name!r} is too large")
-            normalized[scenario_name] = values
+        normalized = _normalize_runner_commands(commands)
         self.commands = normalized
         self.harness = FailureCorpusHarness(
             corpus,
@@ -589,6 +608,198 @@ class FailureCorpusProcessRunner:
 
     def run_all(self, *, category: str | None = None, limit: int = 100) -> tuple[FailureObservation, ...]:
         return self.harness.run_all(category=category, limit=limit)
+
+
+class FailureCorpusPodmanRunner:
+    """Run explicit trusted scenario commands in a rootless Podman container.
+
+    The image and command mapping are supplied by trusted infrastructure, not
+    by corpus data. The runner never pulls an image, mounts the host workspace,
+    or inherits the host environment. It provides CONTAINER isolation only.
+    """
+
+    def __init__(
+        self,
+        corpus: FailureCorpus,
+        image: str,
+        commands: Mapping[str, Sequence[str]],
+        *,
+        policy: FailureCorpusExecutionPolicy | None = None,
+        podman_executable: str = "podman",
+        cgroup_manager: str = "cgroupfs",
+        timeout_seconds: float = 30.0,
+        memory: str = "256m",
+        cpus: float = 1.0,
+        pids_limit: int = 64,
+        tmpfs_size: str = "64m",
+        environment: Mapping[str, str] | None = None,
+    ) -> None:
+        if not image or "\x00" in image:
+            raise FailureCorpusError("a local Podman image is required")
+        if not podman_executable or "\x00" in podman_executable:
+            raise FailureCorpusError("a Podman executable is required")
+        if cgroup_manager not in {"cgroupfs", "systemd"}:
+            raise FailureCorpusError("cgroup_manager must be cgroupfs or systemd")
+        if timeout_seconds <= 0 or cpus <= 0 or pids_limit < 1:
+            raise ValueError("timeout_seconds, cpus, and pids_limit must be positive")
+        self.corpus = corpus
+        self.image = image
+        self.commands = _normalize_runner_commands(commands)
+        self.policy = policy or FailureCorpusExecutionPolicy()
+        self.podman_executable = podman_executable
+        self.cgroup_manager = cgroup_manager
+        self.timeout_seconds = float(timeout_seconds)
+        self.memory = memory
+        self.cpus = float(cpus)
+        self.pids_limit = int(pids_limit)
+        self.tmpfs_size = tmpfs_size
+        self.environment = dict(environment or {})
+        if any(
+            not isinstance(key, str)
+            or not isinstance(value, str)
+            or "\x00" in key
+            or "\x00" in value
+            for key, value in self.environment.items()
+        ):
+            raise FailureCorpusError("Podman runner environment must contain safe string keys and values")
+        self.harness = FailureCorpusHarness(
+            corpus,
+            runners={
+                scenario_id: (lambda scenario, command=command: self._invoke(command, scenario))
+                for scenario_id, command in self.commands.items()
+            },
+            isolation="CONTAINER",
+            policy=self.policy,
+        )
+
+    def _required_isolation(self, scenario: FailureScenario) -> int:
+        return max(
+            ISOLATION_LEVELS_ORDER[self.policy.minimum_isolation],
+            ISOLATION_LEVELS_ORDER[scenario.minimum_isolation],
+        )
+
+    def available(self) -> tuple[bool, str | None]:
+        executable = shutil.which(self.podman_executable)
+        if executable is None and not Path(self.podman_executable).is_file():
+            return False, f"Podman executable {self.podman_executable!r} was not found"
+        try:
+            info = subprocess.run(
+                [self.podman_executable, "info", "--format", "json"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+                close_fds=True,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return False, f"Podman information query failed: {exc}"
+        if info.returncode != 0:
+            return False, f"Podman information query failed: {(info.stderr or '')[-512:]}"
+        try:
+            payload = json.loads(info.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            return False, f"Podman returned invalid JSON: {exc}"
+        rootless = (
+            payload.get("host", {}).get("security", {}).get("rootless")
+            if isinstance(payload, Mapping) and isinstance(payload.get("host"), Mapping)
+            else None
+        )
+        if rootless is not True:
+            return False, "Podman failure-corpus execution requires rootless mode"
+        image = subprocess.run(
+            [self.podman_executable, "image", "exists", self.image],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            close_fds=True,
+        )
+        if image.returncode != 0:
+            return False, f"Podman image {self.image!r} is not present locally"
+        return True, None
+
+    def _build_command(self, command: tuple[str, ...]) -> list[str]:
+        result = [
+            self.podman_executable,
+            f"--cgroup-manager={self.cgroup_manager}",
+            "run",
+            "--rm",
+            "--network=none",
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            f"--pids-limit={self.pids_limit}",
+            f"--memory={self.memory}",
+            f"--cpus={self.cpus:g}",
+            "--userns=keep-id",
+            f"--tmpfs=/tmp:rw,nosuid,nodev,noexec,size={self.tmpfs_size}",
+        ]
+        for key, value in sorted(self.environment.items()):
+            result.extend(("--env", f"{key}={value}"))
+        result.extend((self.image, *command))
+        return result
+
+    def _invoke(self, command: tuple[str, ...], scenario: FailureScenario) -> Mapping[str, Any]:
+        request = json.dumps(
+            {"schema_version": FAILURE_CORPUS_SCHEMA_VERSION, "scenario": scenario.summary()},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        process = subprocess.Popen(
+            self._build_command(command),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            close_fds=True,
+            start_new_session=True,
+        )
+        try:
+            stdout, stderr = process.communicate(input=request, timeout=self.timeout_seconds)
+        except subprocess.TimeoutExpired as exc:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                process.kill()
+            process.communicate()
+            raise RuntimeError(f"Podman runner exceeded {self.timeout_seconds:g}s timeout") from exc
+        if process.returncode != 0:
+            detail = (stderr or "").strip()[-512:]
+            raise RuntimeError(
+                f"Podman runner exited with status {process.returncode}"
+                + (f": {detail}" if detail else "")
+            )
+        if len((stdout or "").encode("utf-8")) > MAX_OBSERVATION_BYTES:
+            raise RuntimeError(f"Podman runner output exceeds {MAX_OBSERVATION_BYTES} bytes")
+        try:
+            observed = json.loads(stdout or "")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("Podman runner stdout is not valid JSON") from exc
+        if not isinstance(observed, Mapping):
+            raise RuntimeError("Podman runner stdout must be a JSON object")
+        return observed
+
+    def run(self, scenario_id: str) -> FailureObservation:
+        scenario = self.corpus.get(scenario_id)
+        if not self.policy.enabled or scenario_id not in self.commands:
+            return self.harness.run(scenario_id)
+        if self._required_isolation(scenario) > ISOLATION_LEVELS_ORDER["CONTAINER"]:
+            return self.harness.run(scenario_id)
+        available, reason = self.available()
+        if not available:
+            return self.harness.isolation_unavailable(
+                scenario_id,
+                reason or "Podman container execution is unavailable",
+            )
+        return self.harness.run(scenario_id)
+
+    def run_all(self, *, category: str | None = None, limit: int = 100) -> tuple[FailureObservation, ...]:
+        bounded_limit = max(1, min(int(limit), MAX_SCENARIOS))
+        selected = [
+            scenario for scenario in self.corpus.scenarios
+            if category is None or scenario.category == category
+        ][:bounded_limit]
+        return tuple(self.run(scenario.scenario_id) for scenario in selected)
 
 
 class FailureCorpusObservationStore:

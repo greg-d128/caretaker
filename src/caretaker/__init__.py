@@ -48,6 +48,7 @@ from .failure_corpus import (
     FailureCorpusHarness,
     FailureCorpusExecutionPolicy,
     FailureCorpusObservationStore,
+    FailureCorpusPodmanRunner,
     FailureCorpusProcessRunner,
     FailureObservation,
     FailureScenario,

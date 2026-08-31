@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from caretaker.failure_corpus import (
     FailureCorpusExecutionPolicy,
     FailureCorpusHarness,
     FailureCorpusObservationStore,
+    FailureCorpusPodmanRunner,
     FailureCorpusProcessRunner,
     MAX_CORPUS_BYTES,
 )
@@ -256,6 +258,86 @@ def test_process_runner_records_command_failure_and_kills_timeout_process_group(
     assert timed_out.status == "ERROR"
     assert "timeout" in (timed_out.error or "")
     assert tuple(tmp_path.iterdir()) == ()
+
+
+def test_podman_runner_verifies_rootless_image_and_hardening_flags(monkeypatch) -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    calls: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        if command[1:4] == ["info", "--format", "json"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout='{"host":{"security":{"rootless":true}}}',
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    class FakeProcess:
+        pid = 1234
+        returncode = 0
+
+        def communicate(self, *, input, timeout):
+            assert '"scenario_id":"exception.unhandled"' in input
+            assert timeout == 5.0
+            return (
+                '{"signal":"EXCEPTION","caretaker_action":"CAPTURE_INCIDENT",'
+                '"authority_effect":"NO_AUTHORITY_CHANGE"}',
+                "",
+            )
+
+    launched: list[list[str]] = []
+    monkeypatch.setattr("caretaker.failure_corpus.shutil.which", lambda _name: "/usr/bin/podman")
+    monkeypatch.setattr("caretaker.failure_corpus.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "caretaker.failure_corpus.subprocess.Popen",
+        lambda command, **_kwargs: launched.append(command) or FakeProcess(),
+    )
+    runner = FailureCorpusPodmanRunner(
+        corpus,
+        "localhost/caretaker-replay-base:0.6.1",
+        {"exception.unhandled": ["trusted-runner", "--json"]},
+        policy=FailureCorpusExecutionPolicy(minimum_isolation="CONTAINER"),
+        timeout_seconds=5,
+        environment={"RUNNER_MODE": "test"},
+    )
+
+    observation = runner.run("exception.unhandled")
+
+    assert observation.status == "MATCHED"
+    assert len(calls) == 2
+    assert launched
+    assert "--network=none" in launched[0]
+    assert "--read-only" in launched[0]
+    assert "--cap-drop=ALL" in launched[0]
+    assert "--security-opt=no-new-privileges" in launched[0]
+    assert "--userns=keep-id" in launched[0]
+    assert "--mount" not in launched[0]
+    assert launched[0][-3:] == ["localhost/caretaker-replay-base:0.6.1", "trusted-runner", "--json"]
+
+
+def test_podman_runner_fails_closed_when_rootless_or_image_preflight_fails(monkeypatch) -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    monkeypatch.setattr("caretaker.failure_corpus.shutil.which", lambda _name: "/usr/bin/podman")
+    monkeypatch.setattr(
+        "caretaker.failure_corpus.subprocess.run",
+        lambda _command, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout='{"host":{"security":{"rootless":false}}}',
+            stderr="",
+        ),
+    )
+    runner = FailureCorpusPodmanRunner(
+        corpus,
+        "localhost/caretaker-replay-base:0.6.1",
+        {"exception.unhandled": ["trusted-runner"]},
+    )
+
+    observation = runner.run("exception.unhandled")
+
+    assert observation.status == "ISOLATION_UNAVAILABLE"
+    assert observation.executed is False
 
 
 def test_trusted_harness_distinguishes_mismatched_and_invalid_results() -> None:

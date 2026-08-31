@@ -40,7 +40,9 @@ The harness has a policy gate with least-friction `PROCESS` as its default and
 can fail closed when a configured `CONTAINER` or `VM` minimum is not met. An
 explicit trusted process runner now provides per-invocation temporary-workspace
 cleanup and process-group timeout handling; it is not a sandbox or substitute
-for container/VM lifecycle tooling.
+for container/VM lifecycle tooling. An explicit rootless Podman runner now
+provides the container-level contract when a pre-provisioned image is present;
+VM lifecycle tooling and repository-owned mappings remain future work.
 Bounded observations can now be stored separately from the manifest, with a
 content hash for corruption detection; that hash is not a substitute for
 external authenticated shipping. Expected metadata must remain separate from actual evidence; loading or listing

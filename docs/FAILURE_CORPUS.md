@@ -97,6 +97,33 @@ The command mapping is trusted test infrastructure and must be reviewed and
 managed separately from corpus data. Caretaker does not treat a successful
 observation as authority, validation, or permission to change an application.
 
+When container isolation is required, `FailureCorpusPodmanRunner` accepts an
+explicit local image and command mapping. It verifies rootless Podman and
+local image presence before each mapped run and never pulls an image. The
+container is launched with no network, a read-only root filesystem, dropped
+capabilities, `no-new-privileges`, bounded PID/CPU/memory settings, `keep-id`,
+and a private no-execute temporary filesystem. No host workspace or Caretaker
+credentials are mounted. A `VM` policy requirement refuses this container
+runner because a container does not prove a separate kernel.
+
+The image must already contain the trusted runner command. This keeps the
+image and executable mapping outside the metadata-only manifest:
+
+```python
+from caretaker.failure_corpus import FailureCorpusPodmanRunner
+
+runner = FailureCorpusPodmanRunner(
+    corpus,
+    "localhost/caretaker-replay-base:0.6.1",
+    {"exception.unhandled": ["trusted-runner", "--json"]},
+    policy=FailureCorpusExecutionPolicy(minimum_isolation="CONTAINER"),
+)
+observation = runner.run("exception.unhandled")
+```
+
+If Podman is unavailable, not rootless, or the image is absent locally, the
+observation is `ISOLATION_UNAVAILABLE` and the command is not launched.
+
 Trusted test infrastructure can persist those observations for later review
 without persisting a runner or executable instruction:
 
