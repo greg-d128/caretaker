@@ -104,6 +104,11 @@ returns the deployed result; canary and active selections return the candidate
 only when the decision makes it authoritative. It does not mutate a slot,
 install a repair, grant authority, or choose an isolation-unavailable fallback.
 
+When an audit callback is supplied, direct deployed/candidate invocations and
+shadow outcomes also emit bounded execution-outcome evidence. It records the
+implementation class, selection state, decision hash, and exception type when
+present; raw outputs and exception messages are never included.
+
 `execute_slot_rollout()` adds the FunctionSlot binding boundary. For a field
 repair it requires the record target, candidate ID, candidate source hash, and
 previous deployed source hash to match the slot. For a permanent record it

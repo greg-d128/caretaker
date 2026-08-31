@@ -435,6 +435,55 @@ def test_routing_decision_can_emit_bounded_audit_evidence() -> None:
     assert fields["outcome"]["candidate_authoritative"] is False
 
 
+def test_execute_rollout_emits_bounded_success_outcome() -> None:
+    ledger = _ledger(canary_percentage=100)
+    validated = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, validated, RepairRolloutStage.CANARY)
+    events: list[tuple[str, dict]] = []
+
+    result = _execute(
+        ledger,
+        record,
+        lambda value: value,
+        lambda value: "secret-result",
+        audit_event=lambda name, **fields: events.append((name, fields)),
+    )
+
+    assert result.result == "secret-result"
+    assert [name for name, _ in events] == [
+        "REPAIR_ROLLOUT_ROUTING_DECISION",
+        "REPAIR_ROLLOUT_EXECUTION_OUTCOME",
+    ]
+    outcome = events[1][1]
+    assert outcome["outcome"]["state"] == "COMPLETED"
+    assert outcome["outcome"]["candidate_authoritative"] is True
+    assert "secret-result" not in str(outcome)
+
+
+def test_execute_rollout_emits_failure_type_without_exception_message() -> None:
+    ledger = _ledger(canary_percentage=100)
+    validated = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, validated, RepairRolloutStage.CANARY)
+    events: list[tuple[str, dict]] = []
+
+    def failing_candidate(value: int) -> int:
+        raise RuntimeError(f"secret failure {value}")
+
+    with pytest.raises(RuntimeError, match="secret failure"):
+        _execute(
+            ledger,
+            record,
+            lambda value: value,
+            failing_candidate,
+            audit_event=lambda name, **fields: events.append((name, fields)),
+        )
+
+    outcome = events[-1][1]
+    assert outcome["outcome"]["state"] == "FAILED"
+    assert outcome["details"]["exception_type"] == "RuntimeError"
+    assert "secret failure" not in str(outcome)
+
+
 @pytest.mark.parametrize(
     "kwargs, message",
     [

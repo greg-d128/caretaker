@@ -223,6 +223,17 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
             "candidate_authoritative": True,
         },
     ),
+    "REPAIR_ROLLOUT_EXECUTION_OUTCOME": _event_definition(
+        description="The bounded outcome of a policy-bound Repair rollout invocation was recorded.",
+        minimum_priority=EvidencePriority.IMPORTANT,
+        required_fields=("scope.rollout_id", "scope.routing_scope", "outcome.state"),
+        example={
+            "state": "COMPLETED",
+            "implementation": "candidate",
+            "candidate_executed": True,
+            "candidate_authoritative": True,
+        },
+    ),
 })
 
 

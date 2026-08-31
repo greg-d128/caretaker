@@ -1003,6 +1003,29 @@ def _execute_rollout_decision(
             comparator=comparator,
             audit_event=audit_event,
         )
+        if audit_event is not None:
+            audit_event(
+                "REPAIR_ROLLOUT_EXECUTION_OUTCOME",
+                actor={"type": "caretaker", "id": "rollout-executor"},
+                scope={
+                    "target_id": decision.target_id,
+                    "rollout_id": str(decision.rollout_id),
+                    "routing_scope": decision.routing_scope,
+                    "routing_key_digest": decision.routing_key_digest,
+                },
+                policy={"fingerprint": decision.policy_fingerprint},
+                outcome={
+                    "state": "COMPLETED" if shadow.original_succeeded else "FAILED",
+                    "implementation": "deployed",
+                    "candidate_executed": True,
+                    "candidate_authoritative": False,
+                },
+                details={
+                    "decision_hash": decision.decision_hash,
+                    "original_succeeded": shadow.original_succeeded,
+                    "candidate_succeeded": shadow.candidate_succeeded,
+                },
+            )
         return RolloutExecutionResult(
             result=shadow.result,
             decision=decision,
@@ -1011,17 +1034,89 @@ def _execute_rollout_decision(
             shadow_result=shadow,
         )
     if decision.candidate_authoritative:
-        return RolloutExecutionResult(
-            result=candidate(*args, **kwargs),
-            decision=decision,
+        return _invoke_rollout_implementation(
+            decision,
+            implementation=candidate,
+            args=args,
+            kwargs=kwargs,
             candidate_executed=True,
-            candidate_authoritative=True,
+            audit_event=audit_event,
+        )
+    return _invoke_rollout_implementation(
+        decision,
+        implementation=deployed,
+        args=args,
+        kwargs=kwargs,
+        candidate_executed=False,
+        audit_event=audit_event,
+    )
+
+
+def _invoke_rollout_implementation(
+    decision: RolloutRoutingDecision,
+    *,
+    implementation: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    candidate_executed: bool,
+    audit_event: Callable[..., Any] | None,
+) -> RolloutExecutionResult:
+    candidate_authoritative = decision.candidate_authoritative
+    try:
+        result = implementation(*args, **kwargs)
+    except BaseException as exc:
+        if audit_event is not None:
+            _emit_rollout_execution_outcome(
+                decision,
+                state="FAILED",
+                candidate_executed=candidate_executed,
+                exception=exc,
+                audit_event=audit_event,
+            )
+        raise
+    if audit_event is not None:
+        _emit_rollout_execution_outcome(
+            decision,
+            state="COMPLETED",
+            candidate_executed=candidate_executed,
+            audit_event=audit_event,
         )
     return RolloutExecutionResult(
-        result=deployed(*args, **kwargs),
+        result=result,
         decision=decision,
-        candidate_executed=False,
-        candidate_authoritative=False,
+        candidate_executed=candidate_executed,
+        candidate_authoritative=candidate_authoritative,
+    )
+
+
+def _emit_rollout_execution_outcome(
+    decision: RolloutRoutingDecision,
+    *,
+    state: str,
+    candidate_executed: bool,
+    audit_event: Callable[..., Any],
+    exception: BaseException | None = None,
+) -> None:
+    details: dict[str, Any] = {"decision_hash": decision.decision_hash}
+    if exception is not None:
+        details["exception_type"] = type(exception).__name__[:128]
+    audit_event(
+        "REPAIR_ROLLOUT_EXECUTION_OUTCOME",
+        actor={"type": "caretaker", "id": "rollout-executor"},
+        scope={
+            "target_id": decision.target_id,
+            "rollout_id": str(decision.rollout_id),
+            "routing_scope": decision.routing_scope,
+            "routing_key_digest": decision.routing_key_digest,
+        },
+        policy={"fingerprint": decision.policy_fingerprint},
+        outcome={
+            "state": state,
+            "implementation": decision.authoritative_implementation.value,
+            "candidate_executed": candidate_executed,
+            "candidate_authoritative": decision.candidate_authoritative,
+        },
+        details=details,
     )
 
 
