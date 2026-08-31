@@ -8,8 +8,8 @@ test harness may map a scenario ID to code in its own trusted test suite.
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -71,6 +71,14 @@ AUTHORITY_EFFECTS = frozenset({
 })
 ISOLATION_LEVELS = frozenset({"PROCESS", "CONTAINER", "VM"})
 OBSERVED_RESULT_FIELDS = frozenset({"signal", "caretaker_action", "authority_effect", "details"})
+OBSERVATION_STATUSES = frozenset({
+    "MATCHED",
+    "MISMATCHED",
+    "INVALID_RESULT",
+    "ERROR",
+    "NOT_MAPPED",
+    "ISOLATION_UNAVAILABLE",
+})
 
 
 class FailureCorpusError(ValueError):
@@ -507,6 +515,8 @@ class FailureCorpusObservationStore:
             raise FailureCorpusError("observation record has no observation object")
         if observation.get("scenario_id") is None or observation.get("status") is None:
             raise FailureCorpusError("observation record is missing scenario identity or status")
+        if observation.get("status") not in OBSERVATION_STATUSES:
+            raise FailureCorpusError("observation record has an unknown status")
         return {**dict(record), "content_sha256": observed_hash}
 
     def load(self, observation_id: str | UUID) -> dict[str, Any]:
@@ -550,6 +560,88 @@ class FailureCorpusObservationStore:
                 "content_sha256": record.get("content_sha256"),
             })
         return tuple(result)
+
+    def build_outcome_report(
+        self,
+        *,
+        corpus_id: str | None = None,
+        environment_id: str | None = None,
+        scenario_id: str | None = None,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        """Build a deterministic, bounded summary of retained observations.
+
+        The report contains counts and record hashes, not full observed details.
+        It is a review artifact only: it cannot authorize a repair or alter a
+        corpus, capsule, policy, or authority state.
+        """
+        corpus_filter = _identifier(corpus_id, field="corpus_id") if corpus_id is not None else None
+        environment_filter = _text(environment_id, field="environment_id", maximum=128) if environment_id is not None else None
+        scenario_filter = _identifier(scenario_id, field="scenario_id") if scenario_id is not None else None
+        bounded_limit = max(1, min(int(limit), MAX_SCENARIOS))
+        valid_records: list[dict[str, Any]] = []
+        corrupt_records = 0
+        paths = sorted(self.directory.glob("*.json"))
+        for path in paths:
+            try:
+                record = self._load_path(path)
+            except FailureCorpusError:
+                corrupt_records += 1
+                continue
+            if corpus_filter is not None and record.get("corpus_id") != corpus_filter:
+                continue
+            if environment_filter is not None and record.get("environment_id") != environment_filter:
+                continue
+            observation = record.get("observation") or {}
+            if scenario_filter is not None and observation.get("scenario_id") != scenario_filter:
+                continue
+            valid_records.append(record)
+
+        selected = valid_records[:bounded_limit]
+        status_counts: dict[str, int] = {}
+        scenario_counts: dict[str, dict[str, Any]] = {}
+        environment_counts: dict[str, int] = {}
+        for record in selected:
+            observation = record["observation"]
+            status = str(observation["status"])
+            scenario_name = str(observation["scenario_id"])
+            environment_name = str(record.get("environment_id") or "unspecified")
+            status_counts[status] = status_counts.get(status, 0) + 1
+            environment_counts[environment_name] = environment_counts.get(environment_name, 0) + 1
+            scenario = scenario_counts.setdefault(scenario_name, {"count": 0, "status_counts": {}})
+            scenario["count"] += 1
+            scenario_statuses = scenario["status_counts"]
+            scenario_statuses[status] = scenario_statuses.get(status, 0) + 1
+
+        payload: dict[str, Any] = {
+            "schema_version": FAILURE_CORPUS_SCHEMA_VERSION,
+            "report_type": "FAILURE_CORPUS_OUTCOME_REPORT",
+            "corpus_id": corpus_filter,
+            "environment_id": environment_filter,
+            "scenario_id": scenario_filter,
+            "records_available": len(valid_records),
+            "records_included": len(selected),
+            "corrupt_records": corrupt_records,
+            "truncated": len(valid_records) > len(selected),
+            "status_counts": dict(sorted(status_counts.items())),
+            "scenario_counts": {
+                key: {
+                    "count": value["count"],
+                    "status_counts": dict(sorted(value["status_counts"].items())),
+                }
+                for key, value in sorted(scenario_counts.items())
+            },
+            "environment_counts": dict(sorted(environment_counts.items())),
+            "provenance": [
+                {
+                    "observation_id": record["observation_id"],
+                    "content_sha256": record["content_sha256"],
+                }
+                for record in selected
+            ],
+        }
+        payload["content_sha256"] = hashlib.sha256(self._canonical(payload)).hexdigest()
+        return payload
 
 
 ISOLATION_LEVELS_ORDER = {name: index for index, name in enumerate(("PROCESS", "CONTAINER", "VM"), start=1)}

@@ -256,6 +256,67 @@ def test_observation_store_enforces_serialized_size_limit(tmp_path: Path) -> Non
         store.record(observation, corpus_id=corpus.corpus_id)
 
 
+def test_observation_store_builds_bounded_deterministic_outcome_report(tmp_path: Path) -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    harness = FailureCorpusHarness(
+        corpus,
+        runners={
+            "exception.unhandled": lambda _scenario: {
+                "signal": "EXCEPTION",
+                "caretaker_action": "CAPTURE_INCIDENT",
+                "authority_effect": "NO_AUTHORITY_CHANGE",
+            },
+            "worker.failed": lambda _scenario: {
+                "signal": "TIMEOUT",
+                "caretaker_action": "RECORD_EVIDENCE",
+                "authority_effect": "NO_AUTHORITY_CHANGE",
+            },
+        },
+    )
+    store = FailureCorpusObservationStore(tmp_path)
+    first = store.record(
+        harness.run("exception.unhandled"),
+        corpus_id=corpus.corpus_id,
+        environment_id="process-linux",
+    )
+    second = store.record(
+        harness.run("worker.failed"),
+        corpus_id=corpus.corpus_id,
+        environment_id="process-linux",
+    )
+
+    report = store.build_outcome_report(corpus_id=corpus.corpus_id, limit=1)
+    same_report = store.build_outcome_report(corpus_id=corpus.corpus_id, limit=1)
+
+    assert report == same_report
+    assert report["records_available"] == 2
+    assert report["records_included"] == 1
+    assert report["truncated"] is True
+    assert report["status_counts"] == {"MATCHED": 1}
+    assert list(report["scenario_counts"]) in [["exception.unhandled"], ["worker.failed"]]
+    assert report["provenance"][0]["observation_id"] in {
+        first["observation_id"], second["observation_id"]
+    }
+    assert len(report["content_sha256"]) == 64
+
+
+def test_observation_store_outcome_report_counts_corrupt_records(tmp_path: Path) -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    store = FailureCorpusObservationStore(tmp_path)
+    record = store.record(
+        FailureCorpusHarness(corpus, runners={}).run("exception.unhandled"),
+        corpus_id=corpus.corpus_id,
+    )
+    path = store.directory / f"{record['observation_id']}.json"
+    path.write_text(path.read_text(encoding="utf-8").replace("NOT_MAPPED", "MATCHED"), encoding="utf-8")
+
+    report = store.build_outcome_report(corpus_id=corpus.corpus_id)
+
+    assert report["records_available"] == 0
+    assert report["corrupt_records"] == 1
+    assert report["provenance"] == []
+
+
 def test_trusted_harness_run_all_is_bounded_and_preserves_unmapped_scenarios() -> None:
     corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
     harness = FailureCorpusHarness(corpus, runners={})

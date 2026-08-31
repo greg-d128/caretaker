@@ -57,10 +57,11 @@ The first repository slice now provides a bounded, metadata-only scenario
 manifest, read-only loader, and explicit trusted-runner harness in
 `examples/failure_corpus/` and `caretaker.failure_corpus`. It records bounded
 observed results separately in a content-hashed local store when a caller
-supplies a runner, but does not provide a sandbox or claim broad observed
-coverage. Repository-owned mappings, isolated lifecycle tooling, captured
-incident fixtures, and outcome reports remain required before this priority can
-be considered complete.
+supplies a runner, and can produce bounded deterministic outcome reports, but
+does not provide a sandbox or claim broad observed coverage. Repository-owned
+mappings, isolated lifecycle tooling, captured incident fixtures, and broad
+cross-version outcome coverage remain required before this priority can be
+considered complete.
 
 ### Incident Capsules and post-mortem capture
 

@@ -78,12 +78,20 @@ that threat matters. Invalid records are rejected by `load()` and omitted by
 `list_summaries()`; loading and listing never execute runner code or grant
 authority.
 
+For review dashboards or release checks, `build_outcome_report()` creates a
+deterministic bounded summary of retained records. It reports status, scenario,
+and environment counts, marks whether the selected records were truncated,
+counts corrupt records, and includes each included record's ID and content hash
+as provenance. It intentionally omits full observed details and is not an
+authorization or validation result.
+
 ## Current status and next work
 
-The loader, manifest, explicit trusted harness, and bounded observation store
-provide the initial reviewable contract. Executable launch/reset/destroy
-tooling, isolated scenario runners, captured incident fixtures, and
-cross-version/adversarial execution reports remain future work.
+The loader, manifest, explicit trusted harness, bounded observation store, and
+deterministic outcome report provide the initial reviewable contract.
+Executable launch/reset/destroy tooling, isolated scenario runners, captured
+incident fixtures, and cross-version/adversarial execution reports remain
+future work.
 Those additions must record actual observed outcomes separately from expected
 metadata and must not turn a corpus file into an execution or authority
 channel.
