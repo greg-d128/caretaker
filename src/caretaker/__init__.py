@@ -41,6 +41,7 @@ from .adaptive_aggregation import (
     verify_adaptive_policy_transition_signature,
 )
 from .behavior import observed_return_shape
+from .console_identity import ConsoleIdentityStore, normalize_console_public_identity
 from .authority import (
     AuthorityKind,
     AuthorityLayerSource,
@@ -349,6 +350,8 @@ __all__ = [
     "extended_aggregation_target_id",
     "normalize_adaptive_observation_batch",
     "verify_adaptive_policy_transition_signature",
+    "ConsoleIdentityStore",
+    "normalize_console_public_identity",
     "AuthorityKind",
     "AuthorityLayerSource",
     "AuthorityLayerVerification",

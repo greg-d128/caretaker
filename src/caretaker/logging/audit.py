@@ -68,7 +68,14 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
     "CONSOLE_INVOCATION_STARTED": _event_definition(
         description="An operator console invocation started.",
         minimum_priority=EvidencePriority.CRITICAL,
-        example={"console_invocation_id": "console-uuid"},
+        example={
+            "console_invocation_id": "console-uuid",
+            "console_identity": {
+                "algorithm": "ed25519",
+                "encoding": "base64",
+                "public_key_fingerprint": "sha256:...",
+            },
+        },
     ),
     "CONSOLE_INVOCATION_ENDED": _event_definition(
         description="An operator console invocation ended.",

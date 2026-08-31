@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 
 from caretaker.logging import AuditStreamError, EvidencePriority, RemoteAuditStream
+from caretaker.console_identity import ConsoleIdentityStore
 from caretaker.run import (
     _handle_console_invocation_event,
     _handle_validation_audit_submission,
@@ -200,6 +201,43 @@ def test_console_invocation_end_cannot_be_replayed_by_another_process():
             (8765, 1000, 1001),
             invocations,
         )
+
+
+def test_console_public_identity_is_audited_and_stored_without_authority(tmp_path):
+    import base64
+    import hashlib
+
+    audit = _Audit()
+    runtime = _runtime(audit)
+    store = ConsoleIdentityStore(tmp_path)
+    public_key = b"c" * 32
+    identity = {
+        "identity_id": str(uuid4()),
+        "algorithm": "ed25519",
+        "encoding": "base64",
+        "public_key": base64.b64encode(public_key).decode("ascii"),
+        "public_key_fingerprint": hashlib.sha256(public_key).hexdigest(),
+    }
+    invocation_id = str(uuid4())
+
+    _handle_console_invocation_event(
+        runtime,
+        {
+            "command": "console-invocation-start",
+            "invocation_id": invocation_id,
+            "console_identity": identity,
+        },
+        (5678, 1000, 1001),
+        {},
+        store,
+    )
+
+    details = audit.calls[-1]["details"]
+    assert details["authority_granted"] is False
+    assert details["console_identity"]["public_key"] == identity["public_key"]
+    stored = store.get(invocation_id)
+    assert stored["public_key_fingerprint"] == identity["public_key_fingerprint"]
+    assert "private_key" not in stored
 
 
 def test_console_cli_registers_and_closes_one_invocation(monkeypatch, tmp_path):

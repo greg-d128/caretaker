@@ -26,7 +26,7 @@ All event types share these redaction rules:
 | `AUDIT_STREAM_ROTATED` | `IMPORTANT` | — | `{"segment_id": "segment-42", "content_sha256": "sha256:..."}` |
 | `AUDIT_DELIVERY_STATUS` | `IMPORTANT` | — | `{"sink_id": "local-file", "state": "ACTIVE", "external_delivery": false}` |
 | `AUDIT_DATA_LOSS` | `CRITICAL` | — | `{"category": "ordinary_metrics", "count": 1, "reason": "sampling_policy"}` |
-| `CONSOLE_INVOCATION_STARTED` | `CRITICAL` | — | `{"console_invocation_id": "console-uuid"}` |
+| `CONSOLE_INVOCATION_STARTED` | `CRITICAL` | — | `{"console_invocation_id": "console-uuid", "console_identity": {"algorithm": "ed25519", "encoding": "base64", "public_key_fingerprint": "sha256:..."}}` |
 | `CONSOLE_INVOCATION_ENDED` | `IMPORTANT` | — | `{"console_invocation_id": "console-uuid", "reason": "operator_exit"}` |
 | `POLICY_PROPOSED` | `CRITICAL` | `policy.policy_id`, `policy.fingerprint`, `outcome.state` | `{"state": "PROPOSED"}` |
 | `POLICY_REVIEWED` | `CRITICAL` | — | `{"state": "APPROVED", "review_id": "review-uuid"}` |
@@ -56,8 +56,11 @@ current audit policy. This path is output-only: it cannot submit arbitrary
 event types, change policy, grant authority, or invoke a control operation.
 Console clients likewise register a UUID-scoped invocation start and end; the
 supervisor binds the session to the console's Unix peer PID and records the OS
-UID/GID. An invocation record is attribution evidence only and does not grant
-authority.
+UID/GID. When the signing extra is available, the console keeps a fresh
+Ed25519 private key in memory for the session and publishes only its public key
+and fingerprint. The public identity is recorded in the audit event and the
+supervisor's `security/console-identities.sqlite` journal. An invocation record
+is attribution evidence only and does not grant authority.
 
 The registry is descriptive and fail-closed for the fields it declares. It
 does not verify operator signatures, authorize policy changes, or provide an

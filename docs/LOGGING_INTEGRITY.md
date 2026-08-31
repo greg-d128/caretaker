@@ -63,9 +63,11 @@ authority grants.
 
 The current console records a UUID-scoped invocation, OS UID/GID, and peer
 process identity in the audit stream so an action can be attributed to a
-console session. A future enhancement may add an ephemeral, memory-only
-console signing key and public-key fingerprint to that record. Such a key
-would authenticate session attribution; it would not authorize a
+console session. When the signing extra is available, it also creates an
+ephemeral, memory-only console signing key, publishes the public-key
+fingerprint, and stores the public identity in the supervisor's
+`security/console-identities.sqlite` journal. Such a key authenticates session
+attribution; it does not authorize a
 deployment-layer change. Permanent deployment changes continue to require the
 configured `policy-deployment` authority and its independently verifiable
 credentials. A deployment-aware console may present or request that credential,

@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
+import hashlib
 import json
 import os
+from dataclasses import dataclass
 from uuid import uuid4
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +33,43 @@ from textual.widgets.data_table import RowDoesNotExist
 
 from .logging.ipc import control_request, unix_socket_exists
 from .logging.segments import read_segment
+
+
+@dataclass
+class ConsoleInvocationIdentity:
+    """Ephemeral console keypair; only the public projection leaves memory."""
+
+    identity_id: str
+    public_key: bytes
+    _private_key: Any
+
+    @classmethod
+    def create(cls) -> "ConsoleInvocationIdentity | None":
+        try:
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        except ImportError:
+            return None
+        private_key = Ed25519PrivateKey.generate()
+        public_key = private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        return cls(str(uuid4()), public_key, private_key)
+
+    def public_record(self) -> dict[str, str]:
+        return {
+            "identity_id": self.identity_id,
+            "algorithm": "ed25519",
+            "encoding": "base64",
+            "public_key": base64.b64encode(self.public_key).decode("ascii"),
+            "public_key_fingerprint": hashlib.sha256(self.public_key).hexdigest(),
+        }
+
+    def close(self) -> None:
+        # The cryptographic backend owns the key object; dropping our reference
+        # is the strongest zeroization available at this boundary.
+        self._private_key = None
 
 
 def discover_control_socket(data_directory: Path) -> Path | None:
@@ -5649,15 +5689,19 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(str(exc))
         return 2
     invocation_id = str(uuid4())
+    console_identity = ConsoleInvocationIdentity.create()
     invocation_started = False
     if socket_path is not None:
         try:
+            start_request: dict[str, Any] = {
+                "command": "console-invocation-start",
+                "invocation_id": invocation_id,
+            }
+            if console_identity is not None:
+                start_request["console_identity"] = console_identity.public_record()
             response = control_request(
                 socket_path,
-                {
-                    "command": "console-invocation-start",
-                    "invocation_id": invocation_id,
-                },
+                start_request,
                 timeout=5.0,
             )
             invocation_started = bool(response.get("ok"))
@@ -5681,6 +5725,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except OSError:
                 pass
+        if console_identity is not None:
+            console_identity.close()
     return 0
 
 

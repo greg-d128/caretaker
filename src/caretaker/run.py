@@ -29,6 +29,7 @@ from .adaptive_aggregation import (
     normalize_adaptive_observation_batch,
 )
 from .communications import generate_communication_draft, review_communication_draft
+from .console_identity import ConsoleIdentityStore, normalize_console_public_identity
 from .behavior import (
     BehaviorSnapshotStore,
     BehaviorStatisticsRepository,
@@ -117,6 +118,7 @@ def _handle_console_invocation_event(
     request: Mapping[str, Any],
     credentials: tuple[int, int, int],
     invocations: dict[str, int],
+    identity_store: ConsoleIdentityStore | None = None,
 ) -> dict[str, Any]:
     """Record a console session lifecycle event without granting authority."""
     command = request.get("command")
@@ -133,16 +135,47 @@ def _handle_console_invocation_event(
     if command == "console-invocation-start":
         if invocation_id in invocations:
             raise ValueError("console invocation is already active")
+        console_identity = normalize_console_public_identity(
+            request.get("console_identity")
+        )
+        if identity_store is not None and console_identity is not None:
+            identity_store.record_start(
+                invocation_id,
+                identity=console_identity,
+                process_id=process_id,
+                uid=credentials[1],
+                gid=credentials[2],
+            )
         event_type = "CONSOLE_INVOCATION_STARTED"
         outcome = {"state": "STARTED"}
     elif command == "console-invocation-end":
         if invocations.get(invocation_id) != process_id:
             raise PermissionError("console invocation is not owned by this process")
+        console_identity = (
+            identity_store.get(invocation_id) if identity_store is not None else None
+        )
+        if identity_store is not None and console_identity is not None:
+            identity_store.record_end(invocation_id, process_id=process_id)
         event_type = "CONSOLE_INVOCATION_ENDED"
         outcome = {"state": "ENDED"}
     else:
         raise ValueError("unsupported console invocation command")
     reason = str(request.get("reason") or "operator_exit")[:256]
+    identity_details = (
+        {
+            key: console_identity[key]
+            for key in (
+                "identity_id",
+                "algorithm",
+                "encoding",
+                "public_key",
+                "public_key_fingerprint",
+            )
+            if key in console_identity
+        }
+        if isinstance(console_identity, Mapping)
+        else {"status": "UNAVAILABLE"}
+    )
     audit_event = runtime.audit.emit(
         event_type,
         actor={"type": "operator", "id": f"uid:{credentials[1]}"},
@@ -161,6 +194,7 @@ def _handle_console_invocation_event(
             "gid": credentials[2],
             "reason": reason,
             "authority_granted": False,
+            "console_identity": identity_details,
         },
         priority=(
             EvidencePriority.CRITICAL
@@ -622,6 +656,7 @@ def main(argv: list[str] | None = None) -> int:
 
     leases: dict[str, object] = {}
     console_invocations: dict[str, int] = {}
+    console_identity_store = ConsoleIdentityStore(policy.directory)
     child_holder: dict[str, subprocess.Popen] = {}
     supervisor_holder: dict[str, CaretakerApplicationSupervisor] = {}
     failure_store_holder: dict[str, SQLiteRepairStore] = {}
@@ -841,6 +876,7 @@ def main(argv: list[str] | None = None) -> int:
                 request,
                 credentials,
                 console_invocations,
+                console_identity_store,
             )
         if command == "adaptive-observation-submit":
             return _handle_adaptive_observation_submission(
