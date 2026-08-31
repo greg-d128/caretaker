@@ -1302,6 +1302,62 @@ def test_console_records_selected_recovery_rollback_without_dispatch(tmp_path):
     asyncio.run(exercise())
 
 
+def test_console_displays_read_only_rollout_execution_status(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            requests = []
+
+            async def request(command: str, **payload):
+                requests.append((command, payload))
+                assert command == "repair-rollout-status"
+                return {
+                    "ok": True,
+                    "available": True,
+                    "read_only": True,
+                    "authority_granted": False,
+                    "records": [{
+                        "rollout_id": "rollout-1",
+                        "target_id": "app:charge",
+                        "incident_id": "incident-1",
+                        "candidate_id": "candidate-1",
+                        "stage": "canary",
+                        "release_kind": "field-repair",
+                        "updated_at": "2026-08-31T12:00:00+00:00",
+                        "execution_summary_status": "AVAILABLE",
+                        "execution_summary": {
+                            "observation_count": 5,
+                            "candidate_success_count": 3,
+                            "candidate_failure_count": 1,
+                            "shadow_equivalent_count": 1,
+                            "shadow_mismatch_count": 0,
+                        },
+                    }],
+                    "transitions": [{"transition_id": "transition-1"}],
+                }
+
+            app._request = request  # type: ignore[method-assign]
+            app._application_running = True
+            await app.refresh_rollouts()
+
+            assert requests == [
+                (
+                    "repair-rollout-status",
+                    {"limit": 100, "transition_limit": 200},
+                )
+            ]
+            assert app.query_one("#rollout-table", DataTable).row_count == 1
+            status = str(app.query_one("#rollout-status", Static).render())
+            assert "Rollouts 1" in status
+            assert "Transitions 1" in status
+            assert "Read-only" in status
+            app._rollout_records[0]["execution_summary_status"] = "STALE_OR_UNAVAILABLE"
+            assert app._rollout_records[0]["execution_summary_status"] == "STALE_OR_UNAVAILABLE"
+
+    asyncio.run(exercise())
+
+
 def test_console_displays_read_only_adaptive_transition_deadlines(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 

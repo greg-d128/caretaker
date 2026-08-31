@@ -308,6 +308,22 @@ class CaretakerConsoleApp(App):
         height: 12;
         border-top: solid $surface-lighten-2;
     }
+    #rollout-help, #rollout-status {
+        height: auto;
+        padding: 0 2;
+        color: $text-muted;
+    }
+    #rollout-toolbar {
+        height: 4;
+        padding: 0 1;
+        align-vertical: middle;
+    }
+    #rollout-toolbar Button { width: auto; min-width: 12; }
+    #rollout-table { height: 1fr; }
+    #rollout-output {
+        height: 12;
+        border-top: solid $surface-lighten-2;
+    }
     #incident-capsule-facts, #incident-capsule-communications {
         height: 5;
         padding: 0 2;
@@ -654,6 +670,8 @@ class CaretakerConsoleApp(App):
         self._adaptive_aggregation_records: list[dict[str, Any]] = []
         self._selected_adaptive_threshold_request_id: str | None = None
         self._selected_adaptive_transition_request_id: str | None = None
+        self._rollout_records: list[dict[str, Any]] = []
+        self._rollout_transitions: list[dict[str, Any]] = []
         self._selected_target: str | None = None
         self._attention_records: list[dict[str, Any]] = []
         self._selected_attention_record: dict[str, Any] | None = None
@@ -1096,6 +1114,22 @@ class CaretakerConsoleApp(App):
                             yield Button("Triggering logs", id="repair-open-logs", disabled=True)
                             yield Button("Guard evidence", id="repair-open-guard", disabled=True)
                             yield Button("Investigate episode", id="repair-open-investigate", disabled=True, variant="primary")
+            with TabPane("Rollouts", id="rollouts"):
+                yield Static(
+                    "Read-only Repair rollout lifecycle and execution evidence. "
+                    "Summaries are integrity-checked; this view cannot advance a rollout or grant authority.",
+                    id="rollout-help",
+                )
+                with Horizontal(id="rollout-toolbar"):
+                    yield Button("Refresh", id="rollout-refresh", variant="primary")
+                yield Static("Repair rollout status not loaded", id="rollout-status")
+                table = DataTable(id="rollout-table")
+                table.cursor_type = "row"
+                table.add_columns(
+                    "#", "Target", "Stage", "Release", "Candidate", "Executions", "Candidate results", "Shadow", "Evidence", "Updated"
+                )
+                yield table
+                yield RichLog(id="rollout-output", wrap=True, markup=False)
             with TabPane("Policy", id="policy"):
                 yield Static(
                     "Review assurance and violations first. Runtime leases are temporary audited changes; "
@@ -2222,6 +2256,20 @@ class CaretakerConsoleApp(App):
                 self._refresh_adaptive_threshold_acceptance_actions()
             return
 
+        if event.data_table.id == "rollout-table":
+            if not row:
+                return
+            try:
+                record = self._rollout_records[int(row[0]) - 1]
+            except (TypeError, ValueError, IndexError):
+                return
+            self._set_operator_context(
+                target=str(record.get("target_id") or "") or None,
+                incident=str(record.get("incident_id") or "") or None,
+            )
+            self._write_json("#rollout-output", record)
+            return
+
         if event.data_table.id == "attention-table":
             if not row:
                 return
@@ -3213,6 +3261,13 @@ class CaretakerConsoleApp(App):
                 "#incident-capsule-output",
                 {"error": f"Unable to refresh Incident Capsules: {type(exc).__name__}: {exc}"},
             )
+        try:
+            await self.refresh_rollouts()
+        except Exception as exc:
+            self.query_one("#rollout-status", Static).update(
+                f"Unable to refresh rollouts: {type(exc).__name__}: {exc}"
+            )
+            self.query_one("#rollout-output", RichLog).write(str(exc))
         self._refresh_attention()
         self._update_data_status()
 
@@ -3892,6 +3947,90 @@ class CaretakerConsoleApp(App):
             confirm.value = False
         self.query_one("#worker-failure-recovery-apply", Button).disabled = not bool(
             actionable and confirm.value
+        )
+
+    async def refresh_rollouts(self) -> None:
+        """Refresh the bounded, read-only supervisor rollout projection."""
+        table = self.query_one("#rollout-table", DataTable)
+        table.clear()
+        output = self.query_one("#rollout-output", RichLog)
+        output.clear()
+        self._rollout_records = []
+        self._rollout_transitions = []
+        if self._application_running is not True:
+            self.query_one("#rollout-status", Static).update(
+                "Rollout status unavailable while the supervised application is stopped"
+            )
+            output.write(
+                "Rollout evidence is read from the live supervisor control plane. "
+                "No rollout action is available from this view."
+            )
+            return
+        try:
+            response = await self._request(
+                "repair-rollout-status",
+                limit=100,
+                transition_limit=200,
+            )
+        except Exception as exc:
+            self.query_one("#rollout-status", Static).update(
+                f"Rollout status unavailable: {type(exc).__name__}: {exc}"
+            )
+            output.write(str(exc))
+            return
+        if not response.get("available", True):
+            self.query_one("#rollout-status", Static).update(
+                f"Rollout status unavailable: {response.get('reason', 'unknown reason')}"
+            )
+            output.write(
+                "The supervisor did not expose a rollout ledger. "
+                "No rollout action is available from this view."
+            )
+            return
+        self._rollout_records = [
+            dict(item)
+            for item in response.get("records", ())
+            if isinstance(item, Mapping)
+        ]
+        self._rollout_transitions = [
+            dict(item)
+            for item in response.get("transitions", ())
+            if isinstance(item, Mapping)
+        ]
+        for index, record in enumerate(self._rollout_records, start=1):
+            summary = record.get("execution_summary")
+            summary = summary if isinstance(summary, Mapping) else {}
+            candidate_results = (
+                f"{summary.get('candidate_success_count', 0)} ok/"
+                f"{summary.get('candidate_failure_count', 0)} fail"
+            )
+            shadow_results = (
+                f"{summary.get('shadow_equivalent_count', 0)} eq/"
+                f"{summary.get('shadow_mismatch_count', 0)} diff"
+            )
+            evidence_status = str(
+                record.get("execution_summary_status") or "UNKNOWN"
+            )
+            table.add_row(
+                index,
+                self._compact_log_text(record.get("target_id"), limit=24) or "-",
+                self._compact_log_text(record.get("stage"), limit=12) or "-",
+                self._compact_log_text(record.get("release_kind"), limit=18) or "-",
+                self._compact_log_text(record.get("candidate_id"), limit=14) or "-",
+                str(summary.get("observation_count", 0)),
+                candidate_results,
+                shadow_results,
+                self._compact_log_text(evidence_status, limit=20) or "-",
+                self._compact_log_text(record.get("updated_at"), limit=19) or "-",
+            )
+        self.query_one("#rollout-status", Static).update(
+            f"Rollouts {len(self._rollout_records)} | "
+            f"Transitions {len(self._rollout_transitions)} | "
+            "Read-only; no authority or rollout actions dispatched"
+        )
+        output.write(
+            "Select a rollout for bounded lifecycle and execution details. "
+            "Stale or unavailable summaries are not treated as successful evidence."
         )
 
     async def refresh_repair_recovery_plan(self) -> None:
@@ -5024,6 +5163,9 @@ class CaretakerConsoleApp(App):
                 return
             if button == "incident-capsule-refresh":
                 await self.refresh_incident_capsules()
+                return
+            if button == "rollout-refresh":
+                await self.refresh_rollouts()
                 return
             if button == "worker-failure-recovery-refresh":
                 await self.refresh_worker_failure_recovery()

@@ -130,6 +130,11 @@ successful evidence. The response explicitly reports `read_only: true` and
 advance a rollout, change routing percentages, activate a FunctionSlot, or
 grant execution authority.
 
+The Caretaker Console's `Rollouts` tab requests this projection, displays the
+current stage and bounded candidate/shadow counts, and lets an operator inspect
+the complete returned record as read-only evidence. It provides no pause,
+resume, percentage-change, activation, or rollback action yet.
+
 The invocation helpers also accept a Guard behavior capture directly through
 `behavior_capture`. Caretaker converts its retained event and resource
 evidence into the shadow eligibility check before execution. A normal capture
