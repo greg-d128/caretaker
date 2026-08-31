@@ -476,6 +476,7 @@ def test_audit_registry_is_complete_and_exposes_redaction_contract() -> None:
         "WORKER_AUTHORITY_EXPIRED", "WORKER_FAILED", "WORKER_REPLACEMENT_REQUESTED",
         "WORKER_REPLACED", "SUPERVISOR_STATE_CHANGED", "INCIDENT_CAPTURED",
         "VALIDATION_DECISION", "RECOVERY_DECISION", "REPAIR_ROLLOUT_TRANSITION",
+        "SHADOW_EXECUTION_DECISION",
     }
     assert set(AUDIT_EVENT_REGISTRY) == expected
     for definition in AUDIT_EVENT_REGISTRY.values():

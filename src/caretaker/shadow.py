@@ -78,8 +78,9 @@ def shadow_execute(
     kwargs: dict[str, Any],
     contract: FunctionExecutionContract,
     effect_observation: EffectObservation | None = None,
-    isolation_adapter: ShadowIsolationAdapter | None = None,
+    isolation_adapter: ShadowExecutionAdapter | None = None,
     comparator: Comparator | None = None,
+    audit_event: Callable[..., Any] | None = None,
 ) -> ShadowExecutionResult:
     """Run a candidate as non-authoritative shadow work.
 
@@ -151,7 +152,7 @@ def shadow_execute(
     else:
         reason = "both original and candidate failed during shadow execution"
 
-    return ShadowExecutionResult(
+    result = ShadowExecutionResult(
         result=original_result,
         original_result=original_result,
         candidate_result=candidate_result,
@@ -166,3 +167,26 @@ def shadow_execute(
         isolation_verified=isolation_verified,
         eligibility=eligibility,
     )
+    if audit_event is not None:
+        audit_event(
+            "SHADOW_EXECUTION_DECISION",
+            actor={"type": "caretaker", "id": "shadow-executor"},
+            scope={"adapter_id": adapter_id} if adapter_id else {},
+            outcome={
+                "state": "COMPLETED",
+                "candidate_authoritative": False,
+                "candidate_succeeded": candidate_succeeded,
+                "original_succeeded": original_succeeded,
+                "equivalent": equivalent,
+                "isolation_verified": isolation_verified,
+            },
+            details={
+                "decision_reason": reason[:256],
+                "evidence_complete": eligibility.evidence_complete,
+                "observed_effects": list(eligibility.observed_effects),
+                "observed_external_effects": list(
+                    eligibility.observed_external_effects
+                ),
+            },
+        )
+    return result

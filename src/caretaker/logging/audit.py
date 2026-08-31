@@ -200,6 +200,17 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
             "action": "advance",
         },
     ),
+    "SHADOW_EXECUTION_DECISION": _event_definition(
+        description="An original-authoritative shadow execution produced bounded evidence.",
+        minimum_priority=EvidencePriority.IMPORTANT,
+        example={
+            "state": "COMPLETED",
+            "candidate_authoritative": False,
+            "candidate_succeeded": True,
+            "equivalent": True,
+            "isolation_verified": True,
+        },
+    ),
 })
 
 

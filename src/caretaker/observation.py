@@ -270,6 +270,7 @@ class ObservationManager:
         effect_observation: EffectObservation | None = None,
         isolation_adapter: ShadowExecutionAdapter | None = None,
         comparator: Comparator | None = None,
+        audit_event: Any | None = None,
     ) -> ShadowExecutionResult:
         """Execute the candidate without allowing it to author the result."""
 
@@ -282,4 +283,5 @@ class ObservationManager:
             effect_observation=effect_observation,
             isolation_adapter=isolation_adapter,
             comparator=comparator,
+            audit_event=audit_event,
         )

@@ -115,3 +115,31 @@ def test_shadow_candidate_failure_never_replaces_original() -> None:
     assert result.original_succeeded is True
     assert result.candidate_succeeded is False
     assert isinstance(result.candidate_exception, ValueError)
+
+
+def test_shadow_emits_bounded_audit_decision_without_outputs() -> None:
+    events = []
+
+    result = shadow_execute(
+        original=lambda value: value,
+        candidate=lambda value: value,
+        args=(3,),
+        kwargs={},
+        contract=_pure_contract(),
+        effect_observation=EffectObservation(complete=True),
+        audit_event=lambda event_type, **fields: events.append((event_type, fields)),
+    )
+
+    assert result.result == 3
+    assert len(events) == 1
+    event_type, fields = events[0]
+    assert event_type == "SHADOW_EXECUTION_DECISION"
+    assert fields["outcome"] == {
+        "state": "COMPLETED",
+        "candidate_authoritative": False,
+        "candidate_succeeded": True,
+        "original_succeeded": True,
+        "equivalent": True,
+        "isolation_verified": False,
+    }
+    assert "candidate_result" not in fields["details"]
