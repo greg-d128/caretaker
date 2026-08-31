@@ -339,6 +339,24 @@ class LoggingRuntime:
             message="Operator logging policy reload failed; previous effective policy retained",
             fields={"error": f"{type(error).__name__}: {error}"},
         )
+        self.audit.emit(
+            "POLICY_REJECTED",
+            actor={"type": "supervisor"},
+            policy={
+                "policy_id": str(self.snapshot.snapshot_id),
+                "fingerprint": self.snapshot.content_hash,
+                "authority_generation": self.effective.generation,
+            },
+            outcome={"state": "REJECTED"},
+            details={
+                "error_type": type(error).__name__,
+                "error_fingerprint": hashlib.sha256(
+                    str(error).encode("utf-8", errors="replace")
+                ).hexdigest(),
+                "prior_policy_retained": True,
+            },
+            priority=EvidencePriority.CRITICAL,
+        )
 
     def acquire_mode(self, *args: Any, **kwargs: Any):
         lease = self.leases.acquire(*args, **kwargs)

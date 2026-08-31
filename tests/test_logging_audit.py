@@ -176,3 +176,29 @@ def test_policy_reload_audit_binds_prior_and_resulting_snapshots(tmp_path: Path)
     applied = [row for row in rows if row["event_type"] == "POLICY_APPLIED"][-1]
     assert applied["policy"]["prior_policy_id"] == str(old_snapshot_id)
     assert applied["policy"]["policy_id"] != str(old_snapshot_id)
+
+
+def test_rejected_policy_reload_is_audited_without_raw_error_text(tmp_path: Path) -> None:
+    from caretaker.logging.handler import LoggingRuntime
+    from caretaker.logging.policy import CompressionPolicy, OperatorLoggingPolicy
+
+    policy = OperatorLoggingPolicy(
+        directory=str(tmp_path),
+        compression=CompressionPolicy(enabled=False),
+    )
+    runtime = LoggingRuntime(policy, supervised=True)
+    try:
+        runtime._on_policy_reload_error(
+            ValueError("secret-token=should-not-be-written")
+        )
+    finally:
+        runtime.close()
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "caretaker_audit.log").read_text().splitlines()
+    ]
+    rejected = [row for row in rows if row["event_type"] == "POLICY_REJECTED"][-1]
+    assert rejected["outcome"] == {"state": "REJECTED"}
+    assert rejected["details"]["error_type"] == "ValueError"
+    assert rejected["details"]["prior_policy_retained"] is True
+    assert "secret-token" not in json.dumps(rejected)
