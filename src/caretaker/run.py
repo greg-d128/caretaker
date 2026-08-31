@@ -1310,6 +1310,7 @@ def main(argv: list[str] | None = None) -> int:
                     "worker_id": acknowledgement.worker_id,
                     "worker_process_id": acknowledgement.worker_process_id,
                     "stage": acknowledgement.stage.value,
+                    "routing_policy_fingerprint": acknowledgement.routing_policy_fingerprint,
                     "acknowledged_at": acknowledgement.acknowledged_at.isoformat(),
                     "content_hash": acknowledgement.content_hash,
                 },

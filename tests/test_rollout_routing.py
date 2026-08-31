@@ -785,6 +785,7 @@ def test_supervisor_rollout_coordinator_requires_current_worker_ack() -> None:
         worker_process_id=101,
     )
     assert acknowledgement.stage is RepairRolloutStage.CANARY
+    assert acknowledgement.routing_policy_fingerprint
     decision = coordinator.route(
         rollout_id=record.rollout_id,
         worker_id="worker-a",
