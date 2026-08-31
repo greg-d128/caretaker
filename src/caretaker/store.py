@@ -44,6 +44,7 @@ class RepairStore(Protocol):
     def record_attempt(self, record: RepairAttempt) -> None: ...
     def append_event(self, record: RepairEvent) -> None: ...
     def record_observation(self, record: ObservationRecord) -> None: ...
+    def all_observations(self) -> tuple[Any, ...]: ...
     def record_internal_incident(self, record: InternalIncident) -> None: ...
     def record_integrity_verification(self, record: IntegrityVerification) -> None: ...
     def record_integrity_incident(self, record: IntegrityIncident) -> None: ...
@@ -113,7 +114,18 @@ class InMemoryRepairStore:
 
     def record_observation(self, record: ObservationRecord) -> None:
         with self._lock:
+            existing = self.observations.get(record.observation_id)
+            if existing is not None:
+                if existing != record:
+                    raise ValueError(
+                        "observation_id was already recorded with different evidence"
+                    )
+                return
             self.observations[record.observation_id] = record
+
+    def all_observations(self) -> tuple[ObservationRecord, ...]:
+        with self._lock:
+            return tuple(sorted(self.observations.values(), key=lambda record: record.occurred_at))
 
     def record_internal_incident(self, record: InternalIncident) -> None:
         with self._lock:
@@ -300,7 +312,31 @@ class SQLiteRepairStore:
         self._write("events", record, target_id=record.target_id, append=True)
 
     def record_observation(self, record: ObservationRecord) -> None:
-        self._write("observations", record, target_id=record.target_id)
+        payload = json.dumps(_jsonable(record), sort_keys=True, separators=(",", ":"))
+        with self._lock, closing(self._connect()) as connection:
+            existing = connection.execute(
+                "SELECT payload FROM observations WHERE record_id = ?",
+                (str(record.observation_id),),
+            ).fetchone()
+            if existing is not None:
+                if existing[0] != payload:
+                    raise ValueError(
+                        "observation_id was already recorded with different evidence"
+                    )
+                return
+            connection.execute(
+                "INSERT INTO observations(record_id, target_id, created_at, payload) VALUES (?, ?, ?, ?)",
+                (
+                    str(record.observation_id),
+                    record.target_id,
+                    record.occurred_at.isoformat(),
+                    payload,
+                ),
+            )
+            connection.commit()
+
+    def all_observations(self) -> tuple[Mapping[str, Any], ...]:
+        return tuple(self.query_records("observations", limit=10000))
 
     def record_internal_incident(self, record: InternalIncident) -> None:
         self._write("internal_incidents", record, target_id=record.active_target_id)

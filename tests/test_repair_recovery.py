@@ -25,8 +25,9 @@ from caretaker import (
     validate_supervisor_time,
     verify_recovery_authority_packet,
     select_recovery_action,
+    recover_candidate_observation_state,
 )
-from caretaker.domain import RepairAttempt, RepairAttemptOutcome, RepairAttemptStage
+from caretaker.domain import ObservationRecord, RepairAttempt, RepairAttemptOutcome, RepairAttemptStage
 from caretaker.policy import PolicyConfigurationError, RepairPolicy, validate_policy
 
 
@@ -47,6 +48,104 @@ def _attempt(*, target_id: str, completed: bool, outcome: RepairAttemptOutcome) 
         stage=RepairAttemptStage.COMPLETE if completed else RepairAttemptStage.VALIDATION,
         outcome=outcome,
     )
+
+
+def _observation(
+    *,
+    target_id: str,
+    candidate_id,
+    call_id,
+    occurred_at: datetime,
+    success: bool,
+) -> ObservationRecord:
+    return ObservationRecord(
+        observation_id=uuid4(),
+        target_id=target_id,
+        candidate_id=candidate_id,
+        function_version=1,
+        call_id=call_id,
+        occurred_at=occurred_at,
+        mode="repair-retry",
+        original_outcome=None,
+        candidate_outcome={"succeeded": success},
+        comparison=None,
+        counted_as_success=success,
+        counted_as_failure=not success,
+        decision_reason="test observation",
+    )
+
+
+def test_observation_recovery_is_durable_idempotent_and_read_only(tmp_path: Path) -> None:
+    interrupted = _attempt(
+        target_id="app:charge",
+        completed=False,
+        outcome=RepairAttemptOutcome.PENDING,
+    )
+    first = _observation(
+        target_id=interrupted.target_id,
+        candidate_id=interrupted.candidate_id,
+        call_id=uuid4(),
+        occurred_at=datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc),
+        success=True,
+    )
+    second = _observation(
+        target_id=interrupted.target_id,
+        candidate_id=interrupted.candidate_id,
+        call_id=uuid4(),
+        occurred_at=datetime(2026, 8, 30, 12, 1, tzinfo=timezone.utc),
+        success=False,
+    )
+
+    for store in (
+        InMemoryRepairStore(),
+        SQLiteRepairStore(tmp_path / "observations.sqlite"),
+    ):
+        store.record_observation(first)
+        store.record_observation(first)
+        store.record_observation(second)
+        assert len(store.all_observations()) == 2
+        with pytest.raises(ValueError, match="different evidence"):
+            store.record_observation(
+                replace(first, counted_as_success=False, counted_as_failure=True)
+            )
+
+        recovered = recover_candidate_observation_state(
+            store,
+            target_id=interrupted.target_id,
+            candidate_id=str(interrupted.candidate_id),
+        )
+        assert recovered["read_only"] is True
+        assert recovered["authority_granted"] is False
+        assert recovered["state"] == "PERSISTED_EVIDENCE_READY"
+        assert recovered["observation_count"] == 2
+        assert recovered["successful_executions"] == 1
+        assert recovered["failed_executions"] == 1
+        assert recovered["duplicate_observation_count"] == 0
+        assert recovered["double_count_protection"] == "OBSERVATION_ID_UNIQUENESS"
+
+
+def test_recovery_plan_includes_persisted_candidate_observation_state() -> None:
+    store = InMemoryRepairStore()
+    interrupted = _attempt(
+        target_id="app:charge",
+        completed=False,
+        outcome=RepairAttemptOutcome.PENDING,
+    )
+    store.record_attempt(interrupted)
+    store.record_observation(
+        _observation(
+            target_id=interrupted.target_id,
+            candidate_id=interrupted.candidate_id,
+            call_id=uuid4(),
+            occurred_at=datetime.now(timezone.utc),
+            success=True,
+        )
+    )
+
+    decision = build_repair_recovery_plan(store)["decisions"][0]
+
+    assert decision["observation_recovery"]["observation_count"] == 1
+    assert decision["observation_recovery"]["continuation_requires_live_revalidation"] is True
 
 
 def test_recovery_plan_marks_incomplete_attempt_as_rollback_without_reactivation() -> None:

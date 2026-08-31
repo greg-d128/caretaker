@@ -1307,6 +1307,15 @@ retains the candidate reference for review. It does not reconstruct the
 process-local approval or grant authority; continuation requires a new
 transaction and fresh approval checks.
 
+Persisted candidate observation records are now reconstructable through
+`recover_candidate_observation_state()` and are included in each recovery-plan
+decision. The projection counts each `observation_id` at most once, and both
+the in-memory and SQLite Repair stores reject reuse of an observation ID with
+different evidence. This restores evidence for probation and long-term review
+without replaying calls or treating the projection as candidate activation;
+continuation still requires live candidate, policy, and authority
+revalidation. Automatic FunctionSlot reactivation remains future work.
+
 - mark interrupted incidents, generations, attempts, and validations incomplete;
 - reconstruct pending approvals or deliberately stale them for every restart path;
 - verify the current candidate source and policy/authority bindings again after restart;

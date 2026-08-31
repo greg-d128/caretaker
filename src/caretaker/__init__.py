@@ -239,6 +239,7 @@ from .repair_recovery import (
     select_recovery_action,
     reconcile_worker_postmortems,
     reconcile_worker_failure_records,
+    recover_candidate_observation_state,
     worker_failure_recovery_status,
     resolve_worker_failure_scope,
     validate_authority_expiry,

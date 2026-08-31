@@ -22,6 +22,7 @@ from .domain import RepairAttemptOutcome, RepairAttemptStage, RepairEpisodeOutco
 
 
 RECOVERY_PLAN_SCHEMA_VERSION = 1
+OBSERVATION_RECOVERY_SCHEMA_VERSION = 1
 WORKER_POSTMORTEM_SCHEMA_VERSION = 1
 WORKER_POSTMORTEM_MAX_BYTES = 1_048_576
 WORKER_FAILURE_SCOPE_MAX_CHARS = 256
@@ -1519,6 +1520,94 @@ def _records_by_id(store: Any, method_name: str, id_field: str) -> dict[str, Any
     }
 
 
+def recover_candidate_observation_state(
+    store: Any,
+    *,
+    target_id: str | None = None,
+    candidate_id: str | None = None,
+    function_version: int | None = None,
+) -> dict[str, Any]:
+    """Reconstruct persisted candidate counters without replaying observations.
+
+    Observation records are evidence, not an authority grant. The returned
+    counters are safe to inspect after restart because each observation ID is
+    counted at most once. A caller still has to bind the result to a live
+    candidate, policy, and authority before it can continue a Repair workflow.
+    """
+    if function_version is not None and function_version < 0:
+        raise ValueError("function_version cannot be negative")
+    records = tuple(store.all_observations()) if hasattr(store, "all_observations") else ()
+    selected: list[Any] = []
+    for record in records:
+        if target_id is not None and str(_field(record, "target_id", "")) != str(target_id):
+            continue
+        if candidate_id is not None and str(_field(record, "candidate_id", "")) != str(candidate_id):
+            continue
+        if (
+            function_version is not None
+            and _field(record, "function_version") != function_version
+        ):
+            continue
+        selected.append(record)
+
+    seen: dict[str, str] = {}
+    duplicate_count = 0
+    conflicting_ids: list[str] = []
+    valid: list[Any] = []
+    for record in selected:
+        observation_id = str(_field(record, "observation_id", ""))
+        payload = json.dumps(
+            {
+                "target_id": _field(record, "target_id", ""),
+                "candidate_id": _field(record, "candidate_id", ""),
+                "function_version": _field(record, "function_version"),
+                "call_id": _field(record, "call_id", ""),
+                "occurred_at": _field(record, "occurred_at", ""),
+                "counted_as_success": bool(_field(record, "counted_as_success", False)),
+                "counted_as_failure": bool(_field(record, "counted_as_failure", False)),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        if observation_id in seen:
+            duplicate_count += 1
+            if seen[observation_id] != payload:
+                conflicting_ids.append(observation_id)
+            continue
+        seen[observation_id] = payload
+        valid.append(record)
+
+    def occurred_at(record: Any) -> str | None:
+        value = _field(record, "occurred_at")
+        return value.isoformat() if isinstance(value, datetime) else str(value) if value else None
+
+    timestamps = [item for item in (occurred_at(record) for record in valid) if item is not None]
+    successes = sum(bool(_field(record, "counted_as_success", False)) for record in valid)
+    failures = sum(bool(_field(record, "counted_as_failure", False)) for record in valid)
+    has_conflicts = bool(conflicting_ids)
+    return {
+        "schema_version": OBSERVATION_RECOVERY_SCHEMA_VERSION,
+        "read_only": True,
+        "authority_granted": False,
+        "target_id": str(target_id) if target_id is not None else None,
+        "candidate_id": str(candidate_id) if candidate_id is not None else None,
+        "function_version": function_version,
+        "state": "CONFLICTING_EVIDENCE" if has_conflicts else (
+            "PERSISTED_EVIDENCE_READY" if valid else "NO_PERSISTED_OBSERVATIONS"
+        ),
+        "observation_count": len(valid),
+        "successful_executions": successes,
+        "failed_executions": failures,
+        "first_observed_at": min(timestamps) if timestamps else None,
+        "last_observed_at": max(timestamps) if timestamps else None,
+        "duplicate_observation_count": duplicate_count,
+        "conflicting_observation_ids": sorted(set(conflicting_ids)),
+        "double_count_protection": "OBSERVATION_ID_UNIQUENESS",
+        "continuation_requires_live_revalidation": True,
+    }
+
+
 def validate_recovery_candidate_binding(
     attempt: Any,
     candidate: Any,
@@ -1777,6 +1866,11 @@ def build_repair_recovery_plan(
                 live_context_by_target or {}
             ).get(str(_field(attempt, "target_id", ""))),
         )
+        observation_recovery = recover_candidate_observation_state(
+            store,
+            target_id=str(_field(attempt, "target_id", "")),
+            candidate_id=str(_field(attempt, "candidate_id", "")),
+        )
         policy_action = select_recovery_action(
             recovery_policy.interrupted_transaction_action,
             enabled=recovery_policy.enabled,
@@ -1805,6 +1899,7 @@ def build_repair_recovery_plan(
                 else "NOT_PENDING"
             ),
             "incomplete_records": list(incomplete_records),
+            "observation_recovery": observation_recovery,
             "reason": (
                 "Repair transaction did not durably complete; treat it as rolled back "
                 "and do not reactivate an in-memory replacement"
