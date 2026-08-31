@@ -33,6 +33,7 @@ from .repair_recovery import (
     WorkerFailureRecoveryRecord,
     WorkerPostmortemConflictReport,
 )
+from .repair_rollout import RepairRolloutRecord, RepairRolloutTransition
 
 
 class RepairStore(Protocol):
@@ -55,6 +56,10 @@ class RepairStore(Protocol):
     def all_episodes(self) -> tuple[Any, ...]: ...
     def all_generations(self) -> tuple[Any, ...]: ...
     def all_candidates(self) -> tuple[Any, ...]: ...
+    def record_rollout(self, record: RepairRolloutRecord) -> None: ...
+    def all_rollouts(self) -> tuple[Any, ...]: ...
+    def record_rollout_transition(self, record: RepairRolloutTransition) -> None: ...
+    def all_rollout_transitions(self) -> tuple[Any, ...]: ...
     def record_recovery(self, record: RepairRecoveryRecord) -> None: ...
     def all_recoveries(self) -> tuple[Any, ...]: ...
     def record_worker_failure(self, record: WorkerFailureRecord) -> None: ...
@@ -77,6 +82,8 @@ class InMemoryRepairStore:
         self.worker_failures: dict[UUID, WorkerFailureRecord] = {}
         self.worker_failure_recoveries: dict[UUID, WorkerFailureRecoveryRecord] = {}
         self.worker_postmortem_conflicts: dict[UUID, WorkerPostmortemConflictReport] = {}
+        self.rollouts: dict[UUID, RepairRolloutRecord] = {}
+        self.rollout_transitions: dict[UUID, RepairRolloutTransition] = {}
         self.observations: dict[UUID, ObservationRecord] = {}
         self.internal_incidents: dict[UUID, InternalIncident] = {}
         self.integrity_verifications: dict[UUID, IntegrityVerification] = {}
@@ -176,6 +183,32 @@ class InMemoryRepairStore:
         with self._lock:
             return tuple(sorted(self.candidates.values(), key=lambda candidate: candidate.created_at))
 
+    def record_rollout(self, record: RepairRolloutRecord) -> None:
+        with self._lock:
+            self.rollouts[record.rollout_id] = record
+
+    def all_rollouts(self) -> tuple[RepairRolloutRecord, ...]:
+        with self._lock:
+            return tuple(sorted(self.rollouts.values(), key=lambda record: record.created_at))
+
+    def record_rollout_transition(self, record: RepairRolloutTransition) -> None:
+        with self._lock:
+            existing = self.rollout_transitions.get(record.transition_id)
+            if existing is not None and existing != record:
+                raise ValueError(
+                    "rollout transition ID was already recorded with different evidence"
+                )
+            self.rollout_transitions[record.transition_id] = record
+
+    def all_rollout_transitions(self) -> tuple[RepairRolloutTransition, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    self.rollout_transitions.values(),
+                    key=lambda record: record.created_at,
+                )
+            )
+
     def record_recovery(self, record: RepairRecoveryRecord) -> None:
         with self._lock:
             self.recoveries.setdefault(record.attempt_id, record)
@@ -228,6 +261,8 @@ class SQLiteRepairStore:
         "episodes": "episode_id",
         "generations": "generation_id",
         "candidates": "candidate_id",
+        "repair_rollouts": "rollout_id",
+        "repair_rollout_transitions": "transition_id",
         "attempts": "attempt_id",
         "recovery_records": "recovery_id",
         "worker_failure_records": "failure_id",
@@ -259,7 +294,7 @@ class SQLiteRepairStore:
                 "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
             )
             connection.execute(
-                "INSERT OR REPLACE INTO caretaker_store_metadata(key, value) VALUES ('schema_version', '2')"
+                "INSERT OR REPLACE INTO caretaker_store_metadata(key, value) VALUES ('schema_version', '3')"
             )
             for table in self._TABLES:
                 connection.execute(
@@ -383,6 +418,23 @@ class SQLiteRepairStore:
 
     def all_candidates(self) -> tuple[Mapping[str, Any], ...]:
         return tuple(self.query_records("candidates", limit=10000))
+
+    def record_rollout(self, record: RepairRolloutRecord) -> None:
+        self._write("repair_rollouts", record, target_id=record.target_id)
+
+    def all_rollouts(self) -> tuple[Mapping[str, Any], ...]:
+        return tuple(self.query_records("repair_rollouts", limit=10000))
+
+    def record_rollout_transition(self, record: RepairRolloutTransition) -> None:
+        self._write(
+            "repair_rollout_transitions",
+            record,
+            target_id=record.target_id,
+            append=True,
+        )
+
+    def all_rollout_transitions(self) -> tuple[Mapping[str, Any], ...]:
+        return tuple(self.query_records("repair_rollout_transitions", limit=10000))
 
     def record_recovery(self, record: RepairRecoveryRecord) -> None:
         self._write("recovery_records", record, target_id=record.target_id)

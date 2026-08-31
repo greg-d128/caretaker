@@ -15,6 +15,7 @@ from .guard.policy import CandidateGuardPolicy, GuardBinding
 from .logging.policy import LoggingBinding
 from .logging.models import RepairAuthority
 from .repair_recovery import RepairRecoveryPolicy, validate_worker_acceptance_policy
+from .repair_rollout import RepairRolloutPolicy
 from .domain import (
     CandidateSelectionMode,
     DifferentialExecutionMode,
@@ -248,6 +249,7 @@ class RepairPolicy:
     stability: StabilityPolicy = field(default_factory=StabilityPolicy)
     integrity: IntegrityRepairPolicy = field(default_factory=IntegrityRepairPolicy)
     recovery: RepairRecoveryPolicy = field(default_factory=RepairRecoveryPolicy)
+    rollout: RepairRolloutPolicy = field(default_factory=RepairRolloutPolicy)
     logging: LoggingBinding = field(default_factory=LoggingBinding)
     guard: GuardBinding = field(default_factory=GuardBinding)
     candidate_guard: CandidateGuardPolicy = field(default_factory=CandidateGuardPolicy)
@@ -555,6 +557,12 @@ def _human_readable(policy: RepairPolicy) -> str:
             f"  replay safety: {policy.retry.safety.name}",
             f"  require successful restore: {policy.retry.require_successful_state_restore}",
             f"  retry original exception only: {policy.retry.retry_original_exception_only}",
+            "Repair rollout:",
+            f"  enabled: {policy.rollout.enabled}",
+            f"  shadow stage: {policy.rollout.allow_shadow_stage}",
+            f"  canary stage: {policy.rollout.allow_canary_stage}",
+            f"  direct field activation: {policy.rollout.allow_direct_field_activation}",
+            f"  deployment authority required for permanence: {policy.rollout.require_deployment_authority_for_permanent}",
             "Validation:",
             f"  profile: {policy.validation.profile_id}",
             f"  isolated: {policy.validation.isolate_validation}",

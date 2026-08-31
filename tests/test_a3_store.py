@@ -15,5 +15,5 @@ def test_sqlite_store_rehydrates_events_and_exposes_schema_version(tmp_path) -> 
     store.append_event(event)
     loaded = store.recent_events("module:function")
     assert loaded == (event,)
-    assert store.schema_version == 2
+    assert store.schema_version == 3
     assert store.query_records("events", target_id="module:function")[0]["details"]["answer"] == 42

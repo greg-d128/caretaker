@@ -14,6 +14,7 @@ Caretaker is active research software. These documents describe current design i
 - `LOGGING_BASELINES.md` — population baselines and slow drift
 - `LOGGING_INTERROGATION.md` — outliers, hypotheses, and LLM authority
 - `ADMIN_CONTROL.md` — local socket authentication, operator console workflow, tab semantics, and mode control
+- `REPAIR_ROLLOUT.md` — policy-bound Repair lifecycle, field-fix authority, and deployment promotion
 - `POLICY_AUTHORITY.md` — signed authority layers, constraints, overrides, and runtime leases
 - `PROFILES.md` — named/versioned profiles, policy-surface coverage, comparison, pinning, and the Profile Editor 
 - `POLICY_SEMANTICS.md` — executable policy support, reserved settings, and semantic surface review

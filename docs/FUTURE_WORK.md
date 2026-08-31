@@ -923,6 +923,17 @@ deep-copied arguments, compare their results, and select an appropriate return o
 open another Repair episode. It is not a general traffic rollout, canary,
 mirroring, or shadow-deployment system.
 
+The application-scoped `RepairRolloutLedger` now provides the first authority
+and lifecycle slice. It records immutable `PROPOSED`, `VALIDATED`, `SHADOW`,
+`CANARY`, `ACTIVE`, `RETIRED`, and `REVOKED` state transitions in the Repair
+store, preserves a transition hash chain, optionally attaches the configured
+runtime signature, and emits a corresponding Repair event. An operator may
+release a validated candidate as an explicitly labelled `field-repair`; that
+record does not make the change a permanent deployment. Promotion to
+`permanent-deployment` requires deployment authority and a deployment artifact
+hash. Active revocation requires a new incident by default. These records do
+not route traffic, activate a FunctionSlot, or grant authority on their own.
+
 Future Repair should provide more operator and policy control over how a validated
 candidate is introduced. Potential execution strategies include:
 

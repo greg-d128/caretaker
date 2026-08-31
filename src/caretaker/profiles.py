@@ -199,6 +199,15 @@ POLICY_CAPABILITIES: tuple[PolicyCapability, ...] = (
         "Review that tailoring is opt-in, bounded, advisory-only, preserves the canonical draft, and cannot authorize delivery or change incident state.",
         ("logging.communications.llm_tailoring_enabled",),
     ),
+    PolicyCapability(
+        "repair.rollout-authority",
+        8,
+        "0.6.1",
+        "Policy-bound Repair rollout authority",
+        "Controls the lifecycle and authority boundaries for field repairs and their later deployment promotion.",
+        "Review validation gates, staged rollout permissions, expiry, revocation, and the requirement for deployment authority before permanence.",
+        ("repair.rollout.",),
+    ),
 )
 
 CURRENT_POLICY_SURFACE_VERSION = max(

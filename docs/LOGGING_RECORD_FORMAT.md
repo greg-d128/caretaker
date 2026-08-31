@@ -68,7 +68,7 @@ segment framing for detailed evidence. Its typed payload has this common envelop
 | `occurred_at`, `monotonic_ns`, `process_start_id` | UTC time plus local ordering evidence; supervisor time is authoritative for control decisions. |
 | `run_id`, `supervisor_id` | Runtime and supervisor provenance. |
 | `actor` | `supervisor`, `worker`, `operator`, `deployment`, `adaptive`, or `system`, with an ID and public-key fingerprint where applicable. `adaptive` is a proposer, never an authority source by itself. |
-| `scope` | Optional `target_id`, extended aggregation scope, `incident_id`, `transition_id`, and worker ID. |
+| `scope` | Optional `target_id`, extended aggregation scope, `incident_id`, `transition_id`, rollout ID, and worker ID. |
 | `policy` | Effective policy ID/fingerprint, authority generation/fingerprint, authority type, and affected canonical field paths when relevant. |
 | `outcome` | Bounded state, reason, effective time, and references to durable evidence or validation results. |
 | `integrity` | Previous-event hash, canonical-content hash, signing mode/status, signer fingerprint, and signature or signature reference. |

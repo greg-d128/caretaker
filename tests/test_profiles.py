@@ -171,6 +171,7 @@ def test_policy_surface_two_requires_review_of_adaptive_instrumentation() -> Non
         "logging.signing-identity-journal",
         "adaptive.persistent-policy-acceptance",
         "logging.communication-llm-tailoring",
+        "repair.rollout-authority",
     ]
 
 def test_policy_surface_reports_capabilities_added_after_profile(monkeypatch) -> None:

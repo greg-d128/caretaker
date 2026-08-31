@@ -257,6 +257,17 @@ from .repair_recovery import (
     verify_worker_postmortem_packet,
     verify_recovery_authority_packet,
 )
+from .repair_rollout import (
+    RepairAuthoritativeImplementation,
+    RepairReleaseKind,
+    RepairRolloutAuthority,
+    RepairRolloutError,
+    RepairRolloutLedger,
+    RepairRolloutPolicy,
+    RepairRolloutRecord,
+    RepairRolloutStage,
+    RepairRolloutTransition,
+)
 from .regression import (
     DATA_ONLY_NOT_EXECUTABLE,
     JSON_EXACT_REHYDRATION,
@@ -593,6 +604,15 @@ __all__ = [
     "validate_authority_expiry",
     "validate_supervisor_time",
     "verify_recovery_authority_packet",
+    "RepairAuthoritativeImplementation",
+    "RepairReleaseKind",
+    "RepairRolloutAuthority",
+    "RepairRolloutError",
+    "RepairRolloutLedger",
+    "RepairRolloutPolicy",
+    "RepairRolloutRecord",
+    "RepairRolloutStage",
+    "RepairRolloutTransition",
     "ReplaySafety",
     "SideEffectClass",
     "EffectObservation",
