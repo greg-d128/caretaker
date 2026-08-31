@@ -142,6 +142,24 @@ transition as immutable evidence. Rolled-back transitions are visible as
 re-applied. An `APPLIED` transition is accepted state; correcting it requires
 a new incident and a new approval workflow.
 
+Each applied threshold transition also creates immutable policy-lineage records
+under `adaptive/policy-ledger/`. The initial record is `PENDING`; completion of
+all required worker acknowledgements adds `APPLIED`, a failed acknowledgement
+adds `FAILED`, and an explicit pre-acceptance rollback adds `ROLLED_BACK`.
+Records bind the transition to the prior and resulting policy fingerprints and
+stable UUID policy IDs, affected fields, target/aggregation scope, effective
+and recorded timestamps, authority type, authority expiry, evidence references,
+and worker acknowledgement counts. Native policy snapshot IDs can be supplied;
+otherwise the UUID is deterministically derived from the policy fingerprint.
+The current record is explicitly `UNSIGNED` evidence until policy-driven audit
+signing is implemented. These records are append-only and read-only: they do
+not replace the authority stack, reapply policy after restart, or allow an
+adaptive actor to activate its own proposal.
+
+`adaptive-aggregation-status` and `adaptive-transition-list` include the bounded
+policy-lineage projection. The projection is for operator history and analytics;
+it does not turn a runtime lease into a permanent deployment policy.
+
 The supervisor exposes `adaptive-aggregation-status`,
 `adaptive-aggregation-reconcile`, `adaptive-aggregation-ack`,
 `adaptive-transition-list`, `adaptive-transition-ack`,

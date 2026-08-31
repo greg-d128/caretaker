@@ -3931,6 +3931,8 @@ class CaretakerConsoleApp(App):
         aggregates = aggregates if isinstance(aggregates, (list, tuple)) else ()
         transitions = response.get("transitions")
         transitions = transitions if isinstance(transitions, (list, tuple)) else ()
+        policy_ledger = response.get("policy_ledger")
+        policy_ledger = policy_ledger if isinstance(policy_ledger, (list, tuple)) else ()
         rows: list[dict[str, Any]] = []
         for item in aggregates:
             if not isinstance(item, Mapping):
@@ -4033,6 +4035,7 @@ class CaretakerConsoleApp(App):
         self.query_one("#adaptive-aggregation-status", Static).update(
             f"Aggregates {len(aggregates)} | "
             f"Transitions {len(transitions)} | "
+            f"Policy lineage {len(policy_ledger)} | "
             f"Proposal reviews {sum(1 for item in transitions if isinstance(item, Mapping) and item.get('review_status') not in {None, 'UNREVIEWED'})} | "
             f"Expired {expired} | "
             f"Distribution conflicts {sum(1 for item in rows if item['kind'] == 'CONFLICT')} | "

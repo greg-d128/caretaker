@@ -19,10 +19,11 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 
 ADAPTIVE_AGGREGATION_SCHEMA_VERSION = 1
+ADAPTIVE_POLICY_LEDGER_SCHEMA_VERSION = 1
 MAX_BATCH_TEXT = 256
 MAX_AGGREGATION_SCOPE_TEXT = 256
 MAX_BATCH_EVENTS = 256
@@ -44,6 +45,9 @@ MAX_RESOURCE_SAMPLES = MAX_BATCH_EVENTS
 MAX_THRESHOLD_CHANGES = 16
 MAX_THRESHOLD_DELAY_SECONDS = 86_400.0
 MAX_THRESHOLD_PROPOSAL_TTL_SECONDS = 86_400.0
+_ADAPTIVE_POLICY_ID_NAMESPACE = uuid5(
+    NAMESPACE_URL, "https://caretaker.dev/adaptive-policy-id"
+)
 _DISTRIBUTION_COUNTER_NAMES = (
     "exception_count",
     "timing_breach_count",
@@ -714,6 +718,20 @@ def _content_hash(value: Any) -> str:
     ).hexdigest()
 
 
+def _adaptive_policy_id(fingerprint: str) -> str:
+    """Return a stable UUID until policy snapshots have native IDs."""
+    return str(uuid5(_ADAPTIVE_POLICY_ID_NAMESPACE, str(fingerprint)))
+
+
+def _policy_id(value: Any, *, fingerprint: str, name: str) -> str:
+    if value is None or not str(value).strip():
+        return _adaptive_policy_id(fingerprint)
+    try:
+        return str(UUID(str(value)))
+    except (TypeError, ValueError) as exc:
+        raise AdaptiveAggregationError(f"{name} must be a UUID") from exc
+
+
 def _duration_statistics(samples: list[float] | tuple[float, ...]) -> dict[str, Any]:
     """Return mergeable, bounded statistics for timing-breach durations."""
     if not samples:
@@ -990,6 +1008,24 @@ def _safe_write(path: Path, value: Mapping[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _immutable_write(path: Path, value: Mapping[str, Any]) -> bool:
+    """Create a record once, accepting only an identical retry."""
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise AdaptiveAggregationError(
+                f"immutable record {path.name} is unreadable"
+            ) from exc
+        if existing == value:
+            return False
+        raise AdaptiveAggregationError(
+            f"immutable record {path.name} already contains different content"
+        )
+    _safe_write(path, value)
+    return True
+
+
 class SupervisorAdaptiveAggregationStore:
     """Durable single-writer ledger for bounded worker observation batches.
 
@@ -1034,6 +1070,7 @@ class SupervisorAdaptiveAggregationStore:
         )
         self.proposal_review_directory = self.root / "adaptive" / "aggregation" / "proposal-reviews"
         self.transition_rollback_directory = self.root / "adaptive" / "aggregation" / "transition-rollbacks"
+        self.policy_ledger_directory = self.root / "adaptive" / "policy-ledger"
         self.conflict_directory = self.root / "adaptive" / "aggregation" / "conflicts"
         for directory in (
             self.pending_directory,
@@ -1045,6 +1082,7 @@ class SupervisorAdaptiveAggregationStore:
             self.transition_acknowledgement_directory,
             self.proposal_review_directory,
             self.transition_rollback_directory,
+            self.policy_ledger_directory,
             self.conflict_directory,
         ):
             directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1140,6 +1178,118 @@ class SupervisorAdaptiveAggregationStore:
 
     def _transition_rollback_path(self, request_id: str) -> Path:
         return self.transition_rollback_directory / f"{request_id}.json"
+
+    def _policy_ledger_path(self, record_id: str) -> Path:
+        return self.policy_ledger_directory / f"{record_id}.json"
+
+    def _load_policy_ledger_record(self, path: Path) -> dict[str, Any]:
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(envelope, Mapping):
+            raise AdaptiveAggregationError("adaptive policy ledger envelope must be an object")
+        if int(envelope.get("schema_version") or 0) != ADAPTIVE_POLICY_LEDGER_SCHEMA_VERSION:
+            raise AdaptiveAggregationError("unsupported adaptive policy ledger schema")
+        record = envelope.get("record")
+        if not isinstance(record, Mapping):
+            raise AdaptiveAggregationError("adaptive policy ledger record is missing")
+        try:
+            record_id = str(UUID(str(record.get("record_id"))))
+            transition_id = str(UUID(str(record.get("transition_id"))))
+        except (TypeError, ValueError) as exc:
+            raise AdaptiveAggregationError("adaptive policy ledger IDs are invalid") from exc
+        if record_id != path.stem:
+            raise AdaptiveAggregationError("adaptive policy ledger ID does not match its filename")
+        if not transition_id:
+            raise AdaptiveAggregationError("adaptive policy ledger transition ID is missing")
+        if str(envelope.get("record_sha256") or "") != _content_hash(record):
+            raise AdaptiveAggregationError("adaptive policy ledger hash is invalid")
+        return dict(record)
+
+    def _record_policy_ledger_state(
+        self,
+        transition: Mapping[str, Any],
+        *,
+        status: str,
+        recorded_at: datetime | None = None,
+        acknowledgement_count: int = 0,
+    ) -> dict[str, Any]:
+        transition_id = str(UUID(str(transition["request_id"])))
+        with self._lock:
+            for path in sorted(self.policy_ledger_directory.glob("*.json")):
+                existing = self._load_policy_ledger_record(path)
+                if (
+                    str(existing.get("transition_id")) == transition_id
+                    and str(existing.get("status")) == status
+                ):
+                    return existing
+            recorded = (recorded_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
+            previous_fingerprint = str(transition.get("previous_policy_fingerprint") or "")
+            applied_fingerprint = str(transition.get("policy_fingerprint") or "")
+            required_workers = transition.get("required_workers") or ()
+            record = {
+                "record_id": str(uuid4()),
+                "transition_id": transition_id,
+                "authority_type": str(transition.get("authority_type") or "operator"),
+                "prior_policy_id": str(transition.get("prior_policy_id") or _adaptive_policy_id(previous_fingerprint)),
+                "policy_id": str(transition.get("policy_id") or _adaptive_policy_id(applied_fingerprint)),
+                "prior_policy_fingerprint": previous_fingerprint,
+                "policy_fingerprint": applied_fingerprint,
+                "target_id": transition.get("target_id"),
+                "aggregation_scope": transition.get("aggregation_scope"),
+                "fields_affected": sorted(
+                    str(key) for key in (transition.get("changes") or {}).keys()
+                ),
+                "change_description": str(
+                    transition.get("change_description") or transition.get("reason") or ""
+                )[:MAX_TRANSITION_REASON],
+                "signature": transition.get("signature"),
+                "signature_status": str(transition.get("signature_status") or "UNSIGNED"),
+                "status": status,
+                "effective_at": transition.get("effective_at") or transition.get("created_at"),
+                "recorded_at": recorded.isoformat(),
+                "authority_expires_at": transition.get("authority_expires_at") or transition.get("expires_at"),
+                "authority_policy_generation": transition.get("authority_policy_generation"),
+                "authority_policy_fingerprint": transition.get("authority_policy_fingerprint"),
+                "authority_lease_id": transition.get("authority_lease_id"),
+                "proposal_request_id": transition.get("proposal_request_id"),
+                "proposal_review_sha256": transition.get("proposal_review_sha256"),
+                "evidence_refs": list(transition.get("evidence_refs") or ()),
+                "rollback_of": transition.get("rollback_of"),
+                "supersedes": transition.get("supersedes"),
+                "required_worker_count": len(required_workers),
+                "acknowledgement_count": int(acknowledgement_count),
+            }
+            envelope = {
+                "schema_version": ADAPTIVE_POLICY_LEDGER_SCHEMA_VERSION,
+                "record": record,
+                "record_sha256": _content_hash(record),
+            }
+            _immutable_write(self._policy_ledger_path(str(record["record_id"])), envelope)
+            return record
+
+    def list_policy_transition_ledger(
+        self,
+        *,
+        transition_id: str | None = None,
+        limit: int = 500,
+    ) -> tuple[dict[str, Any], ...]:
+        """List immutable adaptive-policy lineage records, newest first."""
+        normalized_transition = None
+        if transition_id is not None:
+            try:
+                normalized_transition = str(UUID(str(transition_id)))
+            except (TypeError, ValueError) as exc:
+                raise AdaptiveAggregationError("transition_id must be a UUID") from exc
+        bounded = max(1, min(int(limit), 500))
+        records: list[dict[str, Any]] = []
+        for path in sorted(self.policy_ledger_directory.glob("*.json"), reverse=True):
+            record = self._load_policy_ledger_record(path)
+            if normalized_transition is not None and str(record.get("transition_id")) != normalized_transition:
+                continue
+            records.append(record)
+            if len(records) >= bounded:
+                break
+        records.sort(key=lambda item: str(item.get("recorded_at") or ""), reverse=True)
+        return tuple(records)
 
     def _write_acknowledgement(
         self,
@@ -2316,6 +2466,12 @@ class SupervisorAdaptiveAggregationStore:
         applied_by: str,
         reason: str,
         authority_lease_id: str | None = None,
+        authority_type: str = "operator",
+        prior_policy_id: str | None = None,
+        policy_id: str | None = None,
+        signature: str | None = None,
+        authority_expires_at: str | None = None,
+        effective_at: datetime | None = None,
         transition_timeout_seconds: float = DEFAULT_TRANSITION_TIMEOUT_SECONDS,
         now: datetime | None = None,
     ) -> dict[str, Any]:
@@ -2382,6 +2538,27 @@ class SupervisorAdaptiveAggregationStore:
         assert authority_generation is not None
         assert authority_fingerprint is not None
         assert actor is not None and transition_reason is not None
+        normalized_authority_type = str(authority_type).strip().lower()
+        if normalized_authority_type not in {"operator", "deployment", "adaptive"}:
+            raise AdaptiveAggregationError(
+                "authority_type must be operator, deployment, or adaptive"
+            )
+        if normalized_authority_type == "adaptive":
+            raise PermissionError(
+                "adaptive authority may propose a policy but cannot activate a persistent transition"
+            )
+        prior_policy_id_value = _policy_id(
+            prior_policy_id,
+            fingerprint=previous_policy,
+            name="prior_policy_id",
+        )
+        policy_id_value = _policy_id(
+            policy_id,
+            fingerprint=applied_policy,
+            name="policy_id",
+        )
+        if signature is not None:
+            signature = str(signature)[:MAX_TRANSITION_REASON]
         timeout = _transition_timeout(transition_timeout_seconds)
         if not isinstance(required_workers, (list, tuple)) or not required_workers:
             raise AdaptiveAggregationError("adaptive policy transition requires workers")
@@ -2406,6 +2583,11 @@ class SupervisorAdaptiveAggregationStore:
             worker_ids.add(worker_id)
             normalized_workers.append({"worker_id": worker_id, "worker_pid": worker_pid})
         created_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        effective_timestamp = effective_at or created_at
+        if effective_timestamp.tzinfo is None:
+            effective_timestamp = effective_timestamp.replace(tzinfo=timezone.utc)
+        else:
+            effective_timestamp = effective_timestamp.astimezone(timezone.utc)
         expires_at = created_at + timedelta(seconds=timeout)
         for path in sorted(self.transition_directory.glob("*.json")):
             try:
@@ -2438,6 +2620,14 @@ class SupervisorAdaptiveAggregationStore:
             "monitoring_fingerprint": str(proposal["monitoring_fingerprint"]),
             "previous_policy_fingerprint": previous_policy,
             "policy_fingerprint": applied_policy,
+            "prior_policy_id": prior_policy_id_value,
+            "policy_id": policy_id_value,
+            "transition_id": None,
+            "record_id": str(uuid4()),
+            "authority_type": normalized_authority_type,
+            "change_description": transition_reason,
+            "signature": signature,
+            "signature_status": "UNSIGNED" if signature is None else "UNVERIFIED",
             "authority_policy_generation": authority_generation,
             "authority_policy_fingerprint": authority_fingerprint,
             "changes": dict(proposal.get("changes") or {}),
@@ -2445,13 +2635,17 @@ class SupervisorAdaptiveAggregationStore:
             "reason": transition_reason,
             "applied_by": actor,
             "authority_lease_id": lease_id,
+            "authority_expires_at": authority_expires_at,
             "policy_applied": True,
             "authority_granted": False,
             "created_at": created_at.isoformat(),
+            "recorded_at": created_at.isoformat(),
+            "effective_at": effective_timestamp.isoformat(),
             "transition_timeout_seconds": timeout,
             "expires_at": expires_at.isoformat(),
             "required_workers": normalized_workers,
         }
+        transition["transition_id"] = transition["request_id"]
         _safe_write(
             self._transition_path(str(transition["request_id"])),
             {
@@ -2459,6 +2653,11 @@ class SupervisorAdaptiveAggregationStore:
                 "request": transition,
                 "request_sha256": _content_hash(transition),
             },
+        )
+        self._record_policy_ledger_state(
+            transition,
+            status="PENDING",
+            recorded_at=created_at,
         )
         return {
             **transition,
@@ -2540,6 +2739,12 @@ class SupervisorAdaptiveAggregationStore:
                 "rollback": rollback,
                 "rollback_sha256": _content_hash(rollback),
             },
+        )
+        self._record_policy_ledger_state(
+            stored,
+            status="ROLLED_BACK",
+            recorded_at=now,
+            acknowledgement_count=0,
         )
         return {**rollback, "duplicate": False}
 
@@ -2785,11 +2990,18 @@ class SupervisorAdaptiveAggregationStore:
                 },
             )
         acknowledgements = self._load_transition_acknowledgements(request_id)
+        transition_status = self._transition_status(stored, acknowledgements)
+        if transition_status in {"APPLIED", "FAILED"}:
+            self._record_policy_ledger_state(
+                stored,
+                status=transition_status,
+                acknowledgement_count=len(acknowledgements),
+            )
         return {
             "status": "DUPLICATE" if duplicate else "RECORDED",
             "request_id": request_id,
             "worker_id": worker_id,
-            "transition_status": self._transition_status(stored, acknowledgements),
+            "transition_status": transition_status,
         }
 
     def list_aggregates(self, *, limit: int = 100) -> tuple[dict[str, Any], ...]:
@@ -2835,6 +3047,9 @@ class SupervisorAdaptiveAggregationStore:
             ),
             "transition_rollbacks": sum(
                 1 for _ in self.transition_rollback_directory.glob("*.json")
+            ),
+            "policy_ledger_records": sum(
+                1 for _ in self.policy_ledger_directory.glob("*.json")
             ),
             "conflict_reports": sum(1 for _ in self.conflict_directory.glob("*.json")),
         }

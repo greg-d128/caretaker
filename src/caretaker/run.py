@@ -670,6 +670,9 @@ def main(argv: list[str] | None = None) -> int:
                         **transition_context_kwargs,
                     )
                 ),
+                "policy_ledger": list(
+                    adaptive_aggregation_store.list_policy_transition_ledger()
+                ),
                 "policy_contexts": policy_contexts,
                 "policy_context_available": policy_context_available,
             }
@@ -718,6 +721,9 @@ def main(argv: list[str] | None = None) -> int:
                         limit=limit,
                         **transition_context_kwargs,
                     )
+                ),
+                "policy_ledger": list(
+                    adaptive_aggregation_store.list_policy_transition_ledger()
                 ),
             }
         if command == "adaptive-threshold-proposal":
@@ -1004,6 +1010,7 @@ def main(argv: list[str] | None = None) -> int:
                     applied_by=f"uid:{credentials[1]}",
                     reason=str(request.get("reason") or proposal.get("reason") or "")[:512],
                     authority_lease_id=str(lease.lease_id),
+                    authority_expires_at=lease.expires_at.isoformat(),
                     transition_timeout_seconds=transition_timeout,
                 )
             except Exception:
