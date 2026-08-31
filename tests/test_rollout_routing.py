@@ -624,6 +624,58 @@ def test_rollout_execution_summary_counts_candidate_failures_without_messages() 
     assert "secret failure" not in str(store.all_rollout_executions()[0])
 
 
+def test_rollout_operator_projection_is_bounded_and_read_only() -> None:
+    store = InMemoryRepairStore()
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            routing=RolloutRoutingPolicy(canary_percentage=100),
+        ),
+        store=store,
+    )
+    proposed = _record(ledger)
+    validated = _advance(ledger, proposed, RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, validated, RepairRolloutStage.CANARY)
+    _execute(
+        ledger,
+        record,
+        lambda value: value,
+        lambda value: value + 1,
+        execution_store=store,
+        execution_id=uuid4(),
+    )
+    before = ledger.get(record.rollout_id)
+
+    projection = ledger.operator_projection(
+        policy_fingerprint="policy-hash",
+        rollout_id=record.rollout_id,
+        limit=1,
+        transition_limit=2,
+    )
+
+    assert projection["read_only"] is True
+    assert projection["authority_granted"] is False
+    assert len(projection["records"]) == 1
+    projected = projection["records"][0]
+    assert projected["rollout_id"] == str(record.rollout_id)
+    assert projected["stage"] == "canary"
+    assert projected["execution_summary_status"] == "AVAILABLE"
+    assert projected["execution_summary"]["completed_count"] == 1
+    assert len(projection["transitions"]) == 2
+    assert ledger.get(record.rollout_id) == before
+
+
+def test_rollout_operator_projection_surfaces_stale_policy_evidence() -> None:
+    ledger = _ledger(canary_percentage=100)
+    record = _record(ledger)
+
+    projection = ledger.operator_projection(policy_fingerprint="new-policy-hash")
+
+    assert projection["records"][0]["execution_summary"] is None
+    assert projection["records"][0]["execution_summary_status"] == "STALE_OR_UNAVAILABLE"
+    assert "stale" in projection["records"][0]["execution_summary_reason"]
+
+
 def test_execute_rollout_emits_failure_type_without_exception_message() -> None:
     ledger = _ledger(canary_percentage=100)
     validated = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)

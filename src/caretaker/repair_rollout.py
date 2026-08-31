@@ -8,6 +8,7 @@ authority by itself.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 from collections.abc import Callable, Iterable, Mapping
@@ -539,6 +540,55 @@ class RepairRolloutLedger:
             observations,
             policy_fingerprint=policy_fingerprint,
         )
+
+    def operator_projection(
+        self,
+        *,
+        policy_fingerprint: str,
+        rollout_id: UUID | None = None,
+        limit: int = 100,
+        transition_limit: int = 200,
+    ) -> dict[str, Any]:
+        """Return a bounded, read-only projection for operator review.
+
+        The projection deliberately reports stale or unavailable execution
+        evidence alongside the rollout record. It never advances a stage,
+        changes routing, or grants authority.
+        """
+
+        if limit < 1 or transition_limit < 1:
+            raise ValueError("rollout projection limits must be positive")
+        records = self.all()
+        if rollout_id is not None:
+            records = tuple(item for item in records if item.rollout_id == rollout_id)
+        records = records[:limit]
+        record_payloads: list[dict[str, Any]] = []
+        for record in records:
+            item = _json_safe(record)
+            try:
+                item["execution_summary"] = _json_safe(
+                    self.execution_summary(
+                        record.rollout_id,
+                        policy_fingerprint=policy_fingerprint,
+                    )
+                )
+                item["execution_summary_status"] = "AVAILABLE"
+            except RepairRolloutError as exc:
+                item["execution_summary"] = None
+                item["execution_summary_status"] = "STALE_OR_UNAVAILABLE"
+                item["execution_summary_reason"] = str(exc)
+            record_payloads.append(item)
+
+        return {
+            "read_only": True,
+            "authority_granted": False,
+            "policy_fingerprint": policy_fingerprint,
+            "records": record_payloads,
+            "transitions": [
+                _json_safe(item)
+                for item in self.transitions(rollout_id)[:transition_limit]
+            ],
+        }
 
     def _check_transition(
         self,
@@ -1600,6 +1650,22 @@ def _sign(
 def _digest(value: Mapping[str, Any]) -> str:
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _json_safe(value: Any) -> Any:
+    """Convert rollout dataclasses to stable JSON-compatible values."""
+
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, (UUID, datetime)):
+        return str(value)
+    if dataclasses.is_dataclass(value):
+        return _json_safe(dataclasses.asdict(value))
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
 
 
 def _utcnow() -> datetime:

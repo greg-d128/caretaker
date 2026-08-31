@@ -65,6 +65,7 @@ from .logging.policy import OperatorLoggingPolicy, load_operator_policy
 from .logging.segments import read_segment
 from .regression import RegressionFixtureStore
 from .repair_recovery import worker_failure_recovery_status
+from .repair_rollout import RepairRolloutLedger, RepairRolloutError
 from .replay import (
     IsolatedReplayCoordinator,
     RootlessPodmanReplayBackend,
@@ -700,6 +701,7 @@ def main(argv: list[str] | None = None) -> int:
     child_holder: dict[str, subprocess.Popen] = {}
     supervisor_holder: dict[str, CaretakerApplicationSupervisor] = {}
     failure_store_holder: dict[str, SQLiteRepairStore] = {}
+    rollout_ledger_holder: dict[str, RepairRolloutLedger] = {}
     authority_generation_holder = {"generation": authority.effective.generation}
     authority_runtime_match_holder: dict[str, bool | None] = {"match": None}
     authority_lease_holder = {
@@ -1031,6 +1033,42 @@ def main(argv: list[str] | None = None) -> int:
                 "available": True,
                 **worker_failure_recovery_status(store, limit=limit),
             }
+        if command == "repair-rollout-status":
+            ledger = rollout_ledger_holder.get("ledger")
+            if ledger is None:
+                return {
+                    "ok": True,
+                    "available": False,
+                    "reason": "repair rollout ledger is not initialized",
+                    "read_only": True,
+                    "authority_granted": False,
+                    "records": [],
+                    "transitions": [],
+                }
+            raw_rollout_id = str(request.get("rollout_id") or "").strip()
+            rollout_id = UUID(raw_rollout_id) if raw_rollout_id else None
+            limit = max(1, min(int(request.get("limit", 100)), 500))
+            transition_limit = max(
+                1, min(int(request.get("transition_limit", 200)), 1000)
+            )
+            try:
+                projection = ledger.operator_projection(
+                    policy_fingerprint=runtime.effective.fingerprint,
+                    rollout_id=rollout_id,
+                    limit=limit,
+                    transition_limit=transition_limit,
+                )
+            except RepairRolloutError as exc:
+                return {
+                    "ok": True,
+                    "available": False,
+                    "reason": str(exc),
+                    "read_only": True,
+                    "authority_granted": False,
+                    "records": [],
+                    "transitions": [],
+                }
+            return {"ok": True, "available": True, **projection}
         if command == "adaptive-aggregation-reconcile":
             result = reconcile_adaptive_aggregation(
                 maximum=max(1, min(int(request.get("maximum", 100)), 1000))
@@ -2723,6 +2761,10 @@ def main(argv: list[str] | None = None) -> int:
     child_holder["child"] = child
     failure_store = SQLiteRepairStore(Path(policy.directory) / "repair.sqlite")
     failure_store_holder["store"] = failure_store
+    rollout_ledger_holder["ledger"] = RepairRolloutLedger(
+        policy=policy.rollout,
+        store=failure_store,
+    )
     supervisor = CaretakerApplicationSupervisor(
         runtime,
         application_pid=child.pid,

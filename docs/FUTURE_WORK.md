@@ -964,7 +964,10 @@ failure/fallback policy, and supervisor-wide coordination remain future work.
 `execute_slot_rollout()` now adds strict binding to an installed FunctionSlot
 candidate and its preceding deployed version without mutating slot state;
 candidate acceptance accounting and application-specific failure handling
-remain future work.
+remain future work. The supervised application also exposes a bounded,
+read-only `repair-rollout-status` projection containing lifecycle records,
+transition history, and integrity-checked execution summaries. Stale or
+unavailable summaries remain visibly unresolved and cannot advance authority.
 
 Future Repair should provide more operator and policy control over how a validated
 candidate is introduced. Potential execution strategies include:

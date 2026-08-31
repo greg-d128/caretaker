@@ -119,6 +119,17 @@ observations are evidence for
 operator review and future staged decisions only. They do not advance a stage,
 activate a slot, or grant authority.
 
+The supervised application exposes this evidence through the read-only
+`repair-rollout-status` control request. The response is bounded by `limit` and
+`transition_limit`, includes lifecycle records and transition history, and
+embeds an integrity-checked execution summary for each returned rollout. A
+summary whose policy fingerprint is stale, or whose execution store is not
+available, is reported as `STALE_OR_UNAVAILABLE`; it is never counted as
+successful evidence. The response explicitly reports `read_only: true` and
+`authority_granted: false`. This is an operator projection only: it does not
+advance a rollout, change routing percentages, activate a FunctionSlot, or
+grant execution authority.
+
 The invocation helpers also accept a Guard behavior capture directly through
 `behavior_capture`. Caretaker converts its retained event and resource
 evidence into the shadow eligibility check before execution. A normal capture
