@@ -199,3 +199,8 @@ record. The tab does not expose transition-acknowledgement controls. It does
 expose application of a selected approved proposal through the separately
 gated control-plane operation; the console does not bypass its review, timing,
 provenance, authority, or worker acknowledgement requirements.
+The same table includes bounded immutable policy-lineage rows for pending,
+applied, failed, and rolled-back transitions. Their detail view includes the
+policy IDs, fingerprints, authority metadata, effective time, and affected
+fields. Selecting a lineage row is read-only and cannot enable threshold
+review, application, or rollback controls.

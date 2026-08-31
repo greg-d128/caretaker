@@ -3934,6 +3934,36 @@ class CaretakerConsoleApp(App):
         policy_ledger = response.get("policy_ledger")
         policy_ledger = policy_ledger if isinstance(policy_ledger, (list, tuple)) else ()
         rows: list[dict[str, Any]] = []
+        # Policy lineage is immutable evidence. Keep it in the same bounded
+        # inspection table as aggregates and transitions so an operator can
+        # follow a policy change without turning a history record into an
+        # actionable proposal. The runtime projection is already bounded;
+        # retain an additional UI bound in case a compatible response is larger.
+        for item in policy_ledger[:100]:
+            if not isinstance(item, Mapping):
+                continue
+            fields = item.get("fields_affected")
+            if isinstance(fields, Mapping):
+                field_names = [str(name) for name in fields]
+            elif isinstance(fields, (list, tuple)):
+                field_names = [str(name) for name in fields]
+            else:
+                field_names = []
+            field_text = ", ".join(field_names) if field_names else "no field list"
+            authority = str(item.get("authority_type") or "unknown").upper()
+            rows.append({
+                "kind": "POLICY_HISTORY",
+                "target_id": item.get("aggregation_target_id") or item.get("target_id") or "-",
+                "scope": item.get("aggregation_scope") or "-",
+                "generation": item.get("policy_id") or item.get("policy_fingerprint") or "-",
+                "status": item.get("status") or "UNKNOWN",
+                "workers_or_acks": f"{authority} / {field_text}",
+                "deadline": item.get("effective_at") or item.get("recorded_at") or "-",
+                "payload": {
+                    "policy_ledger_record": dict(item),
+                    "read_only": True,
+                },
+            })
         for item in aggregates:
             if not isinstance(item, Mapping):
                 continue
@@ -4035,7 +4065,7 @@ class CaretakerConsoleApp(App):
         self.query_one("#adaptive-aggregation-status", Static).update(
             f"Aggregates {len(aggregates)} | "
             f"Transitions {len(transitions)} | "
-            f"Policy lineage {len(policy_ledger)} | "
+            f"Policy lineage {len(policy_ledger)} ({min(len(policy_ledger), 100)} shown) | "
             f"Proposal reviews {sum(1 for item in transitions if isinstance(item, Mapping) and item.get('review_status') not in {None, 'UNREVIEWED'})} | "
             f"Expired {expired} | "
             f"Distribution conflicts {sum(1 for item in rows if item['kind'] == 'CONFLICT')} | "

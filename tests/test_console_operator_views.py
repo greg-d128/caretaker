@@ -1342,6 +1342,60 @@ def test_console_displays_read_only_adaptive_transition_deadlines(tmp_path):
     asyncio.run(exercise())
 
 
+def test_console_displays_policy_lineage_as_read_only_history(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            async def request(command: str, **payload):
+                assert command == "adaptive-aggregation-status"
+                return {
+                    "ok": True,
+                    "aggregates": [],
+                    "transitions": [],
+                    "policy_context_available": True,
+                    "policy_contexts": [],
+                    "policy_ledger": [{
+                        "record_id": "record-1",
+                        "transition_id": "transition-1",
+                        "status": "APPLIED",
+                        "target_id": "app:charge",
+                        "aggregation_target_id": "app:charge::aggregation-scope::blue",
+                        "aggregation_scope": "blue",
+                        "policy_id": "policy-new",
+                        "policy_fingerprint": "policy-new-fingerprint",
+                        "prior_policy_id": "policy-old",
+                        "authority_type": "operator",
+                        "fields_affected": ["exception.occurrences", "soft_timing.enabled"],
+                        "effective_at": "2026-08-31T12:00:00+00:00",
+                    }],
+                }
+
+            app._request = request  # type: ignore[method-assign]
+            await app.refresh_adaptive_aggregation()
+
+            table = app.query_one("#adaptive-aggregation-table", DataTable)
+            assert table.row_count == 1
+            record = app._adaptive_aggregation_records[0]
+            assert record["kind"] == "POLICY_HISTORY"
+            assert "exception.occurrences" in record["workers_or_acks"]
+            assert record["payload"]["read_only"] is True
+            assert record["payload"]["policy_ledger_record"]["policy_id"] == "policy-new"
+            status = str(app.query_one("#adaptive-aggregation-status", Static).render())
+            assert "Policy lineage 1 (1 shown)" in status
+
+            app._selected_adaptive_threshold_request_id = "proposal-1"
+            app._selected_adaptive_transition_request_id = "transition-1"
+            key = next(iter(table.rows))
+            await app.on_data_table_row_selected(DataTable.RowSelected(table, 0, key))
+            assert app._selected_adaptive_threshold_request_id is None
+            assert app._selected_adaptive_transition_request_id is None
+            assert app.query_one("#adaptive-threshold-apply", Button).disabled is True
+            assert app.query_one("#adaptive-threshold-rollback", Button).disabled is True
+
+    asyncio.run(exercise())
+
+
 def test_console_reviews_selected_threshold_proposal_without_applying_policy(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 
