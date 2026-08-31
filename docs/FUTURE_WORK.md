@@ -2,7 +2,7 @@
 
 This document records intentionally incomplete, deferred, or proposed Caretaker capabilities. An item listed here is not an implicit security guarantee and must not be treated as implemented until it has code, policy semantics, tests, and documentation.
 
-Last reviewed: 2026-08-30
+Last reviewed: 2026-08-31
 
 ## Long-term roadmap and multi-scope research
 
@@ -1246,10 +1246,25 @@ Until this exists, restart is a rollback to deployed application code, not conti
 
 ## Other logging and storage work
 
-**Status: General future work.**
+**Status: Design clarified; audit-stream implementation remains future work.**
 
 - Extract the writer, attachment store, and system collector into independently restartable worker processes while preserving the current IPC and evidence contracts.
 - Add external `LogSink` implementations and reliable store-and-forward delivery to independent log collection systems.
+- Add the output-only `caretaker_audit.log` stream with the versioned envelope,
+  initial event registry, per-type example fixtures, redaction rules, and
+  explicit critical/important/ordinary/debug priority classes described in
+  [`LOGGING_RECORD_FORMAT.md`](LOGGING_RECORD_FORMAT.md).
+- Make audit hash chaining and signing mode policy controlled. Critical policy,
+  authority, worker-lifecycle, supervisor-state, and audit-delivery events must
+  be retained before their effects are reported complete; ordinary metrics may
+  use policy-approved sampling or loss with an explicit loss event.
+- Ship critical audit events to an independently secured external sink in
+  real time, with bounded local store-and-forward. The sink is never a command
+  channel, and the design requires a security review for injection, replay,
+  redaction, key lifecycle, and disk-full behavior.
+- Add a durable adaptive-policy transition ledger with immutable lineage,
+  resulting-policy IDs/fingerprints, effective and recorded timestamps, scope,
+  validation/acknowledgement references, and operator/deployment attribution.
 - Evaluate a formal forward-secure signature construction beyond epoch key evolution.
 - Add Zstandard and MessagePack as optional codecs without changing the standard-library default.
 - Add distributed multi-host ordering and clock-quality evidence.

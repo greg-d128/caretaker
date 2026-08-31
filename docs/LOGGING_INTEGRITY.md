@@ -49,3 +49,30 @@ python -m caretaker.run \
 The referenced attribute may be a signer instance, class, or zero-argument factory and must expose `public_identity()` plus `sign_artifact()` (or the legacy `sign_manifest()`). In `EXTERNAL_SIGNED` mode an absent/invalid signer fails rather than falling back to ephemeral signing.
 
 `publish_public_key_to_control_clients` controls whether the current public signing identity is returned by supervisor status/health requests. The independently retained Signing Identity Journal remains the durable verification source for ephemeral artifact history.
+
+## Proposed audit-stream signing policy
+
+The future `caretaker_audit.log` uses the same canonicalization and signer
+interfaces as runtime artifact manifests, but its signing decision is policy
+controlled per deployment. A least-friction deployment may use an unsealed local
+stream with checksums; a reviewed deployment may require a hash chain and
+`EPHEMERAL_SIGNED`; a high-assurance deployment may require an external signer
+and immediate external delivery. These modes are assurance choices, not
+authority grants.
+
+The console invocation key is ephemeral and memory-only. Its public key,
+fingerprint, OS UID/GID, process-start identity, and console invocation ID may be
+recorded in the audit stream so an action can be attributed to a console session.
+That key authenticates the session's attribution; it does not authorize a
+deployment-layer change. Permanent deployment changes continue to require the
+configured `policy-deployment` authority and its independently verifiable
+credentials. A deployment-aware console may present or request that credential,
+but must not derive it from the console key.
+
+Hash chaining detects alteration of a retained stream but does not prevent
+wholesale replacement of an unanchored local stream. The external sink should
+therefore receive critical audit events in real time, with bounded local
+store-and-forward for outages. The sink is a security boundary and must never be
+treated as a command channel. A full implementation still requires an external
+security review covering injection, replay, key lifecycle, redaction, delivery
+failure, and local-disk exhaustion.

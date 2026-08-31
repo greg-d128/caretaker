@@ -295,6 +295,40 @@ control plane live below:
 A signed runtime layer must reference the exact currently active framework/application/deployment
 fingerprints. A lease signed against an older policy generation is rejected.
 
+### Persistent adaptive-policy transitions
+
+An adaptive proposal is evidence, not authority. If policy permits a proposal to
+become persistent, the accepted transition is recorded as an immutable,
+content-addressed record and is separately validated against the active authority
+stack. The adaptive actor may suggest the change, but it cannot use its own
+signature to grant itself policy or deployment authority.
+
+The minimum record is a versioned canonical object containing:
+
+- `record_id` and `transition_id`;
+- `authority_type` (`operator`, `deployment`, or `adaptive` as the proposing or
+  approving actor; `adaptive` alone cannot activate a persistent change);
+- `prior_policy_id` and `policy_id` for the resulting policy;
+- prior and resulting policy fingerprints;
+- target and optional extended aggregation scope;
+- sorted canonical `fields_affected` paths and a bounded change description;
+- proposal, review, incident, validation, and worker-acknowledgement references;
+- transition state such as `PROPOSED`, `APPROVED`, `APPLIED`, `ROLLED_BACK`,
+  `SUPERSEDED`, `STALE`, or `REJECTED`;
+- `effective_at`, `recorded_at`, and authority expiration where applicable;
+- authority generation/fingerprint and signer identity, key fingerprint,
+  algorithm, encoding, and signature status;
+- `rollback_of` or `supersedes` when this record corrects another transition;
+- canonical-content hash and, when enabled, audit-stream sequence and previous
+  hash.
+
+The resulting policy snapshot, rather than the description, is the source of
+truth. Historical records remain visible and immutable after migration or
+supersession. A policy ID is not sufficient by itself: fingerprints bind the
+record to exact bytes, while lineage and state explain how it became effective.
+`effective_at` is distinct from `recorded_at` so delayed persistence and clock
+issues remain observable.
+
 ## Policy generations and Repair
 
 Every Repair incident, candidate, attempt, approval, and active validation is bound to the effective
