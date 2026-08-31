@@ -19,6 +19,7 @@ from caretaker.failure_corpus import (
     MAX_CORPUS_BYTES,
 )
 from caretaker.failure_corpus_cli import main as failure_corpus_report_main
+from caretaker.capsule import IncidentCapsuleStore
 from examples.failure_corpus.trusted_mappings import build_reviewed_harness
 
 
@@ -493,6 +494,56 @@ def test_observation_store_round_trip_and_filters(tmp_path: Path) -> None:
     assert loaded["environment_id"] == "process-linux"
     assert loaded["incident_id"] == "incident-123"
     assert summaries[0]["observation"]["observed"]["details"]["source"] == "trusted-test"
+
+
+def test_observation_store_records_verified_incident_capsule_fixture(tmp_path: Path) -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    incident_id = "00000000-0000-0000-0000-000000000091"
+    capsule_store = IncidentCapsuleStore(tmp_path)
+    capsule = capsule_store.create_placeholder(
+        incident_id,
+        incident_state={"signal": "EXCEPTION", "fixture": True},
+    )
+    observation = FailureCorpusHarness(corpus, runners={}).run("exception.unhandled")
+    store = FailureCorpusObservationStore(tmp_path)
+
+    record = store.record_incident_fixture(
+        observation,
+        corpus_id=corpus.corpus_id,
+        capsule_store=capsule_store,
+        capsule_id=capsule["capsule"]["capsule_id"],
+        environment_id="process-linux",
+    )
+
+    assert record["incident_id"] == incident_id
+    assert record["capsule"]["capsule_id"] == capsule["capsule"]["capsule_id"]
+    assert record["capsule"]["content_sha256"] == capsule["integrity"]["content_sha256"]
+    assert store.list_summaries()[0]["capsule"]["revision"] == 1
+
+
+def test_observation_store_refuses_unverified_incident_capsule_fixture(tmp_path: Path) -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    capsule_store = IncidentCapsuleStore(tmp_path)
+    capsule = capsule_store.create_placeholder("00000000-0000-0000-0000-000000000092")
+    path = capsule_store.directory / (
+        f"{capsule['capsule']['capsule_id']}.r1.json"
+    )
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "00000000-0000-0000-0000-000000000092",
+            "00000000-0000-0000-0000-000000000093",
+        ),
+        encoding="utf-8",
+    )
+    store = FailureCorpusObservationStore(tmp_path)
+
+    with pytest.raises(FailureCorpusError, match="cannot verify Incident Capsule"):
+        store.record_incident_fixture(
+            FailureCorpusHarness(corpus, runners={}).run("exception.unhandled"),
+            corpus_id=corpus.corpus_id,
+            capsule_store=capsule_store,
+            capsule_id=capsule["capsule"]["capsule_id"],
+        )
 
 
 def test_observation_store_rejects_corrupt_records_and_skips_them_in_listing(tmp_path: Path) -> None:

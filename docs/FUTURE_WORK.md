@@ -45,7 +45,8 @@ provides the container-level contract when a pre-provisioned image is present;
 an explicit Multipass runner now provides the separate-kernel request-transfer
 contract when a pre-provisioned guest is present. Repository-owned oracle
 mappings now cover the reviewed default manifest; real application runners,
-captured fixtures, and broader observed coverage remain future work.
+and capsule-linked fixtures are now supported, while a curated repository of
+captured real incidents and broader observed coverage remain future work.
 Bounded observations can now be stored separately from the manifest, with a
 content hash for corruption detection; that hash is not a substitute for
 external authenticated shipping. Expected metadata must remain separate from actual evidence; loading or listing

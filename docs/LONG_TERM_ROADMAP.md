@@ -68,7 +68,9 @@ required before this priority can be considered complete. The current
 container and VM runners require pre-provisioned trusted environments and do
 not discover or execute commands from corpus metadata. Repository-owned oracle
 mappings now cover the reviewed manifest, but do not establish real observed
-application coverage.
+application coverage. Persisted observations can now carry a verified
+Incident-Capsule reference without mutating the capsule; a curated repository
+of captured real incidents remains future work.
 
 ### Incident Capsules and post-mortem capture
 

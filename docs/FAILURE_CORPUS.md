@@ -106,6 +106,14 @@ The command mapping is trusted test infrastructure and must be reviewed and
 managed separately from corpus data. Caretaker does not treat a successful
 observation as authority, validation, or permission to change an application.
 
+When a real Incident Capsule is available, use
+`FailureCorpusObservationStore.record_incident_fixture()`. It loads the
+selected capsule through `IncidentCapsuleStore`, which verifies its immutable
+revision chain, and records only the capsule ID, incident ID, revision, and
+verified content hash beside the observation. The capsule is not modified and
+the corpus observation remains separate evidence; a missing or corrupt capsule
+prevents the fixture from being written.
+
 When container isolation is required, `FailureCorpusPodmanRunner` accepts an
 explicit local image and command mapping. It verifies rootless Podman and
 local image presence before each mapped run and never pulls an image. The

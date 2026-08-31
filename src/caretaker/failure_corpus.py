@@ -992,6 +992,7 @@ class FailureCorpusObservationStore:
         corpus_id: str,
         environment_id: str | None = None,
         incident_id: str | None = None,
+        capsule_reference: Mapping[str, Any] | None = None,
         recorded_at: datetime | None = None,
     ) -> dict[str, Any]:
         if not isinstance(observation, FailureObservation):
@@ -999,6 +1000,32 @@ class FailureCorpusObservationStore:
         corpus_name = _identifier(corpus_id, field="corpus_id")
         environment = _text(environment_id, field="environment_id", maximum=128) if environment_id is not None else None
         incident = _text(incident_id, field="incident_id", maximum=128) if incident_id is not None else None
+        capsule = None
+        if capsule_reference is not None:
+            if set(capsule_reference) != {
+                "capsule_id", "incident_id", "revision", "content_sha256"
+            }:
+                raise FailureCorpusError("capsule reference has an unsupported shape")
+            try:
+                capsule_id = str(UUID(str(capsule_reference["capsule_id"])))
+                capsule_incident_id = str(UUID(str(capsule_reference["incident_id"])))
+            except (TypeError, ValueError) as exc:
+                raise FailureCorpusError("capsule reference has an invalid identity") from exc
+            revision = capsule_reference["revision"]
+            digest = capsule_reference["content_sha256"]
+            if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+                raise FailureCorpusError("capsule reference revision must be a positive integer")
+            if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+                raise FailureCorpusError("capsule reference content hash is invalid")
+            capsule = {
+                "capsule_id": capsule_id,
+                "incident_id": capsule_incident_id,
+                "revision": revision,
+                "content_sha256": digest,
+            }
+            if incident is not None and incident != capsule_incident_id:
+                raise FailureCorpusError("capsule reference incident does not match incident_id")
+            incident = capsule_incident_id
         timestamp = recorded_at or datetime.now(timezone.utc)
         if not isinstance(timestamp, datetime):
             raise FailureCorpusError("recorded_at must be a datetime")
@@ -1015,6 +1042,8 @@ class FailureCorpusObservationStore:
             "incident_id": incident,
             "observation": observation.summary(),
         }
+        if capsule is not None:
+            payload["capsule"] = capsule
         encoded = self._canonical(payload)
         envelope = {
             "record": payload,
@@ -1032,6 +1061,44 @@ class FailureCorpusObservationStore:
             pass
         temporary.replace(path)
         return {**payload, "content_sha256": envelope["content_sha256"]}
+
+    def record_incident_fixture(
+        self,
+        observation: FailureObservation,
+        *,
+        corpus_id: str,
+        capsule_store: Any,
+        capsule_id: str | UUID,
+        environment_id: str | None = None,
+        recorded_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Record an observation only after loading a verified Incident Capsule."""
+        try:
+            envelope = capsule_store.load(capsule_id)
+        except Exception as exc:
+            raise FailureCorpusError(
+                f"cannot verify Incident Capsule for failure fixture: {type(exc).__name__}: {exc}"
+            ) from exc
+        capsule = envelope.get("capsule") if isinstance(envelope, Mapping) else None
+        integrity = envelope.get("integrity") if isinstance(envelope, Mapping) else None
+        if not isinstance(capsule, Mapping) or not isinstance(integrity, Mapping):
+            raise FailureCorpusError("verified Incident Capsule envelope is malformed")
+        digest = integrity.get("content_sha256")
+        if not isinstance(digest, str):
+            raise FailureCorpusError("verified Incident Capsule has no content hash")
+        return self.record(
+            observation,
+            corpus_id=corpus_id,
+            environment_id=environment_id,
+            incident_id=str(capsule.get("incident_id") or ""),
+            capsule_reference={
+                "capsule_id": capsule.get("capsule_id"),
+                "incident_id": capsule.get("incident_id"),
+                "revision": capsule.get("revision"),
+                "content_sha256": digest,
+            },
+            recorded_at=recorded_at,
+        )
 
     def _load_path(self, path: Path) -> dict[str, Any]:
         if path.is_symlink() or not path.is_file():
@@ -1100,6 +1167,7 @@ class FailureCorpusObservationStore:
                 "recorded_at": record.get("recorded_at"),
                 "environment_id": record.get("environment_id"),
                 "incident_id": record.get("incident_id"),
+                "capsule": record.get("capsule"),
                 "observation": dict(observation),
                 "content_sha256": record.get("content_sha256"),
             })
