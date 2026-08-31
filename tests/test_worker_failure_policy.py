@@ -38,6 +38,9 @@ class FakeRuntime:
     def event(self, **kwargs):
         self.events.append(kwargs)
 
+    def close(self):
+        self.closed = True
+
 
 class FakeAudit:
     def __init__(self) -> None:
@@ -45,6 +48,24 @@ class FakeAudit:
 
     def emit(self, event_type, **kwargs):
         self.events.append({"event_type": event_type, **kwargs})
+
+
+def test_supervisor_lifecycle_emits_start_and_stop_audit_events() -> None:
+    runtime = FakeRuntime()
+    supervisor = CaretakerApplicationSupervisor(runtime)
+
+    supervisor.start()
+    supervisor.stop()
+
+    assert [item["event_type"] for item in runtime.audit.events] == [
+        "SUPERVISOR_STATE_CHANGED",
+        "SUPERVISOR_STATE_CHANGED",
+    ]
+    assert runtime.audit.events[0]["outcome"]["state"] == "STARTED"
+    assert runtime.audit.events[1]["outcome"]["state"] == "STOPPED"
+    assert runtime.audit.events[0]["scope"]["worker_id"] == str(
+        supervisor.supervisor_health.worker_id
+    )
 
 
 def test_worker_failure_records_incident_and_uses_callback_owned_restart() -> None:

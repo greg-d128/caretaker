@@ -747,6 +747,16 @@ class CaretakerApplicationSupervisor:
     def start(self) -> None:
         self.workers.heartbeat(self.supervisor_health.worker_id)
         self.watchdog.start()
+        self._audit_event(
+            "SUPERVISOR_STATE_CHANGED",
+            actor={"type": "supervisor", "id": str(self.supervisor_health.worker_id)},
+            scope={"worker_id": str(self.supervisor_health.worker_id)},
+            outcome={"state": "STARTED"},
+            details={
+                "application_pid": self.application_pid,
+                "application_process_group_id": self.application_process_group_id,
+            },
+        )
 
     def _worker_unhealthy(self, worker: WorkerHealth) -> None:
         self.runtime.event(
@@ -1599,6 +1609,13 @@ class CaretakerApplicationSupervisor:
     def stop(self) -> None:
         self._stop.set()
         self.watchdog.stop()
+        self._audit_event(
+            "SUPERVISOR_STATE_CHANGED",
+            actor={"type": "supervisor", "id": str(self.supervisor_health.worker_id)},
+            scope={"worker_id": str(self.supervisor_health.worker_id)},
+            outcome={"state": "STOPPED"},
+            details={"application_pid": self.application_pid},
+        )
         self.runtime.close()
 
 
