@@ -161,6 +161,15 @@ and shadow counts, comparison outcomes, invalid evidence, and an evidence hash.
 If the store is unavailable or the policy/authority context is stale, the
 projection reports that state instead of treating missing evidence as success.
 
+`RolloutReadinessRequirements` provides optional, explicit thresholds for
+reviewing the next lifecycle stage. It can require minimum total, completed,
+shadow, candidate-authoritative, or current-worker counts, and maximum failure,
+mismatch, candidate-failure, or invalid-observation counts. The coordinator
+reports `READY`, `NOT_READY`, `UNAVAILABLE`, `NOT_CONFIGURED`, or
+`NOT_APPLICABLE` with each check and the evidence hash. Thresholds are disabled
+by default, and a `READY` result is advisory evidence only: an authorized
+operator or deployment must still call the normal ledger transition.
+
 The current runtime's built-in writer, event server, control server, and system
 collector are not automatically admitted as rollout workers because they do
 not yet receive deployment-specific worker authority packets. Deployment-owned

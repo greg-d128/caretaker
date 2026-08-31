@@ -17,6 +17,7 @@ from caretaker import (
     RepairRolloutLedger,
     RepairRolloutPolicy,
     RepairRolloutStage,
+    RolloutReadinessRequirements,
     RolloutRoutingPolicy,
     SQLiteRepairStore,
     ShadowExecutionError,
@@ -748,6 +749,57 @@ def test_rollout_coordinator_does_not_treat_missing_execution_store_as_progress(
     ).status(record.rollout_id)
 
     assert status["rollouts"][0]["execution_evidence"]["status"] == "UNAVAILABLE"
+    assert status["rollouts"][0]["readiness"]["status"] == "NOT_CONFIGURED"
+
+
+def test_rollout_readiness_requires_policy_thresholds_and_current_worker() -> None:
+    store = InMemoryRepairStore()
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            routing=RolloutRoutingPolicy(canary_percentage=100),
+            readiness=RolloutReadinessRequirements(
+                minimum_observations=1,
+                minimum_completed_observations=1,
+                maximum_failed_observations=0,
+                minimum_candidate_authoritative_observations=1,
+                minimum_current_workers=1,
+            ),
+        ),
+        store=store,
+    )
+    validated = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, validated, RepairRolloutStage.CANARY)
+    coordinator = RepairRolloutCoordinator(
+        ledger,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        store=store,
+    )
+
+    before = coordinator.readiness(record.rollout_id)
+    assert before["status"] == "NOT_READY"
+    assert before["target_stage"] == "active"
+    assert before["checks"]["current_workers"]["passed"] is False
+
+    coordinator.acknowledge_worker(
+        rollout_id=record.rollout_id,
+        worker_id="worker-a",
+        worker_process_id=404,
+    )
+    result = _execute(
+        ledger,
+        record,
+        lambda value: value,
+        lambda value: value + 1,
+        execution_store=store,
+    )
+    assert result.candidate_authoritative is True
+
+    after = coordinator.readiness(record.rollout_id)
+    assert after["status"] == "READY"
+    assert after["checks"]["candidate_authoritative_observations"]["passed"] is True
+    assert len(ledger.transitions(record.rollout_id)) == 3
 
 
 def test_sqlite_rollout_worker_acknowledgement_survives_coordinator_restart(tmp_path) -> None:

@@ -981,6 +981,11 @@ summary of durable application-wide rollout execution evidence, while missing
 or stale evidence is reported as unavailable rather than counted as progress.
 The Rollouts console tab displays the current-versus-acknowledged worker counts
 alongside lifecycle and execution evidence; it remains read-only.
+Optional `RolloutReadinessRequirements` now evaluates explicit evidence
+thresholds for the next stage and reports each passing or failing check without
+advancing the rollout. Thresholds remain disabled by default; staged authority,
+atomic fleet counters, and deployment-owned worker orchestration remain future
+work.
 
 Future Repair should provide more operator and policy control over how a validated
 candidate is introduced. Potential execution strategies include:

@@ -99,6 +99,62 @@ class RolloutRoutingPolicy:
 
 
 @dataclass(frozen=True, slots=True)
+class RolloutReadinessRequirements:
+    """Optional evidence thresholds for a read-only stage review.
+
+    ``None`` disables an individual check.  These requirements are deliberately
+    separate from lifecycle authority: satisfying them only produces a review
+    result, and never advances a rollout or changes the authoritative
+    implementation.
+    """
+
+    minimum_observations: int | None = None
+    minimum_completed_observations: int | None = None
+    maximum_failed_observations: int | None = None
+    minimum_shadow_observations: int | None = None
+    maximum_shadow_mismatches: int | None = None
+    minimum_candidate_authoritative_observations: int | None = None
+    maximum_candidate_failures: int | None = None
+    maximum_invalid_observations: int | None = None
+    minimum_current_workers: int | None = None
+
+    def __post_init__(self) -> None:
+        for name in (
+            "minimum_observations",
+            "minimum_completed_observations",
+            "maximum_failed_observations",
+            "minimum_shadow_observations",
+            "maximum_shadow_mismatches",
+            "minimum_candidate_authoritative_observations",
+            "maximum_candidate_failures",
+            "maximum_invalid_observations",
+            "minimum_current_workers",
+        ):
+            value = getattr(self, name)
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+            ):
+                raise ValueError(f"rollout.readiness.{name} must be a non-negative integer or null")
+
+    @property
+    def configured(self) -> bool:
+        return any(
+            getattr(self, name) is not None
+            for name in (
+                "minimum_observations",
+                "minimum_completed_observations",
+                "maximum_failed_observations",
+                "minimum_shadow_observations",
+                "maximum_shadow_mismatches",
+                "minimum_candidate_authoritative_observations",
+                "maximum_candidate_failures",
+                "maximum_invalid_observations",
+                "minimum_current_workers",
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class RepairRolloutPolicy:
     """Controls the ledger's authority and lifecycle boundaries.
 
@@ -116,6 +172,9 @@ class RepairRolloutPolicy:
     require_deployment_authority_for_permanent: bool = True
     require_incident_for_active_revocation: bool = True
     routing: RolloutRoutingPolicy = field(default_factory=RolloutRoutingPolicy)
+    readiness: RolloutReadinessRequirements = field(
+        default_factory=RolloutReadinessRequirements
+    )
 
     def __post_init__(self) -> None:
         for name in (
@@ -132,6 +191,10 @@ class RepairRolloutPolicy:
                 raise ValueError(f"rollout.{name} must be a boolean")
         if not isinstance(self.routing, RolloutRoutingPolicy):
             raise ValueError("rollout.routing must be a RolloutRoutingPolicy")
+        if not isinstance(self.readiness, RolloutReadinessRequirements):
+            raise ValueError(
+                "rollout.readiness must be a RolloutReadinessRequirements"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -877,6 +940,7 @@ class RepairRolloutCoordinator:
                 "stale_acknowledgement_count": stale,
                 "invalid_acknowledgement_count": invalid,
                 "execution_evidence": self._execution_evidence(record),
+                "readiness": self.readiness(record.rollout_id),
                 "workers": [
                     {
                         "worker_id": item.worker_id,
@@ -893,6 +957,137 @@ class RepairRolloutCoordinator:
             "policy_fingerprint": self.policy_fingerprint,
             "rollouts": output,
         }
+
+    def readiness(self, rollout_id: UUID) -> dict[str, Any]:
+        """Assess policy-supplied evidence thresholds without mutating state."""
+
+        record = self.ledger.get(rollout_id)
+        next_stage = {
+            RepairRolloutStage.PROPOSED: RepairRolloutStage.VALIDATED,
+            RepairRolloutStage.VALIDATED: RepairRolloutStage.SHADOW,
+            RepairRolloutStage.SHADOW: RepairRolloutStage.CANARY,
+            RepairRolloutStage.CANARY: RepairRolloutStage.ACTIVE,
+            RepairRolloutStage.ACTIVE: RepairRolloutStage.RETIRED,
+        }.get(record.stage)
+        result: dict[str, Any] = {
+            "read_only": True,
+            "authority_granted": False,
+            "rollout_id": str(record.rollout_id),
+            "current_stage": record.stage.value,
+            "target_stage": next_stage.value if next_stage is not None else None,
+        }
+        if next_stage is None:
+            result.update({
+                "status": "NOT_APPLICABLE",
+                "reason": "rollout is terminal and has no next stage",
+                "checks": {},
+            })
+            return result
+        requirements = self.ledger.policy.readiness
+        if not requirements.configured:
+            result.update({
+                "status": "NOT_CONFIGURED",
+                "reason": "no rollout readiness thresholds are configured",
+                "checks": {},
+            })
+            return result
+        if self.store is None:
+            result.update({
+                "status": "UNAVAILABLE",
+                "reason": "rollout evidence store is not configured",
+                "checks": {},
+            })
+            return result
+        execution_reader = getattr(self.store, "all_rollout_executions", None)
+        acknowledgement_reader = getattr(
+            self.store, "all_rollout_worker_acknowledgements", None
+        )
+        if not callable(execution_reader) or not callable(acknowledgement_reader):
+            result.update({
+                "status": "UNAVAILABLE",
+                "reason": "rollout store does not support readiness evidence",
+                "checks": {},
+            })
+            return result
+        try:
+            self._check_context(record)
+            summary = self.ledger.execution_summary(
+                record.rollout_id,
+                policy_fingerprint=self.policy_fingerprint,
+            )
+        except RepairRolloutError as exc:
+            result.update({
+                "status": "STALE_OR_UNAVAILABLE",
+                "reason": str(exc),
+                "checks": {},
+            })
+            return result
+
+        current_workers = len({
+            item.worker_id
+            for item in self._acknowledgements_for(record.rollout_id)
+            if _valid_worker_acknowledgement(item)
+            and self._ack_matches_record(item, record)
+        })
+        checks: dict[str, dict[str, Any]] = {}
+
+        def minimum(name: str, observed: int, required: int | None) -> None:
+            if required is not None:
+                checks[name] = {
+                    "observed": observed,
+                    "required": required,
+                    "passed": observed >= required,
+                }
+
+        def maximum(name: str, observed: int, allowed: int | None) -> None:
+            if allowed is not None:
+                checks[name] = {
+                    "observed": observed,
+                    "allowed": allowed,
+                    "passed": observed <= allowed,
+                }
+
+        minimum("observations", summary.observation_count, requirements.minimum_observations)
+        minimum(
+            "completed_observations",
+            summary.completed_count,
+            requirements.minimum_completed_observations,
+        )
+        maximum("failed_observations", summary.failed_count, requirements.maximum_failed_observations)
+        minimum("shadow_observations", summary.shadow_count, requirements.minimum_shadow_observations)
+        maximum(
+            "shadow_mismatches",
+            summary.shadow_mismatch_count,
+            requirements.maximum_shadow_mismatches,
+        )
+        minimum(
+            "candidate_authoritative_observations",
+            summary.candidate_authoritative_count,
+            requirements.minimum_candidate_authoritative_observations,
+        )
+        maximum(
+            "candidate_failures",
+            summary.candidate_failure_count,
+            requirements.maximum_candidate_failures,
+        )
+        maximum(
+            "invalid_observations",
+            summary.invalid_observation_count,
+            requirements.maximum_invalid_observations,
+        )
+        minimum("current_workers", current_workers, requirements.minimum_current_workers)
+        failed_checks = [name for name, check in checks.items() if not check["passed"]]
+        result.update({
+            "status": "READY" if not failed_checks else "NOT_READY",
+            "reason": (
+                "all configured evidence thresholds passed"
+                if not failed_checks
+                else "evidence thresholds not met: " + ", ".join(failed_checks)
+            ),
+            "checks": checks,
+            "evidence_hash": summary.evidence_hash,
+        })
+        return result
 
     def _execution_evidence(self, record: RepairRolloutRecord) -> dict[str, Any]:
         if self.store is None:

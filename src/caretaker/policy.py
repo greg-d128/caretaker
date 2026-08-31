@@ -564,6 +564,7 @@ def _human_readable(policy: RepairPolicy) -> str:
             f"  shadow sample: {policy.rollout.routing.shadow_sample_percentage}%",
             f"  canary percentage: {policy.rollout.routing.canary_percentage}%",
             f"  active candidate percentage: {policy.rollout.routing.active_candidate_percentage}%",
+            f"  rollout readiness thresholds configured: {policy.rollout.readiness.configured}",
             f"  direct field activation: {policy.rollout.allow_direct_field_activation}",
             f"  deployment authority required for permanence: {policy.rollout.require_deployment_authority_for_permanent}",
             "Validation:",
