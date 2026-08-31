@@ -80,7 +80,8 @@ maximum_event_bytes = 4096
 
 The current implementation writes the output-only local stream below the main
 logging directory and emits startup, policy, authority-snapshot, worker-authority,
-supervisor-state, worker-failure, incident, policy-rejection,
+supervisor-state, worker-failure, incident, policy-rejection and policy-
+supersession,
 validation-decision, replacement, and recovery-decision events. In a
 supervised run, validation decisions cross
 the output-only supervisor control socket as bounded, allow-listed evidence;

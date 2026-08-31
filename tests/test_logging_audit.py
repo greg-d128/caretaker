@@ -176,6 +176,9 @@ def test_policy_reload_audit_binds_prior_and_resulting_snapshots(tmp_path: Path)
     applied = [row for row in rows if row["event_type"] == "POLICY_APPLIED"][-1]
     assert applied["policy"]["prior_policy_id"] == str(old_snapshot_id)
     assert applied["policy"]["policy_id"] != str(old_snapshot_id)
+    superseded = [row for row in rows if row["event_type"] == "POLICY_SUPERSEDED"][-1]
+    assert superseded["details"]["superseded_policy_id"] == str(old_snapshot_id)
+    assert superseded["details"]["replacement_policy_id"] == applied["policy"]["policy_id"]
 
 
 def test_rejected_policy_reload_is_audited_without_raw_error_text(tmp_path: Path) -> None:

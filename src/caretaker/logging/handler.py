@@ -323,6 +323,24 @@ class LoggingRuntime:
             details={"restart_bound_changes": list(restart_warnings)},
             priority=EvidencePriority.CRITICAL,
         )
+        self.audit.emit(
+            "POLICY_SUPERSEDED",
+            actor={"type": "supervisor"},
+            scope={"prior_policy_id": str(old_snapshot_id)},
+            policy={
+                "prior_policy_id": str(old_snapshot_id),
+                "policy_id": str(snapshot.snapshot_id),
+                "prior_fingerprint": old_hash,
+                "fingerprint": snapshot.content_hash,
+                "authority_generation": self.effective.generation,
+            },
+            outcome={"state": "SUPERSEDED"},
+            details={
+                "superseded_policy_id": str(old_snapshot_id),
+                "replacement_policy_id": str(snapshot.snapshot_id),
+            },
+            priority=EvidencePriority.IMPORTANT,
+        )
 
 
     def refresh_authority_policy(self) -> None:
