@@ -12,6 +12,7 @@ from caretaker.failure_corpus import (
     FailureCorpusObservationStore,
     MAX_CORPUS_BYTES,
 )
+from caretaker.failure_corpus_cli import main as failure_corpus_report_main
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -339,6 +340,26 @@ def test_observation_store_persists_and_verifies_content_addressed_report(tmp_pa
     path.write_text(path.read_text(encoding="utf-8").replace("NOT_MAPPED", "MATCHED"), encoding="utf-8")
     with pytest.raises(FailureCorpusError, match="content hash"):
         store.load_outcome_report(report["content_sha256"])
+
+
+def test_failure_corpus_report_cli_is_read_only_and_can_persist(tmp_path: Path, capsys) -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    store = FailureCorpusObservationStore(tmp_path)
+    store.record(
+        FailureCorpusHarness(corpus, runners={}).run("exception.unhandled"),
+        corpus_id=corpus.corpus_id,
+    )
+
+    assert failure_corpus_report_main([
+        "--data-directory", str(tmp_path),
+        "--corpus-id", corpus.corpus_id,
+        "--persist",
+    ]) == 0
+    output = json.loads(capsys.readouterr().out)
+
+    assert output["records_available"] == 1
+    assert output["status_counts"] == {"NOT_MAPPED": 1}
+    assert len(tuple((tmp_path / "failure-corpus-reports").glob("*.json"))) == 1
 
 
 def test_trusted_harness_run_all_is_bounded_and_preserves_unmapped_scenarios() -> None:

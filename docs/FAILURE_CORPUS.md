@@ -85,6 +85,21 @@ counts corrupt records, and includes each included record's ID and content hash
 as provenance. It intentionally omits full observed details and is not an
 authorization or validation result.
 
+The same report is available as the read-only
+`caretaker-failure-corpus-report` command. It reads the local observation store
+and emits JSON; `--persist` additionally retains the report by its content
+hash:
+
+```sh
+caretaker-failure-corpus-report \
+  --data-directory ./caretaker-data \
+  --corpus-id caretaker-default-failure-corpus-v1 \
+  --persist
+```
+
+The command never discovers or invokes a runner, contacts a supervisor, or
+changes capsule, policy, repair, or authority state.
+
 ## Current status and next work
 
 The loader, manifest, explicit trusted harness, bounded observation store, and
