@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
@@ -241,6 +242,53 @@ class RolloutExecutionObservation:
     content_hash: str
 
 
+@dataclass(frozen=True, slots=True)
+class RolloutExecutionSummary:
+    """Read-only aggregate of integrity-checked rollout observations."""
+
+    rollout_id: UUID
+    target_id: str
+    candidate_id: UUID
+    policy_fingerprint: str
+    observation_count: int
+    completed_count: int
+    failed_count: int
+    candidate_execution_count: int
+    candidate_authoritative_count: int
+    candidate_success_count: int
+    candidate_failure_count: int
+    shadow_count: int
+    shadow_equivalent_count: int
+    shadow_mismatch_count: int
+    shadow_inconclusive_count: int
+    invalid_observation_count: int
+    stage_counts: Mapping[str, int]
+    evidence_hash: str
+
+
+def _execution_observation_payload(
+    observation: RolloutExecutionObservation,
+) -> dict[str, Any]:
+    return {
+        "observation_id": str(observation.observation_id),
+        "rollout_id": str(observation.rollout_id),
+        "target_id": observation.target_id,
+        "candidate_id": str(observation.candidate_id),
+        "stage": observation.stage.value,
+        "strategy": observation.strategy,
+        "authoritative_implementation": observation.authoritative_implementation.value,
+        "candidate_executed": observation.candidate_executed,
+        "candidate_authoritative": observation.candidate_authoritative,
+        "original_succeeded": observation.original_succeeded,
+        "candidate_succeeded": observation.candidate_succeeded,
+        "equivalent": observation.equivalent,
+        "execution_state": observation.execution_state,
+        "exception_type": observation.exception_type,
+        "decision_hash": observation.decision_hash,
+        "policy_fingerprint": observation.policy_fingerprint,
+    }
+
+
 class RepairRolloutStore(Protocol):
     def record_rollout(self, record: RepairRolloutRecord) -> None: ...
     def all_rollouts(self) -> tuple[Any, ...]: ...
@@ -466,6 +514,31 @@ class RepairRolloutLedger:
         if rollout_id is not None:
             values = (item for item in values if item.rollout_id == rollout_id)
         return tuple(sorted(values, key=lambda item: item.created_at))
+
+    def execution_summary(
+        self,
+        rollout_id: UUID,
+        *,
+        policy_fingerprint: str,
+    ) -> RolloutExecutionSummary:
+        """Summarize persisted execution evidence without changing rollout state."""
+
+        record = self._get(rollout_id)
+        self._check_context(record, policy_fingerprint, record.authority_fingerprint)
+        if self.store is None:
+            observations: tuple[Any, ...] = ()
+        else:
+            reader = getattr(self.store, "all_rollout_executions", None)
+            if not callable(reader):
+                raise RepairRolloutError(
+                    "rollout store does not support execution observations"
+                )
+            observations = tuple(reader())
+        return summarize_rollout_executions(
+            record,
+            observations,
+            policy_fingerprint=policy_fingerprint,
+        )
 
     def _check_transition(
         self,
@@ -1122,7 +1195,13 @@ def _build_execution_observation(
     candidate_succeeded = (
         shadow.candidate_succeeded
         if shadow is not None
-        else (True if result is not None and decision.candidate_authoritative else None)
+        else (
+            True
+            if result is not None and decision.candidate_authoritative
+            else False
+            if error is not None and decision.candidate_authoritative
+            else None
+        )
     )
     original_succeeded = shadow.original_succeeded if shadow is not None else None
     equivalent = shadow.equivalent if shadow is not None else None
@@ -1181,6 +1260,173 @@ def _persist_execution_observation(
             "rollout execution store does not support execution observations"
         )
     recorder(observation)
+
+
+def summarize_rollout_executions(
+    record: RepairRolloutRecord,
+    observations: Iterable[RolloutExecutionObservation | Mapping[str, Any]],
+    *,
+    policy_fingerprint: str,
+) -> RolloutExecutionSummary:
+    """Build an integrity-checked, read-only summary for staged review.
+
+    Observations from another rollout, candidate, target, policy, or a
+    tampered content hash are retained only in ``invalid_observation_count``.
+    No observation can change the supplied rollout record.
+    """
+
+    stage_counts: Counter[str] = Counter()
+    observation_count = 0
+    completed_count = 0
+    failed_count = 0
+    candidate_execution_count = 0
+    candidate_authoritative_count = 0
+    candidate_success_count = 0
+    candidate_failure_count = 0
+    shadow_count = 0
+    shadow_equivalent_count = 0
+    shadow_mismatch_count = 0
+    shadow_inconclusive_count = 0
+    invalid_count = 0
+    for raw in observations:
+        observation = _coerce_execution_observation(raw)
+        if observation is None or not _valid_execution_observation(observation):
+            invalid_count += 1
+            continue
+        if (
+            observation.rollout_id != record.rollout_id
+            or observation.target_id != record.target_id
+            or observation.candidate_id != record.candidate_id
+            or observation.policy_fingerprint != policy_fingerprint
+            or observation.policy_fingerprint != record.policy_fingerprint
+            or observation.content_hash != _digest(_execution_observation_payload(observation))
+        ):
+            invalid_count += 1
+            continue
+        observation_count += 1
+        stage_counts[observation.stage.value] += 1
+        if observation.execution_state == "COMPLETED":
+            completed_count += 1
+        else:
+            failed_count += 1
+        if observation.candidate_executed:
+            candidate_execution_count += 1
+        if observation.candidate_authoritative:
+            candidate_authoritative_count += 1
+        if observation.candidate_succeeded is True:
+            candidate_success_count += 1
+        elif observation.candidate_succeeded is False:
+            candidate_failure_count += 1
+        if observation.strategy == "shadow":
+            shadow_count += 1
+            if observation.equivalent is True:
+                shadow_equivalent_count += 1
+            elif observation.equivalent is False:
+                shadow_mismatch_count += 1
+            else:
+                shadow_inconclusive_count += 1
+    summary_payload = {
+        "rollout_id": str(record.rollout_id),
+        "target_id": record.target_id,
+        "candidate_id": str(record.candidate_id),
+        "policy_fingerprint": policy_fingerprint,
+        "observation_count": observation_count,
+        "completed_count": completed_count,
+        "failed_count": failed_count,
+        "candidate_execution_count": candidate_execution_count,
+        "candidate_authoritative_count": candidate_authoritative_count,
+        "candidate_success_count": candidate_success_count,
+        "candidate_failure_count": candidate_failure_count,
+        "shadow_count": shadow_count,
+        "shadow_equivalent_count": shadow_equivalent_count,
+        "shadow_mismatch_count": shadow_mismatch_count,
+        "shadow_inconclusive_count": shadow_inconclusive_count,
+        "invalid_observation_count": invalid_count,
+        "stage_counts": dict(sorted(stage_counts.items())),
+    }
+    return RolloutExecutionSummary(
+        rollout_id=record.rollout_id,
+        target_id=record.target_id,
+        candidate_id=record.candidate_id,
+        policy_fingerprint=policy_fingerprint,
+        observation_count=observation_count,
+        completed_count=completed_count,
+        failed_count=failed_count,
+        candidate_execution_count=candidate_execution_count,
+        candidate_authoritative_count=candidate_authoritative_count,
+        candidate_success_count=candidate_success_count,
+        candidate_failure_count=candidate_failure_count,
+        shadow_count=shadow_count,
+        shadow_equivalent_count=shadow_equivalent_count,
+        shadow_mismatch_count=shadow_mismatch_count,
+        shadow_inconclusive_count=shadow_inconclusive_count,
+        invalid_observation_count=invalid_count,
+        stage_counts=dict(sorted(stage_counts.items())),
+        evidence_hash=_digest(summary_payload),
+    )
+
+
+def _valid_execution_observation(observation: RolloutExecutionObservation) -> bool:
+    return (
+        observation.execution_state in {"COMPLETED", "FAILED"}
+        and (observation.exception_type is None or observation.exception_type.strip() != "")
+        and observation.strategy.strip() != ""
+    )
+
+
+def _coerce_execution_observation(
+    raw: RolloutExecutionObservation | Mapping[str, Any],
+) -> RolloutExecutionObservation | None:
+    if isinstance(raw, RolloutExecutionObservation):
+        return raw
+    if not isinstance(raw, Mapping):
+        return None
+    try:
+        return RolloutExecutionObservation(
+            observation_id=UUID(str(raw["observation_id"])),
+            rollout_id=UUID(str(raw["rollout_id"])),
+            target_id=str(raw["target_id"]),
+            candidate_id=UUID(str(raw["candidate_id"])),
+            stage=_coerce_rollout_enum(raw["stage"], RepairRolloutStage),
+            strategy=str(raw["strategy"]),
+            authoritative_implementation=_coerce_rollout_enum(
+                raw["authoritative_implementation"],
+                RepairAuthoritativeImplementation,
+            ),
+            candidate_executed=bool(raw["candidate_executed"]),
+            candidate_authoritative=bool(raw["candidate_authoritative"]),
+            original_succeeded=_optional_bool(raw.get("original_succeeded")),
+            candidate_succeeded=_optional_bool(raw.get("candidate_succeeded")),
+            equivalent=_optional_bool(raw.get("equivalent")),
+            execution_state=str(raw["execution_state"]),
+            exception_type=(
+                str(raw["exception_type"])
+                if raw.get("exception_type") is not None
+                else None
+            ),
+            decision_hash=str(raw["decision_hash"]),
+            policy_fingerprint=str(raw["policy_fingerprint"]),
+            created_at=datetime.fromisoformat(str(raw["created_at"])),
+            content_hash=str(raw["content_hash"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _coerce_rollout_enum(value: Any, enum_type: type[Enum]) -> Any:
+    text = str(value)
+    try:
+        return enum_type(text)
+    except ValueError:
+        return enum_type[text.upper()]
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    raise ValueError("expected a boolean or null")
 
 
 def _execute_rollout_decision(

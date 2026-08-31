@@ -523,6 +523,33 @@ def test_execute_rollout_persists_bounded_execution_observation() -> None:
     assert len(store.all_rollout_executions()) == 1
     assert "secret-result" not in repr(observation)
 
+    summary = ledger.execution_summary(
+        record.rollout_id,
+        policy_fingerprint="policy-hash",
+    )
+    assert summary.observation_count == 1
+    assert summary.completed_count == 1
+    assert summary.failed_count == 0
+    assert summary.candidate_execution_count == 1
+    assert summary.candidate_authoritative_count == 1
+    assert summary.candidate_success_count == 1
+    assert summary.stage_counts == {"canary": 1}
+    assert summary.invalid_observation_count == 0
+
+    store.record_rollout_execution(
+        replace(
+            observation,
+            observation_id=uuid4(),
+            content_hash="tampered",
+        )
+    )
+    summary = ledger.execution_summary(
+        record.rollout_id,
+        policy_fingerprint="policy-hash",
+    )
+    assert summary.observation_count == 1
+    assert summary.invalid_observation_count == 1
+
 
 def test_sqlite_rollout_execution_observation_round_trip(tmp_path) -> None:
     store = SQLiteRepairStore(tmp_path / "repair.sqlite")
@@ -553,6 +580,48 @@ def test_sqlite_rollout_execution_observation_round_trip(tmp_path) -> None:
     assert persisted[0]["candidate_id"] == str(record.candidate_id)
     assert persisted[0]["execution_state"] == "COMPLETED"
     assert "secret-result" not in str(persisted[0])
+    summary = ledger.execution_summary(
+        record.rollout_id,
+        policy_fingerprint="policy-hash",
+    )
+    assert summary.observation_count == 1
+    assert summary.stage_counts == {"canary": 1}
+
+
+def test_rollout_execution_summary_counts_candidate_failures_without_messages() -> None:
+    store = InMemoryRepairStore()
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            routing=RolloutRoutingPolicy(canary_percentage=100),
+        ),
+        store=store,
+    )
+    validated = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, validated, RepairRolloutStage.CANARY)
+
+    def failing_candidate(value: int) -> int:
+        raise RuntimeError(f"secret failure {value}")
+
+    with pytest.raises(RuntimeError, match="secret failure"):
+        _execute(
+            ledger,
+            record,
+            lambda value: value,
+            failing_candidate,
+            execution_store=store,
+            execution_id=uuid4(),
+        )
+
+    summary = ledger.execution_summary(
+        record.rollout_id,
+        policy_fingerprint="policy-hash",
+    )
+    assert summary.observation_count == 1
+    assert summary.failed_count == 1
+    assert summary.candidate_authoritative_count == 1
+    assert summary.candidate_failure_count == 1
+    assert "secret failure" not in str(store.all_rollout_executions()[0])
 
 
 def test_execute_rollout_emits_failure_type_without_exception_message() -> None:

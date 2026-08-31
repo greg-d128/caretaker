@@ -270,11 +270,13 @@ from .repair_rollout import (
     RepairRolloutTransition,
     RolloutExecutionObservation,
     RolloutExecutionResult,
+    RolloutExecutionSummary,
     RolloutRoutingDecision,
     RolloutRoutingPolicy,
     decide_rollout_routing,
     execute_rollout,
     execute_slot_rollout,
+    summarize_rollout_executions,
 )
 from .shadow import (
     ShadowExecutionAdapter,
@@ -628,6 +630,8 @@ __all__ = [
     "RepairRolloutStage",
     "RepairRolloutTransition",
     "RolloutExecutionObservation",
+    "RolloutExecutionSummary",
+    "summarize_rollout_executions",
     "ReplaySafety",
     "SideEffectClass",
     "EffectObservation",
