@@ -222,6 +222,7 @@ class RepairEngine:
             metadata=target.metadata,
             integrity_class=target.integrity_class,
             mask_function=target.mask_function,
+            execution_contract=target.execution_contract,
         )
         target = replace(
             target, policy=effective_policy, support=support_probe.support
@@ -252,6 +253,7 @@ class RepairEngine:
                 metadata=current.metadata,
                 integrity_class=current.integrity_class,
                 mask_function=current.mask_function,
+                execution_contract=current.execution_contract,
             )
             updated = replace(
                 current,

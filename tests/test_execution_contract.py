@@ -12,6 +12,7 @@ from caretaker import (
     assess_shadow_eligibility,
 )
 from caretaker.domain import DifferentialExecutionMode
+from caretaker.engine import RepairEngine
 from caretaker.evidence.models import (
     BehaviorEvent,
     BehaviorEventKind,
@@ -63,6 +64,21 @@ def test_function_execution_contract_is_attached_to_target_and_slot() -> None:
 
     assert registered.execution_contract is declared
     assert registered.slot.execution_contract is declared
+
+
+def test_authority_policy_refresh_preserves_execution_contract() -> None:
+    def target(value: int) -> int:
+        return value + 1
+
+    declared = FunctionExecutionContract(side_effects=SideEffectClass.READ_ONLY)
+    engine = RepairEngine()
+    registered = build_target(target, policy=RepairPolicy(), execution_contract=declared)
+    engine.register(registered)
+    engine.refresh_authority_policy()
+
+    refreshed = engine.registry.get(registered.target_id)
+    assert refreshed.execution_contract is declared
+    assert refreshed.slot.execution_contract is declared
 
 
 def test_pure_function_acknowledgement_preserves_legacy_contract_metadata() -> None:
