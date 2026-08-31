@@ -679,7 +679,9 @@ observed call rate plus observed/requested sampling density. Queue pressure is
 also reported as pending-request utilization, available slots, and a full or
 available state; full queues retain the request and apply explicit
 backpressure. Host-resource-aware and density-aware cost budgeting remain
-future work.
+future work. An optional process-scoped RSS boundary now provides a fail-closed
+application-process measurement when configured; host, cgroup, and
+multi-process resource coordination remain future work.
 
 Sealed behavioral snapshots should inform later lightweight anomaly triggers.
 Candidate signals include expected duration ranges, failure/return categories,

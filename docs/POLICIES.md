@@ -86,6 +86,13 @@ pressure as pending-request utilization, available slots, and a full/available
 state; reaching `collection_max_pending` applies backpressure and preserves the
 request rather than dropping it.
 
+Optional `collection_soft_budget_process_memory_bytes` and
+`collection_hard_budget_process_memory_bytes` settings add a process-scoped RSS
+boundary. Memory is sampled only when one of these settings is configured; a
+hard limit blocks new collection claims, and an unavailable measurement also
+blocks claims rather than silently bypassing the configured limit. These fields
+do not provide host, cgroup, or other-process resource visibility.
+
 `BehaviorSnapshotPolicy.collection_auto_promote` is disabled by default. When
 enabled, the supervisor health cycle may promote only current-generation,
 adaptive `armed_waiting` targets into pre-repair Behavior. The

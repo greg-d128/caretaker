@@ -44,6 +44,21 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _current_process_memory_bytes() -> int | None:
+    """Return Linux process RSS without requiring host or superuser access."""
+    if os.name != "posix":
+        return None
+    try:
+        fields = Path("/proc/self/statm").read_text(encoding="ascii").split()
+        page_size = int(os.sysconf("SC_PAGE_SIZE"))
+        resident_pages = int(fields[1])
+        if page_size <= 0 or resident_pages < 0:
+            return None
+        return resident_pages * page_size
+    except (OSError, IndexError, TypeError, ValueError, OverflowError):
+        return None
+
+
 def canonical_json_bytes(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
@@ -1430,6 +1445,9 @@ class BehaviorCollectionScheduler:
         hard_budget_seconds_per_minute: float | None = None,
         soft_budget_calls_per_minute: int | None = None,
         hard_budget_calls_per_minute: int | None = None,
+        soft_budget_process_memory_bytes: int | None = None,
+        hard_budget_process_memory_bytes: int | None = None,
+        process_memory_probe: Callable[[], int | None] | None = None,
         clock: Callable[[], datetime] = utcnow,
     ) -> None:
         if int(maximum_active) <= 0:
@@ -1454,6 +1472,14 @@ class BehaviorCollectionScheduler:
                 isinstance(value, bool) or not isinstance(value, int) or value <= 0
             ):
                 raise ValueError(f"{name} must be a positive integer when configured")
+        for name, value in (
+            ("soft_budget_process_memory_bytes", soft_budget_process_memory_bytes),
+            ("hard_budget_process_memory_bytes", hard_budget_process_memory_bytes),
+        ):
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            ):
+                raise ValueError(f"{name} must be a positive integer when configured")
         if (
             soft_budget_seconds_per_minute is not None
             and hard_budget_seconds_per_minute is not None
@@ -1466,6 +1492,15 @@ class BehaviorCollectionScheduler:
             and int(soft_budget_calls_per_minute) > int(hard_budget_calls_per_minute)
         ):
             raise ValueError("soft_budget_calls_per_minute cannot exceed hard_budget_calls_per_minute")
+        if (
+            soft_budget_process_memory_bytes is not None
+            and hard_budget_process_memory_bytes is not None
+            and int(soft_budget_process_memory_bytes) > int(hard_budget_process_memory_bytes)
+        ):
+            raise ValueError(
+                "soft_budget_process_memory_bytes cannot exceed "
+                "hard_budget_process_memory_bytes"
+            )
         self.root = Path(root)
         self.request_directory = self.root / "behavior" / "collection" / "requests"
         self.automatic_cursor_path = self.root / "behavior" / "collection" / "automatic-cursor.json"
@@ -1497,6 +1532,17 @@ class BehaviorCollectionScheduler:
             if hard_budget_calls_per_minute is not None
             else None
         )
+        self.soft_budget_process_memory_bytes = (
+            int(soft_budget_process_memory_bytes)
+            if soft_budget_process_memory_bytes is not None
+            else None
+        )
+        self.hard_budget_process_memory_bytes = (
+            int(hard_budget_process_memory_bytes)
+            if hard_budget_process_memory_bytes is not None
+            else None
+        )
+        self._process_memory_probe = process_memory_probe or _current_process_memory_bytes
         self._clock = clock
         self._lock = threading.RLock()
         self._recover_active_requests()
@@ -1698,6 +1744,40 @@ class BehaviorCollectionScheduler:
         )
         hard_reasons: list[str] = []
         soft_reasons: list[str] = []
+        memory_bytes: int | None = None
+        memory_measurement_available: bool | None = None
+        if (
+            self.soft_budget_process_memory_bytes is not None
+            or self.hard_budget_process_memory_bytes is not None
+        ):
+            try:
+                measured_memory = self._process_memory_probe()
+                if (
+                    measured_memory is not None
+                    and not isinstance(measured_memory, bool)
+                    and isinstance(measured_memory, int)
+                    and measured_memory >= 0
+                ):
+                    memory_bytes = measured_memory
+            except Exception:
+                memory_bytes = None
+            memory_measurement_available = memory_bytes is not None
+            if memory_bytes is None:
+                if self.hard_budget_process_memory_bytes is not None:
+                    hard_reasons.append("process_memory_unavailable")
+                elif self.soft_budget_process_memory_bytes is not None:
+                    soft_reasons.append("process_memory_unavailable")
+            else:
+                if (
+                    self.hard_budget_process_memory_bytes is not None
+                    and memory_bytes >= self.hard_budget_process_memory_bytes
+                ):
+                    hard_reasons.append("process_memory")
+                if (
+                    self.soft_budget_process_memory_bytes is not None
+                    and memory_bytes >= self.soft_budget_process_memory_bytes
+                ):
+                    soft_reasons.append("process_memory")
         if (
             self.hard_budget_seconds_per_minute is not None
             and recent_seconds >= self.hard_budget_seconds_per_minute
@@ -1737,6 +1817,10 @@ class BehaviorCollectionScheduler:
             "hard_limit_seconds": self.hard_budget_seconds_per_minute,
             "soft_limit_calls": self.soft_budget_calls_per_minute,
             "hard_limit_calls": self.hard_budget_calls_per_minute,
+            "process_memory_bytes": memory_bytes,
+            "process_memory_measurement_available": memory_measurement_available,
+            "soft_limit_process_memory_bytes": self.soft_budget_process_memory_bytes,
+            "hard_limit_process_memory_bytes": self.hard_budget_process_memory_bytes,
         }
 
     def enqueue(
@@ -1940,7 +2024,7 @@ class BehaviorCollectionScheduler:
         if claimed is None:
             if self._budget_status()["state"] == "HARD_LIMIT":
                 raise BehaviorCollectionBudgetExceeded(
-                    "behavior collection hard duration budget is currently exhausted"
+                    "behavior collection hard resource budget is currently exhausted"
                 )
             raise BehaviorCollectionQueueFull(
                 "behavior collection active budget is currently exhausted"

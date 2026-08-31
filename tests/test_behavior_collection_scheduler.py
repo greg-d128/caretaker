@@ -312,6 +312,39 @@ def test_scheduler_reports_queue_pressure_and_available_slots(tmp_path: Path) ->
     assert scheduler.status()["queue_pressure"]["available_slots"] == 1
 
 
+def test_scheduler_enforces_process_memory_budget_and_fails_closed_when_unavailable(
+    tmp_path: Path,
+) -> None:
+    scheduler = BehaviorCollectionScheduler(
+        tmp_path,
+        hard_budget_process_memory_bytes=100,
+        process_memory_probe=lambda: 101,
+    )
+    budget = scheduler.status()["resource_budget"]
+    assert budget["state"] == "HARD_LIMIT"
+    assert budget["hard_limit_reasons"] == ["process_memory"]
+    assert budget["process_memory_bytes"] == 101
+    assert budget["process_memory_measurement_available"] is True
+    request = scheduler.enqueue(
+        scope="function",
+        subject="target-a",
+        requested_calls=1,
+        requested_by="uid:1001",
+        reason="process memory budget test",
+    )
+    assert scheduler.claim_next(request_id=request["request_id"]) is None
+
+    unavailable = BehaviorCollectionScheduler(
+        tmp_path / "unavailable",
+        hard_budget_process_memory_bytes=100,
+        process_memory_probe=lambda: None,
+    )
+    unavailable_budget = unavailable.status()["resource_budget"]
+    assert unavailable_budget["state"] == "HARD_LIMIT"
+    assert unavailable_budget["hard_limit_reasons"] == ["process_memory_unavailable"]
+    assert unavailable_budget["process_memory_measurement_available"] is False
+
+
 def test_scheduler_expires_deadline_without_claiming_request(tmp_path: Path) -> None:
     now = [datetime(2026, 8, 30, tzinfo=timezone.utc)]
     scheduler = BehaviorCollectionScheduler(tmp_path, clock=lambda: now[0])

@@ -157,6 +157,8 @@ class GuardEngine(GuardFacade):
                 hard_budget_seconds_per_minute=self.policy.snapshots.collection_hard_budget_seconds_per_minute,
                 soft_budget_calls_per_minute=self.policy.snapshots.collection_soft_budget_calls_per_minute,
                 hard_budget_calls_per_minute=self.policy.snapshots.collection_hard_budget_calls_per_minute,
+                soft_budget_process_memory_bytes=self.policy.snapshots.collection_soft_budget_process_memory_bytes,
+                hard_budget_process_memory_bytes=self.policy.snapshots.collection_hard_budget_process_memory_bytes,
             )
             if data_root and self.policy.snapshots.enabled
             else None
@@ -245,6 +247,8 @@ class GuardEngine(GuardFacade):
                 hard_budget_seconds_per_minute=self.policy.snapshots.collection_hard_budget_seconds_per_minute,
                 soft_budget_calls_per_minute=self.policy.snapshots.collection_soft_budget_calls_per_minute,
                 hard_budget_calls_per_minute=self.policy.snapshots.collection_hard_budget_calls_per_minute,
+                soft_budget_process_memory_bytes=self.policy.snapshots.collection_soft_budget_process_memory_bytes,
+                hard_budget_process_memory_bytes=self.policy.snapshots.collection_hard_budget_process_memory_bytes,
             )
         elif not self.policy.snapshots.enabled:
             self.behavior_statistics = None
