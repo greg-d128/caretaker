@@ -27,6 +27,10 @@ class RepairRolloutError(RuntimeError):
     """Raised when a rollout transition violates its lifecycle contract."""
 
 
+class RepairRolloutExecutionError(RepairRolloutError):
+    """Raised when a rollout record cannot be bound to a function slot."""
+
+
 class RepairRolloutStage(str, Enum):
     PROPOSED = "proposed"
     VALIDATED = "validated"
@@ -857,6 +861,89 @@ def execute_rollout(
         decision=decision,
         candidate_executed=False,
         candidate_authoritative=False,
+    )
+
+
+def execute_slot_rollout(
+    slot: "FunctionSlot",
+    record: RepairRolloutRecord,
+    *,
+    policy: RepairRolloutPolicy,
+    policy_fingerprint: str,
+    routing_scope: str,
+    routing_key: str,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    effect_observation: EffectObservation | None = None,
+    isolation_adapter: ShadowExecutionAdapter | None = None,
+    comparator: Comparator | None = None,
+    audit_event: Callable[..., Any] | None = None,
+) -> RolloutExecutionResult:
+    """Execute a rollout bound to one slot's current candidate.
+
+    The slot binding is intentionally strict.  A field repair must use the
+    candidate currently installed in the slot and the immediately preceding
+    version as its deployed counterpart.  A permanent record treats the
+    current slot version as deployed code and cannot re-route it as a field
+    candidate.  This function never mutates the slot or records observation
+    acceptance; those remain owned by the normal application lifecycle.
+    """
+
+    if record.stage not in {
+        RepairRolloutStage.SHADOW,
+        RepairRolloutStage.CANARY,
+        RepairRolloutStage.ACTIVE,
+    }:
+        raise RepairRolloutExecutionError(
+            f"rollout stage {record.stage.value} is not executable"
+        )
+    if record.target_id != slot.target_id:
+        raise RepairRolloutExecutionError("rollout target does not match function slot")
+
+    current = slot.load()
+    if current.candidate_id != record.candidate_id:
+        raise RepairRolloutExecutionError(
+            "rollout candidate does not match the function slot candidate"
+        )
+    if current.source_hash != record.candidate_source_hash:
+        raise RepairRolloutExecutionError(
+            "rollout candidate source does not match the function slot candidate"
+        )
+
+    if record.release_kind is RepairReleaseKind.PERMANENT:
+        deployed = current.implementation
+        candidate = current.implementation
+    else:
+        previous = slot.previous()
+        if previous is None:
+            raise RepairRolloutExecutionError(
+                "field rollout requires a preceding deployed function version"
+            )
+        if (
+            record.base_source_hash is not None
+            and previous.source_hash != record.base_source_hash
+        ):
+            raise RepairRolloutExecutionError(
+                "rollout deployed source does not match the function slot history"
+            )
+        deployed = previous.implementation
+        candidate = current.implementation
+
+    return execute_rollout(
+        record,
+        policy=policy,
+        policy_fingerprint=policy_fingerprint,
+        routing_scope=routing_scope,
+        routing_key=routing_key,
+        deployed=deployed,
+        candidate=candidate,
+        args=args,
+        kwargs=kwargs,
+        contract=slot.execution_contract,
+        effect_observation=effect_observation,
+        isolation_adapter=isolation_adapter,
+        comparator=comparator,
+        audit_event=audit_event,
     )
 
 

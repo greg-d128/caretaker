@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from uuid import uuid4
 
 import pytest
@@ -9,14 +10,17 @@ from caretaker import (
     FunctionExecutionContract,
     RepairRolloutAuthority,
     RepairRolloutError,
+    RepairRolloutExecutionError,
     RepairRolloutLedger,
     RepairRolloutPolicy,
     RepairRolloutStage,
     RolloutRoutingPolicy,
     decide_rollout_routing,
     execute_rollout,
+    execute_slot_rollout,
 )
 from caretaker.domain import ReplaySafety, SideEffectClass
+from caretaker.slot import FunctionSlot
 
 
 def _ledger(**routing_changes: int) -> RepairRolloutLedger:
@@ -69,6 +73,37 @@ def _pure_contract() -> FunctionExecutionContract:
         side_effects=SideEffectClass.PURE,
         retry_safety=ReplaySafety.PURE,
     )
+
+
+def _slot_and_record(ledger: RepairRolloutLedger):
+    candidate_id = uuid4()
+    slot = FunctionSlot(
+        target_id="example.target",
+        original=lambda value: value,
+        original_source="deployed-source",
+        original_source_hash="base-hash",
+        execution_contract=_pure_contract(),
+    )
+    lease = slot.begin_repair()
+    slot.activate(
+        lease=lease,
+        implementation=lambda value: value + 1,
+        source="candidate-source",
+        source_hash="candidate-hash",
+        repair_attempt_id=uuid4(),
+        candidate_id=candidate_id,
+    )
+    record = ledger.create(
+        target_id="example.target",
+        incident_id=uuid4(),
+        candidate_id=candidate_id,
+        candidate_source_hash="candidate-hash",
+        base_source_hash="base-hash",
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        proposed_by="advisory-engine",
+    )
+    return slot, record
 
 
 def _execute(ledger: RepairRolloutLedger, record, deployed, candidate, **kwargs):
@@ -159,6 +194,51 @@ def test_execute_rollout_zero_canary_percentage_keeps_deployed_path() -> None:
     assert result.candidate_executed is False
     assert result.candidate_authoritative is False
     assert calls == ["deployed"]
+
+
+def test_execute_slot_rollout_binds_previous_and_current_versions() -> None:
+    ledger = _ledger(shadow_sample_percentage=100)
+    slot, record = _slot_and_record(ledger)
+    record = _advance(ledger, record, RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, record, RepairRolloutStage.SHADOW)
+    version_before = slot.load().number
+
+    result = execute_slot_rollout(
+        slot,
+        record,
+        policy=ledger.policy,
+        policy_fingerprint="policy-hash",
+        routing_scope="tenant",
+        routing_key="tenant-1",
+        args=(4,),
+        kwargs={},
+        effect_observation=EffectObservation(complete=True),
+    )
+
+    assert result.result == 4
+    assert result.shadow_result is not None
+    assert result.shadow_result.candidate_result == 5
+    assert result.candidate_authoritative is False
+    assert slot.load().number == version_before
+
+
+def test_execute_slot_rollout_rejects_stale_candidate_binding() -> None:
+    ledger = _ledger(canary_percentage=100)
+    slot, record = _slot_and_record(ledger)
+    record = _advance(ledger, record, RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, record, RepairRolloutStage.CANARY)
+
+    with pytest.raises(RepairRolloutExecutionError, match="source"):
+        execute_slot_rollout(
+            slot,
+            replace(record, candidate_source_hash="different-hash"),
+            policy=ledger.policy,
+            policy_fingerprint="policy-hash",
+            routing_scope="tenant",
+            routing_key="tenant-1",
+            args=(4,),
+            kwargs={},
+        )
 
 
 def test_canary_and_active_field_repair_can_select_candidate_explicitly() -> None:

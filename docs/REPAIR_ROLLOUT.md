@@ -104,6 +104,14 @@ returns the deployed result; canary and active selections return the candidate
 only when the decision makes it authoritative. It does not mutate a slot,
 install a repair, grant authority, or choose an isolation-unavailable fallback.
 
+`execute_slot_rollout()` adds the FunctionSlot binding boundary. For a field
+repair it requires the record target, candidate ID, candidate source hash, and
+previous deployed source hash to match the slot. For a permanent record it
+uses the current slot version as deployed code and does not re-route it as a
+candidate. Mismatches fail closed. The helper does not mutate the slot or
+advance candidate acceptance counters; the normal application lifecycle still
+owns those actions.
+
 For example:
 
 ```python

@@ -957,6 +957,10 @@ coordinator. `execute_rollout()` now consumes that decision for caller-supplied
 already-authorized callables and delegates sampled shadow work to the
 original-authoritative primitive. FunctionSlot activation, application-specific
 failure/fallback policy, and supervisor-wide coordination remain future work.
+`execute_slot_rollout()` now adds strict binding to an installed FunctionSlot
+candidate and its preceding deployed version without mutating slot state;
+candidate acceptance accounting and application-specific failure handling
+remain future work.
 
 Future Repair should provide more operator and policy control over how a validated
 candidate is introduced. Potential execution strategies include:

@@ -262,6 +262,7 @@ from .repair_rollout import (
     RepairReleaseKind,
     RepairRolloutAuthority,
     RepairRolloutError,
+    RepairRolloutExecutionError,
     RepairRolloutLedger,
     RepairRolloutPolicy,
     RepairRolloutRecord,
@@ -272,6 +273,7 @@ from .repair_rollout import (
     RolloutRoutingPolicy,
     decide_rollout_routing,
     execute_rollout,
+    execute_slot_rollout,
 )
 from .shadow import (
     ShadowExecutionAdapter,
