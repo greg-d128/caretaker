@@ -662,6 +662,8 @@ class ObservationRecord:
     counted_as_success: bool
     counted_as_failure: bool
     decision_reason: str
+    rollout_id: UUID | None = None
+    routing_decision_hash: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

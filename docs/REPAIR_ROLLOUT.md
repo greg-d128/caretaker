@@ -112,6 +112,12 @@ candidate. Mismatches fail closed. The helper does not mutate the slot or
 advance candidate acceptance counters; the normal application lifecycle still
 owns those actions.
 
+When supplied with the existing `ObservationManager`, `execute_slot_rollout()`
+records authoritative candidate outcomes using the rollout ID and routing
+decision hash. Candidate failures follow the configured observation rollback
+policy and are re-raised. Shadow outcomes remain non-authoritative evidence and
+are not counted toward acceptance.
+
 For example:
 
 ```python

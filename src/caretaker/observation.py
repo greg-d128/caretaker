@@ -58,6 +58,8 @@ class ObservationManager:
         policy: ObservationPolicy,
         output: Any,
         mode: str = "canary",
+        rollout_id: UUID | None = None,
+        routing_decision_hash: str | None = None,
     ) -> None:
         version = slot.load()
         if version.candidate_id is None:
@@ -80,6 +82,8 @@ class ObservationManager:
                 counted_as_success=True,
                 counted_as_failure=False,
                 decision_reason=f"candidate call succeeded; state is {session.state.name}",
+                rollout_id=rollout_id,
+                routing_decision_hash=routing_decision_hash,
             )
         )
 
@@ -91,6 +95,8 @@ class ObservationManager:
         exception: BaseException,
         policy: ObservationPolicy,
         mode: str = "canary",
+        rollout_id: UUID | None = None,
+        routing_decision_hash: str | None = None,
     ) -> ObservationFailureDecision:
         version = slot.load()
         if version.candidate_id is None:
@@ -149,6 +155,8 @@ class ObservationManager:
                 counted_as_success=False,
                 counted_as_failure=True,
                 decision_reason=reason,
+                rollout_id=rollout_id,
+                routing_decision_hash=routing_decision_hash,
             )
         )
         return ObservationFailureDecision(

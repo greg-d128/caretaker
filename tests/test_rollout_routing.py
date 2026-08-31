@@ -270,7 +270,10 @@ def test_execute_slot_rollout_counts_only_authoritative_candidate_calls() -> Non
     assert slot.observation() is not None
     assert slot.observation().successful_executions == 1
     assert len(store.observations) == 1
-    assert next(iter(store.observations.values())).mode == "canary"
+    observation = next(iter(store.observations.values()))
+    assert observation.mode == "canary"
+    assert observation.rollout_id == record.rollout_id
+    assert observation.routing_decision_hash == result.decision.decision_hash
 
 
 def test_execute_slot_rollout_does_not_count_shadow_as_acceptance() -> None:
@@ -358,6 +361,7 @@ def test_execute_slot_rollout_applies_existing_failure_rollback_policy() -> None
     failure = next(iter(store.observations.values()))
     assert failure.counted_as_failure is True
     assert failure.comparison["rolled_back"] is True
+    assert failure.rollout_id == record.rollout_id
 
 
 def test_canary_and_active_field_repair_can_select_candidate_explicitly() -> None:

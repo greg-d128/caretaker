@@ -68,6 +68,12 @@ The result is rollout evidence, not authorization. A rollout policy must still
 authorize the execution strategy, preserve validation and authority gates, and
 record the decision.
 
+When rollout execution is connected to `ObservationManager`, authoritative
+candidate successes and failures retain the rollout ID and routing decision
+hash on their `ObservationRecord`. This links acceptance and rollback evidence
+to the exact policy-bound selection. Shadow executions remain comparison
+evidence only and never advance candidate acceptance counters.
+
 The read-only target/slot snapshot exposes the effective contract as
 `execution_contract.side_effects` and `execution_contract.retry_safety`, so
 operator projections can show the duplicate-execution boundary alongside the
