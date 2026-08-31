@@ -46,6 +46,7 @@ from .failure_corpus import (
     FailureCorpus,
     FailureCorpusError,
     FailureCorpusHarness,
+    FailureCorpusObservationStore,
     FailureObservation,
     FailureScenario,
 )

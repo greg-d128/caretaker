@@ -9,6 +9,7 @@ from caretaker.failure_corpus import (
     FailureCorpus,
     FailureCorpusError,
     FailureCorpusHarness,
+    FailureCorpusObservationStore,
     MAX_CORPUS_BYTES,
 )
 
@@ -180,6 +181,79 @@ def test_trusted_harness_distinguishes_mismatched_and_invalid_results() -> None:
 
     assert mismatched.status == "MISMATCHED"
     assert invalid.status == "INVALID_RESULT"
+
+
+def test_trusted_harness_rejects_unsupported_observed_fields() -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    harness = FailureCorpusHarness(
+        corpus,
+        runners={
+            "exception.unhandled": lambda _scenario: {
+                "signal": "EXCEPTION",
+                "caretaker_action": "CAPTURE_INCIDENT",
+                "authority_effect": "NO_AUTHORITY_CHANGE",
+                "command": "must not be persisted",
+            },
+        },
+    )
+
+    observation = harness.run("exception.unhandled")
+
+    assert observation.status == "INVALID_RESULT"
+    assert "unsupported fields" in (observation.error or "")
+
+
+def test_observation_store_round_trip_and_filters(tmp_path: Path) -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    observation = FailureCorpusHarness(
+        corpus,
+        runners={
+            "exception.unhandled": lambda _scenario: {
+                "signal": "EXCEPTION",
+                "caretaker_action": "CAPTURE_INCIDENT",
+                "authority_effect": "NO_AUTHORITY_CHANGE",
+                "details": {"source": "trusted-test"},
+            },
+        },
+    ).run("exception.unhandled")
+    store = FailureCorpusObservationStore(tmp_path)
+
+    record = store.record(
+        observation,
+        corpus_id=corpus.corpus_id,
+        environment_id="process-linux",
+        incident_id="incident-123",
+    )
+    loaded = store.load(record["observation_id"])
+    summaries = store.list_summaries(scenario_id="exception.unhandled", status="MATCHED")
+
+    assert loaded == record
+    assert len(record["content_sha256"]) == 64
+    assert loaded["environment_id"] == "process-linux"
+    assert loaded["incident_id"] == "incident-123"
+    assert summaries[0]["observation"]["observed"]["details"]["source"] == "trusted-test"
+
+
+def test_observation_store_rejects_corrupt_records_and_skips_them_in_listing(tmp_path: Path) -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    observation = FailureCorpusHarness(corpus, runners={}).run("exception.unhandled")
+    store = FailureCorpusObservationStore(tmp_path)
+    record = store.record(observation, corpus_id=corpus.corpus_id)
+    path = store.directory / f"{record['observation_id']}.json"
+    path.write_text(path.read_text(encoding="utf-8").replace("NOT_MAPPED", "MATCHED"), encoding="utf-8")
+
+    with pytest.raises(FailureCorpusError, match="content hash"):
+        store.load(record["observation_id"])
+    assert store.list_summaries() == ()
+
+
+def test_observation_store_enforces_serialized_size_limit(tmp_path: Path) -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    observation = FailureCorpusHarness(corpus, runners={}).run("exception.unhandled")
+    store = FailureCorpusObservationStore(tmp_path, maximum_observation_bytes=64)
+
+    with pytest.raises(FailureCorpusError, match="byte limit"):
+        store.record(observation, corpus_id=corpus.corpus_id)
 
 
 def test_trusted_harness_run_all_is_bounded_and_preserves_unmapped_scenarios() -> None:

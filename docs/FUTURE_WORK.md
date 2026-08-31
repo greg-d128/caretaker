@@ -21,7 +21,7 @@ on demonstrated Application Caretaker maturity.
 
 ## Testing environments and failure corpus
 
-**Status: Implemented in development tree for the initial metadata-only corpus and explicit trusted harness contract; isolated lifecycle tooling and observed scenario coverage remain future work.**
+**Status: Implemented in development tree for the initial metadata-only corpus, explicit trusted harness contract, and bounded local observation store; isolated lifecycle tooling and observed scenario coverage remain future work.**
 
 The repository now contains a bounded, schema-validated failure scenario
 manifest in [`examples/failure_corpus/manifest.json`](../examples/failure_corpus/manifest.json)
@@ -36,7 +36,9 @@ Remaining work is to add repository-owned trusted test-harness mappings,
 isolated launch/reset/destroy tooling, captured historical incident fixtures,
 and deterministic observed-outcome reports. The current harness requires
 callers to supply runners and does not provide a sandbox or process lifecycle.
-Expected metadata must remain separate from actual evidence; loading or listing
+Bounded observations can now be stored separately from the manifest, with a
+content hash for corruption detection; that hash is not a substitute for
+external authenticated shipping. Expected metadata must remain separate from actual evidence; loading or listing
 a scenario must never run it or authorize an action.
 
 ## Status vocabulary

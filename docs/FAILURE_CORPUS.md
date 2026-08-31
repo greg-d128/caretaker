@@ -53,12 +53,37 @@ Observed results are bounded JSON and are classified separately from expected
 metadata as `MATCHED`, `MISMATCHED`, `INVALID_RESULT`, `ERROR`, `NOT_MAPPED`, or
 `ISOLATION_UNAVAILABLE`.
 
+Trusted test infrastructure can persist those observations for later review
+without persisting a runner or executable instruction:
+
+```python
+from caretaker.failure_corpus import FailureCorpusObservationStore
+
+store = FailureCorpusObservationStore("caretaker-data")
+record = store.record(
+    observation,
+    corpus_id=corpus.corpus_id,
+    environment_id="process-linux",
+    incident_id="incident-123",
+)
+```
+
+Each record is a bounded JSON envelope under
+`failure-corpus-observations/`, written atomically with restrictive local file
+permissions. Its `content_sha256` covers the record payload, allowing the
+loader to reject accidental corruption or an inconsistent envelope. The hash
+is not an authenticity mechanism: an attacker able to rewrite both the record
+and hash can replace it. Use signed or externally shipped audit evidence when
+that threat matters. Invalid records are rejected by `load()` and omitted by
+`list_summaries()`; loading and listing never execute runner code or grant
+authority.
+
 ## Current status and next work
 
-The loader, manifest, and explicit trusted harness provide the initial
-reviewable contract. Executable launch/reset/destroy tooling, isolated scenario
-runners, captured incident fixtures, and cross-version/adversarial execution
-reports remain future work.
+The loader, manifest, explicit trusted harness, and bounded observation store
+provide the initial reviewable contract. Executable launch/reset/destroy
+tooling, isolated scenario runners, captured incident fixtures, and
+cross-version/adversarial execution reports remain future work.
 Those additions must record actual observed outcomes separately from expected
 metadata and must not turn a corpus file into an execution or authority
 channel.

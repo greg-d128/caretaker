@@ -9,11 +9,14 @@ test harness may map a scenario ID to code in its own trusted test suite.
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Callable
 from typing import Any, Mapping
+from uuid import UUID, uuid4
 
 
 FAILURE_CORPUS_SCHEMA_VERSION = 1
@@ -22,6 +25,7 @@ MAX_SCENARIOS = 500
 MAX_TEXT_CHARS = 2_048
 MAX_TAGS = 32
 MAX_OBSERVATION_BYTES = 16_384
+MAX_STORED_OBSERVATION_BYTES = 32_768
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9_.-]{1,127}$")
 
 FAILURE_CATEGORIES = frozenset({
@@ -66,6 +70,7 @@ AUTHORITY_EFFECTS = frozenset({
     "APPLICATION_STOP",
 })
 ISOLATION_LEVELS = frozenset({"PROCESS", "CONTAINER", "VM"})
+OBSERVED_RESULT_FIELDS = frozenset({"signal", "caretaker_action", "authority_effect", "details"})
 
 
 class FailureCorpusError(ValueError):
@@ -342,6 +347,15 @@ class FailureCorpusHarness:
                 error="trusted scenario runner must return a mapping",
             )
         observed_copy = dict(observed)
+        unknown_fields = sorted(set(observed_copy) - OBSERVED_RESULT_FIELDS)
+        if unknown_fields:
+            return self._base_observation(
+                scenario,
+                status="INVALID_RESULT",
+                executed=True,
+                observed=observed_copy,
+                error="observed result contains unsupported fields: " + ", ".join(unknown_fields),
+            )
         try:
             encoded = json.dumps(observed_copy, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
         except (TypeError, ValueError) as exc:
@@ -388,6 +402,154 @@ class FailureCorpusHarness:
             if category is None or scenario.category == category
         ][:bounded_limit]
         return tuple(self.run(scenario.scenario_id) for scenario in selected)
+
+
+class FailureCorpusObservationStore:
+    """Immutable local storage for bounded trusted-harness observations."""
+
+    def __init__(
+        self,
+        root: str | Path,
+        *,
+        maximum_observation_bytes: int = MAX_STORED_OBSERVATION_BYTES,
+    ) -> None:
+        if maximum_observation_bytes <= 0:
+            raise ValueError("maximum_observation_bytes must be greater than zero")
+        self.directory = Path(root).expanduser().resolve() / "failure-corpus-observations"
+        self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            self.directory.chmod(0o700)
+        except OSError:
+            pass
+        self.maximum_observation_bytes = maximum_observation_bytes
+
+    @staticmethod
+    def _canonical(value: Mapping[str, Any]) -> bytes:
+        return json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+
+    def record(
+        self,
+        observation: FailureObservation,
+        *,
+        corpus_id: str,
+        environment_id: str | None = None,
+        incident_id: str | None = None,
+        recorded_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        if not isinstance(observation, FailureObservation):
+            raise FailureCorpusError("observation must be a FailureObservation")
+        corpus_name = _identifier(corpus_id, field="corpus_id")
+        environment = _text(environment_id, field="environment_id", maximum=128) if environment_id is not None else None
+        incident = _text(incident_id, field="incident_id", maximum=128) if incident_id is not None else None
+        timestamp = recorded_at or datetime.now(timezone.utc)
+        if not isinstance(timestamp, datetime):
+            raise FailureCorpusError("recorded_at must be a datetime")
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        else:
+            timestamp = timestamp.astimezone(timezone.utc)
+        payload: dict[str, Any] = {
+            "schema_version": FAILURE_CORPUS_SCHEMA_VERSION,
+            "observation_id": str(uuid4()),
+            "corpus_id": corpus_name,
+            "recorded_at": timestamp.isoformat(),
+            "environment_id": environment,
+            "incident_id": incident,
+            "observation": observation.summary(),
+        }
+        encoded = self._canonical(payload)
+        envelope = {
+            "record": payload,
+            "content_sha256": hashlib.sha256(encoded).hexdigest(),
+        }
+        serialized = self._canonical(envelope)
+        if len(serialized) > self.maximum_observation_bytes:
+            raise FailureCorpusError("failure corpus observation exceeds its byte limit")
+        path = self.directory / f"{payload['observation_id']}.json"
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_bytes(serialized)
+        try:
+            temporary.chmod(0o600)
+        except OSError:
+            pass
+        temporary.replace(path)
+        return {**payload, "content_sha256": envelope["content_sha256"]}
+
+    def _load_path(self, path: Path) -> dict[str, Any]:
+        if path.is_symlink() or not path.is_file():
+            raise FailureCorpusError("observation record must be a regular file")
+        try:
+            raw = path.read_bytes()
+            if len(raw) > self.maximum_observation_bytes:
+                raise FailureCorpusError("observation record exceeds its byte limit")
+            envelope = json.loads(raw.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise FailureCorpusError("observation record is not valid JSON") from exc
+        if not isinstance(envelope, Mapping):
+            raise FailureCorpusError("observation record must be an object")
+        record = envelope.get("record")
+        observed_hash = envelope.get("content_sha256")
+        if not isinstance(record, Mapping) or not isinstance(observed_hash, str):
+            raise FailureCorpusError("observation record envelope is malformed")
+        expected_hash = hashlib.sha256(self._canonical(record)).hexdigest()
+        if observed_hash != expected_hash:
+            raise FailureCorpusError("observation record content hash does not match")
+        if record.get("schema_version") != FAILURE_CORPUS_SCHEMA_VERSION:
+            raise FailureCorpusError("unsupported observation record schema version")
+        observation = record.get("observation")
+        if not isinstance(observation, Mapping):
+            raise FailureCorpusError("observation record has no observation object")
+        if observation.get("scenario_id") is None or observation.get("status") is None:
+            raise FailureCorpusError("observation record is missing scenario identity or status")
+        return {**dict(record), "content_sha256": observed_hash}
+
+    def load(self, observation_id: str | UUID) -> dict[str, Any]:
+        try:
+            parsed = observation_id if isinstance(observation_id, UUID) else UUID(str(observation_id))
+        except (TypeError, ValueError) as exc:
+            raise KeyError(f"unknown observation {observation_id!r}") from exc
+        path = self.directory / f"{parsed}.json"
+        if not path.exists():
+            raise KeyError(f"unknown observation {parsed}")
+        return self._load_path(path)
+
+    def list_summaries(
+        self,
+        *,
+        scenario_id: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> tuple[dict[str, Any], ...]:
+        bounded_limit = max(1, min(int(limit), MAX_SCENARIOS))
+        result: list[dict[str, Any]] = []
+        for path in sorted(self.directory.glob("*.json")):
+            if len(result) >= bounded_limit:
+                break
+            try:
+                record = self._load_path(path)
+            except FailureCorpusError:
+                continue
+            observation = record.get("observation") or {}
+            if scenario_id is not None and str(observation.get("scenario_id")) != str(scenario_id):
+                continue
+            if status is not None and str(observation.get("status")) != str(status):
+                continue
+            result.append({
+                "observation_id": record.get("observation_id"),
+                "corpus_id": record.get("corpus_id"),
+                "recorded_at": record.get("recorded_at"),
+                "environment_id": record.get("environment_id"),
+                "incident_id": record.get("incident_id"),
+                "observation": dict(observation),
+                "content_sha256": record.get("content_sha256"),
+            })
+        return tuple(result)
 
 
 ISOLATION_LEVELS_ORDER = {name: index for index, name in enumerate(("PROCESS", "CONTAINER", "VM"), start=1)}
