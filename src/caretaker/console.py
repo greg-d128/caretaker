@@ -212,6 +212,13 @@ class CaretakerConsoleApp(App):
     }
     #incident-communication-review-actions Input { width: 1fr; min-width: 18; }
     #incident-communication-review-actions Button { width: auto; min-width: 12; margin-left: 1; }
+    #incident-communication-tailor-actions {
+        height: 5;
+        padding: 0 1;
+        align-vertical: middle;
+    }
+    #incident-communication-tailor-actions Input { width: 1fr; min-width: 18; }
+    #incident-communication-tailor-actions Button { width: auto; min-width: 22; margin-left: 1; }
     #incident-artifact-title {
         height: 3;
         padding: 1 2;
@@ -739,6 +746,16 @@ class CaretakerConsoleApp(App):
                             yield Button(
                                 "Create review draft",
                                 id="incident-communication-draft",
+                                disabled=True,
+                            )
+                        with Horizontal(id="incident-communication-tailor-actions"):
+                            yield Input(
+                                placeholder="Local Ollama model for advisory tailoring",
+                                id="incident-communication-tailor-model",
+                            )
+                            yield Button(
+                                "Tailor draft (advisory)",
+                                id="incident-communication-tailor",
                                 disabled=True,
                             )
                         with Horizontal(id="incident-communication-review-actions"):
@@ -3215,6 +3232,8 @@ class CaretakerConsoleApp(App):
             self._apply_repair_filter()
         elif event.input.id == "incident-capsule-filter":
             self._apply_incident_capsule_filter()
+        elif event.input.id == "incident-communication-tailor-model":
+            self._refresh_incident_communication_tailoring()
         elif event.input.id in {"policy-target", "policy-path", "policy-value", "policy-duration", "policy-reason"}:
             self._policy_preview = None
             self.query_one("#policy-confirm", Checkbox).value = False
@@ -3666,6 +3685,7 @@ class CaretakerConsoleApp(App):
             self.query_one("#incident-capsule-assist-selected", Button).disabled = True
             self.query_one("#incident-capsule-replay", Button).disabled = True
             self.query_one("#incident-communication-draft", Button).disabled = True
+            self.query_one("#incident-communication-tailor", Button).disabled = True
             self.query_one("#incident-communication-approve", Button).disabled = True
             self.query_one("#incident-communication-reject", Button).disabled = True
             self.query_one("#incident-communication-draft-id", Input).value = ""
@@ -3701,6 +3721,7 @@ class CaretakerConsoleApp(App):
         self.query_one("#incident-capsule-assist-selected", Button).disabled = True
         self.query_one("#incident-capsule-replay", Button).disabled = True
         self.query_one("#incident-communication-draft", Button).disabled = True
+        self.query_one("#incident-communication-tailor", Button).disabled = True
         self.query_one("#incident-communication-approve", Button).disabled = True
         self.query_one("#incident-communication-reject", Button).disabled = True
         self.query_one("#incident-communication-draft-id", Input).value = ""
@@ -4351,6 +4372,7 @@ class CaretakerConsoleApp(App):
         self.query_one("#incident-capsule-assist-selected", Button).disabled = True
         self.query_one("#incident-capsule-replay", Button).disabled = True
         self.query_one("#incident-communication-draft", Button).disabled = True
+        self.query_one("#incident-communication-tailor", Button).disabled = True
         self.query_one("#incident-communication-approve", Button).disabled = True
         self.query_one("#incident-communication-reject", Button).disabled = True
         self.query_one("#incident-communication-draft-id", Input).value = ""
@@ -4379,6 +4401,7 @@ class CaretakerConsoleApp(App):
             self.query_one("#incident-capsule-assist-selected", Button).disabled = False
             self.query_one("#incident-capsule-replay", Button).disabled = False
             self.query_one("#incident-communication-draft", Button).disabled = False
+            self._refresh_incident_communication_tailoring()
             self._update_incident_capsule_structured_details(payload)
             self.query_one("#incident-capsule-detail-title", Static).update(
                 f"Verified Incident Capsule | revision {payload.get('revision', '-')}"
@@ -4444,6 +4467,12 @@ class CaretakerConsoleApp(App):
                 "#incident-capsule-output",
                 {"error": f"{type(exc).__name__}: {exc}", "capsule_id": capsule_id},
             )
+
+    def _refresh_incident_communication_tailoring(self) -> None:
+        model = self.query_one("#incident-communication-tailor-model", Input).value.strip()
+        self.query_one("#incident-communication-tailor", Button).disabled = not bool(
+            self._selected_capsule is not None and model
+        )
 
     async def _select_incident_timeline(self, record: dict[str, Any]) -> None:
         self.query_one("#incident-capsule-detail-title", Static).update(
@@ -5281,6 +5310,38 @@ class CaretakerConsoleApp(App):
                 recording = response.get("recording") or {}
                 self.query_one("#incident-capsule-detail-title", Static).update(
                     f"Communication draft | {recording.get('status', 'UNRECORDED')}"
+                )
+                draft = response.get("draft") or {}
+                self.query_one("#incident-communication-draft-id", Input).value = str(
+                    draft.get("draft_id") or ""
+                )
+                self.query_one("#incident-communication-approve", Button).disabled = False
+                self.query_one("#incident-communication-reject", Button).disabled = False
+                self._write_json("#incident-capsule-output", response)
+                return
+            if button == "incident-communication-tailor":
+                if self._selected_capsule is None:
+                    raise ValueError("Select an Incident Capsule first")
+                audience_profile = self.query_one(
+                    "#incident-communication-audience", Input
+                ).value.strip()
+                model = self.query_one(
+                    "#incident-communication-tailor-model", Input
+                ).value.strip()
+                if not audience_profile:
+                    raise ValueError("Enter a policy-approved audience profile first")
+                if not model:
+                    raise ValueError("Enter a local Ollama model for communication tailoring first")
+                response = await self._request(
+                    "incident-communication-draft",
+                    capsule_id=self._selected_capsule.get("capsule_id"),
+                    audience_profile_id=audience_profile,
+                    tailor_model=model,
+                    record=True,
+                )
+                tailoring = response.get("tailoring") or {}
+                self.query_one("#incident-capsule-detail-title", Static).update(
+                    f"Communication tailoring | {tailoring.get('provider', 'unavailable')}"
                 )
                 draft = response.get("draft") or {}
                 self.query_one("#incident-communication-draft-id", Input).value = str(

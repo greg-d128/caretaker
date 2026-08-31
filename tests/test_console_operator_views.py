@@ -1029,7 +1029,7 @@ def test_console_creates_policy_governed_reviewable_communication_draft(tmp_path
                 if command == "incident-capsule-timeline":
                     return {"ok": True, "records": []}
                 if command == "incident-communication-draft":
-                    return {
+                    response = {
                         "ok": True,
                         "reviewable": True,
                         "delivery_authorized": False,
@@ -1039,6 +1039,14 @@ def test_console_creates_policy_governed_reviewable_communication_draft(tmp_path
                             "audience_profile_id": "operators-v1",
                         },
                     }
+                    if payload.get("tailor_model"):
+                        response["tailoring"] = {
+                            "provider": "ollama",
+                            "advisory_only": True,
+                            "draft_mutated": False,
+                            "delivery_authorized": False,
+                        }
+                    return response
                 if command == "incident-communication-review":
                     return {
                         "ok": True,
@@ -1065,6 +1073,20 @@ def test_console_creates_policy_governed_reviewable_communication_draft(tmp_path
                 {
                     "capsule_id": capsule_id,
                     "audience_profile_id": "operators-v1",
+                    "record": True,
+                },
+            )
+            app.query_one("#incident-communication-tailor-model", Input).value = "local-model"
+            app._refresh_incident_communication_tailoring()
+            tailor = app.query_one("#incident-communication-tailor", Button)
+            assert tailor.disabled is False
+            await app.on_button_pressed(Button.Pressed(tailor))
+            assert requests[-1] == (
+                "incident-communication-draft",
+                {
+                    "capsule_id": capsule_id,
+                    "audience_profile_id": "operators-v1",
+                    "tailor_model": "local-model",
                     "record": True,
                 },
             )

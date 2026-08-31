@@ -103,7 +103,8 @@ separate advisory result with provider, model, prompt, evidence, and response
 hashes. Tailoring cannot authorize delivery, change policy, modify the capsule,
 approve Repair, or satisfy validation.
 
-The console's **Create review draft** action and the non-interactive
+The console's **Create review draft** action and **Tailor draft (advisory)**
+action, plus the non-interactive
 `caretaker-incident-draft` command produce JSON suitable for local review or a
 mode-0600 new file:
 
