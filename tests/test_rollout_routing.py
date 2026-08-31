@@ -5,6 +5,8 @@ from uuid import uuid4
 import pytest
 
 from caretaker import (
+    EffectObservation,
+    FunctionExecutionContract,
     RepairRolloutAuthority,
     RepairRolloutError,
     RepairRolloutLedger,
@@ -12,7 +14,9 @@ from caretaker import (
     RepairRolloutStage,
     RolloutRoutingPolicy,
     decide_rollout_routing,
+    execute_rollout,
 )
+from caretaker.domain import ReplaySafety, SideEffectClass
 
 
 def _ledger(**routing_changes: int) -> RepairRolloutLedger:
@@ -60,6 +64,30 @@ def _decide(ledger: RepairRolloutLedger, record, *, scope: str = "tenant", key: 
     )
 
 
+def _pure_contract() -> FunctionExecutionContract:
+    return FunctionExecutionContract(
+        side_effects=SideEffectClass.PURE,
+        retry_safety=ReplaySafety.PURE,
+    )
+
+
+def _execute(ledger: RepairRolloutLedger, record, deployed, candidate, **kwargs):
+    return execute_rollout(
+        record,
+        policy=ledger.policy,
+        policy_fingerprint="policy-hash",
+        routing_scope="tenant",
+        routing_key="tenant-1",
+        deployed=deployed,
+        candidate=candidate,
+        args=(4,),
+        kwargs={},
+        contract=_pure_contract(),
+        effect_observation=EffectObservation(complete=True),
+        **kwargs,
+    )
+
+
 def test_shadow_selection_is_non_authoritative_and_stable() -> None:
     ledger = _ledger(shadow_sample_percentage=100)
     record = _advance(ledger, _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED), RepairRolloutStage.SHADOW)
@@ -73,6 +101,64 @@ def test_shadow_selection_is_non_authoritative_and_stable() -> None:
     assert first.strategy == "shadow"
     assert first == second
     assert "tenant-1" not in first.routing_key_digest
+
+
+def test_execute_rollout_shadow_returns_deployed_result() -> None:
+    ledger = _ledger(shadow_sample_percentage=100)
+    record = _advance(ledger, _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED), RepairRolloutStage.SHADOW)
+    calls: list[str] = []
+
+    result = _execute(
+        ledger,
+        record,
+        lambda value: calls.append("deployed") or value,
+        lambda value: calls.append("candidate") or value + 1,
+    )
+
+    assert result.result == 4
+    assert result.candidate_executed is True
+    assert result.candidate_authoritative is False
+    assert result.shadow_result is not None
+    assert calls == ["deployed", "candidate"]
+
+
+def test_execute_rollout_canary_invokes_only_authoritative_candidate() -> None:
+    ledger = _ledger(canary_percentage=100)
+    validated = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, validated, RepairRolloutStage.CANARY)
+    calls: list[str] = []
+
+    result = _execute(
+        ledger,
+        record,
+        lambda value: calls.append("deployed") or value,
+        lambda value: calls.append("candidate") or value + 1,
+    )
+
+    assert result.result == 5
+    assert result.candidate_executed is True
+    assert result.candidate_authoritative is True
+    assert result.shadow_result is None
+    assert calls == ["candidate"]
+
+
+def test_execute_rollout_zero_canary_percentage_keeps_deployed_path() -> None:
+    ledger = _ledger(canary_percentage=0)
+    validated = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, validated, RepairRolloutStage.CANARY)
+    calls: list[str] = []
+
+    result = _execute(
+        ledger,
+        record,
+        lambda value: calls.append("deployed") or value,
+        lambda value: calls.append("candidate") or value + 1,
+    )
+
+    assert result.result == 4
+    assert result.candidate_executed is False
+    assert result.candidate_authoritative is False
+    assert calls == ["deployed"]
 
 
 def test_canary_and_active_field_repair_can_select_candidate_explicitly() -> None:

@@ -914,7 +914,7 @@ Future work may export a signed review bundle containing a unified diff, origina
 
 ## Policy-controlled Repair rollout, mirroring, and shadow execution
 
-**Status: Design clarified; effect-aware contract, evidence gate, and deterministic routing decision implemented; rollout orchestration remains future work.**
+**Status: Design clarified; effect-aware contract, evidence gate, deterministic routing decision, and a narrow invocation adapter implemented; rollout orchestration remains future work.**
 
 Caretaker currently supports candidate probation and a narrow
 `PURE_FUNCTION` differential-execution mode. For explicitly confirmed pure
@@ -953,7 +953,10 @@ field-repair stages have separate policy percentages; stale-policy, expired,
 and terminal records fail closed. The result includes a routing-key digest and
 decision hash, never the raw key. This is still an evidence/selection boundary,
 not an invocation engine, FunctionSlot activation path, or supervisor-wide
-coordinator.
+coordinator. `execute_rollout()` now consumes that decision for caller-supplied
+already-authorized callables and delegates sampled shadow work to the
+original-authoritative primitive. FunctionSlot activation, application-specific
+failure/fallback policy, and supervisor-wide coordination remain future work.
 
 Future Repair should provide more operator and policy control over how a validated
 candidate is introduced. Potential execution strategies include:

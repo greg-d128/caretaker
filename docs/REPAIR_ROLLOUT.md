@@ -97,6 +97,13 @@ selected implementation. It does not invoke either implementation, activate a
 function slot, or provide fleet-wide percentage guarantees. The caller must
 still apply normal Repair, Integrity, Guard, isolation, and authority checks.
 
+`execute_rollout()` is the corresponding narrow invocation adapter. It consumes
+the decision and invokes the caller-supplied, already-authorized deployed or
+candidate callable. A sampled shadow call delegates to `shadow_execute()` and
+returns the deployed result; canary and active selections return the candidate
+only when the decision makes it authoritative. It does not mutate a slot,
+install a repair, grant authority, or choose an isolation-unavailable fallback.
+
 For example:
 
 ```python

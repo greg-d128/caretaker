@@ -17,7 +17,10 @@ from enum import Enum
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
+from .contracts import Comparator
 from .domain import RepairEvent
+from .execution import EffectObservation, FunctionExecutionContract
+from .shadow import ShadowExecutionAdapter, ShadowExecutionResult, shadow_execute
 
 
 class RepairRolloutError(RuntimeError):
@@ -187,6 +190,17 @@ class RolloutRoutingDecision:
     policy_fingerprint: str
     decision_hash: str
     reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class RolloutExecutionResult:
+    """Result of one invocation selected by a rollout decision."""
+
+    result: Any
+    decision: RolloutRoutingDecision
+    candidate_executed: bool
+    candidate_authoritative: bool
+    shadow_result: ShadowExecutionResult | None = None
 
 
 class RepairRolloutStore(Protocol):
@@ -775,6 +789,75 @@ def decide_rollout_routing(
             },
         )
     return decision
+
+
+def execute_rollout(
+    record: RepairRolloutRecord,
+    *,
+    policy: RepairRolloutPolicy,
+    policy_fingerprint: str,
+    routing_scope: str,
+    routing_key: str,
+    deployed: Callable[..., Any],
+    candidate: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    contract: FunctionExecutionContract,
+    effect_observation: EffectObservation | None = None,
+    isolation_adapter: ShadowExecutionAdapter | None = None,
+    comparator: Comparator | None = None,
+    audit_event: Callable[..., Any] | None = None,
+) -> RolloutExecutionResult:
+    """Invoke an already-authorized rollout path.
+
+    This adapter consumes, but does not create, rollout authority.  A sampled
+    shadow candidate is executed through the original-authoritative shadow
+    primitive.  A canary or active candidate is invoked only when the routing
+    decision explicitly makes it authoritative; all other calls use ``deployed``.
+    The caller remains responsible for selecting functions that passed its
+    normal Repair, Integrity, Guard, and authority checks.
+    """
+
+    decision = decide_rollout_routing(
+        record,
+        policy=policy,
+        policy_fingerprint=policy_fingerprint,
+        routing_scope=routing_scope,
+        routing_key=routing_key,
+        audit_event=audit_event,
+    )
+    if decision.strategy == "shadow":
+        shadow = shadow_execute(
+            original=deployed,
+            candidate=candidate,
+            args=args,
+            kwargs=kwargs,
+            contract=contract,
+            effect_observation=effect_observation,
+            isolation_adapter=isolation_adapter,
+            comparator=comparator,
+            audit_event=audit_event,
+        )
+        return RolloutExecutionResult(
+            result=shadow.result,
+            decision=decision,
+            candidate_executed=True,
+            candidate_authoritative=False,
+            shadow_result=shadow,
+        )
+    if decision.candidate_authoritative:
+        return RolloutExecutionResult(
+            result=candidate(*args, **kwargs),
+            decision=decision,
+            candidate_executed=True,
+            candidate_authoritative=True,
+        )
+    return RolloutExecutionResult(
+        result=deployed(*args, **kwargs),
+        decision=decision,
+        candidate_executed=False,
+        candidate_authoritative=False,
+    )
 
 
 def _bucket_selected(bucket: int, bucket_count: int, percentage: int) -> bool:
