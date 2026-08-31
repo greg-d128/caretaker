@@ -180,6 +180,15 @@ POLICY_CAPABILITIES: tuple[PolicyCapability, ...] = (
         "Review identity retention against the longest retained signed artifact and the configured runtime signing assurance mode.",
         ("logging.signing.identity_journal_",),
     ),
+    PolicyCapability(
+        "adaptive.persistent-policy-acceptance",
+        6,
+        "0.6.1",
+        "Persistent adaptive-policy acceptance",
+        "Controls whether an operator may record an applied adaptive transition as a durable deployment handoff.",
+        "Review that acceptance remains opt-in, context-bound, signed when available, and unable to mutate authority or reactivate policy.",
+        ("lightweight.aggregation.allow_persistent_acceptance",),
+    ),
 )
 
 CURRENT_POLICY_SURFACE_VERSION = max(

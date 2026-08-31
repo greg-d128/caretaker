@@ -38,6 +38,7 @@ from .adaptive_aggregation import (
     SupervisorAdaptiveAggregationStore,
     extended_aggregation_target_id,
     normalize_adaptive_observation_batch,
+    verify_adaptive_policy_acceptance_signature,
     verify_adaptive_policy_transition_signature,
 )
 from .behavior import observed_return_shape
@@ -270,6 +271,7 @@ from .store import InMemoryRepairStore, SQLiteRepairStore
 from .telemetry import CorrelatedLogHandler
 from .logging import (
     AuditDeliverySink,
+    accept_adaptive_transition,
     ApplicationLoggingBaseline,
     AttachmentPolicy,
     AttachmentReference,
@@ -363,6 +365,7 @@ __all__ = [
     "SupervisorAdaptiveAggregationStore",
     "extended_aggregation_target_id",
     "normalize_adaptive_observation_batch",
+    "verify_adaptive_policy_acceptance_signature",
     "verify_adaptive_policy_transition_signature",
     "ConsoleIdentityStore",
     "normalize_console_public_identity",

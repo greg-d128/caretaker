@@ -1005,6 +1005,9 @@ def main(argv: list[str] | None = None) -> int:
                 "policy_ledger": list(
                     adaptive_aggregation_store.list_policy_transition_ledger()
                 ),
+                "policy_acceptances": list(
+                    adaptive_aggregation_store.list_policy_transition_acceptances()
+                ),
                 "policy_contexts": policy_contexts,
                 "policy_context_available": policy_context_available,
             }
@@ -1056,6 +1059,9 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 "policy_ledger": list(
                     adaptive_aggregation_store.list_policy_transition_ledger()
+                ),
+                "policy_acceptances": list(
+                    adaptive_aggregation_store.list_policy_transition_acceptances()
                 ),
             }
         if command == "adaptive-threshold-proposal":
@@ -1441,6 +1447,111 @@ def main(argv: list[str] | None = None) -> int:
                 "lease_expires_at": lease.expires_at.isoformat(),
                 "transition": transition,
                 "authority_policy": authority.effective.snapshot_dict(),
+            }
+        if command == "adaptive-threshold-accept":
+            request_id = str(request.get("request_id") or "").strip()
+            if not request_id:
+                raise ValueError("adaptive-threshold-accept requires request_id")
+            if request.get("confirm") is not True:
+                raise PermissionError("adaptive-threshold-accept requires confirm=true")
+            reason = str(request.get("reason") or "").strip()
+            if not reason:
+                raise ValueError("adaptive threshold acceptance requires an operator reason")
+            adaptive_context = current_adaptive_context()
+            if adaptive_context is None:
+                raise PermissionError(
+                    "adaptive policy acceptance requires current worker context"
+                )
+            current_generations, policy_fingerprints, promotion_policies = adaptive_context
+            transitions = adaptive_aggregation_store.list_transition_requests(
+                request_id=request_id,
+                current_generations=current_generations,
+                policy_fingerprints=policy_fingerprints,
+                authority_policy_generation=str(authority.effective.generation),
+                authority_policy_fingerprint=authority.effective.fingerprint,
+            )
+            if len(transitions) != 1:
+                raise KeyError(f"No adaptive policy transition found for {request_id}")
+            transition = transitions[0]
+            if transition.get("request_kind") != "ADAPTIVE_POLICY_TRANSITION":
+                raise PermissionError("adaptive policy acceptance requires a policy transition")
+            aggregation_target = str(
+                transition.get("aggregation_target_id")
+                or extended_aggregation_target_id(
+                    str(transition.get("target_id") or ""),
+                    transition.get("aggregation_scope"),
+                )
+            )
+            promotion_policy = promotion_policies.get(aggregation_target) or {}
+            if promotion_policy.get("allow_persistent_acceptance") is not True:
+                raise PermissionError(
+                    "persistent adaptive policy acceptance is disabled by policy"
+                )
+            acceptance = adaptive_aggregation_store.record_policy_transition_acceptance(
+                request_id,
+                accepted_by=f"uid:{credentials[1]}",
+                reason=reason,
+                policy_allows_persistent_acceptance=True,
+                current_generations=current_generations,
+                current_policy_fingerprints=policy_fingerprints,
+                authority_policy_generation=str(authority.effective.generation),
+                authority_policy_fingerprint=authority.effective.fingerprint,
+                authority_type="operator",
+                incident_id=str(request.get("incident_id") or "").strip() or None,
+                artifact_signer=runtime.writer.signing_service,
+            )
+            runtime.event(
+                logger_name="caretaker.adaptive",
+                severity=20,
+                channel=LogChannel.AUDIT,
+                message="Adaptive policy transition accepted for persistent deployment review",
+                fields={
+                    "transition_request_id": request_id,
+                    "acceptance_id": acceptance.get("acceptance_id"),
+                    "target_id": transition.get("target_id"),
+                    "policy_id": acceptance.get("policy_id"),
+                    "policy_mutated": False,
+                    "authority_granted": False,
+                },
+                origin="caretaker",
+            )
+            runtime.audit.emit(
+                "POLICY_ACCEPTED",
+                actor={"type": "operator", "id": f"uid:{credentials[1]}"},
+                scope={
+                    "target_id": transition.get("target_id"),
+                    "aggregation_scope": transition.get("aggregation_scope"),
+                    "transition_id": request_id,
+                },
+                policy={
+                    "prior_policy_id": acceptance.get("prior_policy_id"),
+                    "policy_id": acceptance.get("policy_id"),
+                    "prior_fingerprint": acceptance.get("prior_policy_fingerprint"),
+                    "fingerprint": acceptance.get("policy_fingerprint"),
+                    "authority_type": "operator",
+                    "authority_generation": authority.effective.generation,
+                    "fields_affected": acceptance.get("fields_affected"),
+                },
+                outcome={
+                    "state": "ACCEPTED",
+                    "effective_at": acceptance.get("effective_at"),
+                    "reason": reason,
+                },
+                details={
+                    "acceptance_id": acceptance.get("acceptance_id"),
+                    "policy_mutated": False,
+                    "authority_granted": False,
+                    "deployment_handoff_required": True,
+                },
+                priority=EvidencePriority.CRITICAL,
+            )
+            return {
+                "ok": True,
+                "transition_request_id": request_id,
+                "acceptance": acceptance,
+                "policy_mutated": False,
+                "authority_granted": False,
+                "deployment_handoff_required": True,
             }
         if command == "adaptive-threshold-rollback":
             request_id = str(request.get("request_id") or "").strip()

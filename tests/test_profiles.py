@@ -169,6 +169,7 @@ def test_policy_surface_two_requires_review_of_adaptive_instrumentation() -> Non
         "guard.behavior-collection-scheduler",
         "repair.validation-isolation",
         "logging.signing-identity-journal",
+        "adaptive.persistent-policy-acceptance",
     ]
 
 def test_policy_surface_reports_capabilities_added_after_profile(monkeypatch) -> None:

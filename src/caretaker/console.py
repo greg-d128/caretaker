@@ -981,6 +981,17 @@ class CaretakerConsoleApp(App):
                         disabled=True,
                         variant="warning",
                     )
+                    yield Checkbox(
+                        "Confirm persistent acceptance",
+                        id="adaptive-threshold-accept-confirm",
+                        disabled=True,
+                    )
+                    yield Button(
+                        "Accept for deployment",
+                        id="adaptive-threshold-accept",
+                        disabled=True,
+                        variant="primary",
+                    )
                 with Vertical(id="adaptive-threshold-proposal-actions"):
                     with Horizontal(id="adaptive-threshold-proposal-fields"):
                         yield Input(placeholder="Target id (required)", id="adaptive-threshold-proposal-target")
@@ -2164,6 +2175,7 @@ class CaretakerConsoleApp(App):
                     else None
                 )
                 self._refresh_adaptive_threshold_review_actions()
+                self._refresh_adaptive_threshold_acceptance_actions()
                 target = str(payload.get("target_id") or "").strip()
                 self.query_one("#adaptive-threshold-proposal-target", Input).value = target
                 self.query_one("#adaptive-threshold-proposal-scope", Input).value = str(
@@ -2184,11 +2196,13 @@ class CaretakerConsoleApp(App):
                 self._selected_adaptive_transition_request_id = (
                     str(payload.get("request_id") or "").strip()
                     if request_kind == "ADAPTIVE_POLICY_TRANSITION"
-                    and status not in {"APPLIED", "ROLLED_BACK"}
+                    and status not in {"ROLLED_BACK"}
+                    and payload.get("acceptance_status") != "ACCEPTED"
                     and payload.get("rollback_status") != "ROLLED_BACK"
                     else None
                 )
                 self._refresh_adaptive_threshold_rollback_actions()
+                self._refresh_adaptive_threshold_acceptance_actions()
             return
 
         if event.data_table.id == "attention-table":
@@ -3234,8 +3248,10 @@ class CaretakerConsoleApp(App):
             self.query_one("#adaptive-threshold-review-confirm", Checkbox).value = False
             self.query_one("#adaptive-threshold-apply-confirm", Checkbox).value = False
             self.query_one("#adaptive-threshold-rollback-confirm", Checkbox).value = False
+            self.query_one("#adaptive-threshold-accept-confirm", Checkbox).value = False
             self._refresh_adaptive_threshold_review_actions()
             self._refresh_adaptive_threshold_rollback_actions()
+            self._refresh_adaptive_threshold_acceptance_actions()
         elif event.input.id in {
             "adaptive-threshold-proposal-target",
             "adaptive-threshold-proposal-scope",
@@ -3296,6 +3312,8 @@ class CaretakerConsoleApp(App):
             self._refresh_adaptive_threshold_review_actions()
         elif event.checkbox.id == "adaptive-threshold-rollback-confirm":
             self._refresh_adaptive_threshold_rollback_actions()
+        elif event.checkbox.id == "adaptive-threshold-accept-confirm":
+            self._refresh_adaptive_threshold_acceptance_actions()
         elif event.checkbox.id == "adaptive-threshold-proposal-confirm":
             self._refresh_adaptive_threshold_proposal_actions()
         elif event.checkbox.id == "worker-failure-recovery-apply-confirm":
@@ -3911,6 +3929,7 @@ class CaretakerConsoleApp(App):
         self._selected_adaptive_transition_request_id = None
         self._refresh_adaptive_threshold_review_actions()
         self._refresh_adaptive_threshold_rollback_actions()
+        self._refresh_adaptive_threshold_acceptance_actions()
         try:
             response = await self._request("adaptive-aggregation-status")
         except Exception as exc:
@@ -3983,6 +4002,8 @@ class CaretakerConsoleApp(App):
         transitions = transitions if isinstance(transitions, (list, tuple)) else ()
         policy_ledger = response.get("policy_ledger")
         policy_ledger = policy_ledger if isinstance(policy_ledger, (list, tuple)) else ()
+        policy_acceptances = response.get("policy_acceptances")
+        policy_acceptances = policy_acceptances if isinstance(policy_acceptances, (list, tuple)) else ()
         rows: list[dict[str, Any]] = []
         # Policy lineage is immutable evidence. Keep it in the same bounded
         # inspection table as aggregates and transitions so an operator can
@@ -4116,6 +4137,7 @@ class CaretakerConsoleApp(App):
             f"Aggregates {len(aggregates)} | "
             f"Transitions {len(transitions)} | "
             f"Policy lineage {len(policy_ledger)} ({min(len(policy_ledger), 100)} shown) | "
+            f"Accepted {len(policy_acceptances)} | "
             f"Proposal reviews {sum(1 for item in transitions if isinstance(item, Mapping) and item.get('review_status') not in {None, 'UNREVIEWED'})} | "
             f"Expired {expired} | "
             f"Distribution conflicts {sum(1 for item in rows if item['kind'] == 'CONFLICT')} | "
@@ -4123,9 +4145,9 @@ class CaretakerConsoleApp(App):
         )
         output.write(
             "Select a row for bounded details. The console does not acknowledge "
-            "or expire adaptive transitions. Threshold review is an advisory, "
-            "reasoned record; approved threshold application remains separately "
-            "gated by the control plane."
+            "worker transitions or expire them. Threshold review is an advisory, "
+            "reasoned record; approved application and persistent acceptance remain "
+            "separately gated by the control plane."
         )
         self._refresh_attention()
 
@@ -4192,12 +4214,83 @@ class CaretakerConsoleApp(App):
         confirm.disabled = not selected
         if not selected:
             confirm.value = False
+        selected_record = next(
+            (
+                item
+                for item in self._adaptive_aggregation_records
+                if item.get("kind") == "TRANSITION"
+                and str((item.get("payload") or {}).get("request_id") or "")
+                == self._selected_adaptive_transition_request_id
+            ),
+            None,
+        )
+        payload = selected_record.get("payload") if selected_record else {}
+        payload = payload if isinstance(payload, Mapping) else {}
         self.query_one("#adaptive-threshold-rollback", Button).disabled = not bool(
             selected
             and self._application_running is True
             and confirm.value
             and reason.value.strip()
+            and str(payload.get("status") or "").upper() not in {"APPLIED", "ROLLED_BACK"}
+            and str(payload.get("acceptance_status") or "").upper() != "ACCEPTED"
         )
+
+    def _refresh_adaptive_threshold_acceptance_actions(self) -> None:
+        """Enable acceptance only for an applied transition allowed by policy."""
+        selected = bool(self._selected_adaptive_transition_request_id)
+        confirm = self.query_one("#adaptive-threshold-accept-confirm", Checkbox)
+        reason = self.query_one("#adaptive-threshold-review-reason", Input)
+        confirm.disabled = not selected
+        if not selected:
+            confirm.value = False
+        selected_record = next(
+            (
+                item
+                for item in self._adaptive_aggregation_records
+                if item.get("kind") == "TRANSITION"
+                and str((item.get("payload") or {}).get("request_id") or "")
+                == self._selected_adaptive_transition_request_id
+            ),
+            None,
+        )
+        payload = selected_record.get("payload") if selected_record else {}
+        payload = payload if isinstance(payload, Mapping) else {}
+        aggregation_target = str(
+            payload.get("aggregation_target_id") or payload.get("target_id") or ""
+        )
+        allowed_by_policy = False
+        contexts = self._adaptive_aggregation_status.get("policy_contexts")
+        contexts = contexts if isinstance(contexts, (list, tuple)) else ()
+        for context in contexts:
+            if not isinstance(context, Mapping):
+                continue
+            context_target = str(
+                context.get("aggregation_target_id") or context.get("target_id") or ""
+            )
+            if context_target != aggregation_target:
+                continue
+            promotion = context.get("promotion_policy")
+            if isinstance(promotion, Mapping):
+                allowed_by_policy = promotion.get("allow_persistent_acceptance") is True
+            break
+        remaining = payload.get("remaining_seconds")
+        try:
+            authority_active = remaining is None or float(remaining) > 0
+        except (TypeError, ValueError):
+            authority_active = False
+        enabled = bool(
+            selected
+            and self._application_running is True
+            and confirm.value
+            and reason.value.strip()
+            and str(payload.get("status") or "").upper() == "APPLIED"
+            and str(payload.get("acceptance_status") or "").upper() != "ACCEPTED"
+            and str(payload.get("context_status") or "").upper() == "CURRENT"
+            and str(payload.get("deadline_status") or "").upper() != "EXPIRED"
+            and authority_active
+            and allowed_by_policy
+        )
+        self.query_one("#adaptive-threshold-accept", Button).disabled = not enabled
 
     def _refresh_adaptive_threshold_proposal_actions(self) -> None:
         """Enable only the explicit proposal-only threshold operation."""
@@ -4991,6 +5084,31 @@ class CaretakerConsoleApp(App):
                     request_id=request_id,
                     confirm=True,
                     reason=reason,
+                )
+                await self.refresh_adaptive_aggregation()
+                self._write_json("#adaptive-aggregation-output", response)
+                return
+            if button == "adaptive-threshold-accept":
+                request_id = self._selected_adaptive_transition_request_id
+                if not request_id:
+                    raise ValueError("Select an applied adaptive policy transition first")
+                if self._application_running is not True:
+                    raise RuntimeError("Adaptive policy acceptance requires a live runtime")
+                if not self.query_one(
+                    "#adaptive-threshold-accept-confirm", Checkbox
+                ).value:
+                    raise ValueError("Confirm the persistent adaptive policy acceptance first")
+                reason = self.query_one(
+                    "#adaptive-threshold-review-reason", Input
+                ).value.strip()
+                if not reason:
+                    raise ValueError("Adaptive policy acceptance requires an operator reason")
+                response = await self._request(
+                    "adaptive-threshold-accept",
+                    request_id=request_id,
+                    confirm=True,
+                    reason=reason,
+                    incident_id=self._context_incident,
                 )
                 await self.refresh_adaptive_aggregation()
                 self._write_json("#adaptive-aggregation-output", response)

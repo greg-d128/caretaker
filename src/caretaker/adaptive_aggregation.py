@@ -24,6 +24,7 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 ADAPTIVE_AGGREGATION_SCHEMA_VERSION = 1
 ADAPTIVE_POLICY_LEDGER_SCHEMA_VERSION = 1
+ADAPTIVE_POLICY_ACCEPTANCE_SCHEMA_VERSION = 1
 MAX_BATCH_TEXT = 256
 MAX_AGGREGATION_SCOPE_TEXT = 256
 MAX_BATCH_EVENTS = 256
@@ -782,6 +783,15 @@ def _transition_signature_payload(transition: Mapping[str, Any]) -> dict[str, An
     }
 
 
+def _policy_acceptance_signature_payload(acceptance: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the immutable acceptance fields covered by its signature."""
+    return {
+        str(key): value
+        for key, value in acceptance.items()
+        if key not in {"signature", "signature_status", "duplicate"}
+    }
+
+
 def _normalize_transition_signature(value: Any) -> Mapping[str, Any] | str | None:
     if value is None:
         return None
@@ -834,6 +844,64 @@ def verify_adaptive_policy_transition_signature(
         transition.get("transition_id") or transition.get("request_id") or ""
     ):
         return {"valid": False, "status": "INVALID", "reason": "signature context does not match transition"}
+    fingerprint = artifact.public_key_fingerprint
+    if not fingerprint or identity_journal is None:
+        return {"valid": False, "status": "UNVERIFIABLE", "reason": "signing identity is unavailable"}
+    try:
+        identity_ok, identity_error = identity_journal.verify_identity(fingerprint)
+        if not identity_ok:
+            return {
+                "valid": False,
+                "status": "INVALID",
+                "reason": f"signing identity chain is invalid: {identity_error}",
+            }
+        public_key = identity_journal.public_key(fingerprint)
+    except Exception as exc:
+        return {
+            "valid": False,
+            "status": "UNVERIFIABLE",
+            "reason": f"signing identity lookup failed: {type(exc).__name__}",
+        }
+    if public_key is None or not verify_signed_artifact(artifact, public_key):
+        return {"valid": False, "status": "INVALID", "reason": "signature is invalid"}
+    return {
+        "valid": True,
+        "status": "VERIFIED",
+        "signer_identity_id": artifact.signer_identity_id,
+        "signer_mode": artifact.signer_mode.name,
+        "public_key_fingerprint": fingerprint,
+    }
+
+
+def verify_adaptive_policy_acceptance_signature(
+    acceptance: Mapping[str, Any],
+    *,
+    identity_journal: Any,
+) -> dict[str, Any]:
+    """Verify a signed persistent-acceptance record without granting authority."""
+    signature = acceptance.get("signature")
+    if signature is None:
+        return {"valid": False, "status": "UNSIGNED", "reason": "signature is absent"}
+    if not isinstance(signature, Mapping):
+        return {"valid": False, "status": "MALFORMED", "reason": "signature envelope is not an object"}
+    from .logging.signing import deserialize_signed_artifact, verify_signed_artifact
+
+    try:
+        artifact = deserialize_signed_artifact(signature)
+    except Exception as exc:
+        return {
+            "valid": False,
+            "status": "MALFORMED",
+            "reason": f"signature envelope cannot be decoded: {type(exc).__name__}",
+        }
+    if artifact.artifact_kind != "adaptive-policy-acceptance":
+        return {"valid": False, "status": "INVALID", "reason": "unexpected artifact kind"}
+    if artifact.content_hash != _content_hash(_policy_acceptance_signature_payload(acceptance)):
+        return {"valid": False, "status": "INVALID", "reason": "signature binds different acceptance content"}
+    if str(artifact.context.get("acceptance_id") or "") != str(acceptance.get("acceptance_id") or ""):
+        return {"valid": False, "status": "INVALID", "reason": "signature context does not match acceptance"}
+    if str(artifact.context.get("transition_id") or "") != str(acceptance.get("transition_id") or ""):
+        return {"valid": False, "status": "INVALID", "reason": "signature transition context does not match acceptance"}
     fingerprint = artifact.public_key_fingerprint
     if not fingerprint or identity_journal is None:
         return {"valid": False, "status": "UNVERIFIABLE", "reason": "signing identity is unavailable"}
@@ -1216,6 +1284,7 @@ class SupervisorAdaptiveAggregationStore:
         self.proposal_review_directory = self.root / "adaptive" / "aggregation" / "proposal-reviews"
         self.transition_rollback_directory = self.root / "adaptive" / "aggregation" / "transition-rollbacks"
         self.policy_ledger_directory = self.root / "adaptive" / "policy-ledger"
+        self.policy_acceptance_directory = self.root / "adaptive" / "policy-acceptance"
         self.conflict_directory = self.root / "adaptive" / "aggregation" / "conflicts"
         for directory in (
             self.pending_directory,
@@ -1228,6 +1297,7 @@ class SupervisorAdaptiveAggregationStore:
             self.proposal_review_directory,
             self.transition_rollback_directory,
             self.policy_ledger_directory,
+            self.policy_acceptance_directory,
             self.conflict_directory,
         ):
             directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1327,6 +1397,9 @@ class SupervisorAdaptiveAggregationStore:
     def _policy_ledger_path(self, record_id: str) -> Path:
         return self.policy_ledger_directory / f"{record_id}.json"
 
+    def _policy_acceptance_path(self, acceptance_id: str) -> Path:
+        return self.policy_acceptance_directory / f"{acceptance_id}.json"
+
     def _load_policy_ledger_record(self, path: Path) -> dict[str, Any]:
         envelope = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(envelope, Mapping):
@@ -1348,6 +1421,35 @@ class SupervisorAdaptiveAggregationStore:
         if str(envelope.get("record_sha256") or "") != _content_hash(record):
             raise AdaptiveAggregationError("adaptive policy ledger hash is invalid")
         return dict(record)
+
+    def _load_policy_acceptance_record(self, path: Path) -> dict[str, Any]:
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(envelope, Mapping):
+            raise AdaptiveAggregationError("adaptive policy acceptance envelope must be an object")
+        if int(envelope.get("schema_version") or 0) != ADAPTIVE_POLICY_ACCEPTANCE_SCHEMA_VERSION:
+            raise AdaptiveAggregationError("unsupported adaptive policy acceptance schema")
+        acceptance = envelope.get("acceptance")
+        if not isinstance(acceptance, Mapping):
+            raise AdaptiveAggregationError("adaptive policy acceptance record is missing")
+        try:
+            acceptance_id = str(UUID(str(acceptance.get("acceptance_id"))))
+            transition_id = str(UUID(str(acceptance.get("transition_id"))))
+        except (TypeError, ValueError) as exc:
+            raise AdaptiveAggregationError("adaptive policy acceptance IDs are invalid") from exc
+        if acceptance_id != path.stem:
+            raise AdaptiveAggregationError("adaptive policy acceptance ID does not match its filename")
+        if not transition_id:
+            raise AdaptiveAggregationError("adaptive policy acceptance transition ID is missing")
+        if str(envelope.get("acceptance_sha256") or "") != _content_hash(acceptance):
+            raise AdaptiveAggregationError("adaptive policy acceptance hash is invalid")
+        return dict(acceptance)
+
+    def _load_policy_acceptance(self, transition_id: str) -> dict[str, Any] | None:
+        for path in sorted(self.policy_acceptance_directory.glob("*.json")):
+            acceptance = self._load_policy_acceptance_record(path)
+            if str(acceptance.get("transition_id")) == str(transition_id):
+                return acceptance
+        return None
 
     def _record_policy_ledger_state(
         self,
@@ -2915,6 +3017,169 @@ class SupervisorAdaptiveAggregationStore:
         )
         return {**rollback, "duplicate": False}
 
+    def record_policy_transition_acceptance(
+        self,
+        transition_request_id: str,
+        *,
+        accepted_by: str,
+        reason: str,
+        policy_allows_persistent_acceptance: bool,
+        current_generations: Mapping[str, str],
+        current_policy_fingerprints: Mapping[str, str],
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        authority_type: str = "operator",
+        incident_id: str | None = None,
+        signature: Mapping[str, Any] | str | None = None,
+        artifact_signer: Any | None = None,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Persist an operator acceptance of an already-applied transition.
+
+        Acceptance is a durable deployment handoff record.  It is deliberately
+        separate from the runtime transition and never changes the active
+        authority stack, renews a lease, or re-applies a policy after restart.
+        The exact changed context must still be live when the operator accepts
+        it, so an expired runtime lease cannot be converted into persistence.
+        """
+        if policy_allows_persistent_acceptance is not True:
+            raise PermissionError("persistent adaptive policy acceptance is disabled by policy")
+        try:
+            normalized_id = str(UUID(str(transition_request_id)))
+        except (TypeError, ValueError) as exc:
+            raise AdaptiveAggregationError(
+                "adaptive transition request_id must be a UUID"
+            ) from exc
+        stored = self._load_transition_request(self._transition_path(normalized_id))
+        if stored.get("request_kind") != "ADAPTIVE_POLICY_TRANSITION":
+            raise PermissionError("only an adaptive policy transition can be accepted")
+        existing = self._load_policy_acceptance(normalized_id)
+        if existing is not None:
+            return {**existing, "duplicate": True}
+        if self._load_transition_rollback(normalized_id) is not None:
+            raise PermissionError("rolled-back adaptive policy transitions cannot be accepted")
+        observed_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        if self._transition_status(
+            stored,
+            self._load_transition_acknowledgements(normalized_id),
+            now=observed_at,
+        ) != "APPLIED":
+            raise PermissionError("adaptive policy transition must be APPLIED before acceptance")
+        authority_expiry = self._transition_expiry(
+            {"expires_at": stored.get("authority_expires_at")}
+        )
+        if authority_expiry is not None and observed_at >= authority_expiry:
+            raise PermissionError("adaptive policy transition authority has expired")
+        context_error = self._context_error(
+            stored,
+            current_generations=current_generations,
+            policy_fingerprints=current_policy_fingerprints,
+            policy_fingerprint=None,
+            authority_policy_generation=str(authority_policy_generation),
+            authority_policy_fingerprint=str(authority_policy_fingerprint),
+        )
+        if context_error is not None:
+            raise PermissionError(f"adaptive policy transition context is stale: {context_error}")
+        actor = _text(accepted_by, name="accepted_by", limit=MAX_BATCH_TEXT)
+        acceptance_reason = _text(reason, name="reason", limit=MAX_TRANSITION_REASON)
+        assert actor is not None and acceptance_reason is not None
+        normalized_authority_type = str(authority_type).strip().lower()
+        if normalized_authority_type not in {"operator", "deployment"}:
+            raise PermissionError("only operator or deployment authority can accept a persistent policy")
+        normalized_incident_id = None
+        if incident_id is not None and str(incident_id).strip():
+            try:
+                normalized_incident_id = str(UUID(str(incident_id)))
+            except (TypeError, ValueError) as exc:
+                raise AdaptiveAggregationError("incident_id must be a UUID") from exc
+        acceptance = {
+            "acceptance_id": str(uuid4()),
+            "transition_id": normalized_id,
+            "request_kind": "ADAPTIVE_POLICY_ACCEPTANCE",
+            "proposal_request_id": stored.get("proposal_request_id"),
+            "target_id": stored.get("target_id"),
+            "aggregation_scope": stored.get("aggregation_scope"),
+            "aggregation_target_id": stored.get("aggregation_target_id"),
+            "prior_policy_id": stored.get("prior_policy_id"),
+            "policy_id": stored.get("policy_id"),
+            "prior_policy_fingerprint": stored.get("previous_policy_fingerprint"),
+            "policy_fingerprint": stored.get("policy_fingerprint"),
+            "fields_affected": sorted(
+                str(key) for key in (stored.get("changes") or {}).keys()
+            ),
+            "change_description": str(
+                stored.get("change_description") or stored.get("reason") or ""
+            )[:MAX_TRANSITION_REASON],
+            "authority_type": normalized_authority_type,
+            "accepted_by": actor,
+            "reason": acceptance_reason,
+            "incident_id": normalized_incident_id,
+            "authority_policy_generation": str(authority_policy_generation),
+            "authority_policy_fingerprint": str(authority_policy_fingerprint),
+            "authority_lease_id": stored.get("authority_lease_id"),
+            "authority_expires_at": stored.get("authority_expires_at"),
+            "effective_at": stored.get("effective_at"),
+            "accepted_at": observed_at.isoformat(),
+            "signature": _normalize_transition_signature(signature),
+            "signature_status": "UNSIGNED" if signature is None else "UNVERIFIED",
+            "policy_mutated": False,
+            "authority_granted": False,
+        }
+        if acceptance["signature"] is None and artifact_signer is not None:
+            try:
+                signed_artifact = artifact_signer.sign_artifact(
+                    artifact_kind="adaptive-policy-acceptance",
+                    content_hash=_content_hash(_policy_acceptance_signature_payload(acceptance)),
+                    context={
+                        "acceptance_id": acceptance["acceptance_id"],
+                        "transition_id": acceptance["transition_id"],
+                        "policy_id": acceptance["policy_id"],
+                    },
+                )
+            except Exception as exc:
+                raise AdaptiveAggregationError(
+                    "adaptive policy acceptance signing failed"
+                ) from exc
+            if signed_artifact is not None:
+                from .logging.signing import serialize_signed_artifact
+
+                acceptance["signature"] = serialize_signed_artifact(signed_artifact)
+                acceptance["signature_status"] = signed_artifact.signer_mode.name
+        _immutable_write(
+            self._policy_acceptance_path(str(acceptance["acceptance_id"])),
+            {
+                "schema_version": ADAPTIVE_POLICY_ACCEPTANCE_SCHEMA_VERSION,
+                "acceptance": acceptance,
+                "acceptance_sha256": _content_hash(acceptance),
+            },
+        )
+        return {**acceptance, "duplicate": False}
+
+    def list_policy_transition_acceptances(
+        self,
+        *,
+        transition_id: str | None = None,
+        limit: int = 500,
+    ) -> tuple[dict[str, Any], ...]:
+        """List immutable adaptive-policy acceptance records, newest first."""
+        normalized_transition = None
+        if transition_id is not None:
+            try:
+                normalized_transition = str(UUID(str(transition_id)))
+            except (TypeError, ValueError) as exc:
+                raise AdaptiveAggregationError("transition_id must be a UUID") from exc
+        bounded = max(1, min(int(limit), 500))
+        records: list[dict[str, Any]] = []
+        for path in sorted(self.policy_acceptance_directory.glob("*.json"), reverse=True):
+            record = self._load_policy_acceptance_record(path)
+            if normalized_transition is not None and str(record.get("transition_id")) != normalized_transition:
+                continue
+            records.append(record)
+            if len(records) >= bounded:
+                break
+        records.sort(key=lambda item: str(item.get("accepted_at") or ""), reverse=True)
+        return tuple(records)
+
     def list_transition_requests(
         self,
         *,
@@ -3046,6 +3311,16 @@ class SupervisorAdaptiveAggregationStore:
                         visible["status"] = "ROLLED_BACK"
                     else:
                         visible["rollback_status"] = "NOT_REQUESTED"
+                try:
+                    acceptance = self._load_policy_acceptance(str(request["request_id"]))
+                except Exception as exc:
+                    visible["acceptance_status"] = "INVALID"
+                    visible["acceptance_error"] = f"{type(exc).__name__}: {exc}"[:256]
+                else:
+                    visible["acceptance"] = acceptance
+                    visible["acceptance_status"] = (
+                        "ACCEPTED" if acceptance is not None else "NOT_RECORDED"
+                    )
             result.append(visible)
         return tuple(result)
 
@@ -3217,6 +3492,9 @@ class SupervisorAdaptiveAggregationStore:
             ),
             "policy_ledger_records": sum(
                 1 for _ in self.policy_ledger_directory.glob("*.json")
+            ),
+            "policy_acceptance_records": sum(
+                1 for _ in self.policy_acceptance_directory.glob("*.json")
             ),
             "conflict_reports": sum(1 for _ in self.conflict_directory.glob("*.json")),
         }

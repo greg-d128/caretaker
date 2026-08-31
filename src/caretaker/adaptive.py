@@ -179,6 +179,10 @@ class AdaptiveAggregationPolicy:
     backpressure_action: AdaptiveAggregationBackpressureAction = (
         AdaptiveAggregationBackpressureAction.RETAIN
     )
+    # Recording an accepted adaptive transition for later deployment is a
+    # meaningful policy change.  Keep it opt-in; the record never changes the
+    # active authority stack by itself.
+    allow_persistent_acceptance: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -416,6 +420,8 @@ def validate_lightweight_policy(policy: LightweightPolicy) -> None:
         errors.append(
             "aggregation.backpressure_action must be RETAIN, DROP, or REDUCE"
         )
+    if not isinstance(aggregation.allow_persistent_acceptance, bool):
+        errors.append("aggregation.allow_persistent_acceptance must be a boolean")
     if aggregation.aggregation_scope is not None:
         if not isinstance(aggregation.aggregation_scope, str) or not aggregation.aggregation_scope.strip():
             errors.append("aggregation.aggregation_scope must be a non-empty string when provided")
@@ -1488,6 +1494,7 @@ class _AdaptiveController:
             },
             "transition_timeout_seconds": self.policy.aggregation.transition_timeout_seconds,
             "backpressure_action": self.policy.aggregation.backpressure_action.name,
+            "allow_persistent_acceptance": self.policy.aggregation.allow_persistent_acceptance,
         }
         batcher = self._aggregation_batcher
         if batcher is None:
@@ -1505,6 +1512,7 @@ class _AdaptiveController:
                 "promotion_policy": promotion_policy,
                 "transition_timeout_seconds": self.policy.aggregation.transition_timeout_seconds,
                 "backpressure_action": self.policy.aggregation.backpressure_action.name,
+                "allow_persistent_acceptance": self.policy.aggregation.allow_persistent_acceptance,
             }
         return {
             "enabled": True,

@@ -52,6 +52,7 @@ All event types share these redaction rules:
 | `POLICY_PROPOSED` | `CRITICAL` | `policy.policy_id`, `policy.fingerprint`, `outcome.state` | `{"state": "PROPOSED"}` |
 | `POLICY_REVIEWED` | `CRITICAL` | — | `{"state": "APPROVED", "review_id": "review-uuid"}` |
 | `POLICY_APPLIED` | `CRITICAL` | `policy.policy_id`, `policy.fingerprint`, `outcome.state` | `{"state": "APPLIED"}` |
+| `POLICY_ACCEPTED` | `CRITICAL` | `policy.policy_id`, `policy.fingerprint`, `outcome.state` | `{"state": "ACCEPTED", "policy_mutated": false}` |
 | `POLICY_REJECTED` | `CRITICAL` | — | `{"state": "REJECTED", "reason": "stale_context"}` |
 | `POLICY_ROLLED_BACK` | `CRITICAL` | — | `{"state": "ROLLED_BACK", "transition_id": "transition-uuid"}` |
 | `POLICY_SUPERSEDED` | `IMPORTANT` | — | `{"state": "SUPERSEDED", "replacement_policy_id": "policy-new-uuid"}` |

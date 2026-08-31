@@ -827,9 +827,12 @@ new policy and authority fingerprints and requires exact worker
 acknowledgements. This record verifies adoption; it does not apply policy or
 grant authority. The Adaptive console now drafts new proposal-only changes;
 editing an existing proposal still means creating a new immutable proposal.
-Remaining work is persistent policy acceptance beyond the bounded runtime
-lease and deployment-specific worker/process orchestration. The current slice
-also records immutable `PENDING`, `APPLIED`, `FAILED`, and `ROLLED_BACK`
+Persistent acceptance beyond the bounded runtime lease is now implemented as
+an opt-in, operator-authorized, signed deployment-handoff record. It remains
+evidence only: it does not mutate the active authority stack or reapply policy
+after restart. Remaining work is deployment-authorized installation of an
+accepted policy and deployment-specific worker/process orchestration. The
+current slice also records immutable `PENDING`, `APPLIED`, `FAILED`, and `ROLLED_BACK`
 lineage records with policy IDs/fingerprints, scope, effective/recorded times,
 authority metadata, and worker acknowledgement counts. These records are
 visible through the adaptive aggregation status response; they remain evidence

@@ -10,6 +10,7 @@ import pytest
 from caretaker.adaptive_aggregation import (
     AdaptiveAggregationError,
     SupervisorAdaptiveAggregationStore,
+    verify_adaptive_policy_acceptance_signature,
     verify_adaptive_policy_transition_signature,
 )
 from caretaker.logging import RuntimeArtifactSigningService, RuntimeRecordIntegrityMode, RuntimeSigningPolicy
@@ -67,7 +68,7 @@ def _transition(
         reason="apply reviewed threshold",
         authority_type="operator",
         authority_lease_id="00000000-0000-0000-0000-000000000005",
-        authority_expires_at="2030-01-01T00:00:00+00:00",
+        authority_expires_at="2030-01-02T00:00:00+00:00",
         now=now,
         effective_at=now,
         artifact_signer=artifact_signer,
@@ -164,6 +165,140 @@ def test_adaptive_actor_cannot_activate_policy_transition(tmp_path: Path) -> Non
             applied_by="adaptive:proposal",
             reason="not authorized",
             authority_type="adaptive",
+        )
+
+
+def test_operator_acceptance_is_durable_signed_and_does_not_mutate_policy(
+    tmp_path: Path,
+) -> None:
+    service = RuntimeArtifactSigningService(
+        policy=RuntimeSigningPolicy(
+            mode=RuntimeRecordIntegrityMode.EPHEMERAL_SIGNED,
+            run_signer_in_separate_process=False,
+        ),
+        application_id="payments",
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        root=tmp_path / "signing",
+    )
+    store = SupervisorAdaptiveAggregationStore(tmp_path / "ledger")
+    transition = _transition(
+        store,
+        now=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        artifact_signer=service,
+    )
+    assert store.acknowledge_transition(
+        {
+            **transition,
+            "worker_id": "worker-a",
+            "applied": True,
+            "observed_level": "POLICY",
+        },
+        peer_pid=101,
+        current_generations={"payments.charge": "generation-1"},
+        policy_fingerprints={"payments.charge": "policy-new"},
+        authority_policy_generation="5",
+        authority_policy_fingerprint="authority-new",
+    )["transition_status"] == "APPLIED"
+
+    acceptance = store.record_policy_transition_acceptance(
+        str(transition["transition_id"]),
+        accepted_by="uid:1001",
+        reason="operator accepted for deployment handoff",
+        policy_allows_persistent_acceptance=True,
+        current_generations={"payments.charge": "generation-1"},
+        current_policy_fingerprints={"payments.charge": "policy-new"},
+        authority_policy_generation="5",
+        authority_policy_fingerprint="authority-new",
+        now=datetime(2030, 1, 1, 0, 0, 30, tzinfo=timezone.utc),
+        artifact_signer=service,
+    )
+    assert acceptance["policy_mutated"] is False
+    assert acceptance["authority_granted"] is False
+    assert acceptance["signature_status"] == "EPHEMERAL_SIGNED"
+    assert verify_adaptive_policy_transition_signature(
+        transition, identity_journal=service.journal
+    )["valid"] is True
+    assert verify_adaptive_policy_acceptance_signature(
+        acceptance, identity_journal=service.journal
+    )["valid"] is True
+    assert store.list_policy_transition_acceptances(
+        transition_id=str(transition["transition_id"])
+    )[0]["acceptance_id"] == acceptance["acceptance_id"]
+    visible = store.list_transition_requests(request_id=str(transition["request_id"]))[0]
+    assert visible["acceptance_status"] == "ACCEPTED"
+    assert visible["acceptance"]["acceptance_id"] == acceptance["acceptance_id"]
+
+    duplicate = store.record_policy_transition_acceptance(
+        str(transition["transition_id"]),
+        accepted_by="uid:1001",
+        reason="different retry text is ignored",
+        policy_allows_persistent_acceptance=True,
+        current_generations={"payments.charge": "generation-1"},
+        current_policy_fingerprints={"payments.charge": "policy-new"},
+        authority_policy_generation="5",
+        authority_policy_fingerprint="authority-new",
+        now=datetime(2030, 1, 1, 0, 0, 31, tzinfo=timezone.utc),
+    )
+    assert duplicate["duplicate"] is True
+    service.close()
+
+
+def test_persistent_acceptance_requires_policy_and_live_authority(tmp_path: Path) -> None:
+    store = SupervisorAdaptiveAggregationStore(tmp_path)
+    transition = _transition(store, now=datetime(2030, 1, 1, tzinfo=timezone.utc))
+    with pytest.raises(PermissionError, match="disabled by policy"):
+        store.record_policy_transition_acceptance(
+            str(transition["transition_id"]),
+            accepted_by="uid:1001",
+            reason="not enabled",
+            policy_allows_persistent_acceptance=False,
+            current_generations={"payments.charge": "generation-1"},
+            current_policy_fingerprints={"payments.charge": "policy-new"},
+            authority_policy_generation="5",
+            authority_policy_fingerprint="authority-new",
+        )
+    with pytest.raises(PermissionError, match="must be APPLIED"):
+        store.record_policy_transition_acceptance(
+            str(transition["transition_id"]),
+            accepted_by="uid:1001",
+            reason="not applied",
+            policy_allows_persistent_acceptance=True,
+            current_generations={"payments.charge": "generation-1"},
+            current_policy_fingerprints={"payments.charge": "policy-new"},
+            authority_policy_generation="5",
+            authority_policy_fingerprint="authority-new",
+        )
+
+    expired_store = SupervisorAdaptiveAggregationStore(tmp_path / "expired")
+    expired = _transition(
+        expired_store,
+        now=datetime(2030, 1, 1, tzinfo=timezone.utc),
+    )
+    expired_store.acknowledge_transition(
+        {
+            **expired,
+            "worker_id": "worker-a",
+            "applied": True,
+            "observed_level": "POLICY",
+        },
+        peer_pid=101,
+        current_generations={"payments.charge": "generation-1"},
+        policy_fingerprints={"payments.charge": "policy-new"},
+        authority_policy_generation="5",
+        authority_policy_fingerprint="authority-new",
+    )
+    with pytest.raises(PermissionError, match="authority has expired"):
+        expired_store.record_policy_transition_acceptance(
+            str(expired["transition_id"]),
+            accepted_by="uid:1001",
+            reason="too late",
+            policy_allows_persistent_acceptance=True,
+            current_generations={"payments.charge": "generation-1"},
+            current_policy_fingerprints={"payments.charge": "policy-new"},
+            authority_policy_generation="5",
+            authority_policy_fingerprint="authority-new",
+            now=datetime(2030, 1, 3, tzinfo=timezone.utc),
         )
 
 

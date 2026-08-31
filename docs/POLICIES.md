@@ -8,6 +8,13 @@ Authority-layer constraints can further restrict or deliberately override these 
 
 ## Lightweight adaptive instrumentation policy
 
+Supervisor-owned adaptive aggregation includes the opt-in
+`aggregation.allow_persistent_acceptance` setting. Its default is `false`.
+When enabled, an operator may record an already-applied adaptive threshold
+transition as a signed, durable deployment handoff while the transition's
+runtime authority is still valid. The record does not change the active policy,
+grant authority, or reapply anything after restart.
+
 `LightweightPolicy` is separate from `RepairPolicy`. It controls low-cost problem
 detection, behavior sampling, evidence-gated promotion, and independently controlled
 demotion. The signed authority namespace is `lightweight.*`.

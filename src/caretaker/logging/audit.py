@@ -112,6 +112,12 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
         required_fields=("policy.policy_id", "policy.fingerprint", "outcome.state"),
         example={"state": "APPLIED"},
     ),
+    "POLICY_ACCEPTED": _event_definition(
+        description="An operator accepted an applied policy for persistent deployment review.",
+        minimum_priority=EvidencePriority.CRITICAL,
+        required_fields=("policy.policy_id", "policy.fingerprint", "outcome.state"),
+        example={"state": "ACCEPTED", "policy_mutated": False},
+    ),
     "POLICY_REJECTED": _event_definition(
         description="A policy proposal was rejected.",
         minimum_priority=EvidencePriority.CRITICAL,

@@ -359,6 +359,17 @@ def test_lightweight_policy_rejects_unknown_adaptive_backpressure_action() -> No
         )
 
 
+def test_lightweight_policy_rejects_non_boolean_persistent_acceptance() -> None:
+    with pytest.raises(ValueError, match="allow_persistent_acceptance"):
+        validate_lightweight_policy(
+            LightweightPolicy(
+                aggregation=AdaptiveAggregationPolicy(
+                    allow_persistent_acceptance="yes"
+                )
+            )
+        )
+
+
 def test_supervisor_records_delayed_threshold_proposal_without_applying_policy(
     tmp_path: Path,
 ):

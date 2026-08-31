@@ -335,6 +335,14 @@ record to exact bytes, while lineage and state explain how it became effective.
 `effective_at` is distinct from `recorded_at` so delayed persistence and clock
 issues remain observable.
 
+The `aggregation.allow_persistent_acceptance` setting gates the separate
+operator acceptance record. Acceptance is allowed only for an already-`APPLIED`
+adaptive transition while its exact runtime context and authority lease are
+still current. The record is signed when runtime signing is configured and is
+stored below `adaptive/policy-acceptance/`. It is a durable decision and
+deployment handoff, not a policy mutation or a new authority layer; applying
+it permanently remains a deployment-authorized workflow.
+
 ## Policy generations and Repair
 
 Every Repair incident, candidate, attempt, approval, and active validation is bound to the effective

@@ -729,6 +729,29 @@ def acknowledge_adaptive_transition(
     return control_request(path, request, timeout=timeout)
 
 
+def accept_adaptive_transition(
+    path: str | Path,
+    *,
+    request_id: str | UUID,
+    reason: str,
+    incident_id: str | UUID | None = None,
+    confirm: bool = False,
+    timeout: float = 5.0,
+) -> dict[str, Any]:
+    """Request operator acceptance of an applied adaptive transition."""
+    if not isinstance(confirm, bool):
+        raise ValueError("adaptive transition acceptance confirmation must be a boolean")
+    request: dict[str, Any] = {
+        "command": "adaptive-threshold-accept",
+        "request_id": str(request_id),
+        "reason": str(reason),
+        "confirm": confirm,
+    }
+    if incident_id is not None:
+        request["incident_id"] = str(incident_id)
+    return control_request(path, request, timeout=timeout)
+
+
 def _send_control_payload(connection: socket.socket, payload: bytes) -> None:
     connection.sendall(len(payload).to_bytes(4, "big") + payload)
 

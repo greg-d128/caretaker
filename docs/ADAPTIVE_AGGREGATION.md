@@ -176,12 +176,31 @@ adaptive actor to activate its own proposal.
 policy-lineage projection. The projection is for operator history and analytics;
 it does not turn a runtime lease into a permanent deployment policy.
 
+When the effective adaptive policy explicitly enables
+`aggregation.allow_persistent_acceptance`, an authenticated operator can use
+`adaptive-threshold-accept` after all required workers have acknowledged an
+`APPLIED` transition. The command requires the changed target, generation,
+policy, and authority context to still be current and requires the runtime
+authority to remain unexpired. It writes one immutable record under
+`adaptive/policy-acceptance/`, including the operator identity, affected fields,
+policy IDs/fingerprints, reason, authority expiry, and optional incident
+reference. A configured runtime signer signs the canonical acceptance content
+as an `adaptive-policy-acceptance` artifact.
+
+Acceptance records are a durable operator/deployment handoff, not an authority
+source. The operation does not renew the lease, mutate the active policy, grant
+authority, or reactivate the accepted policy after restart. A deployment
+workflow with its own authority must apply the accepted policy; until then the
+record remains reviewable evidence. The default policy keeps persistent
+acceptance disabled.
+
 The supervisor exposes `adaptive-observation-submit`,
 `adaptive-aggregation-status`,
 `adaptive-aggregation-reconcile`, `adaptive-aggregation-ack`,
 `adaptive-transition-list`, `adaptive-transition-ack`,
 `adaptive-threshold-proposal`, `adaptive-threshold-review`,
-`adaptive-threshold-apply`, and `adaptive-threshold-rollback` through its
+`adaptive-threshold-apply`, `adaptive-threshold-accept`, and
+`adaptive-threshold-rollback` through its
 control socket. All threshold commands
 derive the live context and the caller's local UID; they cannot accept
 arbitrary context supplied by the caller. Its health cycle

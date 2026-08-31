@@ -1681,6 +1681,84 @@ def test_console_rolls_back_selected_adaptive_transition_with_confirmation(tmp_p
     asyncio.run(exercise())
 
 
+def test_console_accepts_applied_adaptive_transition_for_deployment(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            requests = []
+
+            async def request(command: str, **payload):
+                requests.append((command, payload))
+                if command == "adaptive-threshold-accept":
+                    return {
+                        "ok": True,
+                        "transition_request_id": payload["request_id"],
+                        "acceptance": {
+                            "policy_mutated": False,
+                            "authority_granted": False,
+                        },
+                    }
+                if command == "adaptive-aggregation-status":
+                    return {
+                        "ok": True,
+                        "aggregates": [],
+                        "transitions": [],
+                        "policy_context_available": True,
+                        "policy_contexts": [],
+                        "policy_acceptances": [],
+                    }
+                raise AssertionError(command)
+
+            app._request = request  # type: ignore[method-assign]
+            app._application_running = True
+            app._adaptive_aggregation_status = {
+                "policy_contexts": [{
+                    "aggregation_target_id": "app:charge",
+                    "promotion_policy": {"allow_persistent_acceptance": True},
+                }],
+            }
+            app._adaptive_aggregation_records = [{
+                "kind": "TRANSITION",
+                "payload": {
+                    "request_id": "transition-1",
+                    "request_kind": "ADAPTIVE_POLICY_TRANSITION",
+                    "aggregation_target_id": "app:charge",
+                    "status": "APPLIED",
+                    "acceptance_status": "NOT_RECORDED",
+                    "context_status": "CURRENT",
+                    "deadline_status": "ACTIVE",
+                    "remaining_seconds": 30,
+                },
+            }]
+            app._selected_adaptive_transition_request_id = "transition-1"
+            reason = app.query_one("#adaptive-threshold-review-reason", Input)
+            reason.value = "operator accepted the reviewed threshold for deployment"
+            confirm = app.query_one("#adaptive-threshold-accept-confirm", Checkbox)
+            confirm.disabled = False
+            confirm.value = True
+            app._refresh_adaptive_threshold_acceptance_actions()
+            accept = app.query_one("#adaptive-threshold-accept", Button)
+            assert accept.disabled is False
+
+            await app.on_button_pressed(Button.Pressed(accept))
+
+            assert requests[0] == (
+                "adaptive-threshold-accept",
+                {
+                    "request_id": "transition-1",
+                    "confirm": True,
+                    "reason": "operator accepted the reviewed threshold for deployment",
+                    "incident_id": None,
+                },
+            )
+            assert requests[1][0] == "adaptive-aggregation-status"
+            assert app._selected_adaptive_transition_request_id is None
+
+
+    asyncio.run(exercise())
+
+
 def test_consequential_console_actions_fail_closed(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 
