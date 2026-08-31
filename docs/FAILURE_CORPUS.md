@@ -39,6 +39,14 @@ pipeline can be regression-tested together. They do not perform the stated
 stimuli and must not be counted as observed application coverage; real
 scenario runners remain separately reviewed test infrastructure.
 
+The example [`trusted_runner.py`](../examples/failure_corpus/trusted_runner.py)
+executes those oracle mappings through the process runner's JSON protocol. It
+is a lifecycle and protocol fixture, not an application simulator: process
+policy can exercise the ten scenarios whose declared minimum is `PROCESS`,
+while the seven `CONTAINER`/`VM` scenarios are recorded as
+`ISOLATION_UNAVAILABLE`. This deliberate split makes a report honest about
+which isolation tiers were actually exercised.
+
 For deterministic trusted tests, `FailureCorpusHarness` accepts that mapping
 explicitly:
 

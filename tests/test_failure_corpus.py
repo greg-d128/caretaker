@@ -50,6 +50,28 @@ def test_repository_owned_reviewed_mappings_cover_every_scenario() -> None:
     assert all(item.status == "MATCHED" for item in observations)
 
 
+def test_repository_owned_mappings_execute_through_process_runner_without_claiming_vm_coverage(
+    tmp_path: Path,
+) -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    runner_script = ROOT / "examples" / "failure_corpus" / "trusted_runner.py"
+    runner = FailureCorpusProcessRunner(
+        corpus,
+        {scenario.scenario_id: [sys.executable, str(runner_script)] for scenario in corpus.scenarios},
+        workspace_root=tmp_path,
+        environment={"PYTHONPATH": str(ROOT / "src")},
+    )
+
+    observations = runner.run_all(limit=17)
+    statuses = {item.status for item in observations}
+
+    assert len(observations) == 17
+    assert sum(item.status == "MATCHED" for item in observations) == 10
+    assert sum(item.status == "ISOLATION_UNAVAILABLE" for item in observations) == 7
+    assert statuses == {"MATCHED", "ISOLATION_UNAVAILABLE"}
+    assert tuple(tmp_path.iterdir()) == ()
+
+
 def test_failure_corpus_is_read_only_and_bounded(tmp_path: Path) -> None:
     path = tmp_path / "manifest.json"
     path.write_text(json.dumps({

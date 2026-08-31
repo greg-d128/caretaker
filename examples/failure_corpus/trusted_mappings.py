@@ -7,8 +7,6 @@ underlying application behavior has been exercised.
 
 from __future__ import annotations
 
-from typing import Any
-
 from caretaker.failure_corpus import (
     FailureCorpus,
     FailureCorpusError,
@@ -105,6 +103,14 @@ REVIEWED_RESULTS: dict[str, dict[str, str]] = {
         "authority_effect": "NO_AUTHORITY_CHANGE",
     },
 }
+
+
+def result_for_scenario(scenario_id: str) -> dict[str, str]:
+    """Return one reviewed oracle result without reading manifest instructions."""
+    try:
+        return dict(REVIEWED_RESULTS[scenario_id])
+    except KeyError as exc:
+        raise FailureCorpusError(f"no reviewed result exists for {scenario_id!r}") from exc
 
 
 def build_reviewed_harness(
