@@ -812,6 +812,8 @@ def execute_rollout(
     kwargs: dict[str, Any],
     contract: FunctionExecutionContract,
     effect_observation: EffectObservation | None = None,
+    behavior_capture: Mapping[str, Any] | None = None,
+    behavior_capture_complete: bool = False,
     isolation_adapter: ShadowExecutionAdapter | None = None,
     comparator: Comparator | None = None,
     audit_event: Callable[..., Any] | None = None,
@@ -825,6 +827,12 @@ def execute_rollout(
     The caller remains responsible for selecting functions that passed its
     normal Repair, Integrity, Guard, and authority checks.
     """
+
+    effect_observation = _resolve_effect_observation(
+        effect_observation,
+        behavior_capture=behavior_capture,
+        behavior_capture_complete=behavior_capture_complete,
+    )
 
     decision = decide_rollout_routing(
         record,
@@ -859,6 +867,8 @@ def execute_slot_rollout(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
     effect_observation: EffectObservation | None = None,
+    behavior_capture: Mapping[str, Any] | None = None,
+    behavior_capture_complete: bool = False,
     isolation_adapter: ShadowExecutionAdapter | None = None,
     comparator: Comparator | None = None,
     audit_event: Callable[..., Any] | None = None,
@@ -899,6 +909,12 @@ def execute_slot_rollout(
         )
     if record.target_id != slot.target_id:
         raise RepairRolloutExecutionError("rollout target does not match function slot")
+
+    effect_observation = _resolve_effect_observation(
+        effect_observation,
+        behavior_capture=behavior_capture,
+        behavior_capture_complete=behavior_capture_complete,
+    )
 
     current = slot.load()
     if current.candidate_id != record.candidate_id:
@@ -978,6 +994,29 @@ def execute_slot_rollout(
             audit_event=audit_event,
         )
     return result
+
+
+def _resolve_effect_observation(
+    effect_observation: EffectObservation | None,
+    *,
+    behavior_capture: Mapping[str, Any] | None,
+    behavior_capture_complete: bool,
+) -> EffectObservation | None:
+    if effect_observation is not None and behavior_capture is not None:
+        raise RepairRolloutExecutionError(
+            "provide either effect observation or behavior capture, not both"
+        )
+    if behavior_capture is None:
+        return effect_observation
+    try:
+        return EffectObservation.from_behavior_capture(
+            behavior_capture,
+            complete=behavior_capture_complete,
+        )
+    except (TypeError, ValueError) as exc:
+        raise RepairRolloutExecutionError(
+            f"invalid behavior capture for effect assessment: {exc}"
+        ) from exc
 
 
 def _execute_rollout_decision(

@@ -17,6 +17,7 @@ from caretaker import (
     RepairRolloutPolicy,
     RepairRolloutStage,
     RolloutRoutingPolicy,
+    ShadowExecutionError,
     decide_rollout_routing,
     execute_rollout,
     execute_slot_rollout,
@@ -158,6 +159,33 @@ def test_execute_rollout_shadow_returns_deployed_result() -> None:
     assert result.candidate_authoritative is False
     assert result.shadow_result is not None
     assert calls == ["deployed", "candidate"]
+
+
+def test_execute_rollout_can_derive_effect_gate_from_behavior_capture() -> None:
+    ledger = _ledger(shadow_sample_percentage=100)
+    record = _advance(
+        ledger,
+        _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED),
+        RepairRolloutStage.SHADOW,
+    )
+
+    with pytest.raises(ShadowExecutionError, match="conflicts"):
+        execute_rollout(
+            record,
+            policy=ledger.policy,
+            policy_fingerprint="policy-hash",
+            routing_scope="tenant",
+            routing_key="tenant-1",
+            deployed=lambda value: value,
+            candidate=lambda value: value + 1,
+            args=(4,),
+            kwargs={},
+            contract=FunctionExecutionContract(side_effects=SideEffectClass.PURE),
+            behavior_capture={
+                "profile": {"network_destinations": ["api.example:443"]}
+            },
+            behavior_capture_complete=True,
+        )
 
 
 def test_execute_rollout_canary_invokes_only_authoritative_candidate() -> None:

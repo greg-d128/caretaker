@@ -109,6 +109,14 @@ shadow outcomes also emit bounded execution-outcome evidence. It records the
 implementation class, selection state, decision hash, and exception type when
 present; raw outputs and exception messages are never included.
 
+The invocation helpers also accept a Guard behavior capture directly through
+`behavior_capture`. Caretaker converts its retained event and resource
+evidence into the shadow eligibility check before execution. A normal capture
+is incomplete by default, and callers must explicitly provide an already
+validated `EffectObservation` when a collector can justify complete coverage.
+Supplying both forms is rejected so stale and current effect evidence cannot be
+silently merged.
+
 `execute_slot_rollout()` adds the FunctionSlot binding boundary. For a field
 repair it requires the record target, candidate ID, candidate source hash, and
 previous deployed source hash to match the slot. For a permanent record it
