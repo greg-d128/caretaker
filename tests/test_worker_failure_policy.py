@@ -33,9 +33,18 @@ from caretaker import (
 class FakeRuntime:
     def __init__(self) -> None:
         self.events = []
+        self.audit = FakeAudit()
 
     def event(self, **kwargs):
         self.events.append(kwargs)
+
+
+class FakeAudit:
+    def __init__(self) -> None:
+        self.events = []
+
+    def emit(self, event_type, **kwargs):
+        self.events.append({"event_type": event_type, **kwargs})
 
 
 def test_worker_failure_records_incident_and_uses_callback_owned_restart() -> None:
@@ -71,6 +80,14 @@ def test_worker_failure_records_incident_and_uses_callback_owned_restart() -> No
     assert current.state.name == "STARTING"
     assert current.authority_packet_id is None
     assert result["restart"]["backoff_seconds"] == 0.5
+    assert [item["event_type"] for item in runtime.audit.events] == [
+        "WORKER_FAILED",
+        "WORKER_REPLACEMENT_REQUESTED",
+        "WORKER_REPLACED",
+    ]
+    assert runtime.audit.events[0]["outcome"]["state"] == "ROLLED_BACK"
+    assert runtime.audit.events[1]["outcome"]["state"] == "REQUESTED"
+    assert runtime.audit.events[2]["outcome"]["state"] == "RESTARTED"
 
 
 def test_worker_failure_scope_uses_transaction_or_incident_and_does_not_use_target_alone() -> None:

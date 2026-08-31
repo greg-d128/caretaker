@@ -689,6 +689,36 @@ class CaretakerApplicationSupervisor:
             "1", "true", "yes", "on",
         }
 
+    def _audit_event(
+        self,
+        event_type: str,
+        *,
+        actor: Mapping[str, Any] | None = None,
+        scope: Mapping[str, Any] | None = None,
+        policy: Mapping[str, Any] | None = None,
+        outcome: Mapping[str, Any] | None = None,
+        details: Mapping[str, Any] | None = None,
+        priority: Any = None,
+    ) -> None:
+        """Write a high-value audit event when the runtime owns an audit stream."""
+        audit = getattr(self.runtime, "audit", None)
+        emit = getattr(audit, "emit", None)
+        if not callable(emit):
+            return
+        if priority is None:
+            from .models import EvidencePriority
+
+            priority = EvidencePriority.CRITICAL
+        emit(
+            event_type,
+            actor=actor,
+            scope=scope,
+            policy=policy,
+            outcome=outcome,
+            details=details,
+            priority=priority,
+        )
+
     @staticmethod
     def _bounded_diagnostic_value(value: Any, *, depth: int = 0) -> Any:
         """Keep worker-supplied diagnostic context finite and JSON-shaped."""
@@ -803,6 +833,26 @@ class CaretakerApplicationSupervisor:
             worker,
             diagnostic_debug=diagnostic_debug,
         )
+        self._audit_event(
+            "WORKER_FAILED",
+            actor={"type": "worker", "id": str(worker.worker_id)},
+            scope={
+                "worker_id": str(worker.worker_id),
+                "target_id": worker.target_id,
+            },
+            policy={
+                "fingerprint": worker.policy_fingerprint,
+                "authority_packet_id": envelope.get("authority_packet_id"),
+            },
+            outcome={
+                "state": "ROLLED_BACK",
+                "reason": envelope.get("last_error_fingerprint") or "worker_failure",
+            },
+            details={
+                "worker_kind": worker.worker_kind.name,
+                "detail_level": envelope.get("detail_level"),
+            },
+        )
         postmortem_evidence: Mapping[str, Any] | None = None
         postmortem_error = None
         if collect_postmortem is not None:
@@ -858,6 +908,19 @@ class CaretakerApplicationSupervisor:
         )
         restart_result: dict[str, Any] | None = None
         if restart_requested and restart_worker is not None:
+            self._audit_event(
+                "WORKER_REPLACEMENT_REQUESTED",
+                actor={"type": "supervisor", "id": str(self.supervisor_health.worker_id)},
+                scope={
+                    "worker_id": str(worker.worker_id),
+                    "target_id": worker.target_id,
+                },
+                outcome={
+                    "state": "REQUESTED",
+                    "reason": "worker_failure_policy",
+                },
+                details={"restart_count": worker.restart_count},
+            )
             try:
                 raw_result = restart_worker(worker)
                 if isinstance(raw_result, Mapping):
@@ -880,6 +943,19 @@ class CaretakerApplicationSupervisor:
                 )
                 restart_result["worker_id"] = str(restarted.worker_id)
                 restart_result["restart_count"] = restarted.restart_count
+                self._audit_event(
+                    "WORKER_REPLACED",
+                    actor={"type": "supervisor", "id": str(self.supervisor_health.worker_id)},
+                    scope={
+                        "worker_id": str(worker.worker_id),
+                        "target_id": worker.target_id,
+                    },
+                    outcome={"state": "RESTARTED"},
+                    details={
+                        "replacement_worker_id": str(restarted.worker_id),
+                        "restart_count": restarted.restart_count,
+                    },
+                )
                 return {
                     "ok": True,
                     "action": "RESTARTED",
@@ -928,6 +1004,22 @@ class CaretakerApplicationSupervisor:
             "restart": restart_result,
             "failure_envelope": envelope,
         }
+        self._audit_event(
+            "RECOVERY_DECISION",
+            actor={"type": "supervisor", "id": str(self.supervisor_health.worker_id)},
+            scope={
+                "worker_id": str(worker.worker_id),
+                "target_id": worker.target_id,
+            },
+            outcome={
+                "state": "PLANNED_ONLY",
+                "action": exhaustion.name,
+            },
+            details={
+                "incident_status": incident_status,
+                "postmortem_status": postmortem_status,
+            },
+        )
         if callback_result is not None:
             result["action_result"] = callback_result
         self.runtime.event(

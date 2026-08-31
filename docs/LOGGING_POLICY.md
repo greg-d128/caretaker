@@ -79,7 +79,8 @@ maximum_event_bytes = 4096
 ```
 
 The current implementation writes the output-only local stream below the main
-logging directory and emits startup, policy, and authority-snapshot events.
+logging directory and emits startup, policy, authority-snapshot, worker-failure,
+replacement, and recovery-decision events.
 Audit settings are run-bound; a reload records the attempted change but requires
 a new run to change the stream configuration. External delivery and per-event
 signatures remain future capabilities. See
