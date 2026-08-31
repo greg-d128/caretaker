@@ -222,6 +222,7 @@ class AuditStreamPolicy:
     external_delivery_required: bool = False
     external_delivery_max_pending_records: int = 1024
     external_delivery_max_pending_bytes: int = 8 * 1024 * 1024
+    external_delivery_require_ack: bool = False
 
 
 def runtime_integrity_assurance(policy: RuntimeSigningPolicy) -> dict[str, object]:
@@ -400,6 +401,8 @@ def validate_operator_logging_policy(policy: OperatorLoggingPolicy) -> None:
         errors.append("logging.audit.external_delivery_required must be a boolean")
     if policy.audit.external_delivery_required and not policy.audit.enabled:
         errors.append("logging.audit.external_delivery_required requires logging.audit.enabled=True")
+    if not isinstance(policy.audit.external_delivery_require_ack, bool):
+        errors.append("logging.audit.external_delivery_require_ack must be a boolean")
     for name in (
         "external_delivery_max_pending_records",
         "external_delivery_max_pending_bytes",

@@ -25,7 +25,14 @@ persistence, and reports delivery as `ACTIVE`, `DEGRADED`, or `LOCAL_ONLY`.
 `logging.audit.external_delivery_required=true` makes a missing or failed sink
 fail closed after preserving the local record. The adapter has no read or
 command interface; transport authentication, remote retention, replay
-protection, and remote acknowledgement remain external responsibilities.
+protection, and remote retention remain external responsibilities. When
+`logging.audit.external_delivery_require_ack=true`, the sink must return an
+acknowledgement mapping with `acknowledged: true` and `record_sha256` equal to
+the SHA-256 digest of the exact record bytes it received. A missing,
+malformed, or mismatched acknowledgement is treated as a failed delivery and
+the locally persisted record remains in the retry queue. The record digest is
+the sink-side idempotency key; this contract does not itself provide transport
+authentication or replay protection.
 Failed deliveries are retained in a bounded local store-and-forward queue and
 retried in order during writer startup, flush, and the next retained event.
 `external_delivery_max_pending_records` and

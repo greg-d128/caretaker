@@ -1348,7 +1348,7 @@ Until this exists, restart is a rollback to deployed application code, not conti
 
 ## Other logging and storage work
 
-**Status: Implemented in development tree for the local hash-chained stream, optional per-event runtime signing, and a bounded synchronous output-only external sink with local store-and-forward; remote delivery assurance remains future work.**
+**Status: Implemented in development tree for the local hash-chained stream, optional per-event runtime signing, a bounded synchronous output-only external sink with local store-and-forward, and optional record-hash delivery acknowledgements; remote delivery assurance remains future work.**
 
 - Extract the writer, attachment store, and system collector into independently restartable worker processes while preserving the current IPC and evidence contracts.
 - Add external `LogSink` implementations and connect the audit sink boundary to
@@ -1385,7 +1385,8 @@ Until this exists, restart is a rollback to deployed application code, not conti
 - Ship critical audit events to an independently secured external sink in
   real time, with bounded local store-and-forward. The current adapter is
   synchronous and output-only, and has bounded local store-and-forward;
-  transport authentication, remote acknowledgements, replay handling, and the
+  optional record-hash acknowledgements are policy controlled, while
+  transport authentication, replay handling, and the
   security review for injection, redaction, key lifecycle, and disk-full
   behavior remain future work. The sink is never a command channel.
 - Add a durable adaptive-policy transition ledger with immutable lineage,

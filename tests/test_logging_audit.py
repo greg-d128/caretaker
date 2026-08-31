@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from uuid import uuid4
@@ -39,6 +40,21 @@ class FailingAuditSink:
 
     def flush(self) -> None:
         raise OSError("sink unavailable")
+
+
+class AcknowledgingAuditSink(RecordingAuditSink):
+    def deliver(self, record: bytes) -> dict[str, object]:
+        self.records.append(bytes(record))
+        return {
+            "acknowledged": True,
+            "record_sha256": hashlib.sha256(record).hexdigest(),
+        }
+
+
+class MismatchedAcknowledgementSink(RecordingAuditSink):
+    def deliver(self, record: bytes) -> dict[str, object]:
+        self.records.append(bytes(record))
+        return {"acknowledged": True, "record_sha256": "0" * 64}
 
 
 def _writer(path: Path, **changes):
@@ -677,6 +693,49 @@ def test_required_external_audit_sink_must_be_present(tmp_path: Path) -> None:
         )
 
 
+def test_required_external_audit_delivery_accepts_matching_record_acknowledgement(
+    tmp_path: Path,
+) -> None:
+    sink = AcknowledgingAuditSink()
+    writer = AuditStreamWriter(
+        AuditStreamPolicy(
+            external_delivery_required=True,
+            external_delivery_require_ack=True,
+        ),
+        directory=tmp_path,
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        external_sink=sink,
+    )
+    writer.emit("INCIDENT_CAPTURED")
+    writer.close()
+
+    assert writer.delivery_status()["delivered_events"] == 1
+    assert writer.delivery_status()["pending_records"] == 0
+
+
+def test_required_external_audit_delivery_queues_unverified_acknowledgement(
+    tmp_path: Path,
+) -> None:
+    writer = AuditStreamWriter(
+        AuditStreamPolicy(
+            external_delivery_required=True,
+            external_delivery_require_ack=True,
+        ),
+        directory=tmp_path,
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+        external_sink=MismatchedAcknowledgementSink(),
+    )
+    with pytest.raises(AuditStreamError, match="required external audit delivery"):
+        writer.emit("INCIDENT_CAPTURED")
+
+    assert writer.delivery_status()["pending_records"] == 1
+    assert writer.delivery_status()["failed_events"] == 1
+    with pytest.raises(AuditStreamError, match="required external audit delivery"):
+        writer.close()
+
+
 def test_audit_policy_validates_external_delivery_requirement() -> None:
     from caretaker.logging.policy import (
         LoggingPolicyConfigurationError,
@@ -688,6 +747,12 @@ def test_audit_policy_validates_external_delivery_requirement() -> None:
         validate_operator_logging_policy(
             OperatorLoggingPolicy(
                 audit=AuditStreamPolicy(external_delivery_required="yes"),
+            )
+        )
+    with pytest.raises(LoggingPolicyConfigurationError, match="external_delivery_require_ack"):
+        validate_operator_logging_policy(
+            OperatorLoggingPolicy(
+                audit=AuditStreamPolicy(external_delivery_require_ack="yes"),
             )
         )
     with pytest.raises(LoggingPolicyConfigurationError, match="max_pending_records"):

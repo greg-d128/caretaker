@@ -215,7 +215,7 @@ class AuditDeliverySink(Protocol):
 
     sink_id: str
 
-    def deliver(self, record: bytes) -> None: ...
+    def deliver(self, record: bytes) -> Mapping[str, Any] | None: ...
 
     def flush(self) -> None: ...
 
@@ -611,6 +611,8 @@ class AuditStreamWriter:
                 )
         if not isinstance(getattr(self.policy, "external_delivery_required", False), bool):
             raise AuditStreamError("logging.audit.external_delivery_required must be a boolean")
+        if not isinstance(getattr(self.policy, "external_delivery_require_ack", False), bool):
+            raise AuditStreamError("logging.audit.external_delivery_require_ack must be a boolean")
         for name in (
             "external_delivery_max_pending_records",
             "external_delivery_max_pending_bytes",
@@ -641,6 +643,25 @@ class AuditStreamWriter:
             secret_field_names=self._secret_field_names,
             replacement=self._redaction_replacement,
         )
+
+    def _deliver_to_sink(self, encoded: bytes) -> None:
+        sink = self._external_sink
+        if sink is None:
+            return
+        receipt = sink.deliver(encoded)
+        if not getattr(self.policy, "external_delivery_require_ack", False):
+            return
+        expected_hash = hashlib.sha256(encoded).hexdigest()
+        if not isinstance(receipt, Mapping):
+            raise AuditStreamError(
+                "external audit sink did not return the required acknowledgement"
+            )
+        if receipt.get("acknowledged") is not True:
+            raise AuditStreamError("external audit sink did not acknowledge the record")
+        if receipt.get("record_sha256") != expected_hash:
+            raise AuditStreamError(
+                "external audit acknowledgement is bound to a different record"
+            )
 
     def _recover_existing(self) -> None:
         if not self.path.exists():
@@ -785,6 +806,7 @@ class AuditStreamWriter:
             "important_rate",
             "critical_rate",
             "external_delivery_required",
+            "external_delivery_require_ack",
         ):
             if getattr(policy, field_name) != getattr(self.policy, field_name):
                 warnings.append(
@@ -1013,7 +1035,7 @@ class AuditStreamWriter:
                 )
             return
         try:
-            sink.deliver(encoded)
+            self._deliver_to_sink(encoded)
         except Exception as exc:
             self._external_failed_events += 1
             self._external_last_error = type(exc).__name__
@@ -1117,7 +1139,7 @@ class AuditStreamWriter:
         remaining = list(records)
         while remaining:
             try:
-                sink.deliver(remaining[0])
+                self._deliver_to_sink(remaining[0])
             except Exception as exc:
                 self._external_failed_events += 1
                 self._external_last_error = type(exc).__name__
