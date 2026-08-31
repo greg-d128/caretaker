@@ -70,7 +70,9 @@ not discover or execute commands from corpus metadata. Repository-owned oracle
 mappings now cover the reviewed manifest, but do not establish real observed
 application coverage. Persisted observations can now carry a verified
 Incident-Capsule reference without mutating the capsule; a curated repository
-of captured real incidents remains future work.
+of captured real incidents remains future work. A bounded application
+laboratory now exercises ten process-tier stimuli; it is explicitly distinct
+from historical incident evidence and production-like application coverage.
 
 ### Incident Capsules and post-mortem capture
 

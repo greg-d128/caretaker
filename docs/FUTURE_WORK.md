@@ -44,11 +44,12 @@ for container/VM lifecycle tooling. An explicit rootless Podman runner now
 provides the container-level contract when a pre-provisioned image is present;
 an explicit Multipass runner now provides the separate-kernel request-transfer
 contract when a pre-provisioned guest is present. Repository-owned oracle
-mappings now cover the reviewed default manifest; real application runners,
-and capsule-linked fixtures are now supported. The repository also exercises
-the process protocol against all reviewed mappings, while a curated repository
-of captured real incidents and broader application-observed coverage remain
-future work.
+mappings now cover the reviewed default manifest; real application runners and
+capsule-linked fixtures are now supported. The repository also exercises the
+process protocol against all reviewed mappings and provides a bounded
+application laboratory for ten process-tier stimuli, while a curated
+repository of captured real incidents, production-like applications, and
+broader container/VM observed coverage remain future work.
 Bounded observations can now be stored separately from the manifest, with a
 content hash for corruption detection; that hash is not a substitute for
 external authenticated shipping. Expected metadata must remain separate from actual evidence; loading or listing

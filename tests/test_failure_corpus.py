@@ -72,6 +72,35 @@ def test_repository_owned_mappings_execute_through_process_runner_without_claimi
     assert tuple(tmp_path.iterdir()) == ()
 
 
+def test_application_laboratory_executes_real_process_stimuli(tmp_path: Path) -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    laboratory = ROOT / "examples" / "failure_corpus" / "application_laboratory.py"
+    scenario_ids = {
+        "exception.unhandled",
+        "timeout.soft",
+        "output.invalid",
+        "configuration.changed",
+        "behavior.intermittent",
+        "resource.storage-full",
+        "worker.failed",
+        "repair.validation-fails",
+        "repair.secondary-failure",
+        "llm.unavailable",
+    }
+    runner = FailureCorpusProcessRunner(
+        corpus,
+        {scenario_id: [sys.executable, str(laboratory)] for scenario_id in scenario_ids},
+        workspace_root=tmp_path,
+    )
+
+    observations = [runner.run(scenario_id) for scenario_id in sorted(scenario_ids)]
+
+    assert len(observations) == 10
+    assert all(item.status == "MATCHED" for item in observations)
+    assert all(item.observed and item.observed.get("details") for item in observations)
+    assert tuple(tmp_path.iterdir()) == ()
+
+
 def test_failure_corpus_is_read_only_and_bounded(tmp_path: Path) -> None:
     path = tmp_path / "manifest.json"
     path.write_text(json.dumps({
