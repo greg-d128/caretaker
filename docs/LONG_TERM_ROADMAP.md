@@ -58,10 +58,11 @@ manifest, read-only loader, and explicit trusted-runner harness in
 `examples/failure_corpus/` and `caretaker.failure_corpus`. It records bounded
 observed results separately in a content-hashed local store when a caller
 supplies a runner, and can produce bounded deterministic outcome reports, but
-does not provide a sandbox or claim broad observed coverage. Repository-owned
-mappings, isolated lifecycle tooling, captured incident fixtures, and broad
-cross-version outcome coverage remain required before this priority can be
-considered complete.
+its policy gate defaults to least-friction PROCESS execution and can require a
+stronger declared isolation tier. It does not provide a sandbox or claim broad
+observed coverage. Repository-owned mappings, isolated lifecycle tooling,
+captured incident fixtures, and broad cross-version outcome coverage remain
+required before this priority can be considered complete.
 
 ### Incident Capsules and post-mortem capture
 

@@ -51,7 +51,25 @@ sandbox, timeout, process lifecycle, or cleanup guarantee. An unavailable
 mapping or insufficient isolation is recorded without invoking user code.
 Observed results are bounded JSON and are classified separately from expected
 metadata as `MATCHED`, `MISMATCHED`, `INVALID_RESULT`, `ERROR`, `NOT_MAPPED`, or
-`ISOLATION_UNAVAILABLE`.
+`ISOLATION_UNAVAILABLE`. A `POLICY_DISABLED` result records that execution was
+intentionally disabled without invoking a runner.
+
+The harness accepts an optional `FailureCorpusExecutionPolicy`. Its default is
+enabled `PROCESS` execution for the least-friction local start. A deployment
+can require `CONTAINER` or `VM`; the runner is not called unless both the
+scenario minimum and policy minimum are met. The policy is a gate only and
+does not create a sandbox or grant authority:
+
+```python
+from caretaker.failure_corpus import FailureCorpusExecutionPolicy
+
+harness = FailureCorpusHarness(
+    corpus,
+    runners={"worker.failed": run_worker_case},
+    isolation="CONTAINER",
+    policy=FailureCorpusExecutionPolicy(minimum_isolation="CONTAINER"),
+)
+```
 
 Trusted test infrastructure can persist those observations for later review
 without persisting a runner or executable instruction:
@@ -106,7 +124,8 @@ The loader, manifest, explicit trusted harness, bounded observation store, and
 deterministic outcome report provide the initial reviewable contract.
 Executable launch/reset/destroy tooling, isolated scenario runners, captured
 incident fixtures, and cross-version/adversarial execution reports remain
-future work.
+future work. A policy gate does not replace repository-owned isolated
+launch/reset/destroy tooling.
 Those additions must record actual observed outcomes separately from expected
 metadata and must not turn a corpus file into an execution or authority
 channel.

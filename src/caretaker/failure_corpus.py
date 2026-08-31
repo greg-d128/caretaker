@@ -79,6 +79,7 @@ OBSERVATION_STATUSES = frozenset({
     "ERROR",
     "NOT_MAPPED",
     "ISOLATION_UNAVAILABLE",
+    "POLICY_DISABLED",
 })
 
 
@@ -289,6 +290,33 @@ class FailureCorpus:
         )[:bounded_limit]
 
 
+@dataclass(frozen=True, slots=True)
+class FailureCorpusExecutionPolicy:
+    """Policy gate for trusted scenario mappings.
+
+    The default is intentionally the least-friction local mode. This policy
+    does not create isolation; it only refuses a runner unless the caller's
+    declared environment meets the configured minimum.
+    """
+
+    enabled: bool = True
+    minimum_isolation: str = "PROCESS"
+
+    def __post_init__(self) -> None:
+        normalized = str(self.minimum_isolation).strip().upper()
+        if normalized not in ISOLATION_LEVELS:
+            raise FailureCorpusError(
+                f"unknown execution policy isolation {self.minimum_isolation!r}"
+            )
+        object.__setattr__(self, "minimum_isolation", normalized)
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "minimum_isolation": self.minimum_isolation,
+        }
+
+
 class FailureCorpusHarness:
     """Run only explicitly supplied trusted mappings for a validated corpus.
 
@@ -305,6 +333,7 @@ class FailureCorpusHarness:
         runners: Mapping[str, Callable[[FailureScenario], Mapping[str, Any]]],
         *,
         isolation: str = "PROCESS",
+        policy: FailureCorpusExecutionPolicy | None = None,
     ) -> None:
         normalized_isolation = str(isolation).strip().upper()
         if normalized_isolation not in ISOLATION_LEVELS:
@@ -312,13 +341,21 @@ class FailureCorpusHarness:
         self.corpus = corpus
         self.runners = dict(runners)
         self.isolation = normalized_isolation
+        self.policy = policy or FailureCorpusExecutionPolicy()
 
     def _base_observation(self, scenario: FailureScenario, *, status: str, executed: bool, error: str | None = None, observed: Mapping[str, Any] | None = None) -> FailureObservation:
+        required_isolation = max(
+            ISOLATION_LEVELS_ORDER[self.policy.minimum_isolation],
+            ISOLATION_LEVELS_ORDER[scenario.minimum_isolation],
+        )
         return FailureObservation(
             scenario_id=scenario.scenario_id,
             status=status,
             executed=executed,
-            required_isolation=scenario.minimum_isolation,
+            required_isolation=next(
+                name for name, level in ISOLATION_LEVELS_ORDER.items()
+                if level == required_isolation
+            ),
             used_isolation=self.isolation,
             expected_signal=scenario.expected_signal,
             expected_caretaker_action=scenario.caretaker_action,
@@ -329,14 +366,25 @@ class FailureCorpusHarness:
 
     def run(self, scenario_id: str) -> FailureObservation:
         scenario = self.corpus.get(scenario_id)
+        if not self.policy.enabled:
+            return self._base_observation(
+                scenario,
+                status="POLICY_DISABLED",
+                executed=False,
+                error="failure-corpus execution is disabled by policy",
+            )
         if scenario.scenario_id not in self.runners:
             return self._base_observation(scenario, status="NOT_MAPPED", executed=False)
-        if ISOLATION_LEVELS_ORDER[self.isolation] < ISOLATION_LEVELS_ORDER[scenario.minimum_isolation]:
+        required_isolation = max(
+            ISOLATION_LEVELS_ORDER[self.policy.minimum_isolation],
+            ISOLATION_LEVELS_ORDER[scenario.minimum_isolation],
+        )
+        if ISOLATION_LEVELS_ORDER[self.isolation] < required_isolation:
             return self._base_observation(
                 scenario,
                 status="ISOLATION_UNAVAILABLE",
                 executed=False,
-                error="trusted harness isolation is below the scenario minimum",
+                error="trusted harness isolation is below the policy or scenario minimum",
             )
         runner = self.runners[scenario.scenario_id]
         try:

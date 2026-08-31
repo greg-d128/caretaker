@@ -8,6 +8,7 @@ import pytest
 from caretaker.failure_corpus import (
     FailureCorpus,
     FailureCorpusError,
+    FailureCorpusExecutionPolicy,
     FailureCorpusHarness,
     FailureCorpusObservationStore,
     MAX_CORPUS_BYTES,
@@ -160,6 +161,39 @@ def test_trusted_harness_refuses_runner_below_declared_isolation() -> None:
 
     assert observation.status == "ISOLATION_UNAVAILABLE"
     assert observation.executed is False
+    assert called is False
+
+
+def test_trusted_harness_applies_policy_minimum_and_disabled_state() -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    called = False
+
+    def runner(_scenario):
+        nonlocal called
+        called = True
+        return {
+            "signal": "EXCEPTION",
+            "caretaker_action": "CAPTURE_INCIDENT",
+            "authority_effect": "NO_AUTHORITY_CHANGE",
+        }
+
+    strict = FailureCorpusHarness(
+        corpus,
+        runners={"exception.unhandled": runner},
+        policy=FailureCorpusExecutionPolicy(minimum_isolation="CONTAINER"),
+    )
+    unavailable = strict.run("exception.unhandled")
+    assert unavailable.status == "ISOLATION_UNAVAILABLE"
+    assert unavailable.required_isolation == "CONTAINER"
+    assert called is False
+
+    disabled = FailureCorpusHarness(
+        corpus,
+        runners={"exception.unhandled": runner},
+        policy=FailureCorpusExecutionPolicy(enabled=False),
+    ).run("exception.unhandled")
+    assert disabled.status == "POLICY_DISABLED"
+    assert disabled.executed is False
     assert called is False
 
 
