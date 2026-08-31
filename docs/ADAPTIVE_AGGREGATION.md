@@ -204,3 +204,7 @@ applied, failed, and rolled-back transitions. Their detail view includes the
 policy IDs, fingerprints, authority metadata, effective time, and affected
 fields. Selecting a lineage row is read-only and cannot enable threshold
 review, application, or rollback controls.
+The authenticated review, application, and pre-acceptance rollback operations
+also emit attributable `POLICY_REVIEWED`, `POLICY_APPLIED`, and
+`POLICY_ROLLED_BACK` records to `caretaker_audit.log`; these audit records are
+evidence only and do not grant authority.
