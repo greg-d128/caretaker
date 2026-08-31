@@ -6,7 +6,10 @@ from uuid import uuid4
 import pytest
 
 from caretaker.logging import AuditStreamError, EvidencePriority, RemoteAuditStream
-from caretaker.run import _handle_validation_audit_submission
+from caretaker.run import (
+    _handle_console_invocation_event,
+    _handle_validation_audit_submission,
+)
 
 
 def _request() -> dict[str, object]:
@@ -140,3 +143,90 @@ def test_remote_audit_stream_only_allows_validation_decisions(monkeypatch):
     assert "actor" not in calls[0][1]
     with pytest.raises(AuditStreamError, match="only VALIDATION_DECISION"):
         stream.emit("POLICY_APPLIED", priority=EvidencePriority.CRITICAL)
+
+
+def test_console_invocation_events_are_process_owned_and_authority_free():
+    audit = _Audit()
+    runtime = _runtime(audit)
+    invocations: dict[str, int] = {}
+    invocation_id = str(uuid4())
+
+    started = _handle_console_invocation_event(
+        runtime,
+        {
+            "command": "console-invocation-start",
+            "invocation_id": invocation_id,
+        },
+        (5678, 1000, 1001),
+        invocations,
+    )
+    ended = _handle_console_invocation_event(
+        runtime,
+        {
+            "command": "console-invocation-end",
+            "invocation_id": invocation_id,
+            "reason": "operator_exit",
+        },
+        (5678, 1000, 1001),
+        invocations,
+    )
+
+    assert started["recorded"] is True
+    assert ended["recorded"] is True
+    assert invocations == {}
+    assert [call["event_type"] for call in audit.calls[-2:]] == [
+        "CONSOLE_INVOCATION_STARTED",
+        "CONSOLE_INVOCATION_ENDED",
+    ]
+    assert audit.calls[-2]["actor"] == {"type": "operator", "id": "uid:1000"}
+    assert audit.calls[-2]["details"]["authority_granted"] is False
+
+
+def test_console_invocation_end_cannot_be_replayed_by_another_process():
+    audit = _Audit()
+    runtime = _runtime(audit)
+    invocations: dict[str, int] = {}
+    invocation_id = str(uuid4())
+    _handle_console_invocation_event(
+        runtime,
+        {"command": "console-invocation-start", "invocation_id": invocation_id},
+        (5678, 1000, 1001),
+        invocations,
+    )
+    with pytest.raises(PermissionError, match="not owned"):
+        _handle_console_invocation_event(
+            runtime,
+            {"command": "console-invocation-end", "invocation_id": invocation_id},
+            (8765, 1000, 1001),
+            invocations,
+        )
+
+
+def test_console_cli_registers_and_closes_one_invocation(monkeypatch, tmp_path):
+    import caretaker.console as console_module
+
+    requests: list[dict[str, object]] = []
+
+    def fake_control_request(path, request, *, timeout):
+        requests.append(dict(request))
+        return {"ok": True}
+
+    class FakeConsole:
+        def __init__(self, socket_path, data_directory):
+            self.socket_path = socket_path
+            self.data_directory = data_directory
+
+        def run(self):
+            return None
+
+    monkeypatch.setattr(console_module, "control_request", fake_control_request)
+    monkeypatch.setattr(console_module, "CaretakerConsoleApp", FakeConsole)
+
+    assert console_module.main(
+        ["--socket", str(tmp_path / "control.sock"), "--data-directory", str(tmp_path)]
+    ) == 0
+    assert [item["command"] for item in requests] == [
+        "console-invocation-start",
+        "console-invocation-end",
+    ]
+    assert requests[0]["invocation_id"] == requests[1]["invocation_id"]

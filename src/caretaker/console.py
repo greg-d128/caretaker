@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import os
+from uuid import uuid4
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -5647,7 +5648,39 @@ def main(argv: list[str] | None = None) -> int:
     except RuntimeError as exc:
         parser.error(str(exc))
         return 2
-    CaretakerConsoleApp(socket_path, data_directory).run()
+    invocation_id = str(uuid4())
+    invocation_started = False
+    if socket_path is not None:
+        try:
+            response = control_request(
+                socket_path,
+                {
+                    "command": "console-invocation-start",
+                    "invocation_id": invocation_id,
+                },
+                timeout=5.0,
+            )
+            invocation_started = bool(response.get("ok"))
+        except OSError:
+            # The console remains useful for offline/local inspection when the
+            # supervisor disappears before session attribution is recorded.
+            invocation_started = False
+    try:
+        CaretakerConsoleApp(socket_path, data_directory).run()
+    finally:
+        if invocation_started and socket_path is not None:
+            try:
+                control_request(
+                    socket_path,
+                    {
+                        "command": "console-invocation-end",
+                        "invocation_id": invocation_id,
+                        "reason": "operator_exit",
+                    },
+                    timeout=5.0,
+                )
+            except OSError:
+                pass
     return 0
 
 

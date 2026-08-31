@@ -61,14 +61,15 @@ with checksums; a reviewed deployment may require a hash chain and
 and immediate external delivery. These modes are assurance choices, not
 authority grants.
 
-The console invocation key is ephemeral and memory-only. Its public key,
-fingerprint, OS UID/GID, process-start identity, and console invocation ID may be
-recorded in the audit stream so an action can be attributed to a console session.
-That key authenticates the session's attribution; it does not authorize a
+The current console records a UUID-scoped invocation, OS UID/GID, and peer
+process identity in the audit stream so an action can be attributed to a
+console session. A future enhancement may add an ephemeral, memory-only
+console signing key and public-key fingerprint to that record. Such a key
+would authenticate session attribution; it would not authorize a
 deployment-layer change. Permanent deployment changes continue to require the
 configured `policy-deployment` authority and its independently verifiable
 credentials. A deployment-aware console may present or request that credential,
-but must not derive it from the console key.
+but must not derive it from a console key.
 
 Hash chaining detects alteration of a retained stream but does not prevent
 wholesale replacement of an unanchored local stream. The external sink should

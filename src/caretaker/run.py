@@ -111,6 +111,74 @@ _VALIDATION_AUDIT_DETAIL_FIELDS = frozenset({
 })
 
 
+def _handle_console_invocation_event(
+    runtime: Any,
+    request: Mapping[str, Any],
+    credentials: tuple[int, int, int],
+    invocations: dict[str, int],
+) -> dict[str, Any]:
+    """Record a console session lifecycle event without granting authority."""
+    command = request.get("command")
+    invocation_id = str(request.get("invocation_id") or "").strip()
+    if not invocation_id:
+        raise ValueError(f"{command} requires invocation_id")
+    try:
+        invocation_id = str(UUID(invocation_id))
+    except (ValueError, AttributeError) as exc:
+        raise ValueError("console invocation_id must be a UUID") from exc
+    process_id = credentials[0]
+    if process_id < 0:
+        raise PermissionError("console peer process identity is unavailable")
+    if command == "console-invocation-start":
+        if invocation_id in invocations:
+            raise ValueError("console invocation is already active")
+        event_type = "CONSOLE_INVOCATION_STARTED"
+        outcome = {"state": "STARTED"}
+    elif command == "console-invocation-end":
+        if invocations.get(invocation_id) != process_id:
+            raise PermissionError("console invocation is not owned by this process")
+        event_type = "CONSOLE_INVOCATION_ENDED"
+        outcome = {"state": "ENDED"}
+    else:
+        raise ValueError("unsupported console invocation command")
+    reason = str(request.get("reason") or "operator_exit")[:256]
+    audit_event = runtime.audit.emit(
+        event_type,
+        actor={"type": "operator", "id": f"uid:{credentials[1]}"},
+        scope={
+            "console_invocation_id": invocation_id,
+            "process_id": process_id,
+        },
+        policy={
+            "policy_id": str(runtime.snapshot.snapshot_id),
+            "fingerprint": runtime.snapshot.content_hash,
+            "authority_generation": runtime.effective.generation,
+        },
+        outcome=outcome,
+        details={
+            "uid": credentials[1],
+            "gid": credentials[2],
+            "reason": reason,
+            "authority_granted": False,
+        },
+        priority=(
+            EvidencePriority.CRITICAL
+            if event_type == "CONSOLE_INVOCATION_STARTED"
+            else EvidencePriority.IMPORTANT
+        ),
+    )
+    if event_type == "CONSOLE_INVOCATION_STARTED":
+        invocations[invocation_id] = process_id
+    else:
+        invocations.pop(invocation_id, None)
+    return {
+        "ok": True,
+        "recorded": audit_event is not None,
+        "event_id": audit_event.get("event_id") if audit_event else None,
+        "stream_sequence": audit_event.get("stream_sequence") if audit_event else None,
+    }
+
+
 def _bounded_validation_audit_fields(
     value: Any,
     *,
@@ -523,6 +591,7 @@ def main(argv: list[str] | None = None) -> int:
     server_thread.start()
 
     leases: dict[str, object] = {}
+    console_invocations: dict[str, int] = {}
     child_holder: dict[str, subprocess.Popen] = {}
     supervisor_holder: dict[str, CaretakerApplicationSupervisor] = {}
     failure_store_holder: dict[str, SQLiteRepairStore] = {}
@@ -736,6 +805,13 @@ def main(argv: list[str] | None = None) -> int:
 
     def control_handler(request, credentials):
         command = request.get("command")
+        if command in {"console-invocation-start", "console-invocation-end"}:
+            return _handle_console_invocation_event(
+                runtime,
+                request,
+                credentials,
+                console_invocations,
+            )
         if command == "audit-validation-decision":
             return _handle_validation_audit_submission(
                 runtime,

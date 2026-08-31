@@ -54,6 +54,10 @@ event actor from peer credentials. The submitted validation policy is retained
 as reported evidence; the audit envelope's policy identifies the supervisor's
 current audit policy. This path is output-only: it cannot submit arbitrary
 event types, change policy, grant authority, or invoke a control operation.
+Console clients likewise register a UUID-scoped invocation start and end; the
+supervisor binds the session to the console's Unix peer PID and records the OS
+UID/GID. An invocation record is attribution evidence only and does not grant
+authority.
 
 The registry is descriptive and fail-closed for the fields it declares. It
 does not verify operator signatures, authorize policy changes, or provide an
