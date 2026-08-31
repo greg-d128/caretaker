@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from .models import GuardDeviationAction, GuardMode, InspectionLevel
@@ -83,6 +84,10 @@ class BehaviorSnapshotPolicy:
     collection_max_active: int = 1
     collection_max_pending: int = 256
     collection_max_calls: int = 1000
+    # Optional application-wide wall-clock budgets for scheduled collection.
+    # The default remains unlimited for the least-friction profile.
+    collection_soft_budget_seconds_per_minute: float | None = None
+    collection_hard_budget_seconds_per_minute: float | None = None
     collection_auto_promote: bool = False
     collection_auto_max_promoted: int = 1
     collection_auto_max_waiting: int = 4
@@ -256,6 +261,29 @@ def validate_guard_policy(policy: GuardPolicy) -> None:
         errors.append("snapshots.collection_max_calls must be greater than zero")
     if snapshots.collection_max_calls > 1000:
         errors.append("snapshots.collection_max_calls must not exceed 1000")
+    for name in (
+        "collection_soft_budget_seconds_per_minute",
+        "collection_hard_budget_seconds_per_minute",
+    ):
+        value = getattr(snapshots, name)
+        if value is not None:
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or value <= 0
+            ):
+                errors.append(f"snapshots.{name} must be greater than zero when configured")
+    if (
+        snapshots.collection_soft_budget_seconds_per_minute is not None
+        and snapshots.collection_hard_budget_seconds_per_minute is not None
+        and snapshots.collection_soft_budget_seconds_per_minute
+        > snapshots.collection_hard_budget_seconds_per_minute
+    ):
+        errors.append(
+            "snapshots.collection_soft_budget_seconds_per_minute cannot exceed "
+            "collection_hard_budget_seconds_per_minute"
+        )
     if not isinstance(snapshots.collection_auto_promote, bool):
         errors.append("snapshots.collection_auto_promote must be a boolean")
     if snapshots.collection_auto_max_promoted <= 0:

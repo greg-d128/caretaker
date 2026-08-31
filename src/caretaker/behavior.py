@@ -10,6 +10,7 @@ import os
 import random
 import threading
 import tarfile
+import time
 import types
 import urllib.error
 import urllib.request
@@ -1399,6 +1400,10 @@ class BehaviorCollectionQueueFull(RuntimeError):
     """Raised when the policy-governed collection queue applies backpressure."""
 
 
+class BehaviorCollectionBudgetExceeded(BehaviorCollectionQueueFull):
+    """Raised when a configured hard collection-duration budget is exhausted."""
+
+
 class BehaviorCollectionScheduler:
     """Durable scheduler for bounded operator-directed behavior captures.
 
@@ -1421,6 +1426,8 @@ class BehaviorCollectionScheduler:
         maximum_active: int = 1,
         maximum_pending: int = 256,
         maximum_calls: int = 1000,
+        soft_budget_seconds_per_minute: float | None = None,
+        hard_budget_seconds_per_minute: float | None = None,
         clock: Callable[[], datetime] = utcnow,
     ) -> None:
         if int(maximum_active) <= 0:
@@ -1429,6 +1436,20 @@ class BehaviorCollectionScheduler:
             raise ValueError("maximum_pending must be greater than zero")
         if int(maximum_calls) <= 0:
             raise ValueError("maximum_calls must be greater than zero")
+        for name, value in (
+            ("soft_budget_seconds_per_minute", soft_budget_seconds_per_minute),
+            ("hard_budget_seconds_per_minute", hard_budget_seconds_per_minute),
+        ):
+            if value is not None and (
+                isinstance(value, bool) or not math.isfinite(float(value)) or float(value) <= 0.0
+            ):
+                raise ValueError(f"{name} must be greater than zero when configured")
+        if (
+            soft_budget_seconds_per_minute is not None
+            and hard_budget_seconds_per_minute is not None
+            and float(soft_budget_seconds_per_minute) > float(hard_budget_seconds_per_minute)
+        ):
+            raise ValueError("soft_budget_seconds_per_minute cannot exceed hard_budget_seconds_per_minute")
         self.root = Path(root)
         self.request_directory = self.root / "behavior" / "collection" / "requests"
         self.automatic_cursor_path = self.root / "behavior" / "collection" / "automatic-cursor.json"
@@ -1440,6 +1461,16 @@ class BehaviorCollectionScheduler:
         self.maximum_active = int(maximum_active)
         self.maximum_pending = int(maximum_pending)
         self.maximum_calls = int(maximum_calls)
+        self.soft_budget_seconds_per_minute = (
+            float(soft_budget_seconds_per_minute)
+            if soft_budget_seconds_per_minute is not None
+            else None
+        )
+        self.hard_budget_seconds_per_minute = (
+            float(hard_budget_seconds_per_minute)
+            if hard_budget_seconds_per_minute is not None
+            else None
+        )
         self._clock = clock
         self._lock = threading.RLock()
         self._recover_active_requests()
@@ -1601,6 +1632,43 @@ class BehaviorCollectionScheduler:
             if request.get("status") in {self._QUEUED, self._ACTIVE}
         )
 
+    def _budget_status(self, now: datetime | None = None) -> dict[str, Any]:
+        observed_at = now or self._now()
+        window_start = observed_at.timestamp() - 60.0
+        recent_seconds = 0.0
+        for request in self._requests():
+            duration = request.get("duration_seconds")
+            completed_at = request.get("completed_at")
+            if duration is None or completed_at is None:
+                continue
+            try:
+                completed_timestamp = datetime.fromisoformat(
+                    str(completed_at).replace("Z", "+00:00")
+                ).timestamp()
+                duration_value = float(duration)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if math.isfinite(duration_value) and duration_value >= 0.0 and completed_timestamp >= window_start:
+                recent_seconds += duration_value
+        state = "NORMAL"
+        if (
+            self.hard_budget_seconds_per_minute is not None
+            and recent_seconds >= self.hard_budget_seconds_per_minute
+        ):
+            state = "HARD_LIMIT"
+        elif (
+            self.soft_budget_seconds_per_minute is not None
+            and recent_seconds >= self.soft_budget_seconds_per_minute
+        ):
+            state = "SOFT_LIMIT"
+        return {
+            "state": state,
+            "window_seconds": 60,
+            "recent_collection_seconds": recent_seconds,
+            "soft_limit_seconds": self.soft_budget_seconds_per_minute,
+            "hard_limit_seconds": self.hard_budget_seconds_per_minute,
+        }
+
     def enqueue(
         self,
         *,
@@ -1664,6 +1732,7 @@ class BehaviorCollectionScheduler:
                     limit=128,
                 ),
                 "attempt": 0,
+                "duration_seconds": None,
             }
             path = self._path(request_id)
             self._write(path, request)
@@ -1701,6 +1770,8 @@ class BehaviorCollectionScheduler:
             now = self._now()
             requests = list(self._requests())
             self._expire(requests, now)
+            if self._budget_status(now)["state"] == "HARD_LIMIT":
+                return None
             active = [item for item in requests if item.get("status") == self._ACTIVE]
             if len(active) >= self.maximum_active:
                 return None
@@ -1730,6 +1801,7 @@ class BehaviorCollectionScheduler:
         observed_calls: int = 0,
         observed_generation: str | None = None,
         error: str | None = None,
+        duration_seconds: float | None = None,
     ) -> dict[str, Any]:
         normalized_outcome = str(outcome).strip().upper()
         if normalized_outcome not in {"CAPTURED", "FAILED", "CANCELLED", "DEFERRED"}:
@@ -1756,6 +1828,14 @@ class BehaviorCollectionScheduler:
                 request["observed_generation"] = normalized_generation
             if error:
                 request["error"] = str(error)[:500]
+            if duration_seconds is not None:
+                try:
+                    duration = float(duration_seconds)
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise ValueError("duration_seconds must be a finite non-negative number") from exc
+                if not math.isfinite(duration) or duration < 0.0:
+                    raise ValueError("duration_seconds must be a finite non-negative number")
+                request["duration_seconds"] = min(duration, 86_400.0)
             self._write(path, request)
             return dict(request)
 
@@ -1788,9 +1868,14 @@ class BehaviorCollectionScheduler:
         request = self.enqueue(**request_fields)
         claimed = self.claim_next(request_id=request["request_id"])
         if claimed is None:
+            if self._budget_status()["state"] == "HARD_LIMIT":
+                raise BehaviorCollectionBudgetExceeded(
+                    "behavior collection hard duration budget is currently exhausted"
+                )
             raise BehaviorCollectionQueueFull(
                 "behavior collection active budget is currently exhausted"
             )
+        started = time.monotonic()
         try:
             capture = dict(operation())
             profile = capture.get("profile")
@@ -1800,6 +1885,7 @@ class BehaviorCollectionScheduler:
                 outcome="CAPTURED",
                 observed_calls=observed_calls,
                 observed_generation=str(capture.get("generation_id") or "") or None,
+                duration_seconds=max(0.0, time.monotonic() - started),
             )
             capture["collection_request"] = {
                 key: value
@@ -1832,6 +1918,7 @@ class BehaviorCollectionScheduler:
                 claimed["request_id"],
                 outcome="FAILED",
                 error=f"{type(exc).__name__}: {exc}",
+                duration_seconds=max(0.0, time.monotonic() - started),
             )
             raise
 
@@ -1869,6 +1956,7 @@ class BehaviorCollectionScheduler:
                 "maximum_active": self.maximum_active,
                 "maximum_pending": self.maximum_pending,
                 "maximum_calls": self.maximum_calls,
+                "resource_budget": self._budget_status(),
                 "automatic_fairness": "PERSISTED_ROUND_ROBIN",
                 "automatic_last_subject": automatic_last_subject,
                 "active": counts.get("active", 0),

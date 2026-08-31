@@ -631,7 +631,8 @@ targets that have begun collecting calls, so a rare function does not consume
 the same automatic collection slot as a hot function. The console reports both
 counts. Automatic promotion now uses a bounded, restart-safe round-robin
 cursor so hot and rare functions do not remain tied to fixed target ordering;
-measured resource budgets remain future work. The console
+measured scheduled-collection duration budgets are now optional and visible in
+status. The console
 and operator control plane can also promote one
 registered adaptive lightweight target into pre-repair Behavior. This request
 is fixed to Behavior, records the operator reason and authority generation, and
@@ -667,6 +668,13 @@ collecting, sufficiently covered, deferred, and failed collection states and
 explains why a subject is in that state; stale/suspicious prioritization,
 measured resource budgets remain future work; explicit operator requests
 continue to use their priority/deadline ordering.
+
+The scheduler now provides an initial measured-cost boundary: optional soft and
+hard wall-clock budgets can be configured per rolling minute. Completed
+collection requests record bounded observed duration; the soft limit is exposed
+as an advisory status, while the hard limit leaves queued work intact and
+defers new claims until the window clears. Call-rate, sampling-density,
+queue-pressure, and host-resource-aware budgeting remain future work.
 
 Sealed behavioral snapshots should inform later lightweight anomaly triggers.
 Candidate signals include expected duration ranges, failure/return categories,

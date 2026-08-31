@@ -153,6 +153,8 @@ class GuardEngine(GuardFacade):
                 maximum_active=self.policy.snapshots.collection_max_active,
                 maximum_pending=self.policy.snapshots.collection_max_pending,
                 maximum_calls=self.policy.snapshots.collection_max_calls,
+                soft_budget_seconds_per_minute=self.policy.snapshots.collection_soft_budget_seconds_per_minute,
+                hard_budget_seconds_per_minute=self.policy.snapshots.collection_hard_budget_seconds_per_minute,
             )
             if data_root and self.policy.snapshots.enabled
             else None
@@ -237,6 +239,8 @@ class GuardEngine(GuardFacade):
                 maximum_active=self.policy.snapshots.collection_max_active,
                 maximum_pending=self.policy.snapshots.collection_max_pending,
                 maximum_calls=self.policy.snapshots.collection_max_calls,
+                soft_budget_seconds_per_minute=self.policy.snapshots.collection_soft_budget_seconds_per_minute,
+                hard_budget_seconds_per_minute=self.policy.snapshots.collection_hard_budget_seconds_per_minute,
             )
         elif not self.policy.snapshots.enabled:
             self.behavior_statistics = None

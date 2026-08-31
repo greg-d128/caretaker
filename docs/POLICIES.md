@@ -68,6 +68,15 @@ recorded, and the resulting request provenance is included in the signed behavio
 snapshot when a capture completes. Scheduling is evidence collection only: it
 cannot modify Guard policy, an accepted baseline, or Repair state.
 
+Optional `collection_soft_budget_seconds_per_minute` and
+`collection_hard_budget_seconds_per_minute` settings bound observed scheduler
+wall-clock cost over a rolling minute. The soft limit is advisory and appears
+in scheduler status. Once the hard limit is reached, new requests remain
+queued until the window clears; existing collection is not interrupted. The
+default is unlimited, preserving the least-friction profile. These budgets
+measure scheduled collection duration only and do not yet account for host
+resource pressure, call rate, or sampling density.
+
 `BehaviorSnapshotPolicy.collection_auto_promote` is disabled by default. When
 enabled, the supervisor health cycle may promote only current-generation,
 adaptive `armed_waiting` targets into pre-repair Behavior. The

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from caretaker.behavior import (
+    BehaviorCollectionBudgetExceeded,
     BehaviorCollectionQueueFull,
     BehaviorCollectionScheduler,
 )
@@ -130,6 +131,79 @@ def test_scheduler_fair_selection_handles_subjects_added_or_removed(tmp_path: Pa
     assert scheduler.select_fair_automatic_subjects(("target-b", "target-c"), limit=1) == (
         "target-b",
     )
+
+
+def test_scheduler_enforces_observed_duration_budget_and_preserves_queued_work(
+    tmp_path: Path,
+) -> None:
+    scheduler = BehaviorCollectionScheduler(
+        tmp_path,
+        soft_budget_seconds_per_minute=5.0,
+        hard_budget_seconds_per_minute=10.0,
+    )
+    first = scheduler.enqueue(
+        scope="function",
+        subject="target-a",
+        requested_calls=1,
+        requested_by="uid:1001",
+        reason="budget test",
+    )
+    claimed = scheduler.claim_next(request_id=first["request_id"])
+    assert claimed is not None
+    scheduler.complete(
+        claimed["request_id"],
+        outcome="CAPTURED",
+        duration_seconds=10.0,
+    )
+    assert scheduler.status()["resource_budget"]["state"] == "HARD_LIMIT"
+
+    second = scheduler.enqueue(
+        scope="function",
+        subject="target-b",
+        requested_calls=1,
+        requested_by="uid:1001",
+        reason="budget test",
+    )
+    assert scheduler.claim_next(request_id=second["request_id"]) is None
+    with pytest.raises(BehaviorCollectionBudgetExceeded):
+        scheduler.execute(
+            scope="function",
+            subject="target-c",
+            requested_calls=1,
+            requested_by="uid:1001",
+            reason="budget test",
+            operation=lambda: {"profile": {"call_count": 1}},
+        )
+    requests = {
+        item["request_id"]: item
+        for item in scheduler.list_requests(limit=10)
+    }
+    assert requests[second["request_id"]]["status"] == "QUEUED"
+
+
+def test_scheduler_duration_budget_expires_with_time_window(tmp_path: Path) -> None:
+    now = [datetime(2026, 8, 30, tzinfo=timezone.utc)]
+    scheduler = BehaviorCollectionScheduler(
+        tmp_path,
+        hard_budget_seconds_per_minute=1.0,
+        clock=lambda: now[0],
+    )
+    request = scheduler.enqueue(
+        scope="function",
+        subject="target-a",
+        requested_calls=1,
+        requested_by="uid:1001",
+        reason="budget window test",
+    )
+    claimed = scheduler.claim_next(request_id=request["request_id"])
+    assert claimed is not None
+    scheduler.complete(
+        claimed["request_id"],
+        outcome="CAPTURED",
+        duration_seconds=1.0,
+    )
+    now[0] += timedelta(seconds=61)
+    assert scheduler.status()["resource_budget"]["state"] == "NORMAL"
 
 
 def test_scheduler_expires_deadline_without_claiming_request(tmp_path: Path) -> None:

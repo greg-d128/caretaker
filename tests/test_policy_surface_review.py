@@ -119,6 +119,17 @@ def test_behavior_collection_scheduler_limits_are_validated():
                 snapshots=replace(policy.snapshots, collection_auto_max_waiting=0),
             )
         )
+    with pytest.raises(GuardPolicyConfigurationError, match="collection_soft_budget"):
+        validate_guard_policy(
+            replace(
+                policy,
+                snapshots=replace(
+                    policy.snapshots,
+                    collection_soft_budget_seconds_per_minute=10.0,
+                    collection_hard_budget_seconds_per_minute=5.0,
+                ),
+            )
+        )
     with pytest.raises(GuardPolicyConfigurationError, match="maximum_return_shapes"):
         validate_guard_policy(
             replace(
