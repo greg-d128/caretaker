@@ -13,6 +13,7 @@ from .handler import (
     CaretakerLogHandler,
     LoggingRuntime,
     LogSink,
+    RemoteAuditStream,
     RemoteLoggingRuntime,
     configure,
     configure_from_operator_policy,

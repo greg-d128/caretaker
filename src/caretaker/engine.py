@@ -55,7 +55,7 @@ from .domain import (
     utcnow,
 )
 from .logging.handler import get_runtime as get_logging_runtime
-from .logging.models import RepairAuthority
+from .logging.models import EvidencePriority, RepairAuthority
 from .observation import ObservationManager
 from .policy import OutputValidationTrigger, RepairPolicy, TimeoutTrigger
 from .postmortem import PostMortemRecorder
@@ -1878,6 +1878,56 @@ class RepairEngine:
             self._attempt_cache[attempt.attempt_id] = attempt
             if report.eligible:
                 self.store.record_candidate(replace(candidate, state=CandidateState.SANDBOX_VALIDATED))
+            logging_runtime = get_logging_runtime()
+            audit = getattr(logging_runtime, "audit", None)
+            if audit is not None:
+                passed_checks = sum(
+                    check.outcome.name == "PASSED" for check in report.checks
+                )
+                failed_checks = sum(
+                    check.outcome.name in {"FAILED", "ERROR"}
+                    for check in report.checks
+                )
+                audit.emit(
+                    "VALIDATION_DECISION",
+                    actor={"type": "application"},
+                    scope={
+                        "target_id": target.target_id,
+                        "incident_id": str(incident.incident_id),
+                        "episode_id": str(episode.episode_id),
+                        "candidate_id": str(candidate.candidate_id),
+                        "attempt_id": str(attempt.attempt_id),
+                    },
+                    policy={
+                        "policy_id": str(policy_snapshot.policy_snapshot_id),
+                        "fingerprint": str(policy_snapshot.content_hash),
+                        "authority_policy_generation": incident.authority_policy_generation,
+                        "authority_policy_fingerprint": incident.authority_policy_fingerprint,
+                    },
+                    outcome={
+                        "state": (
+                            "ELIGIBLE"
+                            if score.eligible
+                            else "REJECTED_BY_VALIDATION"
+                        ),
+                        "eligible": score.eligible,
+                        "requires_operator_approval": report.requires_operator_approval,
+                        "proposal_only": report.proposal_only,
+                        "total_score": score.total_score,
+                    },
+                    details={
+                        "validation_backend": report.backend_name,
+                        "validation_isolation": report.isolation_level.name,
+                        "backend_available": report.backend_available,
+                        "check_count": len(report.checks),
+                        "passed_check_count": passed_checks,
+                        "failed_check_count": failed_checks,
+                        "risk_finding_count": len(report.risk_findings),
+                        "hard_disqualification_count": len(report.hard_disqualifications),
+                        "review_required_finding_count": len(report.review_required_findings),
+                    },
+                    priority=EvidencePriority.IMPORTANT,
+                )
             return EvaluatedCandidate(candidate=candidate, report=report, score=score), attempt
         finally:
             with self._activity_lock:

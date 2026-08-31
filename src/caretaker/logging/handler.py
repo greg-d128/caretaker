@@ -15,7 +15,7 @@ from typing import Any, Callable, Mapping, Protocol
 from uuid import UUID, uuid4
 
 from ..runtime import snapshot_context
-from .audit import AuditStreamWriter
+from .audit import AuditStreamError, AuditStreamWriter
 from .attachments import AttachmentStore
 from .buffering import BufferedSegmentSink
 from .models import EvidencePriority, LogChannel, LogEnvelope, LoggingCapability
@@ -481,6 +481,78 @@ class CaretakerLogHandler(logging.Handler):
             self.handleError(record)
 
 
+class RemoteAuditStream:
+    """Output-only bridge from an application process to its supervisor.
+
+    The supervised application must not own or open the audit file.  This
+    bridge therefore exposes only the validation-decision submission used by
+    the application validation boundary; the supervisor remains responsible
+    for identity binding, event construction, and persistence.
+    """
+
+    def __init__(self, socket_path: str | Path | None, *, timeout: float = 5.0) -> None:
+        self.socket_path = str(socket_path) if socket_path else None
+        self.timeout = timeout
+
+    def emit(
+        self,
+        event_type: str,
+        *,
+        actor: Mapping[str, Any] | None = None,
+        scope: Mapping[str, Any] | None = None,
+        policy: Mapping[str, Any] | None = None,
+        outcome: Mapping[str, Any] | None = None,
+        details: Mapping[str, Any] | None = None,
+        priority: EvidencePriority = EvidencePriority.IMPORTANT,
+        **_ignored: Any,
+    ) -> dict[str, Any] | None:
+        """Submit one bounded validation event, or remain disabled unsupervised.
+
+        ``actor`` is deliberately ignored.  The supervisor derives it from
+        authenticated peer credentials.  Other fields are treated as worker
+        evidence and are validated again by the supervisor before persistence.
+        """
+        if event_type != "VALIDATION_DECISION":
+            raise AuditStreamError(
+                "supervised application audit transport permits only "
+                "VALIDATION_DECISION"
+            )
+        if not self.socket_path:
+            return None
+        if not isinstance(priority, EvidencePriority):
+            raise AuditStreamError("Audit priority must be an EvidencePriority")
+        from .ipc import control_request
+
+        request = {
+            "command": "audit-validation-decision",
+            "scope": dict(scope or {}),
+            "policy": dict(policy or {}),
+            "outcome": dict(outcome or {}),
+            "details": dict(details or {}),
+            "priority": priority.name,
+        }
+        try:
+            response = control_request(
+                self.socket_path,
+                request,
+                timeout=self.timeout,
+            )
+        except OSError as exc:
+            raise AuditStreamError(
+                "supervisor audit transport is unavailable"
+            ) from exc
+        if not isinstance(response, Mapping) or not response.get("ok"):
+            error = response.get("error", "supervisor rejected audit event") if isinstance(response, Mapping) else "invalid supervisor audit response"
+            raise AuditStreamError(str(error)[:2048])
+        if response.get("recorded") is not True:
+            return None
+        event_id = response.get("event_id")
+        stream_sequence = response.get("stream_sequence")
+        if not isinstance(event_id, str) or not isinstance(stream_sequence, int):
+            raise AuditStreamError("supervisor returned an invalid audit acknowledgement")
+        return {"event_id": event_id, "stream_sequence": stream_sequence}
+
+
 
 def json_bytes(value: Any) -> bytes:
     import json
@@ -560,6 +632,9 @@ class RemoteLoggingRuntime:
         self._sequence = 0
         self._lock = threading.RLock()
         self.client = SocketLogClient(socket_path, codec=__import__("caretaker.logging.records", fromlist=["TLVLogCodec"]).TLVLogCodec(maximum_record_bytes=policy.codec.maximum_record_bytes))
+        self.audit = RemoteAuditStream(
+            os.environ.get("CARETAKER_SUPERVISOR_CONTROL_SOCKET")
+        )
         self.supervised = True
         self._closed = False
 

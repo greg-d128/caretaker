@@ -80,8 +80,11 @@ maximum_event_bytes = 4096
 
 The current implementation writes the output-only local stream below the main
 logging directory and emits startup, policy, authority-snapshot, worker-authority,
-supervisor-state, worker-failure, incident, replacement, and recovery-decision
-events.
+supervisor-state, worker-failure, incident, validation-decision, replacement,
+and recovery-decision events. In a supervised run, validation decisions cross
+the output-only supervisor control socket as bounded, allow-listed evidence;
+the supervisor binds the submitting application PID and derives the worker
+actor. The submitted validation context cannot modify policy or authority.
 Audit settings are run-bound; a reload records the attempted change but requires
 a new run to change the stream configuration. External delivery and per-event
 signatures remain future capabilities. See

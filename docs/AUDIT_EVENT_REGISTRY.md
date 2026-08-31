@@ -43,8 +43,17 @@ All event types share these redaction rules:
 | `WORKER_REPLACED` | `CRITICAL` | — | `{"failed_worker_id": "worker-old", "replacement_worker_id": "worker-new"}` |
 | `SUPERVISOR_STATE_CHANGED` | `CRITICAL` | — | `{"state": "CONTROL_PLANE_LOST", "reason": "heartbeat_timeout"}` |
 | `INCIDENT_CAPTURED` | `IMPORTANT` | — | `{"incident_id": "incident-uuid", "capture_level": "STANDARD"}` |
-| `VALIDATION_DECISION` | `IMPORTANT` | — | `{"state": "PASSED", "validation_id": "validation-uuid"}` |
+| `VALIDATION_DECISION` | `IMPORTANT` | — | `{"state": "ELIGIBLE", "validation_id": "validation-uuid"}` |
 | `RECOVERY_DECISION` | `CRITICAL` | — | `{"state": "PLANNED_ONLY", "action": "ROLLBACK_TO_DEPLOYED_CODE"}` |
+
+In a supervised run, the application process may submit only a bounded
+`VALIDATION_DECISION` through the supervisor control socket. The supervisor
+checks that the Unix peer PID is the live application child, accepts only
+allow-listed scalar scope, policy, outcome, and detail fields, and derives the
+event actor from peer credentials. The submitted validation policy is retained
+as reported evidence; the audit envelope's policy identifies the supervisor's
+current audit policy. This path is output-only: it cannot submit arbitrary
+event types, change policy, grant authority, or invoke a control operation.
 
 The registry is descriptive and fail-closed for the fields it declares. It
 does not verify operator signatures, authorize policy changes, or provide an

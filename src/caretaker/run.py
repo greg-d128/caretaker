@@ -4,6 +4,7 @@ import argparse
 from collections.abc import Mapping
 import hashlib
 import importlib
+import math
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 import json
@@ -89,6 +90,142 @@ _ADAPTIVE_THRESHOLD_SETTING_PATHS = {
     ),
     "transition_timeout_seconds": "lightweight.aggregation.transition_timeout_seconds",
 }
+
+
+_VALIDATION_AUDIT_SCOPE_FIELDS = frozenset({
+    "target_id", "incident_id", "episode_id", "candidate_id", "attempt_id",
+})
+_VALIDATION_AUDIT_POLICY_FIELDS = frozenset({
+    "policy_id", "fingerprint", "authority_policy_generation",
+    "authority_policy_fingerprint",
+})
+_VALIDATION_AUDIT_OUTCOME_FIELDS = frozenset({
+    "state", "eligible", "requires_operator_approval", "proposal_only",
+    "total_score",
+})
+_VALIDATION_AUDIT_DETAIL_FIELDS = frozenset({
+    "validation_backend", "validation_isolation", "backend_available",
+    "check_count", "passed_check_count", "failed_check_count",
+    "risk_finding_count", "hard_disqualification_count",
+    "review_required_finding_count",
+})
+
+
+def _bounded_validation_audit_fields(
+    value: Any,
+    *,
+    allowed: frozenset[str],
+    label: str,
+) -> dict[str, Any]:
+    """Validate the scalar, allow-listed shape accepted from an application worker."""
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{label} must be an object")
+    unknown = set(value) - allowed
+    if unknown:
+        raise ValueError(f"{label} contains unsupported fields: {', '.join(sorted(map(str, unknown)))}")
+    if len(value) > len(allowed):
+        raise ValueError(f"{label} is too large")
+    bounded: dict[str, Any] = {}
+    for key, item in value.items():
+        name = str(key)
+        if isinstance(item, str):
+            if len(item) > 512:
+                raise ValueError(f"{label}.{name} is too long")
+            bounded[name] = item
+        elif isinstance(item, bool):
+            bounded[name] = item
+        elif isinstance(item, int):
+            if abs(item) > 2**63 - 1:
+                raise ValueError(f"{label}.{name} is out of range")
+            bounded[name] = item
+        elif isinstance(item, float):
+            if not math.isfinite(item):
+                raise ValueError(f"{label}.{name} must be finite")
+            bounded[name] = item
+        else:
+            raise ValueError(f"{label}.{name} must be a scalar")
+    return bounded
+
+
+def _handle_validation_audit_submission(
+    runtime: Any,
+    request: Mapping[str, Any],
+    credentials: tuple[int, int, int],
+    child: Any,
+) -> dict[str, Any]:
+    """Persist one application-worker validation decision on the supervisor."""
+    if child is None or child.poll() is not None:
+        raise PermissionError("application worker is not running")
+    if credentials[0] != child.pid:
+        raise PermissionError(
+            "validation audit submission is not from the application worker"
+        )
+    scope = _bounded_validation_audit_fields(
+        request.get("scope"),
+        allowed=_VALIDATION_AUDIT_SCOPE_FIELDS,
+        label="validation audit scope",
+    )
+    worker_policy = _bounded_validation_audit_fields(
+        request.get("policy"),
+        allowed=_VALIDATION_AUDIT_POLICY_FIELDS,
+        label="validation audit policy",
+    )
+    outcome = _bounded_validation_audit_fields(
+        request.get("outcome"),
+        allowed=_VALIDATION_AUDIT_OUTCOME_FIELDS,
+        label="validation audit outcome",
+    )
+    details = _bounded_validation_audit_fields(
+        request.get("details"),
+        allowed=_VALIDATION_AUDIT_DETAIL_FIELDS,
+        label="validation audit details",
+    )
+    if not isinstance(scope.get("target_id"), str) or not scope["target_id"]:
+        raise ValueError("validation audit scope requires a non-empty target_id")
+    if not isinstance(scope.get("candidate_id"), str) or not scope["candidate_id"]:
+        raise ValueError("validation audit scope requires target_id and candidate_id")
+    if not isinstance(outcome.get("state"), str) or not outcome["state"]:
+        raise ValueError("validation audit outcome requires a non-empty state")
+    if not isinstance(outcome.get("eligible"), bool):
+        raise ValueError("validation audit outcome requires state and eligible")
+    if not isinstance(worker_policy.get("policy_id"), str) or not worker_policy["policy_id"]:
+        raise ValueError("validation audit policy requires a non-empty policy_id")
+    if not isinstance(worker_policy.get("fingerprint"), str) or not worker_policy["fingerprint"]:
+        raise ValueError("validation audit policy requires policy_id and fingerprint")
+    details.update({
+        "reported_policy_id": worker_policy["policy_id"],
+        "reported_policy_fingerprint": worker_policy["fingerprint"],
+        "reported_authority_policy_generation": worker_policy.get(
+            "authority_policy_generation"
+        ),
+        "reported_authority_policy_fingerprint": worker_policy.get(
+            "authority_policy_fingerprint"
+        ),
+        "worker_pid": credentials[0],
+    })
+    audit_event = runtime.audit.emit(
+        "VALIDATION_DECISION",
+        actor={
+            "type": "worker",
+            "id": f"pid:{credentials[0]}",
+            "uid": credentials[1],
+        },
+        scope=scope,
+        policy={
+            "policy_id": str(runtime.snapshot.snapshot_id),
+            "fingerprint": runtime.snapshot.content_hash,
+            "authority_generation": runtime.effective.generation,
+        },
+        outcome=outcome,
+        details=details,
+        priority=EvidencePriority.IMPORTANT,
+    )
+    return {
+        "ok": True,
+        "recorded": audit_event is not None,
+        "event_id": audit_event.get("event_id") if audit_event else None,
+        "stream_sequence": audit_event.get("stream_sequence") if audit_event else None,
+    }
 
 
 def _adaptive_threshold_policy_settings(
@@ -599,6 +736,13 @@ def main(argv: list[str] | None = None) -> int:
 
     def control_handler(request, credentials):
         command = request.get("command")
+        if command == "audit-validation-decision":
+            return _handle_validation_audit_submission(
+                runtime,
+                request,
+                credentials,
+                child_holder.get("child"),
+            )
         if command == "worker-acceptance-observation":
             supervisor = supervisor_holder.get("supervisor")
             if supervisor is None:

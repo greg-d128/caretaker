@@ -139,6 +139,15 @@ implementation is considered complete. Registry additions require a schema
 version or a backward-compatible event version; they must not silently reuse a
 different event's meaning.
 
+During a supervised run, validation decisions are submitted from the
+application process over the supervisor control socket as bounded evidence.
+Only `VALIDATION_DECISION` is accepted on that path. The supervisor binds the
+submission to the live application peer PID, derives the worker actor from
+Unix peer credentials, validates allow-listed scalar fields, and writes the
+event to the supervisor-owned audit stream. Worker-reported validation policy
+and authority fingerprints remain explicitly reported evidence; they do not
+authorize the candidate or alter the supervisor's effective policy.
+
 The executable registry and per-event examples are maintained in
 [`AUDIT_EVENT_REGISTRY.md`](AUDIT_EVENT_REGISTRY.md). The local writer applies
 the registered minimum priority and required envelope paths. Unknown future

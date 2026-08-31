@@ -1260,10 +1260,13 @@ Until this exists, restart is a rollback to deployed application code, not conti
   checks, and redaction rules described in
   [`AUDIT_EVENT_REGISTRY.md`](AUDIT_EVENT_REGISTRY.md). The current local
   slice emits startup, policy, authority-snapshot, worker-authority,
-  supervisor-state, worker-failure, incident, replacement, and recovery-decision
-  events and preserves a policy-controlled hash chain. Remaining work is to
-  connect every registry type to its producer and complete policy-controlled
-  critical/important/ordinary/debug delivery semantics.
+  supervisor-state, worker-failure, incident, validation-decision, replacement,
+  and recovery-decision events and preserves a policy-controlled hash chain.
+  Supervised application validation decisions cross an output-only, PID-bound,
+  allow-listed control-socket submission path; worker identity is derived by the
+  supervisor and the submitted policy context remains evidence. Remaining work
+  is to connect every registry type to its producer and complete
+  policy-controlled critical/important/ordinary/debug delivery semantics.
 - Make audit hash chaining and signing mode policy controlled. Critical policy,
   authority, worker-lifecycle, supervisor-state, and audit-delivery events must
   be retained before their effects are reported complete; ordinary metrics may
