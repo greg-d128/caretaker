@@ -544,6 +544,11 @@ def repair(
                         candidate_id=version.candidate_id,
                         succeeded=succeeded,
                         elapsed_seconds=elapsed_for_logging,
+                        result=(
+                            completed_output
+                            if succeeded and completed_output is not _NO_RESULT
+                            else None
+                        ),
                     )
                 if (
                     logging_runtime is not None

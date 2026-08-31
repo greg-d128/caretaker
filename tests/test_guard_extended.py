@@ -176,6 +176,32 @@ def test_guard_analytics_are_persisted_for_querying(tmp_path: Path) -> None:
     assert decisions and decisions[0]["action"] == "ALERT"
 
 
+def test_repair_wrapper_passes_successful_results_to_guard_behavior_capture() -> None:
+    guard = GuardEngine(policy=_guard_policy())
+    engine = RepairEngine(guard=guard)
+    policy = replace(
+        RepairPolicy(),
+        guard=GuardBinding(
+            enabled=True,
+            observe_network=True,
+            include_guard_context_in_repair=True,
+        ),
+    )
+
+    def returns_text(value: int) -> str:
+        return "value:" + str(value)
+
+    wrapped = repair(policy=policy, engine=engine, target_id="tests:return-text")(returns_text)
+
+    assert wrapped(7) == "value:7"
+    summary = guard.current_behavior_summary("tests:return-text")
+    assert summary is not None
+    assert summary.success_count == 1
+    assert summary.return_observations_available is True
+    assert summary.return_category_counts == {"text:builtins.str": 1}
+    assert summary.return_shape_counts == {"text:length-medium": 1}
+
+
 def test_repair_provider_receives_guard_evidence() -> None:
     guard = GuardEngine(policy=_guard_policy())
     provider = CapturingRepairProvider()

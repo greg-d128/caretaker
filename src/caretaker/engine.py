@@ -1434,6 +1434,7 @@ class RepairEngine:
                     candidate_id=selected.candidate.candidate_id,
                     succeeded=True,
                     elapsed_seconds=elapsed,
+                    result=output,
                 )
                 close_window = getattr(self.guard, "close_target_window", None)
                 if close_window is not None:

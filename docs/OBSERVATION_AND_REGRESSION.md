@@ -54,6 +54,9 @@ run.
 
 Guard behavior evidence can record imports, network/DNS and socket activity,
 filesystem reads and writes, subprocesses, dynamic code, and environment reads.
+Managed function calls also pass successful return values through the Guard
+capture path as bounded type/category and structural-shape evidence; raw return
+values remain outside this signal.
 `EffectObservation` summarizes those observations and
 `assess_shadow_eligibility()` applies a conservative gate:
 
