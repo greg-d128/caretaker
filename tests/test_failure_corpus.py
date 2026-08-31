@@ -267,8 +267,8 @@ def test_observation_store_builds_bounded_deterministic_outcome_report(tmp_path:
                 "authority_effect": "NO_AUTHORITY_CHANGE",
             },
             "worker.failed": lambda _scenario: {
-                "signal": "TIMEOUT",
-                "caretaker_action": "RECORD_EVIDENCE",
+                "signal": "WORKER_FAILURE",
+                "caretaker_action": "REPLACE_WORKER",
                 "authority_effect": "NO_AUTHORITY_CHANGE",
             },
         },
@@ -315,6 +315,30 @@ def test_observation_store_outcome_report_counts_corrupt_records(tmp_path: Path)
     assert report["records_available"] == 0
     assert report["corrupt_records"] == 1
     assert report["provenance"] == []
+
+
+def test_observation_store_persists_and_verifies_content_addressed_report(tmp_path: Path) -> None:
+    corpus = FailureCorpus.load(ROOT / "examples" / "failure_corpus" / "manifest.json")
+    store = FailureCorpusObservationStore(tmp_path)
+    store.record(
+        FailureCorpusHarness(corpus, runners={}).run("exception.unhandled"),
+        corpus_id=corpus.corpus_id,
+    )
+    report = store.build_outcome_report(corpus_id=corpus.corpus_id)
+
+    persisted = store.persist_outcome_report(report)
+    loaded = store.load_outcome_report(report["content_sha256"])
+    persisted_again = store.persist_outcome_report(report)
+
+    assert loaded == report
+    assert persisted == report
+    assert persisted_again == report
+    assert len(tuple(store.report_directory.glob("*.json"))) == 1
+
+    path = store.report_directory / f"{report['content_sha256']}.json"
+    path.write_text(path.read_text(encoding="utf-8").replace("NOT_MAPPED", "MATCHED"), encoding="utf-8")
+    with pytest.raises(FailureCorpusError, match="content hash"):
+        store.load_outcome_report(report["content_sha256"])
 
 
 def test_trusted_harness_run_all_is_bounded_and_preserves_unmapped_scenarios() -> None:

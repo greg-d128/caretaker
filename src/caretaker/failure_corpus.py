@@ -26,6 +26,7 @@ MAX_TEXT_CHARS = 2_048
 MAX_TAGS = 32
 MAX_OBSERVATION_BYTES = 16_384
 MAX_STORED_OBSERVATION_BYTES = 32_768
+MAX_OUTCOME_REPORT_BYTES = 65_536
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9_.-]{1,127}$")
 
 FAILURE_CATEGORIES = frozenset({
@@ -429,6 +430,12 @@ class FailureCorpusObservationStore:
             self.directory.chmod(0o700)
         except OSError:
             pass
+        self.report_directory = self.directory.parent / "failure-corpus-reports"
+        self.report_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            self.report_directory.chmod(0o700)
+        except OSError:
+            pass
         self.maximum_observation_bytes = maximum_observation_bytes
 
     @staticmethod
@@ -642,6 +649,63 @@ class FailureCorpusObservationStore:
         }
         payload["content_sha256"] = hashlib.sha256(self._canonical(payload)).hexdigest()
         return payload
+
+    @classmethod
+    def _verify_report(cls, report: Mapping[str, Any]) -> dict[str, Any]:
+        if not isinstance(report, Mapping):
+            raise FailureCorpusError("outcome report must be an object")
+        observed_hash = report.get("content_sha256")
+        if not isinstance(observed_hash, str):
+            raise FailureCorpusError("outcome report content hash is missing")
+        payload = dict(report)
+        payload.pop("content_sha256", None)
+        expected_hash = hashlib.sha256(cls._canonical(payload)).hexdigest()
+        if observed_hash != expected_hash:
+            raise FailureCorpusError("outcome report content hash does not match")
+        if payload.get("schema_version") != FAILURE_CORPUS_SCHEMA_VERSION:
+            raise FailureCorpusError("unsupported outcome report schema version")
+        if payload.get("report_type") != "FAILURE_CORPUS_OUTCOME_REPORT":
+            raise FailureCorpusError("unsupported outcome report type")
+        return {**payload, "content_sha256": observed_hash}
+
+    def persist_outcome_report(self, report: Mapping[str, Any]) -> dict[str, Any]:
+        """Persist one verified deterministic report as a content-addressed artifact."""
+        verified = self._verify_report(report)
+        serialized = self._canonical(verified)
+        if len(serialized) > MAX_OUTCOME_REPORT_BYTES:
+            raise FailureCorpusError("outcome report exceeds its byte limit")
+        report_path = self.report_directory / f"{verified['content_sha256']}.json"
+        if report_path.exists():
+            return self._load_report_path(report_path)
+        temporary = self.report_directory / f".{verified['content_sha256']}.{uuid4()}.tmp"
+        temporary.write_bytes(serialized)
+        try:
+            temporary.chmod(0o600)
+        except OSError:
+            pass
+        temporary.replace(report_path)
+        return verified
+
+    def _load_report_path(self, path: Path) -> dict[str, Any]:
+        if path.is_symlink() or not path.is_file():
+            raise FailureCorpusError("outcome report must be a regular file")
+        try:
+            raw = path.read_bytes()
+            if len(raw) > MAX_OUTCOME_REPORT_BYTES:
+                raise FailureCorpusError("outcome report exceeds its byte limit")
+            report = json.loads(raw.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise FailureCorpusError("outcome report is not valid JSON") from exc
+        return self._verify_report(report)
+
+    def load_outcome_report(self, content_sha256: str) -> dict[str, Any]:
+        """Load one persisted report by its content hash, rejecting tampering."""
+        if not re.fullmatch(r"[0-9a-f]{64}", content_sha256):
+            raise KeyError(f"unknown outcome report {content_sha256!r}")
+        path = self.report_directory / f"{content_sha256}.json"
+        if not path.exists():
+            raise KeyError(f"unknown outcome report {content_sha256}")
+        return self._load_report_path(path)
 
 
 ISOLATION_LEVELS_ORDER = {name: index for index, name in enumerate(("PROCESS", "CONTAINER", "VM"), start=1)}
