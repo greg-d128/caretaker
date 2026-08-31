@@ -961,6 +961,7 @@ def execute_slot_rollout(
                     mode=decision.strategy,
                     rollout_id=record.rollout_id,
                     routing_decision_hash=decision.decision_hash,
+                    audit_event=audit_event,
                 )
             except BaseException as accounting_error:
                 raise exc from accounting_error
@@ -974,6 +975,7 @@ def execute_slot_rollout(
             mode=decision.strategy,
             rollout_id=record.rollout_id,
             routing_decision_hash=decision.decision_hash,
+            audit_event=audit_event,
         )
     return result
 

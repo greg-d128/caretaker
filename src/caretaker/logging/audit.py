@@ -234,6 +234,17 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
             "candidate_authoritative": True,
         },
     ),
+    "REPAIR_CANDIDATE_OBSERVATION": _event_definition(
+        description="A bounded authoritative Repair candidate observation was recorded.",
+        minimum_priority=EvidencePriority.IMPORTANT,
+        required_fields=("scope.target_id", "scope.candidate_id", "outcome.state"),
+        example={
+            "state": "ACCEPTANCE_OBSERVED",
+            "succeeded": True,
+            "candidate_state": "INITIALLY_VALIDATED",
+            "mode": "canary",
+        },
+    ),
 })
 
 

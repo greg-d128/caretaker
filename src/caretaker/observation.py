@@ -60,6 +60,7 @@ class ObservationManager:
         mode: str = "canary",
         rollout_id: UUID | None = None,
         routing_decision_hash: str | None = None,
+        audit_event: Any | None = None,
     ) -> None:
         version = slot.load()
         if version.candidate_id is None:
@@ -86,6 +87,27 @@ class ObservationManager:
                 routing_decision_hash=routing_decision_hash,
             )
         )
+        if audit_event is not None:
+            audit_event(
+                "REPAIR_CANDIDATE_OBSERVATION",
+                actor={"type": "caretaker", "id": "observation-manager"},
+                scope={
+                    "target_id": slot.target_id,
+                    "candidate_id": str(version.candidate_id),
+                    "rollout_id": str(rollout_id) if rollout_id else None,
+                },
+                outcome={
+                    "state": "ACCEPTANCE_OBSERVED",
+                    "succeeded": True,
+                    "candidate_state": session.state.name,
+                    "mode": mode,
+                },
+                details={
+                    "successful_executions": session.successful_executions,
+                    "failed_executions": session.failed_executions,
+                    "routing_decision_hash": routing_decision_hash,
+                },
+            )
 
     def record_failure(
         self,
@@ -97,6 +119,7 @@ class ObservationManager:
         mode: str = "canary",
         rollout_id: UUID | None = None,
         routing_decision_hash: str | None = None,
+        audit_event: Any | None = None,
     ) -> ObservationFailureDecision:
         version = slot.load()
         if version.candidate_id is None:
@@ -159,6 +182,29 @@ class ObservationManager:
                 routing_decision_hash=routing_decision_hash,
             )
         )
+        if audit_event is not None:
+            audit_event(
+                "REPAIR_CANDIDATE_OBSERVATION",
+                actor={"type": "caretaker", "id": "observation-manager"},
+                scope={
+                    "target_id": slot.target_id,
+                    "candidate_id": str(version.candidate_id),
+                    "rollout_id": str(rollout_id) if rollout_id else None,
+                },
+                outcome={
+                    "state": "FAILURE_OBSERVED",
+                    "succeeded": False,
+                    "rolled_back": rollback,
+                    "candidate_state": session.state.name,
+                    "mode": mode,
+                },
+                details={
+                    "successful_executions": session.successful_executions,
+                    "failed_executions": session.failed_executions,
+                    "failure_rate": failure_rate,
+                    "routing_decision_hash": routing_decision_hash,
+                },
+            )
         return ObservationFailureDecision(
             rolled_back=rollback,
             state=session.state,

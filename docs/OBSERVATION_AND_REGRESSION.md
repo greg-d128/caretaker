@@ -73,6 +73,10 @@ candidate successes and failures retain the rollout ID and routing decision
 hash on their `ObservationRecord`. This links acceptance and rollback evidence
 to the exact policy-bound selection. Shadow executions remain comparison
 evidence only and never advance candidate acceptance counters.
+When an audit callback is configured, the same authoritative success or failure
+also emits a bounded `REPAIR_CANDIDATE_OBSERVATION` event containing counters,
+candidate state, rollback status, and rollout provenance without result values
+or exception messages.
 
 The read-only target/slot snapshot exposes the effective contract as
 `execution_contract.side_effects` and `execution_contract.retry_safety`, so

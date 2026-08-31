@@ -1400,7 +1400,7 @@ Until this exists, restart is a rollback to deployed application code, not conti
   supervisor-state, worker-failure, incident, audit-data-loss, policy-rejection,
   policy-supersession, audit-delivery-status, console-invocation,
   validation-decision, replacement, recovery-decision, shadow-execution, and
-  rollout-routing and rollout-execution-outcome events and preserves a
+  rollout-routing, rollout-execution-outcome, and candidate-observation events and preserves a
   policy-controlled hash chain.
   Supervised application validation decisions cross an output-only, PID-bound,
   allow-listed control-socket submission path; worker identity is derived by the
