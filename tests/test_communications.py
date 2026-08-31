@@ -14,6 +14,7 @@ from caretaker.communications import (
     build_communication_draft,
     generate_communication_draft,
     review_communication_draft,
+    tailor_communication_draft,
 )
 from caretaker.logging.policy import load_operator_policy
 
@@ -138,6 +139,7 @@ directory = "./data"
 
 [logging.communications]
 maximum_draft_bytes = 8192
+llm_tailoring_enabled = true
 
 [[logging.communications.audiences]]
 profile_id = "public-v1"
@@ -149,6 +151,7 @@ require_review = true
     )
     policy, _snapshot = load_operator_policy(policy_file)
     assert policy.communications.maximum_draft_bytes == 8192
+    assert policy.communications.llm_tailoring_enabled is True
     assert policy.communications.audiences[0].profile_id == "public-v1"
     assert policy.communications.audiences[0].allowed_sections == (
         "identity",
@@ -173,6 +176,46 @@ def test_cli_exports_a_new_reviewable_draft_without_overwriting(tmp_path: Path) 
     assert output.stat().st_mode & 0o777 == 0o600
     assert '"delivery_authorized": false' in output.read_text(encoding="utf-8")
     assert len(store.load(envelope["capsule"]["capsule_id"])["capsule"]["communications"]) == 1
+
+
+def test_cli_can_request_policy_enabled_advisory_tailoring(tmp_path: Path, monkeypatch, capsys) -> None:
+    from caretaker.communication_cli import main
+
+    policy_file = tmp_path / "caretaker.toml"
+    policy_file.write_text(
+        """
+[logging]
+directory = "./data"
+
+[logging.communications]
+llm_tailoring_enabled = true
+""",
+        encoding="utf-8",
+    )
+    store = IncidentCapsuleStore(tmp_path)
+    envelope = store.create_placeholder(uuid4(), incident_state={"trigger": "exception"})
+    monkeypatch.setattr(
+        "caretaker.communications.CommunicationDraftAssistant._chat",
+        lambda _assistant, _prompt: json.dumps({
+            "body": (
+                "Incident wording suggestion\n"
+                "Status: DRAFT — review required\n"
+                "Delivery: not authorized; this is a reviewable draft only."
+            )
+        }),
+    )
+    assert main([
+        "--data-directory", str(tmp_path),
+        "--policy", str(policy_file),
+        "--capsule-id", envelope["capsule"]["capsule_id"],
+        "--audience-profile", "operators-v1",
+        "--no-record",
+        "--tailor-model", "local-model",
+    ]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["tailoring"]["advisory_only"] is True
+    assert result["tailoring"]["delivery_authorized"] is False
+    assert result["recording"]["capsule_mutated"] is False
 
 
 def test_review_records_explicit_decision_once_without_authorizing_delivery(tmp_path: Path) -> None:
@@ -235,6 +278,95 @@ def test_review_requires_recorded_draft_and_reason(tmp_path: Path) -> None:
             capsule_policy=store.policy,
             reviewer_identity="uid:1000",
         )
+
+
+def test_llm_tailoring_is_disabled_by_default_and_preserves_canonical_draft(tmp_path: Path, monkeypatch) -> None:
+    store = IncidentCapsuleStore(tmp_path)
+    envelope = store.create_placeholder(
+        uuid4(),
+        incident_state={"trigger": "exception", "impact": "unknown"},
+    )
+    draft = generate_communication_draft(
+        store,
+        envelope,
+        audience_profile_id="operators-v1",
+        policy=IncidentCommunicationPolicy(),
+        capsule_policy=store.policy,
+        record=False,
+    )
+    with pytest.raises(CommunicationPolicyError, match="disabled by policy"):
+        tailor_communication_draft(
+            draft,
+            policy=IncidentCommunicationPolicy(),
+            model="local-model",
+        )
+
+    policy = IncidentCommunicationPolicy(llm_tailoring_enabled=True)
+    draft = generate_communication_draft(
+        store,
+        envelope,
+        audience_profile_id="operators-v1",
+        policy=policy,
+        capsule_policy=store.policy,
+        record=False,
+    )
+    prompts: list[str] = []
+
+    def fake_chat(_assistant, prompt: str) -> str:
+        prompts.append(prompt)
+        return json.dumps({
+            "body": (
+                "Incident rewritten for clarity\n"
+                "Status: DRAFT — review required\n"
+                "Impact remains unknown.\n"
+                "token=must-not-pass\n"
+                "Delivery: not authorized; this is a reviewable draft only."
+            )
+        })
+
+    monkeypatch.setattr(
+        "caretaker.communications.CommunicationDraftAssistant._chat",
+        fake_chat,
+    )
+    canonical_body = draft["draft"]["body"]
+    result = tailor_communication_draft(
+        draft,
+        policy=policy,
+        model="local-model",
+    )
+    assert result["canonical_body"] == canonical_body
+    assert result["suggested_body"] != canonical_body
+    assert "token=must-not-pass" not in result["suggested_body"]
+    assert "token=<redacted>" in result["suggested_body"]
+    assert result["advisory_only"] is True
+    assert result["draft_mutated"] is False
+    assert result["delivery_authorized"] is False
+    assert draft["draft"]["body"] == canonical_body
+    assert prompts and "DRAFT_DATA" in prompts[0]
+
+
+def test_llm_tailoring_rejects_tampering_and_removed_safety_caveats(tmp_path: Path, monkeypatch) -> None:
+    store = IncidentCapsuleStore(tmp_path)
+    envelope = store.create_placeholder(uuid4(), incident_state={"trigger": "timeout"})
+    policy = IncidentCommunicationPolicy(llm_tailoring_enabled=True)
+    draft = generate_communication_draft(
+        store,
+        envelope,
+        audience_profile_id="operators-v1",
+        policy=policy,
+        capsule_policy=store.policy,
+        record=False,
+    )
+    tampered = {**draft, "draft": {**draft["draft"], "body": "tampered"}}
+    with pytest.raises(CommunicationPolicyError, match="content hash is invalid"):
+        tailor_communication_draft(tampered, policy=policy, model="local-model")
+
+    monkeypatch.setattr(
+        "caretaker.communications.CommunicationDraftAssistant._chat",
+        lambda _assistant, _prompt: json.dumps({"body": "Status: DRAFT only"}),
+    )
+    with pytest.raises(CommunicationPolicyError, match="safety caveats"):
+        tailor_communication_draft(draft, policy=policy, model="local-model")
 
 
 def test_review_cli_records_decision_and_does_not_claim_delivery(tmp_path: Path, capsys) -> None:

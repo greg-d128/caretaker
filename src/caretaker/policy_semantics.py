@@ -16,15 +16,16 @@ from types import ModuleType
 from typing import Any
 
 from . import adaptive as adaptive_policy
+from . import communications as communication_policy
 from . import policy as repair_policy
 from .guard import policy as guard_policy
 from .logging import policy as logging_policy
 from .system import policy as system_policy
 
 
-POLICY_SEMANTICS_REVIEW_GENERATION = 20
+POLICY_SEMANTICS_REVIEW_GENERATION = 21
 # Updated only after the policy truthfulness suite reviews every changed field.
-REVIEWED_POLICY_SURFACE_HASH = "9bcb109dc466db1fc3a87a6a32e7125d1d749c1e41b65938488ff4f23f876de3"
+REVIEWED_POLICY_SURFACE_HASH = "58aa993e01737bada5c7d4ca2377d30e646211e166c4151bc77d5d8dbd81b7a3"
 
 
 RESERVED_SETTINGS: dict[str, str] = {
@@ -91,6 +92,7 @@ def policy_surface_schema() -> tuple[str, ...]:
         ("repair", repair_policy, False),
         ("guard", guard_policy, False),
         ("logging", logging_policy, False),
+        ("logging.communications", communication_policy, False),
         ("system", system_policy, False),
         ("lightweight", adaptive_policy, True),
     )

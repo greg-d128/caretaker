@@ -189,6 +189,15 @@ POLICY_CAPABILITIES: tuple[PolicyCapability, ...] = (
         "Review that acceptance remains opt-in, context-bound, signed when available, and unable to mutate authority or reactivate policy.",
         ("lightweight.aggregation.allow_persistent_acceptance",),
     ),
+    PolicyCapability(
+        "logging.communication-llm-tailoring",
+        7,
+        "0.6.1",
+        "Advisory incident communication language tailoring",
+        "Allows a local LLM to suggest clearer wording for an already redacted incident communication draft.",
+        "Review that tailoring is opt-in, bounded, advisory-only, preserves the canonical draft, and cannot authorize delivery or change incident state.",
+        ("logging.communications.llm_tailoring_enabled",),
+    ),
 )
 
 CURRENT_POLICY_SURFACE_VERSION = max(

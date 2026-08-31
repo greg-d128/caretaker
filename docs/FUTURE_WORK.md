@@ -95,7 +95,7 @@ close incidents, or expand Caretaker authority. See
 
 ## Policy-governed incident communications
 
-**Status: Implemented in development tree for reviewable draft generation and local review records; delivery remains future work.**
+**Status: Implemented in development tree for reviewable draft generation, optional advisory LLM language tailoring, and local review records; delivery remains future work.**
 
 During an incident, Caretaker already has or may accumulate useful context:
 observed symptoms, evidence, affected targets, hypotheses, policy and integrity

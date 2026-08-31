@@ -9,7 +9,7 @@ from pathlib import Path
 from uuid import UUID
 
 from .capsule import IncidentCapsuleStore
-from .communications import generate_communication_draft
+from .communications import generate_communication_draft, tailor_communication_draft
 from .console import discover_control_socket
 from .logging.ipc import control_request
 from .logging.policy import OperatorLoggingPolicy, load_operator_policy
@@ -37,6 +37,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="do not append the draft metadata/hash to the capsule communication history",
     )
+    parser.add_argument(
+        "--tailor-model",
+        help="optional local Ollama model for advisory language tailoring (policy opt-in)",
+    )
+    parser.add_argument(
+        "--tailor-endpoint",
+        default="http://127.0.0.1:11434/api/generate",
+        help="local Ollama generate endpoint used for advisory tailoring",
+    )
     parser.add_argument("--output", type=Path, help="write JSON to a new mode-0600 file")
     args = parser.parse_args(argv)
 
@@ -52,6 +61,9 @@ def main(argv: list[str] | None = None) -> int:
             request["capsule_id"] = args.capsule_id
         else:
             request["incident_id"] = args.incident_id
+        if args.tailor_model:
+            request["tailor_model"] = args.tailor_model
+            request["tailor_endpoint"] = args.tailor_endpoint
         result = control_request(socket_path, request, timeout=30.0)
     else:
         if args.policy:
@@ -74,6 +86,16 @@ def main(argv: list[str] | None = None) -> int:
             capsule_policy=policy.capsules,
             record=not args.no_record,
         )
+        if args.tailor_model:
+            result = {
+                **result,
+                "tailoring": tailor_communication_draft(
+                    result,
+                    policy=policy.communications,
+                    model=args.tailor_model,
+                    endpoint=args.tailor_endpoint,
+                ),
+            }
         result = {
             "ok": True,
             "reviewable": True,

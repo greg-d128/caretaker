@@ -97,13 +97,16 @@ A new public policy field requires all of the following before the reviewed surf
 
 If any of those are intentionally deferred, the field must default to an inactive value and be entered in the explicit reserved-setting catalog. Recovery policy fields are reviewed with the same rule: the current defaults preserve deployed-code-only restart recovery, require authority revalidation, and reject candidate reactivation because that executor is not implemented yet.
 
-The current review generation is 11. It includes the optional
+The current review generation is 21. It includes the optional
 `lightweight.AdaptiveAggregationPolicy.aggregation_scope` field and the
 `transition_timeout_seconds` field. The scope is inactive by default, is
 validated when supplied, and only partitions supervisor evidence. The timeout
 is bounded to 1..86400 seconds, is captured in each supervisor Behavior
 transition request, and only governs expiry of incomplete acknowledgements.
-Neither field authorizes promotion, Repair, or policy changes.
+Neither field authorizes promotion, Repair, or policy changes. The current
+surface also reviews `logging.communications.llm_tailoring_enabled`, which is
+disabled by default and only permits bounded, advisory language suggestions
+for already redacted incident drafts.
 
 The aggregation policy also includes `backpressure_action`, which defaults to
 `RETAIN` for least-loss behavior and may be set to `DROP` or `REDUCE`. These

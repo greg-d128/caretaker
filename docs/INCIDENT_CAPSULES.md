@@ -93,6 +93,16 @@ idempotent. `--no-record` can be used for a purely review-only export. Records
 contain channel/audience/status and hashes rather than granting a delivery
 adapter authority.
 
+The optional `--tailor-model` argument asks a local Ollama model to suggest
+clearer wording for the already redacted draft. This requires
+`[logging.communications].llm_tailoring_enabled = true` and is disabled by
+default. Tailoring receives only the bounded draft projection, must return a
+single bounded body, and must preserve the draft and delivery caveats. The
+canonical draft is never replaced or rewritten; the response is returned as a
+separate advisory result with provider, model, prompt, evidence, and response
+hashes. Tailoring cannot authorize delivery, change policy, modify the capsule,
+approve Repair, or satisfy validation.
+
 The console's **Create review draft** action and the non-interactive
 `caretaker-incident-draft` command produce JSON suitable for local review or a
 mode-0600 new file:
@@ -177,7 +187,6 @@ never dispatches replay, changes a capsule, or changes Repair state.
 ## Remaining work
 
 Incident Capsules do not yet provide policy-specific capture levels for every
-application state source, LLM-assisted language tailoring, or communication
-delivery. VM replay with guest attestation and richer type-preserving
+application state source or communication delivery. VM replay with guest attestation and richer type-preserving
 rehydration remain future work. Existing replay is deliberately limited to
 bounded `JSON_EXACT` fixtures and an explicitly configured isolated backend.

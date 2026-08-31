@@ -28,7 +28,11 @@ from .adaptive_aggregation import (
     extended_aggregation_target_id,
     normalize_adaptive_observation_batch,
 )
-from .communications import generate_communication_draft, review_communication_draft
+from .communications import (
+    generate_communication_draft,
+    review_communication_draft,
+    tailor_communication_draft,
+)
 from .console_identity import ConsoleIdentityStore, normalize_console_public_identity
 from .behavior import (
     BehaviorSnapshotStore,
@@ -1947,6 +1951,25 @@ def main(argv: list[str] | None = None) -> int:
                 record=raw_record,
                 run_id=runtime.run_id,
             )
+            raw_tailor_model = request.get("tailor_model")
+            if raw_tailor_model is not None:
+                if not isinstance(raw_tailor_model, str) or not raw_tailor_model.strip():
+                    raise ValueError("incident-communication-draft tailor_model must be non-empty text")
+                raw_tailor_endpoint = request.get(
+                    "tailor_endpoint",
+                    "http://127.0.0.1:11434/api/generate",
+                )
+                if not isinstance(raw_tailor_endpoint, str) or not raw_tailor_endpoint.strip():
+                    raise ValueError("incident-communication-draft tailor_endpoint must be non-empty text")
+                result = {
+                    **result,
+                    "tailoring": tailor_communication_draft(
+                        result,
+                        policy=runtime.active_policy.communications,
+                        model=raw_tailor_model,
+                        endpoint=raw_tailor_endpoint,
+                    ),
+                }
             draft = result.get("draft") or {}
             recording = result.get("recording") or {}
             runtime.event(

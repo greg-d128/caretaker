@@ -1,5 +1,15 @@
 # Repair policies
 
+## Incident communication policy
+
+`IncidentCommunicationPolicy.llm_tailoring_enabled` defaults to `false`.
+When explicitly enabled, the non-interactive incident-draft command may send
+the already bounded and redacted draft projection to a loopback Ollama
+endpoint for language suggestions. The canonical draft remains the source of
+truth; model output is separate advisory evidence and cannot authorize
+delivery, change policy, modify a capsule, approve Repair, or satisfy
+validation. Remote provider endpoints remain rejected by the built-in client.
+
 Caretaker accepts a policy setting only when the running release can honor its semantics. See [`POLICY_SEMANTICS.md`](POLICY_SEMANTICS.md) for the policy-truthfulness rules, reviewed policy-surface fingerprint, and explicitly reserved settings.
 
 Authority-layer constraints can further restrict or deliberately override these settings. See [`POLICY_AUTHORITY.md`](POLICY_AUTHORITY.md) for supervisor-owned signed/unsigned authority stacks and runtime leases.
