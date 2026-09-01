@@ -2266,8 +2266,10 @@ projection available from `OperationContext` and can read common fields from
 family-specific or legacy mappings while ignoring unknown family fields. It
 does not change the existing context dictionary, signed bytes, or persisted
 schemas. Legacy readers, signature/hash compatibility fixtures, and any
-serialized-format migration remain future work; do not make this breaking
-cleanup a prerequisite for Application Caretaker operation.
+serialized-format migration remain future work. Compatibility regression tests
+pin the legacy operation-context fingerprint and verify that projecting Capsule
+provenance leaves its persisted bytes and integrity result unchanged. Do not
+make this breaking cleanup a prerequisite for Application Caretaker operation.
 
 #### 12. Make dependency reproducibility explicit without pinning users
 
