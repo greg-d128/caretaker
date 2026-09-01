@@ -58,6 +58,17 @@ and return transport provenance for the application to verify and admit. They
 do not call the registry, start a process, consume a replacement request, or
 turn queue access into worker authority.
 
+`CaretakerApplicationSupervisor.handle_worker_authority_queue_handoff()` and
+`handle_worker_replacement_queue_handoff()` provide the corresponding
+application-local admission boundary. They accept the typed handoff mapping,
+re-run the existing packet/request integrity and context checks, and apply the
+same single-use handoff or replacement gates as the control-socket path. The
+caller must supply the live worker PID that it derived from its queue/process
+binding; the queue-reported sender PID is returned as provenance only and is
+never used as the worker identity. These adapters still do not create or stop
+processes, and an application that cannot establish that binding must reject
+the handoff rather than substitute the untrusted transport metadata.
+
 The replacement handler provides the corresponding application-owned launch
 boundary. `spawn_worker(request)` receives the immutable replacement request
 and must return a positive process ID only after the application has started

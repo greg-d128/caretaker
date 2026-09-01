@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import signal
 import threading
@@ -39,6 +40,8 @@ from ..repair_recovery import (
     verify_comparison_worker_result,
     deserialize_recovery_authority_packet,
     deserialize_worker_replacement_request,
+    serialize_recovery_authority_packet,
+    serialize_worker_replacement_request,
     verify_recovery_authority_packet,
 )
 from .models import (
@@ -2528,6 +2531,97 @@ class CaretakerApplicationSupervisor:
             "authority_granted": False,
         }
 
+    def handle_worker_authority_queue_handoff(
+        self,
+        handoff: Mapping[str, Any],
+        *,
+        authoritative_worker_pid: int,
+        allowed_worker_kinds: set[WorkerKind] | frozenset[WorkerKind],
+        supervisor_time: datetime,
+        target_id: str,
+        generation_id: str,
+        code_hash: str,
+        policy_fingerprint: str,
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        allowed_capabilities: set[str] | frozenset[str] = frozenset(),
+        policy: RepairRecoveryPolicy | None = None,
+        acceptance_policy: WorkerAcceptancePolicy | None = None,
+    ) -> dict[str, Any]:
+        """Admit a typed queue handoff using application-owned identity.
+
+        ``QueueWorkerAuthorityPacketTransport.receive()`` returns evidence
+        decoded from an application-owned queue.  Queue access and its sender
+        PID are not authentication, so the embedding application must bind
+        the handoff to a live worker and provide that worker's authoritative
+        PID here.  The packet and handoff replay gates remain the same as the
+        local control-socket path.
+        """
+        if not isinstance(handoff, Mapping):
+            raise TypeError("worker authority queue handoff must be a mapping")
+        operation = handoff.get("operation")
+        if operation not in {"register", "refresh"}:
+            raise ValueError("worker authority queue handoff operation is invalid")
+        expected_fields = {
+            "operation",
+            "handoff_id",
+            "worker_kind",
+            "packet",
+            "transport_message_id",
+            "transport_sender_pid",
+        }
+        if operation == "refresh":
+            expected_fields.update({"worker_id", "process_start_id"})
+        if set(handoff) != expected_fields:
+            raise ValueError("worker authority queue handoff fields are invalid")
+        if (
+            isinstance(authoritative_worker_pid, bool)
+            or not isinstance(authoritative_worker_pid, int)
+            or authoritative_worker_pid <= 0
+        ):
+            raise ValueError("worker authority queue handoff requires a positive authoritative worker PID")
+        worker_kind = handoff.get("worker_kind")
+        if not isinstance(worker_kind, str) or not worker_kind.strip():
+            raise ValueError("worker authority queue handoff worker_kind is invalid")
+        packet = handoff.get("packet")
+        if not isinstance(packet, RecoveryAuthorityPacket):
+            raise ValueError("worker authority queue handoff packet is invalid")
+        try:
+            transport_value = json.loads(
+                serialize_recovery_authority_packet(packet).decode("utf-8")
+            )
+        except (TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("worker authority queue handoff packet is invalid") from exc
+        request: dict[str, Any] = {
+            "command": "worker-authority-packet",
+            "operation": operation,
+            "handoff_id": handoff.get("handoff_id"),
+            "worker_kind": worker_kind.strip(),
+            "packet": transport_value,
+        }
+        if operation == "refresh":
+            request["worker_id"] = handoff.get("worker_id")
+            request["process_start_id"] = handoff.get("process_start_id")
+        result = self.handle_worker_authority_packet(
+            request,
+            (authoritative_worker_pid, 0, 0),
+            allowed_worker_kinds=allowed_worker_kinds,
+            supervisor_time=supervisor_time,
+            target_id=target_id,
+            generation_id=generation_id,
+            code_hash=code_hash,
+            policy_fingerprint=policy_fingerprint,
+            authority_policy_generation=authority_policy_generation,
+            authority_policy_fingerprint=authority_policy_fingerprint,
+            allowed_capabilities=allowed_capabilities,
+            policy=policy,
+            acceptance_policy=acceptance_policy,
+        )
+        result["transport_message_id"] = handoff["transport_message_id"]
+        result["transport_sender_pid"] = handoff["transport_sender_pid"]
+        result["authoritative_worker_pid"] = authoritative_worker_pid
+        return result
+
     def handle_worker_replacement_packet(
         self,
         request: Mapping[str, Any],
@@ -2603,6 +2697,75 @@ class CaretakerApplicationSupervisor:
             "acceptance_state": replacement.acceptance_state.name,
             "authority_granted": False,
         }
+
+    def handle_worker_replacement_queue_handoff(
+        self,
+        handoff: Mapping[str, Any],
+        *,
+        authoritative_worker_pid: int,
+        allowed_worker_kinds: set[WorkerKind] | frozenset[WorkerKind],
+        supervisor_time: datetime,
+        target_id: str,
+        generation_id: str,
+        code_hash: str,
+        policy_fingerprint: str,
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        allowed_capabilities: set[str] | frozenset[str] = frozenset(),
+        policy: RepairRecoveryPolicy | None = None,
+        acceptance_policy: WorkerAcceptancePolicy | None = None,
+    ) -> dict[str, Any]:
+        """Admit a typed replacement queue handoff with bound process identity.
+
+        The application supplies the live replacement PID after associating it
+        with its queue binding.  The queue-reported sender PID is retained as
+        provenance only and is never used as the worker identity.
+        """
+        if not isinstance(handoff, Mapping):
+            raise TypeError("worker replacement queue handoff must be a mapping")
+        if set(handoff) != {
+            "request",
+            "transport_message_id",
+            "transport_sender_pid",
+        }:
+            raise ValueError("worker replacement queue handoff fields are invalid")
+        if (
+            isinstance(authoritative_worker_pid, bool)
+            or not isinstance(authoritative_worker_pid, int)
+            or authoritative_worker_pid <= 0
+        ):
+            raise ValueError("worker replacement queue handoff requires a positive authoritative worker PID")
+        request_value = handoff.get("request")
+        if not isinstance(request_value, WorkerReplacementRequest):
+            raise ValueError("worker replacement queue handoff request is invalid")
+        try:
+            transport_value = json.loads(
+                serialize_worker_replacement_request(request_value).decode("utf-8")
+            )
+        except (TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("worker replacement queue handoff request is invalid") from exc
+        result = self.handle_worker_replacement_packet(
+            {
+                "command": "worker-replacement-packet",
+                "replacement": transport_value,
+            },
+            (authoritative_worker_pid, 0, 0),
+            allowed_worker_kinds=allowed_worker_kinds,
+            supervisor_time=supervisor_time,
+            target_id=target_id,
+            generation_id=generation_id,
+            code_hash=code_hash,
+            policy_fingerprint=policy_fingerprint,
+            authority_policy_generation=authority_policy_generation,
+            authority_policy_fingerprint=authority_policy_fingerprint,
+            allowed_capabilities=allowed_capabilities,
+            policy=policy,
+            acceptance_policy=acceptance_policy,
+        )
+        result["transport_message_id"] = handoff["transport_message_id"]
+        result["transport_sender_pid"] = handoff["transport_sender_pid"]
+        result["authoritative_worker_pid"] = authoritative_worker_pid
+        return result
 
     def monitor_application(self, *, interval_seconds: float = 1.0) -> None:
         while not self._stop.wait(interval_seconds):

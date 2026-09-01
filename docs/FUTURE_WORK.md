@@ -1378,6 +1378,14 @@ Typed `QueueWorkerAuthorityPacketTransport` and
 handoffs, while leaving live-context validation, registry admission, and
 process lifecycle effects to the application and supervisor.
 
+The supervisor now provides application-local queue admission adapters for
+those typed handoffs. They bind receipt to an application-supplied live worker
+PID, reuse the control-socket packet/request gates, preserve single-use replay
+protection, and expose the queue sender PID only as provenance. Queue access
+still does not authenticate a process or create one; cross-host
+authentication, durable replay state, and deployment-specific process
+orchestration remain future work.
+
 The registry also supports `refresh_authorized()` for a live worker that needs
 to reacquire an expiring approval packet. Refresh requires the worker to remain
 authorized and unexpired, verifies the replacement packet against the current

@@ -160,6 +160,145 @@ def test_queue_worker_replacement_transport_round_trips_request() -> None:
     assert handoff["transport_sender_pid"] == os.getpid()
 
 
+def test_supervisor_admits_authority_queue_handoff_with_application_bound_pid() -> None:
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    supervisor = supervisor_module.CaretakerApplicationSupervisor(object())
+    packet = _packet(supervisor_time=supervisor_time)
+    transport = QueueWorkerAuthorityPacketTransport(queue.Queue())
+    transport.send(
+        packet,
+        operation="register",
+        handoff_id=uuid4(),
+        worker_kind=WorkerKind.REPAIR_ANALYZER.name,
+    )
+    handoff = transport.receive()
+    assert handoff is not None
+    handoff["transport_sender_pid"] = os.getpid() + 1
+
+    response = supervisor.handle_worker_authority_queue_handoff(
+        handoff,
+        authoritative_worker_pid=4321,
+        allowed_worker_kinds={WorkerKind.REPAIR_ANALYZER},
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+    )
+
+    assert response["ok"] is True
+    assert response["process_id"] == 4321
+    assert response["authoritative_worker_pid"] == 4321
+    assert response["transport_sender_pid"] == os.getpid() + 1
+    worker = supervisor.workers.get(UUID(response["worker_id"]))
+    assert worker.process_id == 4321
+    assert worker.authority_packet_id == packet.packet_id
+
+    refreshed_time = supervisor_time + timedelta(seconds=60)
+    refreshed_packet = create_recovery_authority_packet(
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-9",
+        authority_policy_fingerprint="authority-hash-new",
+        capabilities=("observe",),
+        supervisor_time=refreshed_time,
+    )
+    transport.send(
+        refreshed_packet,
+        operation="refresh",
+        handoff_id=uuid4(),
+        worker_kind=WorkerKind.REPAIR_ANALYZER.name,
+        worker_id=worker.worker_id,
+        process_start_id=worker.process_start_id,
+    )
+    refresh_handoff = transport.receive()
+    assert refresh_handoff is not None
+    refresh_response = supervisor.handle_worker_authority_queue_handoff(
+        refresh_handoff,
+        authoritative_worker_pid=4321,
+        allowed_worker_kinds={WorkerKind.REPAIR_ANALYZER},
+        supervisor_time=refreshed_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-9",
+        authority_policy_fingerprint="authority-hash-new",
+        allowed_capabilities={"observe"},
+    )
+
+    assert refresh_response["ok"] is True
+    assert refresh_response["operation"] == "refresh"
+    assert refresh_response["worker_id"] == str(worker.worker_id)
+    assert supervisor.workers.get(worker.worker_id).authority_packet_id == refreshed_packet.packet_id
+
+
+def test_supervisor_admits_replacement_queue_handoff_with_application_bound_pid() -> None:
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    supervisor = supervisor_module.CaretakerApplicationSupervisor(object())
+    original = supervisor.workers.register(WorkerKind.REPAIR_ANALYZER, 4321)
+    supervisor.workers.mark_failed(original.worker_id, error_fingerprint="worker-crash")
+    request = supervisor.workers.prepare_replacement(
+        original.worker_id,
+        _packet(supervisor_time=supervisor_time),
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+    )
+    transport = QueueWorkerReplacementRequestTransport(queue.Queue())
+    transport.send(request)
+    handoff = transport.receive()
+    assert handoff is not None
+    handoff["transport_sender_pid"] = os.getpid() + 1
+
+    response = supervisor.handle_worker_replacement_queue_handoff(
+        handoff,
+        authoritative_worker_pid=8765,
+        allowed_worker_kinds={WorkerKind.REPAIR_ANALYZER},
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+    )
+
+    assert response["ok"] is True
+    assert response["process_id"] == 8765
+    assert response["authoritative_worker_pid"] == 8765
+    assert response["transport_sender_pid"] == os.getpid() + 1
+    replacement = supervisor.workers.get(UUID(response["worker_id"]))
+    assert replacement.process_id == 8765
+    assert replacement.replaced_worker_id == original.worker_id
+
+    with pytest.raises(PermissionError, match="already been consumed"):
+        supervisor.handle_worker_replacement_queue_handoff(
+            handoff,
+            authoritative_worker_pid=9999,
+            allowed_worker_kinds={WorkerKind.REPAIR_ANALYZER},
+            supervisor_time=supervisor_time,
+            target_id="app:charge",
+            generation_id="generation-7",
+            code_hash="code-hash",
+            policy_fingerprint="policy-hash",
+            authority_policy_generation="authority-8",
+            authority_policy_fingerprint="authority-hash",
+            allowed_capabilities={"observe"},
+        )
+
+
 def test_transported_authority_admission_binds_peer_and_rejects_replay() -> None:
     registry = WorkerRegistry()
     supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
