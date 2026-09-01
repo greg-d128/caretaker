@@ -1819,6 +1819,42 @@ class CaretakerConsoleApp(App):
             "policy still gate retry and shadow execution.",
         )
 
+    @staticmethod
+    def _shadow_eligibility_lines(value: Any) -> tuple[str, ...]:
+        if not isinstance(value, Mapping):
+            return (
+                "[b]Observed side-effect assessment[/b]",
+                "Unavailable; no shadow safety decision was inferred.",
+            )
+        if "eligible" not in value:
+            return (
+                "[b]Observed side-effect assessment[/b]",
+                f"{value.get('status') or 'UNAVAILABLE'}: "
+                f"{value.get('reason') or 'assessment unavailable'}",
+            )
+        eligible = bool(value.get("eligible"))
+        status = "ELIGIBLE" if eligible else (
+            "ISOLATION_REQUIRED" if value.get("requires_isolation") else "NOT_ELIGIBLE"
+        )
+        effects = value.get("observed_effects")
+        effects_text = (
+            ", ".join(str(item) for item in effects)
+            if isinstance(effects, (list, tuple)) and effects
+            else "none retained"
+        )
+        external = value.get("observed_external_effects")
+        external_text = (
+            ", ".join(str(item) for item in external)
+            if isinstance(external, (list, tuple)) and external
+            else "none retained"
+        )
+        return (
+            "[b]Observed side-effect assessment[/b]",
+            f"Status: {status}; evidence complete: {'yes' if value.get('evidence_complete') else 'no'}",
+            f"Observed effects: {effects_text}; externally visible: {external_text}",
+            f"Reason: {value.get('reason') or 'not provided'}",
+        )
+
     @classmethod
     def _observation_display(cls, value: Any, slot_role: Any = None) -> str:
         level = cls._enum_name(value)
@@ -2802,6 +2838,16 @@ class CaretakerConsoleApp(App):
             if not isinstance(contract, Mapping):
                 contract = target_record.get("execution_contract")
             details.write("\n" + "\n".join(self._execution_contract_lines(contract)))
+            details.write(
+                "\n"
+                + "\n".join(
+                    self._shadow_eligibility_lines(
+                        state.get("shadow_eligibility")
+                        if isinstance(state, Mapping)
+                        else None
+                    )
+                )
+            )
             details.write("\n[b]Technical state and effective policy[/b]")
             details.write(json.dumps(
                 {"state": state.get("state"), "policy": policy.get("policy")},

@@ -118,6 +118,10 @@ operator projections can show the duplicate-execution boundary alongside the
 candidate lifecycle. The Console target detail renders these fields as a
 declared contract and reminds the operator that the declaration is not proof:
 observed effects and the active policy still gate retry and shadow execution.
+When Guard evidence is available, the same read-only target detail also shows
+the conservative shadow-eligibility assessment, retained effect categories,
+and whether the evidence is complete. An incomplete assessment is never shown
+as proof that duplicate execution is safe.
 
 ## Original-authoritative shadow execution
 

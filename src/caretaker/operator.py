@@ -345,12 +345,33 @@ class OperatorRuntimeRegistry:
     def target_state(self, target_id: str) -> dict[str, Any]:
         engine = self._repair_engine_for_target(target_id)
         target = engine.registry.get(target_id)
+        try:
+            guard = self._guard_engine_for_target(target_id)
+            shadow_eligibility = _jsonable(
+                guard.assess_shadow_eligibility(
+                    target_id,
+                    target.execution_contract,
+                )
+            )
+        except KeyError:
+            shadow_eligibility = {
+                "status": "NOT_ASSESSED",
+                "reason": "Guard is not registered for this target",
+            }
+        except Exception:
+            # Operator inspection must remain available when an optional Guard
+            # evidence cache is unavailable; absence is not a safety approval.
+            shadow_eligibility = {
+                "status": "UNAVAILABLE",
+                "reason": "Guard effect assessment was unavailable",
+            }
         return {
             "target_id": target_id,
             "slot": _jsonable(target.slot.snapshot()),
             "support": _jsonable(target.support),
             "registered_cases": _jsonable(target.registered_cases),
             "tags": sorted(target.tags),
+            "shadow_eligibility": shadow_eligibility,
         }
 
     def target_policy(self, target_id: str) -> dict[str, Any]:

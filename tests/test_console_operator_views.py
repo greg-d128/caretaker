@@ -182,6 +182,19 @@ def test_target_detail_contract_projection_is_conservative() -> None:
     assert CaretakerConsoleApp._execution_contract_lines(None)[1].startswith(
         "Unavailable for this target"
     )
+    assert CaretakerConsoleApp._shadow_eligibility_lines({
+        "eligible": False,
+        "requires_isolation": True,
+        "reason": "effect observation is incomplete",
+        "observed_effects": ["filesystem"],
+        "observed_external_effects": ["filesystem"],
+        "evidence_complete": False,
+    }) == (
+        "[b]Observed side-effect assessment[/b]",
+        "Status: ISOLATION_REQUIRED; evidence complete: no",
+        "Observed effects: filesystem; externally visible: filesystem",
+        "Reason: effect observation is incomplete",
+    )
 
 
 def test_repair_source_extracts_pending_approval_source():

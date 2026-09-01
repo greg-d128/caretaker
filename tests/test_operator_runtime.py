@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from caretaker import GuardBinding, RepairAuthority, RepairEngine, RepairMode, RepairPolicy
+from caretaker import (
+    FunctionExecutionContract,
+    GuardBinding,
+    RepairAuthority,
+    RepairEngine,
+    RepairMode,
+    RepairPolicy,
+    SideEffectClass,
+)
 from caretaker.guard import GuardEngine
 from caretaker.operator import OperatorRuntimeRegistry
 from caretaker.registry import build_target
@@ -48,6 +56,34 @@ def test_operator_registry_exposes_repair_and_guard_targets():
         "side_effects": "UNKNOWN",
         "retry_safety": "UNKNOWN",
     }
+
+
+def test_operator_target_state_exposes_conservative_shadow_assessment():
+    registry = OperatorRuntimeRegistry()
+    guard = GuardEngine()
+    engine = RepairEngine(guard=guard)
+    target = build_target(
+        lambda value: value + 1,
+        target_id="test.operator.shadow",
+        policy=RepairPolicy(
+            mode=RepairMode.DIAGNOSE,
+            authority=RepairAuthority.ANALYZE_ONLY,
+            guard=GuardBinding(enabled=True),
+        ),
+        execution_contract=FunctionExecutionContract(
+            side_effects=SideEffectClass.READ_ONLY,
+        ),
+    )
+    engine.register(target)
+    registry.register_repair_engine(engine)
+    registry.register_guard_engine(guard)
+
+    assessment = registry.target_state(target.target_id)["shadow_eligibility"]
+
+    assert assessment["eligible"] is False
+    assert assessment["requires_isolation"] is True
+    assert assessment["evidence_complete"] is False
+    assert "incomplete" in assessment["reason"]
 
 
 def test_unsupervised_behavior_capture_emits_local_audit_evidence(monkeypatch):
