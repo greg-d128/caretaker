@@ -15,6 +15,8 @@
   minimum samples and sigma thresholds, including console visibility.
 - Document the remaining fleet, deployment, external-assurance, and Crucible
   boundaries explicitly for the pre-version-1 release.
+- Record the supported interpreter matrix and a release-verification dependency
+  constraints snapshot without pinning library consumers.
 
 ## 0.6.1
 

@@ -50,6 +50,7 @@ Caretaker is active research software. These documents describe current design i
 ## Planning and releases
 
 - `FUTURE_WORK.md`
+- `DEPENDENCY_REPRODUCIBILITY.md` — supported interpreter matrix and release verification constraints
 - `INTERACTIVE_ISOLATION_TESTING.md` — controlled interactive isolation experiments
 - `../MIGRATION.md`
 - `../CHANGELOG.md`

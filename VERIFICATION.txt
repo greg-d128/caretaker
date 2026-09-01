@@ -17,11 +17,11 @@ Environment used for this review
 --------------------------------
 Python: 3.14.4 (review environment; declared support is CPython 3.11-3.14)
 Platform: Linux workspace; full run allowed normal GnuPG-agent and Unix-socket access
-Command: make check
+Commands: PYTHONPATH=src venv/bin/python -m pytest -q; venv/bin/python -m build; git diff --check
 
 Observed result
 ---------------
-- 929 passed;
+- 961 passed;
 - no unexpected test failures;
 - source, test, example, and script compilation succeeded.
 
@@ -29,6 +29,8 @@ The complete run included GnuPG key/signature tests and Unix-domain logging and
 control-socket tests. Forgejo CI is configured to run the suite on ordinary Linux
 for CPython 3.11, 3.12, and 3.13; this local review used the additionally
 supported Python 3.14 and supplements rather than replaces the CI matrix.
+The exact Python 3.14.4 development and release-tool environment is recorded
+in `constraints/caretaker-0.6.5a-py3.14.txt`.
 
 Known assurance debt
 ------------------------------

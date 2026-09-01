@@ -2255,12 +2255,17 @@ cleanup a prerequisite for Application Caretaker operation.
 
 #### 12. Make dependency reproducibility explicit without pinning users
 
+**Status: Implemented in development tree for the current application scope.**
+
 Keep library-friendly dependency lower bounds in `pyproject.toml`, but record a
-tested Python/dependency matrix and a release constraints/lock artifact for
-reproducible source and wheel verification. Periodically test compatibility
-with newer dependency versions and tie release evidence to the exact resolved
-environment. Do not impose runtime pins or add a dependency manager without a
-demonstrated need.
+tested Python/dependency matrix and a release constraints snapshot for
+reproducible source and wheel verification. `docs/DEPENDENCY_REPRODUCIBILITY.md`
+documents the supported interpreter matrix, the verified Python 3.14.4
+environment, the refresh procedure, and the separation between release
+constraints and user-facing runtime lower bounds. Periodically test
+compatibility with newer dependency versions and tie release evidence to the
+exact resolved environment. Do not impose runtime pins or add a dependency
+manager without a demonstrated need.
 
 ### Implementation gates
 
