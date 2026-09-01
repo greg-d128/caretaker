@@ -607,9 +607,9 @@ class RemoteAuditStream:
     """Output-only bridge from an application process to its supervisor.
 
     The supervised application must not own or open the audit file.  This
-    bridge therefore exposes only the validation-decision submission used by
-    the application validation boundary; the supervisor remains responsible
-    for identity binding, event construction, and persistence.
+    bridge therefore exposes only the explicitly allow-listed validation and
+    adaptive-backpressure submissions; the supervisor remains responsible for
+    identity binding, event construction, and persistence.
     """
 
     def __init__(self, socket_path: str | Path | None, *, timeout: float = 5.0) -> None:
@@ -628,16 +628,19 @@ class RemoteAuditStream:
         priority: EvidencePriority = EvidencePriority.IMPORTANT,
         **_ignored: Any,
     ) -> dict[str, Any] | None:
-        """Submit one bounded validation event, or remain disabled unsupervised.
+        """Submit one bounded worker audit event, or remain disabled unsupervised.
 
         ``actor`` is deliberately ignored.  The supervisor derives it from
         authenticated peer credentials.  Other fields are treated as worker
         evidence and are validated again by the supervisor before persistence.
         """
-        if event_type != "VALIDATION_DECISION":
+        if event_type not in {
+            "VALIDATION_DECISION",
+            "ADAPTIVE_AGGREGATION_BACKPRESSURE",
+        }:
             raise AuditStreamError(
                 "supervised application audit transport permits only "
-                "VALIDATION_DECISION"
+                "VALIDATION_DECISION or ADAPTIVE_AGGREGATION_BACKPRESSURE"
             )
         if not self.socket_path:
             return None
@@ -646,12 +649,20 @@ class RemoteAuditStream:
         from .ipc import control_request
 
         request = {
-            "command": "audit-validation-decision",
+            "command": (
+                "audit-validation-decision"
+                if event_type == "VALIDATION_DECISION"
+                else "audit-adaptive-backpressure"
+            ),
             "scope": dict(scope or {}),
             "policy": dict(policy or {}),
             "outcome": dict(outcome or {}),
             "details": dict(details or {}),
-            "priority": priority.name,
+            "priority": (
+                priority.name
+                if event_type == "VALIDATION_DECISION"
+                else EvidencePriority.CRITICAL.name
+            ),
         }
         try:
             response = control_request(

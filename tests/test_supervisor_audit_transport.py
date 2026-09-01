@@ -11,6 +11,7 @@ from caretaker.run import (
     _handle_console_invocation_event,
     _handle_console_identity_request,
     _emit_behavior_collection_audit,
+    _handle_adaptive_backpressure_audit_submission,
     _handle_validation_audit_submission,
 )
 
@@ -48,6 +49,37 @@ def _request() -> dict[str, object]:
             "risk_finding_count": 0,
             "hard_disqualification_count": 0,
             "review_required_finding_count": 0,
+        },
+    }
+
+
+def _backpressure_request() -> dict[str, object]:
+    return {
+        "command": "audit-adaptive-backpressure",
+        "scope": {
+            "target_id": "demo.target",
+            "aggregation_scope": "checkout:premium",
+            "generation_id": "generation-1",
+            "batch_id": str(uuid4()),
+        },
+        "policy": {
+            "fingerprint": "sha256:worker-policy",
+            "authority_generation": 4,
+            "authority_fingerprint": "sha256:worker-authority",
+        },
+        "outcome": {
+            "state": "INCIDENT_RECORDED",
+            "incident_recorded": True,
+            "authority_granted": False,
+        },
+        "details": {
+            "action": "INCIDENT",
+            "pending_records": 4,
+            "sequence_start": 10,
+            "sequence_end": 13,
+            "incident_id": "incident-1",
+            "error": "queue full",
+            "authority_granted": False,
         },
     }
 
@@ -120,6 +152,80 @@ def test_supervisor_rejects_nested_or_unknown_worker_audit_fields():
         )
 
 
+def test_supervisor_binds_backpressure_audit_and_forces_critical_priority():
+    audit = _Audit()
+    runtime = _runtime(audit)
+    response = _handle_adaptive_backpressure_audit_submission(
+        runtime,
+        _backpressure_request(),
+        (4321, 1000, 1000),
+        SimpleNamespace(pid=4321, poll=lambda: None),
+    )
+
+    assert response == {
+        "ok": True,
+        "recorded": True,
+        "event_id": "event-1",
+        "stream_sequence": 8,
+    }
+    call = audit.calls[0]
+    assert call["event_type"] == "ADAPTIVE_AGGREGATION_BACKPRESSURE"
+    assert call["actor"] == {"type": "worker", "id": "pid:4321", "uid": 1000}
+    assert call["policy"] == {
+        "policy_id": str(runtime.snapshot.snapshot_id),
+        "fingerprint": "sha256:audit-policy",
+        "authority_generation": 9,
+    }
+    assert call["scope"]["target_id"] == "demo.target"
+    assert call["details"]["reported_policy_fingerprint"] == "sha256:worker-policy"
+    assert call["details"]["reported_authority_generation"] == 4
+    assert call["details"]["worker_pid"] == 4321
+    assert call["priority"] is EvidencePriority.CRITICAL
+
+
+def test_supervisor_rejects_unauthorized_backpressure_audit_claims():
+    request = _backpressure_request()
+    request["outcome"] = {
+        "state": "INCIDENT_RECORDED",
+        "incident_recorded": True,
+        "authority_granted": True,
+    }
+    with pytest.raises(ValueError, match="cannot grant authority"):
+        _handle_adaptive_backpressure_audit_submission(
+            _runtime(_Audit()),
+            request,
+            (4321, 1000, 1000),
+            SimpleNamespace(pid=4321, poll=lambda: None),
+        )
+
+
+def test_supervisor_rejects_invalid_backpressure_audit_shape():
+    request = _backpressure_request()
+    request["details"] = {
+        "action": "INCIDENT",
+        "pending_records": {"secret": "do not persist"},
+        "sequence_start": 1,
+        "sequence_end": 1,
+    }
+    with pytest.raises(ValueError, match="must be a scalar"):
+        _handle_adaptive_backpressure_audit_submission(
+            _runtime(_Audit()),
+            request,
+            (4321, 1000, 1000),
+            SimpleNamespace(pid=4321, poll=lambda: None),
+        )
+
+
+def test_supervisor_rejects_non_application_peer_for_backpressure_audit():
+    with pytest.raises(PermissionError, match="not from the application worker"):
+        _handle_adaptive_backpressure_audit_submission(
+            _runtime(_Audit()),
+            _backpressure_request(),
+            (9999, 1000, 1000),
+            SimpleNamespace(pid=4321, poll=lambda: None),
+        )
+
+
 def test_behavior_collection_audit_is_bounded_and_authority_free():
     audit = _Audit()
     runtime = _runtime(audit)
@@ -181,7 +287,7 @@ def test_behavior_collection_audit_is_bounded_and_authority_free():
     assert automatic_call["details"]["snapshot_id"]
 
 
-def test_remote_audit_stream_only_allows_validation_decisions(monkeypatch):
+def test_remote_audit_stream_only_allows_allow_listed_worker_events(monkeypatch):
     calls = []
 
     def fake_control_request(path, request, *, timeout):
@@ -205,7 +311,17 @@ def test_remote_audit_stream_only_allows_validation_decisions(monkeypatch):
     ) == {"event_id": "event-1", "stream_sequence": 2}
     assert calls[0][1]["command"] == "audit-validation-decision"
     assert "actor" not in calls[0][1]
-    with pytest.raises(AuditStreamError, match="only VALIDATION_DECISION"):
+    assert stream.emit(
+        "ADAPTIVE_AGGREGATION_BACKPRESSURE",
+        scope={"target_id": "demo.target", "batch_id": "batch-1"},
+        policy={"fingerprint": "sha256:worker"},
+        outcome={"state": "RETAINED", "authority_granted": False},
+        details={"action": "RETAIN", "pending_records": 1, "sequence_start": 1, "sequence_end": 1},
+        priority=EvidencePriority.IMPORTANT,
+    ) == {"event_id": "event-1", "stream_sequence": 2}
+    assert calls[1][1]["command"] == "audit-adaptive-backpressure"
+    assert calls[1][1]["priority"] == EvidencePriority.CRITICAL.name
+    with pytest.raises(AuditStreamError, match="only VALIDATION_DECISION or ADAPTIVE_AGGREGATION_BACKPRESSURE"):
         stream.emit("POLICY_APPLIED", priority=EvidencePriority.CRITICAL)
 
 

@@ -191,8 +191,14 @@ bounded `ADAPTIVE_AGGREGATION_BACKPRESSURE` envelope to an application-owned
 output-only audit callback for the pending episode. The adapter that persists
 `caretaker_audit.log` must assign the event's critical priority and preserve
 the usual hash-chain and delivery policy; callback failure is exposed in the
-batcher status and cannot change application behavior. Parallel stores and
-transport-level throttling remain future integrations.
+batcher status and cannot change application behavior. In a supervised run,
+`RemoteAuditStream` forwards this bounded envelope through the control socket.
+The supervisor accepts it only from the live application PID, derives the
+actor from peer credentials, records the current supervisor policy context,
+retains worker policy values as reported evidence, and forces critical
+priority. The path is output-only and rejects unknown or nested fields and
+any authority-granting claim. Parallel stores and transport-level throttling
+remain future integrations.
 
 The supervisor can also persist a delayed `ADAPTIVE_THRESHOLD_PROPOSAL` for a
 bounded set of threshold fields. The proposal records the requested changes,

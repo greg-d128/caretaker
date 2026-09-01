@@ -141,6 +141,16 @@ scopes are never merged. The report may identify `COMPARABLE`,
 aggregate, policy, Guard baseline, Repair state, or authority. The Adaptive
 console exposes the same operation as **Compare populations**.
 
+When adaptive batching runs inside the supervised application, its bounded
+`ADAPTIVE_AGGREGATION_BACKPRESSURE` audit envelope may be sent through the
+child control socket with `audit-adaptive-backpressure`. The supervisor accepts
+this output-only submission only from the live application PID, derives the
+actor from authenticated peer credentials, records the current supervisor
+policy and authority context, and forces `CRITICAL` audit priority. Worker
+policy values are retained only as reported evidence. Unknown or nested fields
+and any authority-granting claim are rejected; the request cannot alter the
+batch, incident, policy, or authority state.
+
 Replacement probation and acceptance counters are policy resolved. The default
 guideline is 1,000 successful executions for each stage with no permitted
 failures; a target-specific override may explicitly change those counters.

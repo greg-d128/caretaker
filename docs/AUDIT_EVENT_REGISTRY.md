@@ -166,6 +166,13 @@ authenticated console request and records only request metadata, generation
 identifiers, snapshot references, counts, duration, and outcome; snapshot
 contents remain in the behavior evidence store. A failed, cancelled, deferred, or unavailable
 collection is recorded as evidence and does not change policy or authority.
+Adaptive backpressure may use the same supervised output-only path through
+`audit-adaptive-backpressure`. Its bounded payload is accepted only from the
+live application PID; the supervisor derives the worker actor, replaces the
+policy envelope with current supervisor context, preserves worker policy
+values as reported evidence, and forces `CRITICAL` priority. The handler
+rejects unknown or nested fields and authority-granting claims before the
+record is emitted.
 In an unsupervised local runtime, the operator registry uses the same bounded
 projection with a `caretaker` actor; it never attempts to use the supervised
 control-socket path.

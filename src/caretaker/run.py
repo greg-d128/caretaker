@@ -124,6 +124,19 @@ _VALIDATION_AUDIT_DETAIL_FIELDS = frozenset({
     "risk_finding_count", "hard_disqualification_count",
     "review_required_finding_count",
 })
+_ADAPTIVE_BACKPRESSURE_AUDIT_SCOPE_FIELDS = frozenset({
+    "target_id", "aggregation_scope", "generation_id", "batch_id",
+})
+_ADAPTIVE_BACKPRESSURE_AUDIT_POLICY_FIELDS = frozenset({
+    "fingerprint", "authority_generation", "authority_fingerprint",
+})
+_ADAPTIVE_BACKPRESSURE_AUDIT_OUTCOME_FIELDS = frozenset({
+    "state", "incident_recorded", "authority_granted",
+})
+_ADAPTIVE_BACKPRESSURE_AUDIT_DETAIL_FIELDS = frozenset({
+    "action", "pending_records", "sequence_start", "sequence_end",
+    "incident_id", "error", "authority_granted",
+})
 
 
 def _emit_adaptive_policy_transition_audit(
@@ -1005,6 +1018,121 @@ def _handle_validation_audit_submission(
     }
 
 
+def _handle_adaptive_backpressure_audit_submission(
+    runtime: Any,
+    request: Mapping[str, Any],
+    credentials: tuple[int, int, int],
+    child: Any,
+) -> dict[str, Any]:
+    """Persist one bounded adaptive backpressure event from the app child.
+
+    The application may report what happened, but the supervisor owns the
+    authenticated actor, current policy context, and critical priority. This
+    is an output-only path: it records evidence and cannot mutate aggregation,
+    policy, authority, or incident state.
+    """
+    if child is None or child.poll() is not None:
+        raise PermissionError("application worker is not running")
+    if credentials[0] != child.pid:
+        raise PermissionError(
+            "adaptive backpressure audit submission is not from the application worker"
+        )
+    scope = _bounded_validation_audit_fields(
+        request.get("scope"),
+        allowed=_ADAPTIVE_BACKPRESSURE_AUDIT_SCOPE_FIELDS,
+        label="adaptive backpressure audit scope",
+    )
+    worker_policy = _bounded_validation_audit_fields(
+        request.get("policy"),
+        allowed=_ADAPTIVE_BACKPRESSURE_AUDIT_POLICY_FIELDS,
+        label="adaptive backpressure audit policy",
+    )
+    outcome = _bounded_validation_audit_fields(
+        request.get("outcome"),
+        allowed=_ADAPTIVE_BACKPRESSURE_AUDIT_OUTCOME_FIELDS,
+        label="adaptive backpressure audit outcome",
+    )
+    details = _bounded_validation_audit_fields(
+        request.get("details"),
+        allowed=_ADAPTIVE_BACKPRESSURE_AUDIT_DETAIL_FIELDS,
+        label="adaptive backpressure audit details",
+    )
+    if not isinstance(scope.get("target_id"), str) or not scope["target_id"]:
+        raise ValueError("adaptive backpressure audit scope requires target_id")
+    if not isinstance(scope.get("batch_id"), str) or not scope["batch_id"]:
+        raise ValueError("adaptive backpressure audit scope requires batch_id")
+    if not isinstance(outcome.get("state"), str) or not outcome["state"]:
+        raise ValueError("adaptive backpressure audit outcome requires state")
+    if "incident_recorded" in outcome and not isinstance(
+        outcome["incident_recorded"], bool
+    ):
+        raise ValueError(
+            "adaptive backpressure audit outcome incident_recorded must be boolean"
+        )
+    if outcome.get("authority_granted") is not False:
+        raise ValueError(
+            "adaptive backpressure audit outcome cannot grant authority"
+        )
+    if "authority_granted" in details and details["authority_granted"] is not False:
+        raise ValueError(
+            "adaptive backpressure audit details cannot grant authority"
+        )
+    if not isinstance(details.get("action"), str) or not details["action"]:
+        raise ValueError("adaptive backpressure audit details requires action")
+    for field in ("pending_records", "sequence_start", "sequence_end"):
+        value = details.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(
+                f"adaptive backpressure audit details requires non-negative {field}"
+            )
+    if details["sequence_end"] < details["sequence_start"]:
+        raise ValueError(
+            "adaptive backpressure audit details sequence range is invalid"
+        )
+    for field in ("fingerprint", "authority_fingerprint"):
+        if field in worker_policy and (
+            not isinstance(worker_policy[field], str) or not worker_policy[field]
+        ):
+            raise ValueError(
+                f"adaptive backpressure audit policy requires non-empty {field}"
+            )
+    if "authority_generation" in worker_policy:
+        value = worker_policy["authority_generation"]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(
+                "adaptive backpressure audit policy authority_generation must be non-negative"
+            )
+    details.update({
+        "reported_policy_fingerprint": worker_policy.get("fingerprint"),
+        "reported_authority_generation": worker_policy.get("authority_generation"),
+        "reported_authority_fingerprint": worker_policy.get("authority_fingerprint"),
+        "worker_pid": credentials[0],
+    })
+    audit_event = runtime.audit.emit(
+        "ADAPTIVE_AGGREGATION_BACKPRESSURE",
+        actor={
+            "type": "worker",
+            "id": f"pid:{credentials[0]}",
+            "uid": credentials[1],
+        },
+        scope=scope,
+        policy={
+            "policy_id": str(runtime.snapshot.snapshot_id),
+            "fingerprint": runtime.snapshot.content_hash,
+            "authority_generation": runtime.effective.generation,
+        },
+        outcome=outcome,
+        details=details,
+        priority=EvidencePriority.CRITICAL,
+    )
+    return {
+        "ok": True,
+        "recorded": audit_event is not None,
+        "event_id": audit_event.get("event_id") if audit_event else None,
+        "stream_sequence": audit_event.get("stream_sequence") if audit_event else None,
+    }
+
+
 def _adaptive_threshold_policy_settings(
     changes: Mapping[str, Any], *, target_id: str
 ) -> tuple[PolicySetting, ...]:
@@ -1568,6 +1696,13 @@ def main(argv: list[str] | None = None) -> int:
             )
         if command == "audit-validation-decision":
             return _handle_validation_audit_submission(
+                runtime,
+                request,
+                credentials,
+                child_holder.get("child"),
+            )
+        if command == "audit-adaptive-backpressure":
+            return _handle_adaptive_backpressure_audit_submission(
                 runtime,
                 request,
                 credentials,
