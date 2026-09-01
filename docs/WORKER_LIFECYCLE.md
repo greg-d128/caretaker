@@ -21,6 +21,15 @@ idempotent and does not create a replacement or grant a new packet; deliberate
 replacement still requires the existing policy and application-owned process
 callback path.
 
+`CaretakerApplicationSupervisor.run_control_cycle()` exposes the same bounded
+one-shot operation used by `monitor_application()`. After expiry
+reconciliation and the supervisor heartbeat, it invokes an optional
+application-owned callback with the authoritative cycle timestamp. This is the
+integration point for registry-backed adaptive queue draining and other
+application-scoped control work. Callback failures are returned as explicit
+failed-cycle evidence; they do not grant authority, select recovery, or cause
+Caretaker to stop the application automatically.
+
 ## Authority packet transport
 
 `serialize_recovery_authority_packet()` provides a bounded canonical JSON

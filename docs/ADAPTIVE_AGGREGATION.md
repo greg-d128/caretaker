@@ -74,6 +74,15 @@ binding requires an explicit unbind so queued evidence is not silently
 abandoned. `adaptive_aggregation_queue_bindings()` is a bounded, read-only
 operator projection; unbinding also leaves queued evidence untouched.
 
+An embedding application can pass a callback to
+`CaretakerApplicationSupervisor.run_control_cycle()` or
+`monitor_application(on_cycle=...)`; the callback receives the supervisor's
+authoritative, timezone-aware cycle timestamp and can call the registry-backed
+queue reconciliation method. Callback errors are returned as bounded failed
+cycle evidence, so the application can apply its own policy rather than
+silently treating the cycle as successful. Caretaker does not infer a policy
+action from that error or stop an application on the callback's behalf.
+
 `AdaptiveAggregationPolicy.transport` selects `AUTO`, `DIRECT`, `SOCKET`, or
 `QUEUE`. `AUTO` preserves the least-friction behavior (configured supervisor
 socket when present, otherwise the local ledger); `SOCKET` and `QUEUE` fail
