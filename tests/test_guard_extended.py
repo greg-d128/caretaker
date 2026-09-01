@@ -7,6 +7,8 @@ from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
+
 from caretaker import (
     CandidateProposal,
     ExceptionTrigger,
@@ -299,7 +301,11 @@ def test_periodic_behavior_comparison_records_change_as_evidence(tmp_path, monke
         targets=(
             GuardTargetPolicy(
                 module_pattern="tests.guard_targets",
-                periodic=PeriodicInspectionPolicy(compare_behavior=True),
+                periodic=PeriodicInspectionPolicy(
+                    compare_behavior=True,
+                    duration_distribution_minimum_samples=2,
+                    duration_distribution_sigma_threshold=2.5,
+                ),
             ),
         ),
     )
@@ -349,6 +355,8 @@ def test_periodic_behavior_comparison_records_change_as_evidence(tmp_path, monke
     assert comparison["evidence_only"] is True
     assert comparison["authority_granted"] is False
     assert "new-resource-capability" in comparison["change_reasons"]
+    assert comparison["duration_distribution"]["minimum_samples_per_snapshot"] == 2
+    assert comparison["duration_distribution"]["sigma_threshold"] == pytest.approx(2.5)
     assert guard.control_plane.signals[-1].target_id == target_id
 
 

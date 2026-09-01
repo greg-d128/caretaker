@@ -158,6 +158,11 @@ class PeriodicInspectionPolicy:
     verify_runtime_fingerprints: bool = True
     compare_behavior: bool = False
     rotate_generation_on_behavior_change: bool = False
+    # These controls affect only the evidence-only duration comparison emitted
+    # by periodic behavior inspection. They never accept a baseline or grant
+    # authority.
+    duration_distribution_minimum_samples: int = 20
+    duration_distribution_sigma_threshold: float = 3.0
     escalate_on_change: bool = True
 
 
@@ -389,6 +394,23 @@ def validate_guard_policy(policy: GuardPolicy) -> None:
         if not isinstance(periodic.rotate_generation_on_behavior_change, bool):
             errors.append(
                 f"{prefix}.periodic.rotate_generation_on_behavior_change must be a boolean"
+            )
+        if (
+            isinstance(periodic.duration_distribution_minimum_samples, bool)
+            or not isinstance(periodic.duration_distribution_minimum_samples, int)
+            or not 2 <= periodic.duration_distribution_minimum_samples <= 1_000_000
+        ):
+            errors.append(
+                f"{prefix}.periodic.duration_distribution_minimum_samples must be an integer between 2 and 1000000"
+            )
+        if (
+            isinstance(periodic.duration_distribution_sigma_threshold, bool)
+            or not isinstance(periodic.duration_distribution_sigma_threshold, (int, float))
+            or not math.isfinite(float(periodic.duration_distribution_sigma_threshold))
+            or not 0.0 < float(periodic.duration_distribution_sigma_threshold) <= 100.0
+        ):
+            errors.append(
+                f"{prefix}.periodic.duration_distribution_sigma_threshold must be finite and between 0 and 100"
             )
         if not periodic.escalate_on_change:
             errors.append(f"{prefix}.periodic.escalate_on_change=False is unsupported; detected integrity changes remain signal-producing")

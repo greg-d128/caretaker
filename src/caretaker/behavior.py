@@ -3075,10 +3075,23 @@ class BehaviorStatisticsRepository:
                 continue
         return tuple(materialized)
 
+_DISTRIBUTION_MINIMUM_SAMPLES = 20
+_DISTRIBUTION_SIGMA_THRESHOLD = 3.0
+
+
 def compare_snapshots(
     older_envelope: Mapping[str, Any],
     newer_envelope: Mapping[str, Any],
+    *,
+    minimum_duration_distribution_samples: int = _DISTRIBUTION_MINIMUM_SAMPLES,
+    duration_distribution_sigma_threshold: float = _DISTRIBUTION_SIGMA_THRESHOLD,
 ) -> dict[str, Any]:
+    minimum_duration_distribution_samples, duration_distribution_sigma_threshold = (
+        _validate_duration_distribution_configuration(
+            minimum_duration_distribution_samples,
+            duration_distribution_sigma_threshold,
+        )
+    )
     older = dict(older_envelope.get("snapshot") or older_envelope)
     newer = dict(newer_envelope.get("snapshot") or newer_envelope)
     left = _profile(older.get("profile"))
@@ -3123,6 +3136,8 @@ def compare_snapshots(
         newer,
         left,
         right,
+        minimum_samples=minimum_duration_distribution_samples,
+        sigma_threshold=duration_distribution_sigma_threshold,
     )
     return_novelty = _return_novelty_report(older, newer, left, right)
     return {
@@ -3161,15 +3176,14 @@ def compare_snapshots(
     }
 
 
-_DISTRIBUTION_MINIMUM_SAMPLES = 20
-_DISTRIBUTION_SIGMA_THRESHOLD = 3.0
-
-
 def _duration_distribution_report(
     older: Mapping[str, Any],
     newer: Mapping[str, Any],
     left: Mapping[str, Any],
     right: Mapping[str, Any],
+    *,
+    minimum_samples: int,
+    sigma_threshold: float,
 ) -> dict[str, Any]:
     """Compare bounded duration summaries without making an authority decision.
 
@@ -3183,9 +3197,11 @@ def _duration_distribution_report(
         "evidence_only": True,
         "state": "incomparable",
         "reason": None,
-        "minimum_samples_per_snapshot": _DISTRIBUTION_MINIMUM_SAMPLES,
-        "sigma_threshold": _DISTRIBUTION_SIGMA_THRESHOLD,
+        "minimum_samples_per_snapshot": minimum_samples,
+        "sigma_threshold": sigma_threshold,
         "absence_claim_allowed": False,
+        "mean_shift_at_threshold": False,
+        "spread_shift_at_threshold": False,
         "mean_shift_at_three_sigma": False,
         "spread_shift_at_three_sigma": False,
         "reference": {},
@@ -3227,7 +3243,7 @@ def _duration_distribution_report(
     new_count = _finite_nonnegative_int(new_duration.get("count"))
     report["reference"]["count"] = old_count
     report["selected"]["count"] = new_count
-    if old_count < _DISTRIBUTION_MINIMUM_SAMPLES or new_count < _DISTRIBUTION_MINIMUM_SAMPLES:
+    if old_count < minimum_samples or new_count < minimum_samples:
         report["state"] = "insufficient-evidence"
         report["reason"] = "minimum-duration-samples-not-reached"
         return report
@@ -3288,20 +3304,56 @@ def _duration_distribution_report(
     finite_spread_ratio = spread_ratio if math.isfinite(spread_ratio) else None
     report.update({
         "state": "shift-signal"
-        if sigma >= _DISTRIBUTION_SIGMA_THRESHOLD or spread_ratio >= _DISTRIBUTION_SIGMA_THRESHOLD
+        if sigma >= sigma_threshold or spread_ratio >= sigma_threshold
         else "no-shift-signal",
-        "reason": "three-sigma-distribution-signal"
-        if sigma >= _DISTRIBUTION_SIGMA_THRESHOLD or spread_ratio >= _DISTRIBUTION_SIGMA_THRESHOLD
-        else "no-three-sigma-distribution-signal",
+        "reason": (
+            "three-sigma-distribution-signal"
+            if sigma_threshold == _DISTRIBUTION_SIGMA_THRESHOLD
+            else "configured-distribution-threshold-signal"
+        )
+        if sigma >= sigma_threshold or spread_ratio >= sigma_threshold
+        else (
+            "no-three-sigma-distribution-signal"
+            if sigma_threshold == _DISTRIBUTION_SIGMA_THRESHOLD
+            else "no-configured-distribution-threshold-signal"
+        ),
         "mean_difference": mean_difference,
         "mean_sigma": finite_sigma,
         "mean_sigma_unbounded": not math.isfinite(sigma),
         "spread_ratio": finite_spread_ratio,
         "spread_ratio_unbounded": not math.isfinite(spread_ratio),
+        "mean_shift_at_threshold": sigma >= sigma_threshold,
+        "spread_shift_at_threshold": spread_ratio >= sigma_threshold,
+        # Preserve the descriptive keys for the default three-sigma contract.
         "mean_shift_at_three_sigma": sigma >= _DISTRIBUTION_SIGMA_THRESHOLD,
         "spread_shift_at_three_sigma": spread_ratio >= _DISTRIBUTION_SIGMA_THRESHOLD,
     })
     return report
+
+
+def _validate_duration_distribution_configuration(
+    minimum_samples: Any,
+    sigma_threshold: Any,
+) -> tuple[int, float]:
+    if (
+        isinstance(minimum_samples, bool)
+        or not isinstance(minimum_samples, int)
+        or not 2 <= minimum_samples <= 1_000_000
+    ):
+        raise ValueError(
+            "minimum_duration_distribution_samples must be an integer between 2 and 1000000"
+        )
+    try:
+        threshold = float(sigma_threshold)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            "duration_distribution_sigma_threshold must be finite and between 0 and 100"
+        ) from exc
+    if not math.isfinite(threshold) or not 0.0 < threshold <= 100.0:
+        raise ValueError(
+            "duration_distribution_sigma_threshold must be finite and between 0 and 100"
+        )
+    return minimum_samples, threshold
 
 
 def _finite_number(value: Any) -> float | None:

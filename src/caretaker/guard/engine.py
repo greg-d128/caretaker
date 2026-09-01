@@ -1728,32 +1728,32 @@ class GuardEngine(GuardFacade):
     def _periodic_behavior_enabled(
         self, target_id: str, inspection: RuntimeInspection
     ) -> bool:
+        return self._periodic_behavior_policy(target_id, inspection) is not None
+
+    def _periodic_behavior_policy(
+        self, target_id: str, inspection: RuntimeInspection
+    ) -> Any | None:
         binding = self._targets.get(target_id)
         if binding is None or inspection.function_state_summary is None:
-            return False
-        return any(
-            target.periodic.enabled
-            and target.periodic.compare_behavior
-            and self._module_policy_matches(
-                target.module_pattern, inspection.subject.module_name
-            )
-            for target in self.policy.targets
-        )
+            return None
+        for target in self.policy.targets:
+            if (
+                target.periodic.enabled
+                and target.periodic.compare_behavior
+                and self._module_policy_matches(
+                    target.module_pattern, inspection.subject.module_name
+                )
+            ):
+                return target.periodic
+        return None
 
     def _periodic_behavior_rotation_enabled(
         self, target_id: str, inspection: RuntimeInspection
     ) -> bool:
-        binding = self._targets.get(target_id)
-        if binding is None or inspection.function_state_summary is None:
-            return False
-        return any(
-            target.periodic.enabled
-            and target.periodic.compare_behavior
-            and target.periodic.rotate_generation_on_behavior_change
-            and self._module_policy_matches(
-                target.module_pattern, inspection.subject.module_name
-            )
-            for target in self.policy.targets
+        periodic_policy = self._periodic_behavior_policy(target_id, inspection)
+        return bool(
+            periodic_policy is not None
+            and periodic_policy.rotate_generation_on_behavior_change
         )
 
     @staticmethod
@@ -1919,7 +1919,21 @@ class GuardEngine(GuardFacade):
         current_snapshot["created_at"] = str(
             capture.get("observation_ended_at") or capture.get("created_at") or ""
         )
-        comparison = compare_snapshots(baseline_snapshot, current_snapshot)
+        periodic_policy = self._periodic_behavior_policy(target_id, inspection)
+        comparison = compare_snapshots(
+            baseline_snapshot,
+            current_snapshot,
+            minimum_duration_distribution_samples=(
+                periodic_policy.duration_distribution_minimum_samples
+                if periodic_policy is not None
+                else 20
+            ),
+            duration_distribution_sigma_threshold=(
+                periodic_policy.duration_distribution_sigma_threshold
+                if periodic_policy is not None
+                else 3.0
+            ),
+        )
         semantic_changes = [
             item
             for item in comparison.get("semantic_changes") or ()

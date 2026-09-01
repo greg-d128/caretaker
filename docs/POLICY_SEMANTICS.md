@@ -78,6 +78,13 @@ setting accepts a baseline, changes policy, or grants authority. Missing,
 stale, or incompatible evidence is reported explicitly rather than classified
 as unchanged.
 
+The periodic policy also exposes bounded
+`duration_distribution_minimum_samples` and
+`duration_distribution_sigma_threshold` controls. They configure only the
+comparison evidence gate for that target; they do not change the Guard action
+policy, accept evidence, or grant authority. Values are validated to prevent
+unbounded sample requirements and non-finite thresholds.
+
 ## Repair context privacy and size
 
 `ContextPolicy` is applied before a `RepairRequest` is handed to a provider. `include_source`, `include_traceback`, `include_state_diff`, `send_argument_values`, and `send_local_values` therefore change the actual provider payload. `maximum_context_characters` bounds the combined textual context fields, not only correlated log text.
@@ -114,7 +121,7 @@ A new public policy field requires all of the following before the reviewed surf
 
 If any of those are intentionally deferred, the field must default to an inactive value and be entered in the explicit reserved-setting catalog. Recovery policy fields are reviewed with the same rule: the current defaults preserve deployed-code-only restart recovery, require authority revalidation, and reject candidate reactivation because that executor is not implemented yet.
 
-The current review generation is 27. It includes the optional
+The current review generation is 31. It includes the optional
 `lightweight.AdaptiveAggregationPolicy.aggregation_scope` field and the
 `transition_timeout_seconds` field. The scope is inactive by default, is
 validated when supplied, and only partitions supervisor evidence. The timeout

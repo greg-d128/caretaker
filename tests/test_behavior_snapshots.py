@@ -210,6 +210,19 @@ def test_duration_distribution_report_surfaces_three_sigma_shift(
     assert report["mean_sigma"] > 3.0
     assert report["quantile_changes"]["p50"]["absolute"] == 0.010
 
+    monkeypatch.setattr(
+        "caretaker.behavior.utcnow",
+        lambda: datetime(2026, 1, 3, tzinfo=timezone.utc),
+    )
+    configured_report = compare_snapshots(
+        left,
+        right,
+        duration_distribution_sigma_threshold=100.0,
+    )["duration_distribution"]
+    assert configured_report["state"] == "no-shift-signal"
+    assert configured_report["reason"] == "no-configured-distribution-threshold-signal"
+    assert configured_report["mean_shift_at_threshold"] is False
+
 
 def test_duration_distribution_report_preserves_insufficient_or_legacy_evidence(
     tmp_path: Path, monkeypatch

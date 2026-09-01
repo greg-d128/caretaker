@@ -110,6 +110,19 @@ least `minimum_new_return_observations` times. The resulting
 `OUTPUT_BEHAVIOR_CHANGE` is evidence for the normal Guard action policy; it is
 not proof of failure and cannot grant Repair or other authority.
 
+Periodic behavior comparison also supports target-local controls for its
+evidence-only duration analysis:
+
+- `duration_distribution_minimum_samples` requires that many duration samples
+  in both compatible snapshots (default `20`; bounded to `2..1000000`);
+- `duration_distribution_sigma_threshold` controls the mean/spread signal in
+  standard-error units (default `3.0`; bounded to finite `0..100`).
+
+These settings affect only comparison evidence and the existing opt-in periodic
+change signal. They do not accept a baseline, modify policy, or grant Repair
+authority. Dynamic console administration of these settings remains future
+work.
+
 ## LLM review
 
 `LLMReviewPolicy` enables bounded advisory assessment after deterministic extraction. It should define thresholds for when review is useful and limits on evidence volume.

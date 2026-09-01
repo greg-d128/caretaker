@@ -10,6 +10,7 @@ from caretaker.guard.policy import (
     GuardPolicyConfigurationError,
     BehaviorSnapshotPolicy,
     CandidateGuardPolicy,
+    GuardTargetPolicy,
     PeriodicInspectionPolicy,
     RetentionPolicy as GuardRetentionPolicy,
     validate_guard_policy,
@@ -90,6 +91,34 @@ def test_randomized_behavior_snapshot_bounds_are_validated():
                 ),
             )
         )
+
+
+def test_duration_distribution_policy_bounds_are_validated():
+    policy = GuardPolicy(
+        targets=(
+            GuardTargetPolicy(
+                module_pattern="example",
+                periodic=PeriodicInspectionPolicy(
+                    duration_distribution_minimum_samples=1,
+                ),
+            ),
+        )
+    )
+    with pytest.raises(GuardPolicyConfigurationError, match="duration_distribution_minimum_samples"):
+        validate_guard_policy(policy)
+
+    policy = GuardPolicy(
+        targets=(
+            GuardTargetPolicy(
+                module_pattern="example",
+                periodic=PeriodicInspectionPolicy(
+                    duration_distribution_sigma_threshold=0.0,
+                ),
+            ),
+        )
+    )
+    with pytest.raises(GuardPolicyConfigurationError, match="duration_distribution_sigma_threshold"):
+        validate_guard_policy(policy)
 
 
 def test_behavior_collection_scheduler_limits_are_validated():
