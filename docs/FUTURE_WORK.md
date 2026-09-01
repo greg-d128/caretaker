@@ -1537,6 +1537,11 @@ Each coordinated recovery decision now also emits the registered critical
 reconciliation state, handler status, and checkpoint identity. The audit event
 is evidence only and does not execute or authorize the selected action.
 
+The single-worker failure path also emits a critical `RECOVERY_DECISION` audit
+event for both an admitted restart and an exhausted policy action. Explicitly
+acknowledged disable or shutdown callbacks are marked executed; missing or
+rejected callbacks remain planned-only evidence.
+
 The supervisor also exposes `handle_worker_failure_cohort()` for one
 continuous transaction. The caller supplies all affected failed or
 unauthorized workers and a bounded reconciliation scope; Caretaker persists

@@ -1739,6 +1739,21 @@ class CaretakerApplicationSupervisor:
                         "restart_count": restarted.restart_count,
                     },
                 )
+                self._audit_recovery_decision(
+                    {
+                        "scope": reconciliation_scope or f"worker:{worker.worker_id}",
+                        "target_id": worker.target_id,
+                        "policy_action": {
+                            "selected_action": "RESTART_WORKER",
+                            "status": "SELECTED",
+                        },
+                        "action_execution": {
+                            "status": "RESTARTED",
+                            "authority_granted": False,
+                        },
+                        "reconciliation": {},
+                    }
+                )
                 return {
                     "ok": True,
                     "action": "RESTARTED",
@@ -1787,21 +1802,24 @@ class CaretakerApplicationSupervisor:
             "restart": restart_result,
             "failure_envelope": envelope,
         }
-        self._audit_event(
-            "RECOVERY_DECISION",
-            actor={"type": "supervisor", "id": str(self.supervisor_health.worker_id)},
-            scope={
-                "worker_id": str(worker.worker_id),
+        callback_accepted = isinstance(callback_result, Mapping) and bool(
+            callback_result.get("accepted")
+        )
+        self._audit_recovery_decision(
+            {
+                "scope": reconciliation_scope or f"worker:{worker.worker_id}",
                 "target_id": worker.target_id,
-            },
-            outcome={
-                "state": "PLANNED_ONLY",
-                "action": exhaustion.name,
-            },
-            details={
-                "incident_status": incident_status,
-                "postmortem_status": postmortem_status,
-            },
+                "policy_action": {
+                    "selected_action": exhaustion.name,
+                    "status": "SELECTED",
+                },
+                "action_execution": {
+                    "status": "EXECUTED" if callback_accepted else "PLANNED_ONLY",
+                    "authority_granted": False,
+                },
+                "reconciliation": {},
+                "critical_evidence_conflict": bool(critical_evidence),
+            }
         )
         if callback_result is not None:
             result["action_result"] = callback_result

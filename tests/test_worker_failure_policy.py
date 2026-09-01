@@ -107,11 +107,17 @@ def test_worker_failure_records_incident_and_uses_callback_owned_restart() -> No
         "INCIDENT_CAPTURED",
         "WORKER_REPLACEMENT_REQUESTED",
         "WORKER_REPLACED",
+        "RECOVERY_DECISION",
     ]
     assert runtime.audit.events[0]["outcome"]["state"] == "ROLLED_BACK"
     assert runtime.audit.events[1]["outcome"]["state"] == "RECORDED"
     assert runtime.audit.events[2]["outcome"]["state"] == "REQUESTED"
     assert runtime.audit.events[3]["outcome"]["state"] == "RESTARTED"
+    assert runtime.audit.events[4]["outcome"] == {
+        "state": "RESTARTED",
+        "action": "RESTART_WORKER",
+        "authority_granted": False,
+    }
 
 
 def test_worker_failure_cohort_captures_all_postmortems_before_one_policy_action() -> None:
