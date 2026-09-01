@@ -43,6 +43,11 @@ shutdown signals and, after a bounded grace period, force-stops that complete
 application group without signalling Caretaker or unrelated same-user
 processes. Caretaker then exits after flushing complete records where possible.
 
+Application composition enters through `ApplicationRuntimeSupervisor` in the
+application package. During the compatibility extraction phase it delegates
+to the historical logging supervisor; logging remains an observability
+dependency, and this delegation does not add host-level authority.
+
 ## Channels
 
 - `APPLICATION`

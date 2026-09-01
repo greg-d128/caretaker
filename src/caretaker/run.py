@@ -46,7 +46,6 @@ from .behavior import (
     wrap_snapshot,
 )
 from .logging import (
-    CaretakerApplicationSupervisor,
     EvidencePriority,
     LogChannel,
     LoggingMode,
@@ -57,6 +56,7 @@ from .logging import (
     WorkerKind,
     WorkerState,
 )
+from .runtime_supervisor import ApplicationRuntimeSupervisor
 from .logging.handler import LoggingRuntime
 from .logging.ipc import (
     ControlSocketServer,
@@ -1710,7 +1710,7 @@ def main(argv: list[str] | None = None) -> int:
     console_invocations: dict[str, int] = {}
     console_identity_store = ConsoleIdentityStore(policy.directory)
     child_holder: dict[str, subprocess.Popen] = {}
-    supervisor_holder: dict[str, CaretakerApplicationSupervisor] = {}
+    supervisor_holder: dict[str, ApplicationRuntimeSupervisor] = {}
     failure_store_holder: dict[str, SQLiteRepairStore] = {}
     rollout_ledger_holder: dict[str, RepairRolloutLedger] = {}
     rollout_coordinator_holder: dict[str, RepairRolloutCoordinator] = {}
@@ -4412,7 +4412,7 @@ def main(argv: list[str] | None = None) -> int:
         authority_fingerprint=authority.effective.fingerprint,
         store=failure_store,
     )
-    supervisor = CaretakerApplicationSupervisor(
+    supervisor = ApplicationRuntimeSupervisor(
         runtime,
         application_pid=child.pid,
         application_process_group_id=os.getpgid(child.pid),

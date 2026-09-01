@@ -2208,6 +2208,14 @@ not multiply physical stores.
 
 #### 10. Move runtime supervision ownership out of logging
 
+**Status: Partially implemented in development tree.**
+
+`ApplicationRuntimeSupervisor` now provides the application-runtime ownership
+boundary and `run.py` composes through it. It delegates to the historical
+logging supervisor during the compatibility phase, so the worker, health,
+control, scheduling, and shutdown implementation still needs to be extracted
+method-by-method. No host-level or infrastructure-level authority is added.
+
 `logging/supervisor.py` and `logging/__init__.py` currently include application
 supervision, worker health/authority, adaptive coordination, and recovery
 alongside logging. Create an application-runtime owner for workers, health,
