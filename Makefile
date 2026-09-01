@@ -16,7 +16,8 @@ PACKAGE_VERSION ?= $(shell sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml
 ROOT_VERSION ?= $(shell $(TOOLS_PYTHON) -c 'import json; print(json.load(open("$(ROOT)"))["root_version"])' 2>/dev/null)
 INTEGRITY := PYTHONPATH=src $(TOOLS_PYTHON) -m caretaker.integrity.cli
 TWINE := $(TOOLS_PYTHON) -m twine
-PACKAGE_FILES := dist/caretaker-$(PACKAGE_VERSION).tar.gz dist/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl
+PACKAGE_FILES = dist/caretaker-$(PACKAGE_VERSION)*.tar.gz dist/caretaker-$(PACKAGE_VERSION)*-py3-none-any.whl
+PODMAN_WHEEL = $(wildcard dist/caretaker-$(PACKAGE_VERSION)*-py3-none-any.whl)
 PYPI_UPLOAD_URL ?= https://upload.pypi.org/legacy/
 TEST_PYPI_UPLOAD_URL ?= https://test.pypi.org/legacy/
 PODMAN ?= podman
@@ -82,13 +83,14 @@ wheel: ## Build the wheel in dist/
 
 podman-image: wheel ## Build the Caretaker rootless replay worker image
 	@test -n "$(PODMAN_BASE_IMAGE)" || { echo 'PODMAN_BASE_IMAGE must not be empty' >&2; exit 2; }
+	@test "$(words $(PODMAN_WHEEL))" -eq 1 || { echo 'Expected exactly one current-version wheel in dist/' >&2; exit 2; }
 	case "$(PODMAN_BASE_IMAGE)" in *REVIEWED_DIGEST*) echo 'Replace REVIEWED_DIGEST with a real digest or omit PODMAN_BASE_IMAGE for the local quick-start default' >&2; exit 2;; esac
 	case "$(PODMAN_BASE_IMAGE)" in *@sha256:*) ;; *) echo 'Warning: PODMAN_BASE_IMAGE is tag-based; pin it by digest for reviewed or production use.' >&2;; esac
 	$(PODMAN) --cgroup-manager="$(PODMAN_CGROUP_MANAGER)" build \
 	  --file isolated/podman/Containerfile \
 	  --ignorefile isolated/podman/.containerignore \
 	  --build-arg "PYTHON_BASE_IMAGE=$(PODMAN_BASE_IMAGE)" \
-	  --build-arg "CARETAKER_WHEEL=caretaker-$(PACKAGE_VERSION)-py3-none-any.whl" \
+	  --build-arg "CARETAKER_WHEEL=$(notdir $(PODMAN_WHEEL))" \
 	  --tag "$(PODMAN_IMAGE)" \
 	  dist
 
@@ -110,8 +112,8 @@ build: ## Build the wheel and source distribution in dist/
 	$(BIN)/python -m build
 
 package-check: build ## Validate exactly the current-version wheel and source distribution
-	@test -f "dist/caretaker-$(PACKAGE_VERSION).tar.gz" || { echo "Missing source distribution for version $(PACKAGE_VERSION)" >&2; exit 2; }
-	@test -f "dist/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl" || { echo "Missing wheel for version $(PACKAGE_VERSION)" >&2; exit 2; }
+	@test "$(words $(wildcard dist/caretaker-$(PACKAGE_VERSION)*.tar.gz))" -eq 1 || { echo "Expected exactly one source distribution for version $(PACKAGE_VERSION)" >&2; exit 2; }
+	@test "$(words $(wildcard dist/caretaker-$(PACKAGE_VERSION)*-py3-none-any.whl))" -eq 1 || { echo "Expected exactly one wheel for version $(PACKAGE_VERSION)" >&2; exit 2; }
 	$(TWINE) check $(PACKAGE_FILES)
 	@echo "Validated distributions for Caretaker $(PACKAGE_VERSION): $(PACKAGE_FILES)"
 
@@ -247,8 +249,10 @@ profile: ## Open the Textual Caretaker Profile Editor
 verify-wheel: wheel ## Install and test the wheel in a temporary virtual environment
 	@tmp="$$(mktemp -d)"; \
 	trap 'rm -rf "$$tmp"' EXIT; \
-	wheel="dist/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl"; \
-	test -f "$$wheel" || { echo "Current-version wheel not found: $$wheel" >&2; exit 1; }; \
+	wheel_pattern="dist/caretaker-$(PACKAGE_VERSION)*-py3-none-any.whl"; \
+	set -- $$wheel_pattern; \
+	test "$$#" -eq 1 && test -f "$$1" || { echo "Expected exactly one current-version wheel: $$wheel_pattern" >&2; exit 1; }; \
+	wheel="$$1"; \
 	wheel="$$(realpath "$$wheel")"; \
 	$(PYTHON) -m venv "$$tmp/venv"; \
 	"$$tmp/venv/bin/python" -m pip install --quiet --upgrade pip pytest; \

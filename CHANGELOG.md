@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.5a
+
+### Pre-version-1 application scope
+
+- Accept the bounded application-local supervisor scope for adaptive
+  aggregation, policy-bound Repair rollout, and Repair recovery.
+- Add Incident Capsule side artifacts, operator-view capture, read-only
+  Incident Explorer replay, non-interactive historical replay, and advisory
+  LLM assistance without allowing capsule or authority mutation.
+- Add policy-governed incident communication drafts and local review records;
+  external delivery remains intentionally deferred.
+- Add bounded behavior distribution-shift evidence with policy-configurable
+  minimum samples and sigma thresholds, including console visibility.
+- Document the remaining fleet, deployment, external-assurance, and Crucible
+  boundaries explicitly for the pre-version-1 release.
+
 ## 0.6.1
 
 ### Authority verification

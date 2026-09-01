@@ -1,37 +1,40 @@
-Caretaker 0.6.1 development verification status
+Caretaker 0.6.5a development verification status
 =================================================
 
 Status date
 -----------
-2026-08-23
+2026-09-01
 
 Scope and interpretation
 ------------------------
 This is a transparent development-tree verification status, not a release
-certification or guarantee. Caretaker is alpha research software. A tagged
-release should receive a fresh run on every supported Python version, an
-installed wheel, and an extracted source distribution.
+certification or guarantee. Caretaker is pre-version-1 alpha research
+software. This verification covers the accepted application-local scope. A
+published release should still receive a fresh run on every supported Python
+version, an installed wheel, and an extracted source distribution.
 
 Environment used for this review
 --------------------------------
-Python: 3.14 (review environment; declared support is CPython 3.11-3.14)
+Python: 3.14.4 (review environment; declared support is CPython 3.11-3.14)
 Platform: Linux workspace; full run allowed normal GnuPG-agent and Unix-socket access
-Command: PYTHONPATH=src venv/bin/python -m pytest -q
+Command: make check
 
 Observed result
 ---------------
-- 319 passed;
-- 11 strict expected failures representing known security/assurance debt;
-- no unexpected failures.
+- 919 passed;
+- no unexpected test failures;
+- source, test, example, and script compilation succeeded.
 
 The complete run included GnuPG key/signature tests and Unix-domain logging and
 control-socket tests. Forgejo CI is configured to run the suite on ordinary Linux
 for CPython 3.11, 3.12, and 3.13; this local review used the additionally
 supported Python 3.14 and supplements rather than replaces the CI matrix.
 
-Known strict expected failures
+Known assurance debt
 ------------------------------
-The executable debt ledger currently covers:
+The executable regression coverage and roadmap continue to document these
+known limitations. Passing the current suite does not mean these assurance
+properties are complete:
 
 1. operator override of missing validation isolation;
 2. arbitrary pickle-serializable validation request objects;
@@ -45,12 +48,12 @@ The executable debt ledger currently covers:
 10. marker-only Multipass network-isolation assertion;
 11. inaccurate ephemeral-workspace capability for persistent VMs.
 
-The prior Guard automatic-baseline-acceptance documentation inconsistency was
-corrected in this update and its regression now passes normally.
+These limitations are intentionally outside the accepted pre-version-1 sprint
+boundary unless a deployment requires stronger assurance.
 
 The authoritative tests are tests/test_validation_trust_boundary.py and
 tests/test_security_assurance_regressions.py. The public design and remediation
-ledger is docs/FUTURE_WORK.md. A strict expected failure must not be interpreted
+ledger is docs/FUTURE_WORK.md. A documented limitation must not be interpreted
 as an implemented security property.
 
 Additional checks performed
@@ -61,7 +64,14 @@ Additional checks performed
 - Relative links across root, docs, and example Markdown resolve locally.
 - Current operator guides are checked against retired Lab/Console labels and the
   role-oriented signing commands.
-- git diff --check is required before the documentation update is committed.
+- `make package-check` passed for the normalized PEP 440 artifacts
+  `caretaker-0.6.5a0.tar.gz` and `caretaker-0.6.5a0-py3-none-any.whl`.
+- `make verify-wheel` intentionally failed closed: the committed signed wheel
+  manifests still describe the prior 0.6.1 publication and omit newer modules.
+  Regenerating and re-signing those manifests is a separate release-station
+  task; this development-version update does not modify signed publication
+  material or weaken installed integrity verification.
+- `git diff --check` passed before this verification update.
 
 Historical Caretaker 0.5.0a1 verification report
 ================================================
@@ -69,7 +79,7 @@ Historical Caretaker 0.5.0a1 verification report
 Historical notice
 -----------------
 This report records verification performed for 0.5.0a1. It is retained as release
-history and is not a verification report for the current 0.6.1 research tree.
+history and is not a verification report for the current 0.6.5a research tree.
 Current features, test counts, security debt, and isolation backends differ. Do
 not use the results below as evidence that the current checkout has been verified.
 
