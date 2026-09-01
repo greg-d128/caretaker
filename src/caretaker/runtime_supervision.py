@@ -7,6 +7,7 @@ their implementation must not depend on the logging supervisor or runtime.
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import threading
@@ -53,6 +54,8 @@ from .repair_recovery import (
     reconcile_worker_failure_records,
     resolve_worker_failure_scope,
     select_recovery_action,
+    serialize_recovery_authority_packet,
+    serialize_worker_replacement_request,
     validate_worker_acceptance_policy,
     verify_comparison_worker_assignment,
     verify_comparison_worker_result,
@@ -1777,6 +1780,391 @@ def capture_worker_failure_evidence(
     }
 
 
+def handle_worker_acceptance_observation(
+    supervisor: Any,
+    request: Mapping[str, Any],
+    credentials: tuple[int, int, int],
+) -> dict[str, Any]:
+    """Accept one observation from the registered worker process only."""
+    try:
+        worker_id = UUID(str(request["worker_id"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("worker acceptance observation requires a valid worker_id") from exc
+    worker = supervisor.workers.get(worker_id)
+    if worker.process_id != credentials[0]:
+        raise PermissionError("worker process identity does not match its registration")
+    if str(request.get("process_start_id") or "") != str(worker.process_start_id):
+        raise PermissionError("worker process start identity does not match its registration")
+    if str(request.get("authority_packet_id") or "") != str(worker.authority_packet_id or ""):
+        raise PermissionError("worker authority packet identity does not match its registration")
+    success = request.get("success")
+    if not isinstance(success, bool):
+        raise ValueError("worker acceptance observation success must be a boolean")
+    observation_id = str(request.get("observation_id") or "")
+    if not observation_id or len(observation_id) > 256:
+        raise ValueError("worker acceptance observation requires a 1..256 observation_id")
+    updated = supervisor.workers.record_acceptance_observation(
+        worker_id,
+        success=success,
+        policy=None,
+        observation_id=observation_id,
+        observed_at=(str(request["observed_at"]) if request.get("observed_at") else None),
+    )
+    return {
+        "ok": True,
+        "worker_id": str(updated.worker_id),
+        "target_id": updated.target_id,
+        "state": updated.state.name,
+        "acceptance_state": updated.acceptance_state.name,
+        "acceptance_successful_executions": updated.acceptance_successful_executions,
+        "acceptance_failed_executions": updated.acceptance_failed_executions,
+        "authority_granted": False,
+    }
+
+def handle_worker_authority_packet(
+    supervisor: Any,
+    request: Mapping[str, Any],
+    credentials: tuple[int, int, int],
+    *,
+    allowed_worker_kinds: set[WorkerKind] | frozenset[WorkerKind],
+    supervisor_time: datetime,
+    target_id: str,
+    generation_id: str,
+    code_hash: str,
+    policy_fingerprint: str,
+    authority_policy_generation: str,
+    authority_policy_fingerprint: str,
+    allowed_capabilities: set[str] | frozenset[str] = frozenset(),
+    policy: RepairRecoveryPolicy | None = None,
+    acceptance_policy: WorkerAcceptancePolicy | None = None,
+) -> dict[str, Any]:
+    """Admit or refresh a worker packet received on the local control socket.
+
+    The application supplies the current context through this method's
+    keyword arguments.  Request fields are transport data only; in
+    particular, a worker cannot choose its PID, policy context, or allowed
+    worker kind.  ``ControlSocketServer`` supplies authenticated peer
+    credentials to this handler.
+    """
+    if request.get("command") != "worker-authority-packet":
+        raise ValueError("unsupported worker authority packet command")
+    try:
+        kind = WorkerKind[str(request["worker_kind"]).upper()]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("worker authority packet requires a valid worker_kind") from exc
+    if kind not in allowed_worker_kinds:
+        raise PermissionError("worker authority packet kind is not permitted")
+    operation = request.get("operation")
+    if operation not in {"register", "refresh"}:
+        raise ValueError("worker authority packet operation must be register or refresh")
+    handoff_id = request.get("handoff_id")
+    if not isinstance(handoff_id, str) or not handoff_id.strip():
+        raise ValueError("worker authority packet requires a handoff_id")
+    transport_value = request.get("packet")
+    if not isinstance(transport_value, Mapping):
+        raise ValueError("worker authority packet requires a JSON transport envelope")
+    if operation == "register":
+        worker = supervisor.workers.register_transported_authorized(
+            kind,
+            credentials[0],
+            transport_value,
+            handoff_id=handoff_id,
+            supervisor_time=supervisor_time,
+            target_id=target_id,
+            generation_id=generation_id,
+            code_hash=code_hash,
+            policy_fingerprint=policy_fingerprint,
+            authority_policy_generation=authority_policy_generation,
+            authority_policy_fingerprint=authority_policy_fingerprint,
+            allowed_capabilities=allowed_capabilities,
+            policy=policy,
+            acceptance_policy=acceptance_policy,
+        )
+    else:
+        try:
+            worker_id = UUID(str(request["worker_id"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("worker authority refresh requires a valid worker_id") from exc
+        process_start_id = request.get("process_start_id")
+        if not isinstance(process_start_id, str) or not process_start_id.strip():
+            raise ValueError("worker authority refresh requires process_start_id")
+        worker = supervisor.workers.refresh_transported_authorized(
+            worker_id,
+            credentials[0],
+            transport_value,
+            handoff_id=handoff_id,
+            process_start_id=process_start_id,
+            supervisor_time=supervisor_time,
+            target_id=target_id,
+            generation_id=generation_id,
+            code_hash=code_hash,
+            policy_fingerprint=policy_fingerprint,
+            authority_policy_generation=authority_policy_generation,
+            authority_policy_fingerprint=authority_policy_fingerprint,
+            allowed_capabilities=allowed_capabilities,
+            policy=policy,
+        )
+    return {
+        "ok": True,
+        "operation": operation,
+        "worker_id": str(worker.worker_id),
+        "process_id": worker.process_id,
+        "process_start_id": str(worker.process_start_id),
+        "worker_kind": worker.worker_kind.name,
+        "authority_packet_id": (
+            str(worker.authority_packet_id)
+            if worker.authority_packet_id is not None
+            else None
+        ),
+        "authority_packet_expires_at": (
+            worker.authority_packet_expires_at.isoformat()
+            if worker.authority_packet_expires_at is not None
+            else None
+        ),
+        "state": worker.state.name,
+        "acceptance_state": worker.acceptance_state.name,
+        "authority_granted": False,
+    }
+
+def handle_worker_authority_queue_handoff(
+    supervisor: Any,
+    handoff: Mapping[str, Any],
+    *,
+    authoritative_worker_pid: int,
+    allowed_worker_kinds: set[WorkerKind] | frozenset[WorkerKind],
+    supervisor_time: datetime,
+    target_id: str,
+    generation_id: str,
+    code_hash: str,
+    policy_fingerprint: str,
+    authority_policy_generation: str,
+    authority_policy_fingerprint: str,
+    allowed_capabilities: set[str] | frozenset[str] = frozenset(),
+    policy: RepairRecoveryPolicy | None = None,
+    acceptance_policy: WorkerAcceptancePolicy | None = None,
+) -> dict[str, Any]:
+    """Admit a typed queue handoff using application-owned identity.
+
+    ``QueueWorkerAuthorityPacketTransport.receive()`` returns evidence
+    decoded from an application-owned queue.  Queue access and its sender
+    PID are not authentication, so the embedding application must bind
+    the handoff to a live worker and provide that worker's authoritative
+    PID here.  The packet and handoff replay gates remain the same as the
+    local control-socket path.
+    """
+    if not isinstance(handoff, Mapping):
+        raise TypeError("worker authority queue handoff must be a mapping")
+    operation = handoff.get("operation")
+    if operation not in {"register", "refresh"}:
+        raise ValueError("worker authority queue handoff operation is invalid")
+    expected_fields = {
+        "operation",
+        "handoff_id",
+        "worker_kind",
+        "packet",
+        "transport_message_id",
+        "transport_sender_pid",
+    }
+    if operation == "refresh":
+        expected_fields.update({"worker_id", "process_start_id"})
+    if set(handoff) != expected_fields:
+        raise ValueError("worker authority queue handoff fields are invalid")
+    if (
+        isinstance(authoritative_worker_pid, bool)
+        or not isinstance(authoritative_worker_pid, int)
+        or authoritative_worker_pid <= 0
+    ):
+        raise ValueError("worker authority queue handoff requires a positive authoritative worker PID")
+    worker_kind = handoff.get("worker_kind")
+    if not isinstance(worker_kind, str) or not worker_kind.strip():
+        raise ValueError("worker authority queue handoff worker_kind is invalid")
+    packet = handoff.get("packet")
+    if not isinstance(packet, RecoveryAuthorityPacket):
+        raise ValueError("worker authority queue handoff packet is invalid")
+    try:
+        transport_value = json.loads(
+            serialize_recovery_authority_packet(packet).decode("utf-8")
+        )
+    except (TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("worker authority queue handoff packet is invalid") from exc
+    request: dict[str, Any] = {
+        "command": "worker-authority-packet",
+        "operation": operation,
+        "handoff_id": handoff.get("handoff_id"),
+        "worker_kind": worker_kind.strip(),
+        "packet": transport_value,
+    }
+    if operation == "refresh":
+        request["worker_id"] = handoff.get("worker_id")
+        request["process_start_id"] = handoff.get("process_start_id")
+    result = handle_worker_authority_packet(
+        supervisor,
+        request,
+        (authoritative_worker_pid, 0, 0),
+        allowed_worker_kinds=allowed_worker_kinds,
+        supervisor_time=supervisor_time,
+        target_id=target_id,
+        generation_id=generation_id,
+        code_hash=code_hash,
+        policy_fingerprint=policy_fingerprint,
+        authority_policy_generation=authority_policy_generation,
+        authority_policy_fingerprint=authority_policy_fingerprint,
+        allowed_capabilities=allowed_capabilities,
+        policy=policy,
+        acceptance_policy=acceptance_policy,
+    )
+    result["transport_message_id"] = handoff["transport_message_id"]
+    result["transport_sender_pid"] = handoff["transport_sender_pid"]
+    result["authoritative_worker_pid"] = authoritative_worker_pid
+    return result
+
+def handle_worker_replacement_packet(
+    supervisor: Any,
+    request: Mapping[str, Any],
+    credentials: tuple[int, int, int],
+    *,
+    allowed_worker_kinds: set[WorkerKind] | frozenset[WorkerKind],
+    supervisor_time: datetime,
+    target_id: str,
+    generation_id: str,
+    code_hash: str,
+    policy_fingerprint: str,
+    authority_policy_generation: str,
+    authority_policy_fingerprint: str,
+    allowed_capabilities: set[str] | frozenset[str] = frozenset(),
+    policy: RepairRecoveryPolicy | None = None,
+    acceptance_policy: WorkerAcceptancePolicy | None = None,
+) -> dict[str, Any]:
+    """Admit an application-started replacement over local transport.
+
+    The replacement request is a supervisor-issued, single-use handoff.
+    The application still starts the process; this handler only binds the
+    authenticated peer PID and performs the existing replacement gates.
+    """
+    if request.get("command") != "worker-replacement-packet":
+        raise ValueError("unsupported worker replacement command")
+    transport_value = request.get("replacement")
+    if not isinstance(transport_value, Mapping):
+        raise ValueError("worker replacement requires a JSON transport envelope")
+    replacement_request = deserialize_worker_replacement_request(transport_value)
+    try:
+        kind = WorkerKind[replacement_request.worker_kind]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("worker replacement request has an invalid worker kind") from exc
+    if kind not in allowed_worker_kinds:
+        raise PermissionError("worker replacement kind is not permitted")
+    replacement = supervisor.workers.register_transported_replacement(
+        replacement_request,
+        credentials[0],
+        supervisor_time=supervisor_time,
+        target_id=target_id,
+        generation_id=generation_id,
+        code_hash=code_hash,
+        policy_fingerprint=policy_fingerprint,
+        authority_policy_generation=authority_policy_generation,
+        authority_policy_fingerprint=authority_policy_fingerprint,
+        allowed_capabilities=allowed_capabilities,
+        policy=policy,
+        acceptance_policy=acceptance_policy,
+    )
+    return {
+        "ok": True,
+        "operation": "replacement",
+        "worker_id": str(replacement.worker_id),
+        "process_id": replacement.process_id,
+        "process_start_id": str(replacement.process_start_id),
+        "worker_kind": replacement.worker_kind.name,
+        "replaced_worker_id": (
+            str(replacement.replaced_worker_id)
+            if replacement.replaced_worker_id is not None
+            else None
+        ),
+        "authority_packet_id": (
+            str(replacement.authority_packet_id)
+            if replacement.authority_packet_id is not None
+            else None
+        ),
+        "authority_packet_expires_at": (
+            replacement.authority_packet_expires_at.isoformat()
+            if replacement.authority_packet_expires_at is not None
+            else None
+        ),
+        "state": replacement.state.name,
+        "acceptance_state": replacement.acceptance_state.name,
+        "authority_granted": False,
+    }
+
+def handle_worker_replacement_queue_handoff(
+    supervisor: Any,
+    handoff: Mapping[str, Any],
+    *,
+    authoritative_worker_pid: int,
+    allowed_worker_kinds: set[WorkerKind] | frozenset[WorkerKind],
+    supervisor_time: datetime,
+    target_id: str,
+    generation_id: str,
+    code_hash: str,
+    policy_fingerprint: str,
+    authority_policy_generation: str,
+    authority_policy_fingerprint: str,
+    allowed_capabilities: set[str] | frozenset[str] = frozenset(),
+    policy: RepairRecoveryPolicy | None = None,
+    acceptance_policy: WorkerAcceptancePolicy | None = None,
+) -> dict[str, Any]:
+    """Admit a typed replacement queue handoff with bound process identity.
+
+    The application supplies the live replacement PID after associating it
+    with its queue binding.  The queue-reported sender PID is retained as
+    provenance only and is never used as the worker identity.
+    """
+    if not isinstance(handoff, Mapping):
+        raise TypeError("worker replacement queue handoff must be a mapping")
+    if set(handoff) != {
+        "request",
+        "transport_message_id",
+        "transport_sender_pid",
+    }:
+        raise ValueError("worker replacement queue handoff fields are invalid")
+    if (
+        isinstance(authoritative_worker_pid, bool)
+        or not isinstance(authoritative_worker_pid, int)
+        or authoritative_worker_pid <= 0
+    ):
+        raise ValueError("worker replacement queue handoff requires a positive authoritative worker PID")
+    request_value = handoff.get("request")
+    if not isinstance(request_value, WorkerReplacementRequest):
+        raise ValueError("worker replacement queue handoff request is invalid")
+    try:
+        transport_value = json.loads(
+            serialize_worker_replacement_request(request_value).decode("utf-8")
+        )
+    except (TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("worker replacement queue handoff request is invalid") from exc
+    result = handle_worker_replacement_packet(
+        supervisor,
+        {
+            "command": "worker-replacement-packet",
+            "replacement": transport_value,
+        },
+        (authoritative_worker_pid, 0, 0),
+        allowed_worker_kinds=allowed_worker_kinds,
+        supervisor_time=supervisor_time,
+        target_id=target_id,
+        generation_id=generation_id,
+        code_hash=code_hash,
+        policy_fingerprint=policy_fingerprint,
+        authority_policy_generation=authority_policy_generation,
+        authority_policy_fingerprint=authority_policy_fingerprint,
+        allowed_capabilities=allowed_capabilities,
+        policy=policy,
+        acceptance_policy=acceptance_policy,
+    )
+    result["transport_message_id"] = handoff["transport_message_id"]
+    result["transport_sender_pid"] = handoff["transport_sender_pid"]
+    result["authoritative_worker_pid"] = authoritative_worker_pid
+    return result
+
+
 def issue_comparison_worker_assignment(
     supervisor: Any,
     packet: RecoveryAuthorityPacket,
@@ -2899,8 +3287,13 @@ __all__ = [
     "capture_worker_failure_evidence",
     "compare_comparison_worker_result",
     "handle_expired_worker_cohort",
+    "handle_worker_acceptance_observation",
+    "handle_worker_authority_packet",
+    "handle_worker_authority_queue_handoff",
     "handle_worker_failure",
     "handle_worker_failure_cohort",
+    "handle_worker_replacement_packet",
+    "handle_worker_replacement_queue_handoff",
     "issue_comparison_worker_assignment",
     "join_worker_evidence_reconciliations",
     "MAX_WORKER_FAILURE_COHORT",

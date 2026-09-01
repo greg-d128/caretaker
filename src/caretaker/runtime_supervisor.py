@@ -24,8 +24,13 @@ from .runtime_supervision import (
     capture_worker_failure_evidence,
     compare_comparison_worker_result,
     handle_expired_worker_cohort,
+    handle_worker_acceptance_observation,
+    handle_worker_authority_packet,
+    handle_worker_authority_queue_handoff,
     handle_worker_failure,
     handle_worker_failure_cohort,
+    handle_worker_replacement_packet,
+    handle_worker_replacement_queue_handoff,
     issue_comparison_worker_assignment,
     join_worker_evidence_reconciliations,
     reconcile_worker_failures,
@@ -224,6 +229,26 @@ class ApplicationRuntimeSupervisor:
     def join_worker_evidence_reconciliations(self, *args: Any, **kwargs: Any) -> Any:
         """Join worker evidence through the runtime seam."""
         return join_worker_evidence_reconciliations(self._implementation, *args, **kwargs)
+
+    def handle_worker_acceptance_observation(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """Handle a worker acceptance observation through the runtime seam."""
+        return handle_worker_acceptance_observation(self._implementation, *args, **kwargs)
+
+    def handle_worker_authority_packet(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """Admit or refresh a worker authority packet through the runtime seam."""
+        return handle_worker_authority_packet(self._implementation, *args, **kwargs)
+
+    def handle_worker_authority_queue_handoff(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """Handle an authority queue handoff through the runtime seam."""
+        return handle_worker_authority_queue_handoff(self._implementation, *args, **kwargs)
+
+    def handle_worker_replacement_packet(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """Admit a worker replacement packet through the runtime seam."""
+        return handle_worker_replacement_packet(self._implementation, *args, **kwargs)
+
+    def handle_worker_replacement_queue_handoff(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """Handle a replacement queue handoff through the runtime seam."""
+        return handle_worker_replacement_queue_handoff(self._implementation, *args, **kwargs)
 
     def handle_expired_worker_cohort(
         self,

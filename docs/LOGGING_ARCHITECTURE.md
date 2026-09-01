@@ -110,6 +110,12 @@ These operations validate identity and provenance, persist evidence where
 configured, and remain authority-neutral; they do not accept policy changes or
 authorize repairs.
 
+Worker acceptance observations and authority/replacement packet handoffs are
+also runtime-owned control boundaries. They validate the registered process,
+packet, and application-bound PID before updating worker state. The logging
+compatibility surface forwards these operations and does not expand them into
+host-level process management.
+
 Application monitoring and application-boundary shutdown are also implemented
 in the application-runtime package. The legacy logging supervisor delegates to
 those functions, and the runtime owner exposes them directly while preserving

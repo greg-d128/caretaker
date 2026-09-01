@@ -2234,7 +2234,8 @@ callback construction is also runtime-owned. Recovery handlers and process
 creation remain application-owned; remaining work is to extract only the other
 specialized orchestration boundaries without broadening the application
 authority boundary. Comparison-worker evidence assignment, acceptance, and
-reconciliation now use the same runtime owner.
+reconciliation now use the same runtime owner. Worker acceptance observations
+and authority/replacement packet handoffs now use it as well.
 
 `logging/supervisor.py` and `logging/__init__.py` currently include application
 supervision, worker health/authority, adaptive coordination, and recovery
