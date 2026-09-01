@@ -858,8 +858,10 @@ application-owned output-only audit callback. In a supervised run,
 `RemoteAuditStream` can forward that envelope through the authenticated local
 control socket; the supervisor binds the live application PID and actor,
 replaces the policy envelope with current supervisor context, and forces
-critical priority. Parallel stores and transport-level throttling remain
-future integrations.
+critical priority. When no explicit callback is supplied, the active enabled
+logging audit emitter is used automatically; an unconfigured or disabled audit
+stream leaves the path local and least-friction. Parallel stores and
+transport-level throttling remain future integrations.
 The supervisor also records delayed, context-bound threshold proposals as
 proposal-only evidence. An authenticated control-plane operation now applies
 an approved, effective proposal through a target-scoped runtime authority

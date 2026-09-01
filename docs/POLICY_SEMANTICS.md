@@ -126,4 +126,7 @@ the bounded incident context. A callback must explicitly return an accepted
 incident identifier; callback absence, rejection, or failure is reported and
 does not discard the evidence. An optional
 `backpressure_audit_callback` receives a bounded output-only audit envelope;
-the callback is not a command channel and cannot grant authority.
+the callback is not a command channel and cannot grant authority. When
+Caretaker logging is configured, its enabled audit emitter supplies the
+default callback; an explicit callback still takes precedence. An unconfigured
+or disabled audit stream leaves the adaptive path least-friction and local.

@@ -703,6 +703,95 @@ def test_lightweight_forwards_adaptive_backpressure_incident_callback(tmp_path: 
     assert batcher.backpressure_audit_callback is audit
 
 
+def test_lightweight_uses_active_logging_audit_by_default(
+    monkeypatch, tmp_path: Path
+) -> None:
+    audit_events: list[tuple[str, dict[str, object]]] = []
+
+    def audit(event_type, **fields):
+        audit_events.append((event_type, dict(fields)))
+
+    class _Audit:
+        enabled = True
+
+        emit = staticmethod(audit)
+
+    monkeypatch.setattr(
+        "caretaker.logging.handler.get_runtime",
+        lambda: type("_Runtime", (), {"audit": _Audit()})(),
+    )
+    wrapped = lightweight(
+        policy=LightweightPolicy(
+            aggregation=AdaptiveAggregationPolicy(
+                enabled=True,
+                backpressure_action=AdaptiveAggregationBackpressureAction.INCIDENT,
+            )
+        ),
+        target_id="example.adaptive.default-audit",
+        state_directory=tmp_path,
+    )(lambda: "ok")
+
+    batcher = wrapped.__caretaker_adaptive__._aggregation_batcher
+    assert batcher is not None
+    assert batcher.backpressure_audit_callback is audit
+
+
+def test_lightweight_explicit_backpressure_audit_callback_wins(
+    monkeypatch, tmp_path: Path
+) -> None:
+    explicit = lambda *_args, **_kwargs: None
+    active = lambda *_args, **_kwargs: None
+    monkeypatch.setattr(
+        "caretaker.logging.handler.get_runtime",
+        lambda: type(
+            "_Runtime",
+            (),
+            {"audit": type("_Audit", (), {"enabled": True, "emit": active})()},
+        )(),
+    )
+    wrapped = lightweight(
+        policy=LightweightPolicy(
+            aggregation=AdaptiveAggregationPolicy(enabled=True)
+        ),
+        target_id="example.adaptive.explicit-audit",
+        state_directory=tmp_path,
+        backpressure_audit_callback=explicit,
+    )(lambda: "ok")
+
+    batcher = wrapped.__caretaker_adaptive__._aggregation_batcher
+    assert batcher is not None
+    assert batcher.backpressure_audit_callback is explicit
+
+
+def test_lightweight_does_not_enable_unconfigured_remote_audit_callback(
+    monkeypatch, tmp_path: Path
+) -> None:
+    active = lambda *_args, **_kwargs: None
+    monkeypatch.setattr(
+        "caretaker.logging.handler.get_runtime",
+        lambda: type(
+            "_Runtime",
+            (),
+            {
+                "audit": type(
+                    "_Audit", (), {"socket_path": None, "emit": active}
+                )()
+            },
+        )(),
+    )
+    wrapped = lightweight(
+        policy=LightweightPolicy(
+            aggregation=AdaptiveAggregationPolicy(enabled=True)
+        ),
+        target_id="example.adaptive.no-remote-audit",
+        state_directory=tmp_path,
+    )(lambda: "ok")
+
+    batcher = wrapped.__caretaker_adaptive__._aggregation_batcher
+    assert batcher is not None
+    assert batcher.backpressure_audit_callback is None
+
+
 def test_lightweight_policy_rejects_unknown_adaptive_backpressure_action() -> None:
     with pytest.raises(ValueError, match="backpressure_action"):
         validate_lightweight_policy(

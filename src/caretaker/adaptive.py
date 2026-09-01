@@ -64,6 +64,31 @@ def _authority_context():
     return get_authority_runtime_context()
 
 
+def _configured_logging_audit_callback() -> Callable[..., Any] | None:
+    """Return the active logging audit emitter when it is usable.
+
+    Adaptive aggregation remains least-friction by default: no logging
+    runtime means no callback, and a disabled local audit writer or an
+    unconfigured remote transport is not treated as an active sink. Explicit
+    decorator callbacks are resolved separately and always take precedence.
+    """
+    try:
+        from .logging.handler import get_runtime
+
+        logging_runtime = get_runtime()
+        audit = getattr(logging_runtime, "audit", None)
+        if audit is None:
+            return None
+        if hasattr(audit, "enabled") and not bool(audit.enabled):
+            return None
+        if hasattr(audit, "socket_path") and not getattr(audit, "socket_path"):
+            return None
+        emit = getattr(audit, "emit", None)
+        return emit if callable(emit) else None
+    except Exception:
+        return None
+
+
 def utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -1517,6 +1542,9 @@ class _AdaptiveController:
             if supervisor_socket
             else SupervisorAdaptiveAggregationStore(self._aggregation_root())
         )
+        audit_callback = self.backpressure_audit_callback
+        if audit_callback is None:
+            audit_callback = _configured_logging_audit_callback()
         self._aggregation_batcher = AdaptiveObservationBatcher(
             aggregation_store,
             worker_id=_ADAPTIVE_WORKER_ID,
@@ -1525,7 +1553,7 @@ class _AdaptiveController:
             flush_interval_seconds=self.policy.aggregation.flush_interval_seconds,
             backpressure_action=self.policy.aggregation.backpressure_action,
             backpressure_incident_callback=self.backpressure_incident_callback,
-            backpressure_audit_callback=self.backpressure_audit_callback,
+            backpressure_audit_callback=audit_callback,
             **context,
         )
 
