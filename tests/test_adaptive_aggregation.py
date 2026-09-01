@@ -76,12 +76,26 @@ def _context():
     }
 
 
-def test_scoped_threshold_activation_fails_closed_until_scope_policy_resolution_exists():
-    with pytest.raises(ValueError, match="scope-specific adaptive threshold application"):
+def test_fixed_scoped_threshold_activation_targets_only_that_population():
+    settings = _adaptive_threshold_policy_settings(
+        {"exception.occurrences": 2},
+        target_id="example.target",
+        aggregation_scope="cluster:blue",
+        scope_resolution="FIXED",
+    )
+    assert len(settings) == 1
+    assert settings[0].target == extended_aggregation_target_id(
+        "example.target", "cluster:blue"
+    )
+
+
+def test_resolver_scoped_threshold_activation_remains_fail_closed():
+    with pytest.raises(ValueError, match="resolver-driven activation"):
         _adaptive_threshold_policy_settings(
             {"exception.occurrences": 2},
             target_id="example.target",
             aggregation_scope="cluster:blue",
+            scope_resolution="RESOLVER",
         )
 
     settings = _adaptive_threshold_policy_settings(

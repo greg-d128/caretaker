@@ -237,11 +237,14 @@ review for the proposal. `APPROVE` means only that the proposal is eligible for
 later staged policy review; it does not apply thresholds, reload workers, grant
 authority, or replace the policy. Conflicting review reuse is rejected and a
 stale or expired proposal cannot be reviewed.
-Population-scoped threshold proposals remain reviewable evidence, but their
-activation currently fails closed. The adaptive controller resolves authority
-policy by the base target, so applying such a proposal would otherwise affect
-all populations for that target. Scope-aware policy resolution is required
-before a scoped threshold can become active.
+Population-scoped threshold proposals use the exact extended target identity
+when the population is a fixed scope declared by the effective policy. This
+keeps a runtime lease limited to that population instead of affecting every
+population for the base target. Resolver-driven scopes remain reviewable
+evidence and fail closed at activation: the current controller has one policy
+and state object rather than independent policy/state for every population a
+per-call resolver may return. Dynamic population membership and its staged
+policy semantics remain future work.
 Before acceptance, an authenticated operator can use
 `adaptive-threshold-rollback` with an explicit confirmation and reason. This
 releases the transition's target-scoped runtime lease when present and writes a

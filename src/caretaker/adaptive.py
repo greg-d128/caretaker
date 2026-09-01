@@ -1484,7 +1484,25 @@ class _AdaptiveController:
 
     def _effective_policy(self) -> LightweightPolicy:
         context = _authority_context()
-        policy = context.apply(self.declared_policy, prefix="lightweight", target_id=self.target_id)
+        policy = context.apply(
+            self.declared_policy,
+            prefix="lightweight",
+            target_id=self.target_id,
+        )
+        # A fixed scope is part of the controller's effective identity.  Apply
+        # a second, exact-target lookup so a supervisor runtime lease can
+        # change thresholds for that population without changing the target's
+        # other populations.  Resolver-driven scopes are deliberately left on
+        # the base target: the controller has one policy/state object and must
+        # not pretend that a per-call resolver has population-specific policy
+        # state until that model exists.
+        fixed_scope = policy.aggregation.aggregation_scope
+        if fixed_scope and self.aggregation_scope_resolver is None:
+            policy = context.apply(
+                policy,
+                prefix="lightweight",
+                target_id=extended_aggregation_target_id(self.target_id, fixed_scope),
+            )
         self._authority_fingerprint = context.effective.fingerprint
         return policy
 
@@ -1594,6 +1612,15 @@ class _AdaptiveController:
             self._rebind_aggregation_batcher()
 
     def aggregation_status(self) -> dict[str, Any]:
+        aggregation_scope_mode = (
+            "RESOLVER"
+            if self.aggregation_scope_resolver is not None
+            else (
+                "FIXED"
+                if self.policy.aggregation.aggregation_scope
+                else "APPLICATION"
+            )
+        )
         promotion_policy = {
             "exception": {
                 "enabled": self.policy.exception.enabled,
@@ -1625,6 +1652,7 @@ class _AdaptiveController:
                 "transport": "DISABLED",
                 "target_id": self.target_id,
                 "aggregation_scope": self.policy.aggregation.aggregation_scope,
+                "aggregation_scope_mode": aggregation_scope_mode,
                 "generation_id": self.code_hash,
                 "policy_fingerprint": self._policy_fingerprint,
                 "authority_policy_generation": str(
@@ -1645,6 +1673,7 @@ class _AdaptiveController:
             ),
             **batcher.status(),
             **batcher.context,
+            "aggregation_scope_mode": aggregation_scope_mode,
             "promotion_policy": promotion_policy,
         }
 

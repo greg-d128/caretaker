@@ -1358,33 +1358,45 @@ def _handle_adaptive_backpressure_incident_submission(
 
 
 def _adaptive_threshold_policy_settings(
-    changes: Mapping[str, Any], *, target_id: str, aggregation_scope: str | None = None
+    changes: Mapping[str, Any],
+    *,
+    target_id: str,
+    aggregation_scope: str | None = None,
+    scope_resolution: str = "APPLICATION",
 ) -> tuple[PolicySetting, ...]:
     """Translate validated changes into target-scoped authority settings.
 
-    Population-scoped policy resolution is not implemented by the current
-    adaptive controller. Keep scoped proposals as reviewable evidence, but
-    refuse activation rather than applying them to every population for the
-    same target.
+    A fixed, policy-declared population can be addressed by its exact extended
+    target identity. Resolver-driven populations still cannot be activated:
+    the current controller does not maintain independent policy/state for each
+    population returned by a per-call resolver.
     """
     target = str(target_id).strip()
     if not target:
         raise ValueError("adaptive threshold application requires a target id")
     scope = str(aggregation_scope).strip() if aggregation_scope is not None else ""
-    if scope:
+    resolution = str(scope_resolution).strip().upper()
+    if resolution not in {"APPLICATION", "FIXED", "RESOLVER"}:
         raise ValueError(
-            "scope-specific adaptive threshold application is not implemented; "
-            "the proposal remains reviewable evidence"
+            "adaptive threshold application requires a known aggregation scope mode"
+        )
+    if scope and resolution != "FIXED":
+        raise ValueError(
+            "scope-specific adaptive threshold application requires a fixed "
+            "policy-declared scope; resolver-driven activation is not implemented"
         )
     if not isinstance(changes, Mapping) or not changes:
         raise ValueError("adaptive threshold application requires threshold changes")
+    setting_target = (
+        extended_aggregation_target_id(target, scope) if scope else target
+    )
     settings: list[PolicySetting] = []
     for raw_name, value in changes.items():
         name = str(raw_name).strip()
         path = _ADAPTIVE_THRESHOLD_SETTING_PATHS.get(name)
         if path is None:
             raise ValueError(f"unsupported adaptive threshold field {name!r}")
-        settings.append(PolicySetting(path=path, value=value, target=target))
+        settings.append(PolicySetting(path=path, value=value, target=setting_target))
     return tuple(settings)
 
 
@@ -1795,7 +1807,10 @@ def main(argv: list[str] | None = None) -> int:
         return matches, child_status
 
     def current_adaptive_context() -> tuple[
-        dict[str, str], dict[str, str], dict[str, dict[str, Any]]
+        dict[str, str],
+        dict[str, str],
+        dict[str, dict[str, Any]],
+        dict[str, str],
     ] | None:
         """Read the child's current adaptive context without mutating state."""
         if not unix_socket_exists(runtime_control_socket):
@@ -1813,6 +1828,7 @@ def main(argv: list[str] | None = None) -> int:
         current_generations: dict[str, str] = {}
         policy_fingerprints: dict[str, str] = {}
         promotion_policies: dict[str, dict[str, Any]] = {}
+        scope_resolutions: dict[str, str] = {}
         promotion_policy_values: dict[str, object] = {}
         ambiguous_targets: set[str] = set()
         for item in contexts:
@@ -1830,6 +1846,9 @@ def main(argv: list[str] | None = None) -> int:
                 target,
                 aggregation_scope,
             )
+            scope_resolution = str(item.get("aggregation_scope_mode") or "").strip().upper()
+            if not scope_resolution:
+                scope_resolution = "APPLICATION" if aggregation_scope is None else "UNKNOWN"
             promotion_policy = item.get("promotion_policy")
             if (
                 aggregation_target in current_generations
@@ -1840,12 +1859,17 @@ def main(argv: list[str] | None = None) -> int:
                         aggregation_target in promotion_policy_values
                         and promotion_policy_values[aggregation_target] != promotion_policy
                     )
+                    or (
+                        aggregation_target in scope_resolutions
+                        and scope_resolutions[aggregation_target] != scope_resolution
+                    )
                 )
             ):
                 ambiguous_targets.add(aggregation_target)
                 continue
             current_generations[aggregation_target] = generation
             policy_fingerprints[aggregation_target] = policy_fingerprint
+            scope_resolutions[aggregation_target] = scope_resolution
             promotion_policy_values[aggregation_target] = promotion_policy
             if isinstance(promotion_policy, dict):
                 promotion_policies[aggregation_target] = dict(promotion_policy)
@@ -1853,7 +1877,13 @@ def main(argv: list[str] | None = None) -> int:
             current_generations.pop(aggregation_target, None)
             policy_fingerprints.pop(aggregation_target, None)
             promotion_policies.pop(aggregation_target, None)
-        return current_generations, policy_fingerprints, promotion_policies
+            scope_resolutions.pop(aggregation_target, None)
+        return (
+            current_generations,
+            policy_fingerprints,
+            promotion_policies,
+            scope_resolutions,
+        )
 
     def reconcile_adaptive_aggregation(
         *,
@@ -1865,7 +1895,7 @@ def main(argv: list[str] | None = None) -> int:
         context = current_adaptive_context()
         if context is None:
             return None
-        current_generations, policy_fingerprints, promotion_policies = context
+        current_generations, policy_fingerprints, promotion_policies, _ = context
         effective_authority = authority.effective
         result = adaptive_aggregation_store.reconcile(
             current_generations=current_generations,
@@ -2010,7 +2040,7 @@ def main(argv: list[str] | None = None) -> int:
             adaptive_context = current_adaptive_context()
             transition_context_kwargs: dict[str, Any] = {}
             if adaptive_context is not None:
-                current_generations, policy_fingerprints, _ = adaptive_context
+                current_generations, policy_fingerprints, _, _ = adaptive_context
                 effective_authority = authority.effective
                 transition_context_kwargs = {
                     "current_generations": current_generations,
@@ -2252,7 +2282,7 @@ def main(argv: list[str] | None = None) -> int:
             adaptive_context = current_adaptive_context()
             transition_context_kwargs: dict[str, Any] = {}
             if adaptive_context is not None:
-                current_generations, policy_fingerprints, _ = adaptive_context
+                current_generations, policy_fingerprints, _, _ = adaptive_context
                 effective_authority = authority.effective
                 transition_context_kwargs = {
                     "current_generations": current_generations,
@@ -2353,7 +2383,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise PermissionError(
                     "adaptive threshold review requires current worker context"
                 )
-            current_generations, policy_fingerprints, _ = adaptive_context
+            current_generations, policy_fingerprints, _, _ = adaptive_context
             effective_authority = authority.effective
             reviews = adaptive_aggregation_store.list_transition_requests(
                 request_id=request_id,
@@ -2447,7 +2477,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise PermissionError(
                     "adaptive threshold application requires current worker context"
                 )
-            current_generations, policy_fingerprints, _ = adaptive_context
+            current_generations, policy_fingerprints, _, scope_resolutions = adaptive_context
             previous_authority = authority.effective
             proposals = adaptive_aggregation_store.list_transition_requests(
                 request_id=request_id,
@@ -2534,6 +2564,7 @@ def main(argv: list[str] | None = None) -> int:
                 proposal.get("changes") or {},
                 target_id=str(proposal["target_id"]),
                 aggregation_scope=proposal.get("aggregation_scope"),
+                scope_resolution=scope_resolutions.get(aggregation_target, "UNKNOWN"),
             )
             lease = authority.acquire_runtime_lease(
                 settings=settings,
@@ -2563,7 +2594,12 @@ def main(argv: list[str] | None = None) -> int:
                 post_context = current_adaptive_context()
                 if post_context is None:
                     raise RuntimeError("application adaptive context is unavailable after policy update")
-                post_generations, post_policies, post_promotion_policies = post_context
+                (
+                    post_generations,
+                    post_policies,
+                    post_promotion_policies,
+                    _,
+                ) = post_context
                 applied_policy = str(post_policies.get(aggregation_target) or "")
                 if not applied_policy or applied_policy == str(proposal["policy_fingerprint"]):
                     raise RuntimeError(
@@ -2688,7 +2724,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise PermissionError(
                     "adaptive policy acceptance requires current worker context"
                 )
-            current_generations, policy_fingerprints, promotion_policies = adaptive_context
+            current_generations, policy_fingerprints, promotion_policies, _ = adaptive_context
             transitions = adaptive_aggregation_store.list_transition_requests(
                 request_id=request_id,
                 current_generations=current_generations,
@@ -2910,7 +2946,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise PermissionError(
                     "adaptive transition acknowledgement requires current worker context"
                 )
-            current_generations, policy_fingerprints, _ = adaptive_context
+            current_generations, policy_fingerprints, _, _ = adaptive_context
             effective_authority = authority.effective
             acknowledgement = adaptive_aggregation_store.acknowledge_transition(
                 request,
