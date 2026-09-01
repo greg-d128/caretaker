@@ -1811,6 +1811,7 @@ def test_console_displays_read_only_adaptive_transition_deadlines(tmp_path):
                     "policy_contexts": [{
                         "target_id": "app:charge",
                         "aggregation_scope": "blue",
+                        "aggregation_scope_mode": "FIXED",
                         "promotion_policy": {
                             "exception": {
                                 "enabled": True,
@@ -1861,6 +1862,7 @@ def test_console_displays_read_only_adaptive_transition_deadlines(tmp_path):
                 app.query_one("#adaptive-aggregation-policy-status", Static).render()
             )
             assert "exception=3 in 30s" in policy_status
+            assert "scope=FIXED" in policy_status
             assert "timing=disabled" in policy_status
             assert "repair evidence=20 samples / 100 calls" in policy_status
             assert "backpressure=RETAIN" in policy_status

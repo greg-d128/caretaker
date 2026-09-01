@@ -4790,6 +4790,9 @@ class CaretakerConsoleApp(App):
                 scope = context.get("aggregation_scope")
                 if scope and "::aggregation-scope::" not in str(target):
                     target = f"{target}::aggregation-scope::{scope}"
+                scope_mode = str(context.get("aggregation_scope_mode") or "").strip().upper()
+                if not scope_mode:
+                    scope_mode = "APPLICATION" if not scope else "UNKNOWN"
                 promotion = context.get("promotion_policy")
                 promotion = promotion if isinstance(promotion, Mapping) else {}
                 exception = promotion.get("exception")
@@ -4817,6 +4820,7 @@ class CaretakerConsoleApp(App):
                 backpressure = str(promotion.get("backpressure_action") or "RETAIN")
                 policy_lines.append(
                     f"{self._compact_log_text(target, limit=42) or '-'} | "
+                    f"scope={scope_mode}; "
                     f"exception={exception_text}; timing={timing_text}; "
                     f"repair evidence={evidence_text}; backpressure={backpressure}"
                 )
