@@ -203,6 +203,7 @@ from .execution import (
 )
 from .engine import RepairEngine, RepairResolution, ResolutionKind
 from .operation_context import OperationContext, OperationContextStaleError
+from .provenance import ProvenanceEnvelope
 from .runtime_supervisor import ApplicationRuntimeSupervisor
 from .integrity import (
     GPGVerifier,
@@ -675,6 +676,7 @@ __all__ = [
     "RepairEngine",
     "OperationContext",
     "OperationContextStaleError",
+    "ProvenanceEnvelope",
     "ApplicationRuntimeSupervisor",
     "PolicyConfigurationError",
     "RepairLimits",

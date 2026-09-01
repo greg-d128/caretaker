@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from .provenance import ProvenanceEnvelope
+
 
 class OperationContextStaleError(RuntimeError):
     """Raised when an operation no longer matches its admission context."""
@@ -80,6 +82,19 @@ class OperationContext:
         return hashlib.sha256(
             json.dumps(self.as_dict(), sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
+
+    @property
+    def provenance(self) -> ProvenanceEnvelope:
+        """Return common provenance without changing the context wire shape."""
+
+        return ProvenanceEnvelope(
+            target_id=self.target_id,
+            policy_fingerprint=self.policy_fingerprint,
+            authority_policy_generation=self.authority_policy_generation,
+            authority_policy_fingerprint=self.authority_policy_fingerprint,
+            evidence_identity=self.evidence_identity,
+            evidence_fingerprint=self.evidence_fingerprint,
+        )
 
     def assert_current(
         self,

@@ -21,6 +21,8 @@ integration:
   the policy/domain/validation value objects used to configure them;
 - `IncidentCapsule`, `IncidentCapsuleStore`, `IncidentCapsulePolicy`,
   `CommunicationRecord`, and the incident-capsule validation helpers;
+- `OperationContext` and `ProvenanceEnvelope` for immutable operation and
+  common provenance projections;
 - `ApplicationRuntimeSupervisor`, `ApplicationLocalQueueTransport`, and
   `ApplicationTransportError`;
 - the primary observation, behavior, shadow-execution, and store interfaces

@@ -2232,8 +2232,8 @@ export.
 
 #### 11. Consolidate provenance and classify the public API last
 
-**Status: API inventory implemented; provenance schema consolidation remains
-future work.**
+**Status: API inventory and a non-breaking provenance projection are implemented;
+serialized provenance consolidation remains future work.**
 
 Behavior, capsule, adaptive, transport, recovery, and integrity artifacts
 repeat identity, policy/authority fingerprints, versions, hashes, and JSON
@@ -2245,9 +2245,13 @@ fixtures before changing formats.
 The public root inventory and stability classifications are documented in
 `docs/PUBLIC_API.md`, with `src/caretaker/__init__.py::__all__` as the
 authoritative membership list. No exports were removed or deprecated. The
-shared provenance envelope, legacy readers, signature/hash compatibility
-fixtures, and any serialized-format migration remain future work; do not make
-this breaking cleanup a prerequisite for Application Caretaker operation.
+shared `ProvenanceEnvelope` is an immutable, bounded, non-authorizing
+projection available from `OperationContext` and can read common fields from
+family-specific or legacy mappings while ignoring unknown family fields. It
+does not change the existing context dictionary, signed bytes, or persisted
+schemas. Legacy readers, signature/hash compatibility fixtures, and any
+serialized-format migration remain future work; do not make this breaking
+cleanup a prerequisite for Application Caretaker operation.
 
 #### 12. Make dependency reproducibility explicit without pinning users
 
