@@ -1961,6 +1961,7 @@ class CaretakerConsoleApp(App):
                 "summary": summary,
                 "deviations": deviations,
                 "inspections": inspections,
+                "behavior_comparison": self._latest_guard_behavior_comparison(inspections),
                 "decisions": target_decisions,
             })
         self._guard_records = records
@@ -1996,6 +1997,38 @@ class CaretakerConsoleApp(App):
         if summary:
             return "LEARNING"
         return "NO EVIDENCE"
+
+    @staticmethod
+    def _latest_guard_behavior_comparison(inspections: Any) -> dict[str, Any] | None:
+        """Return a bounded summary of the newest periodic comparison."""
+        candidates: list[tuple[str, dict[str, Any]]] = []
+        for inspection in inspections or ():
+            if not isinstance(inspection, dict):
+                continue
+            comparison = inspection.get("behavior_comparison")
+            if not isinstance(comparison, dict):
+                continue
+            occurred_at = str(
+                inspection.get("occurred_at")
+                or inspection.get("created_at")
+                or comparison.get("observed_at")
+                or ""
+            )
+            candidates.append((occurred_at, comparison))
+        if not candidates:
+            return None
+        _, comparison = max(candidates, key=lambda item: item[0])
+        reasons = comparison.get("change_reasons") or ()
+        if not isinstance(reasons, (list, tuple)):
+            reasons = (str(reasons),)
+        return {
+            "comparison_id": str(comparison.get("comparison_id") or "-")[:128],
+            "state": str(comparison.get("state") or "unknown").upper(),
+            "observed_at": str(comparison.get("observed_at") or "-")[:64],
+            "baseline_calls": comparison.get("baseline_calls", "?"),
+            "observed_calls": comparison.get("observed_calls", "?"),
+            "change_reasons": [str(reason)[:128] for reason in reasons[:8]],
+        }
 
     def _apply_guard_filter(self) -> None:
         expression = self.query_one("#guard-filter", Input).value.strip().casefold()
@@ -2479,6 +2512,24 @@ class CaretakerConsoleApp(App):
                 f"[b]Active findings[/b] {record.get('violation_count')}\n"
                 f"[b]Escalations/decisions[/b] {record.get('escalation_count')}"
             )
+            comparison = record.get("behavior_comparison")
+            if not isinstance(comparison, dict):
+                comparison = self._latest_guard_behavior_comparison(record.get("inspections"))
+            output.write("\n[b]Periodic behavior comparison[/b]")
+            if comparison is None:
+                output.write("  No periodic comparison has been recorded.")
+            else:
+                output.write(
+                    f"  state={comparison.get('state', 'UNKNOWN')} "
+                    f"baseline_calls={comparison.get('baseline_calls', '?')} "
+                    f"observed_calls={comparison.get('observed_calls', '?')} "
+                    f"observed_at={comparison.get('observed_at', '-')}"
+                )
+                reasons = comparison.get("change_reasons") or ()
+                output.write(
+                    f"  change_reasons={', '.join(str(reason) for reason in reasons)}"
+                    if reasons else "  change_reasons=none"
+                )
             deviations = record.get("deviations") or ()
             if deviations:
                 output.write("\n[b]Why this target needs attention[/b]")

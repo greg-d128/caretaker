@@ -748,6 +748,51 @@ def test_guard_console_exposes_sensitive_file_network_sequences(tmp_path):
     asyncio.run(exercise())
 
 
+def test_guard_console_summarizes_periodic_behavior_comparison(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)) as pilot:
+            app._activate_tab("guard")
+            await pilot.pause()
+            app._guard_records = [{
+                "target_id": "app.worker",
+                "status": "DEVIATION",
+                "severity": "HIGH",
+                "last_check": "2026-08-31T12:00:00Z",
+                "violation_count": 1,
+                "escalation_count": 0,
+                "summary": {"target_id": "app.worker"},
+                "deviations": [],
+                "inspections": [{
+                    "occurred_at": "2026-08-31T12:00:00Z",
+                    "behavior_comparison": {
+                        "comparison_id": "comparison-1",
+                        "state": "changed",
+                        "observed_at": "2026-08-31T11:59:59Z",
+                        "baseline_calls": 20,
+                        "observed_calls": 27,
+                        "change_reasons": ["new-resource-capability", "additional-failures"],
+                    },
+                }],
+                "decisions": [],
+            }]
+            app._apply_guard_filter()
+            table = app.query_one("#guard-table", DataTable)
+            key = next(iter(table.rows))
+            await app.on_data_table_row_selected(DataTable.RowSelected(table, 0, key))
+
+            rendered = "\n".join(line.text for line in app.query_one("#guard-output", RichLog).lines)
+            assert "Periodic behavior comparison" in rendered
+            assert "state=CHANGED" in rendered
+            assert "baseline_calls=20" in rendered
+            assert "observed_calls=27" in rendered
+            assert "new-resource-capability" in rendered
+            assert "additional-failures" in rendered
+
+    asyncio.run(exercise())
+
+
 def test_behavior_archive_controls_fit_in_console(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 

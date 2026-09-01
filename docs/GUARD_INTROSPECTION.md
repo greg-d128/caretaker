@@ -62,6 +62,11 @@ resource capabilities, newly observed event kinds, repeated return novelty,
 and additional failures are reported as change reasons. Cumulative call and
 event counts alone do not constitute a behavior change.
 
+The Guard console includes the newest comparison state, baseline and observed
+call counts, observation time, and bounded change reasons in the selected
+target's operational detail. The separate Inspections action remains the
+source for complete comparison evidence.
+
 The comparison requires a matching target, code hash, monitoring fingerprint,
 statistics schema, and behavior generation, plus calls observed after baseline
 acceptance. It never accepts or updates a baseline, rotates a generation,
