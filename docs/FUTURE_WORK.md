@@ -2190,6 +2190,14 @@ audit-context equality before persistence changes.
 
 #### 9. Split consumer interfaces without multiplying physical stores
 
+**Status: Partially implemented in development tree.**
+
+The store module now exposes typed lifecycle, evidence, worker/recovery, and
+integrity capability views over the existing InMemory and SQLite stores. The
+observation manager consumes the evidence view, while the physical stores,
+schema, and recovery queries remain unchanged. Migrating the remaining
+consumers and tightening ownership boundaries is still pending.
+
 `RepairStore` currently exposes policy, incidents, episodes, candidates,
 attempts, events, observations, integrity, rollouts, workers, comparisons, and
 recovery. Add narrow capability views such as lifecycle, evidence,

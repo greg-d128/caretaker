@@ -45,6 +45,17 @@ archives. Durable time-based Guard retention and segment-class-aware incident/
 baseline retention remain deferred; their policy fields are rejected or treated
 as reserved rather than silently applied.
 
+## Store capability views
+
+`RepairStore` remains the single physical InMemory/SQLite persistence seam. To
+keep consumers from depending on unrelated record families, the public API
+also provides `lifecycle_store_view()`, `evidence_store_view()`,
+`worker_recovery_store_view()`, and `integrity_store_view()`. These are narrow
+typed projections over the same store; they do not create additional databases,
+change the schema, or provide an authorization boundary. New consumers should
+accept the narrowest capability they require. The observation manager already
+uses the evidence capability; further consumer migration is incremental.
+
 Archive/compaction work must be an inspectable, resumable operation with a
 dry-run projection, preservation exceptions, and reference validation. No
 universal migration or deletion framework is implied by this contract.

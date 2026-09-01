@@ -78,7 +78,7 @@ from .state import (
     exception_evidence,
     value_snapshot,
 )
-from .store import InMemoryRepairStore, RepairStore
+from .store import InMemoryRepairStore, RepairStore, evidence_store_view, lifecycle_store_view
 from .telemetry import CorrelatedLogHandler, logger
 
 
@@ -149,6 +149,8 @@ class RepairEngine:
         self.provider = provider
         self.registry = registry or TargetRegistry()
         self.store = store or InMemoryRepairStore()
+        self.lifecycle_store = lifecycle_store_view(self.store)
+        self.evidence_store = evidence_store_view(self.store)
         if validation_backend is not None and validation_backends is not None:
             raise ValueError("specify validation_backend or validation_backends, not both")
         configured_backends = (
@@ -185,7 +187,7 @@ class RepairEngine:
         self.state_capture = StateCapture()
         self.scorer = CandidateScorer()
         self.selector = CandidateSelector()
-        self.observation = ObservationManager(self.store)
+        self.observation = ObservationManager(self.evidence_store)
         self.regression = RegressionCorpus(fixture_store=self.regression_fixture_store)
         self._repair_history: dict[tuple[str, str], list[datetime]] = {}
         self._attempt_cache: dict[UUID, RepairAttempt] = {}

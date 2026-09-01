@@ -18,7 +18,7 @@ from .shadow import (
 )
 from .execution import EffectObservation, FunctionExecutionContract
 from .state import exception_evidence, value_snapshot
-from .store import RepairStore
+from .store import RepairEvidenceStore
 
 
 class DifferentialMismatchError(RuntimeError):
@@ -49,7 +49,7 @@ class ObservationFailureDecision:
 
 
 class ObservationManager:
-    def __init__(self, store: RepairStore) -> None:
+    def __init__(self, store: RepairEvidenceStore) -> None:
         self.store = store
 
     def restore_candidate_observation(

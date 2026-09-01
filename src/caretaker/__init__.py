@@ -352,7 +352,18 @@ from .replay import (
     execute_capsule_replay,
     execute_historical_capsule_replays,
 )
-from .store import InMemoryRepairStore, SQLiteRepairStore
+from .store import (
+    InMemoryRepairStore,
+    RepairEvidenceStore,
+    RepairIntegrityStore,
+    RepairLifecycleStore,
+    RepairWorkerRecoveryStore,
+    SQLiteRepairStore,
+    evidence_store_view,
+    integrity_store_view,
+    lifecycle_store_view,
+    worker_recovery_store_view,
+)
 from .telemetry import CorrelatedLogHandler
 from .logging import (
     AuditDeliverySink,
@@ -632,6 +643,14 @@ __all__ = [
     "ExceptionHookManager",
     "ExceptionTrigger",
     "InMemoryRepairStore",
+    "RepairEvidenceStore",
+    "RepairIntegrityStore",
+    "RepairLifecycleStore",
+    "RepairWorkerRecoveryStore",
+    "evidence_store_view",
+    "integrity_store_view",
+    "lifecycle_store_view",
+    "worker_recovery_store_view",
     "bootstrap_integrity",
     "RuntimeIntegrityMonitor",
     "RootMetadata",
