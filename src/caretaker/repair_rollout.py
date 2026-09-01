@@ -260,6 +260,33 @@ class RolloutReadinessRequirements:
 
 
 @dataclass(frozen=True, slots=True)
+class RolloutStageReadiness:
+    """Readiness requirements that override the global stage gate."""
+
+    stage: RepairRolloutStage
+    requirements: RolloutReadinessRequirements
+
+    def __post_init__(self) -> None:
+        try:
+            stage = RepairRolloutStage(self.stage)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("rollout.stage_readiness stage is invalid") from exc
+        if stage not in {
+            RepairRolloutStage.SHADOW,
+            RepairRolloutStage.CANARY,
+            RepairRolloutStage.ACTIVE,
+        }:
+            raise ValueError(
+                "rollout.stage_readiness stages must be shadow, canary, or active"
+            )
+        if not isinstance(self.requirements, RolloutReadinessRequirements):
+            raise ValueError(
+                "rollout.stage_readiness requirements must be RolloutReadinessRequirements"
+            )
+        object.__setattr__(self, "stage", stage)
+
+
+@dataclass(frozen=True, slots=True)
 class RepairRolloutPolicy:
     """Controls the ledger's authority and lifecycle boundaries.
 
@@ -285,6 +312,7 @@ class RepairRolloutPolicy:
     readiness: RolloutReadinessRequirements = field(
         default_factory=RolloutReadinessRequirements
     )
+    stage_readiness: tuple[RolloutStageReadiness, ...] = ()
 
     def __post_init__(self) -> None:
         for name in (
@@ -325,6 +353,43 @@ class RepairRolloutPolicy:
             raise ValueError(
                 "rollout.readiness must be a RolloutReadinessRequirements"
             )
+        try:
+            stage_readiness = tuple(self.stage_readiness)
+        except TypeError as exc:
+            raise ValueError("rollout.stage_readiness must be a sequence") from exc
+        stage_order = {
+            RepairRolloutStage.SHADOW: 0,
+            RepairRolloutStage.CANARY: 1,
+            RepairRolloutStage.ACTIVE: 2,
+        }
+        previous_order = -1
+        seen_stages: set[RepairRolloutStage] = set()
+        for item in stage_readiness:
+            if not isinstance(item, RolloutStageReadiness):
+                raise ValueError(
+                    "rollout.stage_readiness must contain RolloutStageReadiness values"
+                )
+            if item.stage in seen_stages:
+                raise ValueError(
+                    f"rollout.stage_readiness has more than one step for {item.stage.value}"
+                )
+            if stage_order[item.stage] <= previous_order:
+                raise ValueError(
+                    "rollout.stage_readiness must be ordered by lifecycle stage"
+                )
+            seen_stages.add(item.stage)
+            previous_order = stage_order[item.stage]
+        object.__setattr__(self, "stage_readiness", stage_readiness)
+
+    def readiness_for_stage(
+        self,
+        stage: RepairRolloutStage,
+    ) -> RolloutReadinessRequirements:
+        stage = RepairRolloutStage(stage)
+        for item in self.stage_readiness:
+            if item.stage is stage:
+                return item.requirements
+        return self.readiness
 
 
 @dataclass(frozen=True, slots=True)
@@ -1459,7 +1524,7 @@ class RepairRolloutCoordinator:
                 "checks": {},
             })
             return result
-        requirements = self.ledger.policy.readiness
+        requirements = self.ledger.policy.readiness_for_stage(next_stage)
         if not requirements.configured:
             result.update({
                 "status": "NOT_CONFIGURED",

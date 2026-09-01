@@ -993,7 +993,7 @@ Future work may export a signed review bundle containing a unified diff, origina
 
 ## Policy-controlled Repair rollout, mirroring, and shadow execution
 
-**Status: In progress in development tree; effect-aware contract, evidence gate, deterministic routing decision, registry-aware FunctionSlot invocation bridge, explicit application-owned raw-result callable binding, conservative pure-only candidate-failure fallback, policy-controlled candidate-authoritative mirroring, policy-defined staged routing ramps, and readiness-gated supervisor-cycle advancement implemented; richer fallback policy, fleet-wide routing, implicit arbitrary-callable replacement, and deployment-owned orchestration remain future work.**
+**Status: In progress in development tree; effect-aware contract, evidence gate, deterministic routing decision, registry-aware FunctionSlot invocation bridge, explicit application-owned raw-result callable binding, conservative pure-only candidate-failure fallback, policy-controlled candidate-authoritative mirroring, policy-defined staged routing ramps, stage-specific readiness requirements, and readiness-gated supervisor-cycle advancement implemented; richer fallback policy, fleet-wide routing, implicit arbitrary-callable replacement, and deployment-owned orchestration remain future work.**
 
 Caretaker currently supports candidate probation and a narrow
 `PURE_FUNCTION` differential-execution mode. For explicitly confirmed pure
@@ -1119,6 +1119,11 @@ thresholds for the next stage and reports each passing or failing check without
 advancing the rollout. Thresholds remain disabled by default; staged authority,
 atomic fleet counters, and deployment-owned worker orchestration remain future
 work.
+`RolloutStageReadiness` can now override those global thresholds for ordered
+shadow, canary, and active stages. The supervisor selects the requirements for
+the next stage under review, and unspecified stages inherit the global policy.
+These overrides remain evidence gates only; they do not grant authority or
+permit lifecycle skips.
 The supervised control plane now has an explicitly confirmed operator advance
 request that uses those readiness results for promotion and preserves a
 separate safety path for retirement or incident-backed revocation. A proposed

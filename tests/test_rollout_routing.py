@@ -24,6 +24,7 @@ from caretaker import (
     RolloutRampPolicy,
     RolloutRampStep,
     RolloutRoutingPolicy,
+    RolloutStageReadiness,
     SQLiteRepairStore,
     ShadowExecutionError,
     decide_rollout_routing,
@@ -1445,6 +1446,71 @@ def test_supervisor_ramp_advancement_retains_unready_state_without_mutation() ->
     assert result["authority_granted"] is False
     assert result["record"]["stage"] == "validated"
     assert len(ledger.transitions(record.rollout_id)) == 2
+
+
+def test_stage_readiness_overrides_global_requirements_for_next_stage() -> None:
+    store = InMemoryRepairStore()
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            allow_adaptive_stage_progression=True,
+            readiness=RolloutReadinessRequirements(minimum_current_workers=0),
+            stage_readiness=(
+                RolloutStageReadiness(
+                    RepairRolloutStage.CANARY,
+                    RolloutReadinessRequirements(minimum_observations=1),
+                ),
+            ),
+        ),
+        store=store,
+    )
+    record = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    coordinator = RepairRolloutCoordinator(
+        ledger,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        store=store,
+    )
+    shadow = coordinator.advance_if_ready(
+        record.rollout_id,
+        authority_id="supervisor-1",
+        reason="enter shadow",
+    )
+    assert shadow["status"] == "ADVANCED"
+
+    readiness = coordinator.readiness(record.rollout_id)
+    assert readiness["status"] == "NOT_READY"
+    assert readiness["checks"]["observations"]["required"] == 1
+    assert readiness["checks"]["observations"]["passed"] is False
+
+
+def test_stage_readiness_rejects_duplicate_or_out_of_order_overrides() -> None:
+    with pytest.raises(ValueError, match="more than one step"):
+        RepairRolloutPolicy(
+            stage_readiness=(
+                RolloutStageReadiness(
+                    RepairRolloutStage.SHADOW,
+                    RolloutReadinessRequirements(minimum_observations=1),
+                ),
+                RolloutStageReadiness(
+                    RepairRolloutStage.SHADOW,
+                    RolloutReadinessRequirements(minimum_observations=2),
+                ),
+            )
+        )
+    with pytest.raises(ValueError, match="ordered"):
+        RepairRolloutPolicy(
+            stage_readiness=(
+                RolloutStageReadiness(
+                    RepairRolloutStage.CANARY,
+                    RolloutReadinessRequirements(minimum_observations=1),
+                ),
+                RolloutStageReadiness(
+                    RepairRolloutStage.SHADOW,
+                    RolloutReadinessRequirements(minimum_observations=1),
+                ),
+            )
+        )
 
 
 def test_operator_rollout_advance_requires_confirmation_and_records_identity() -> None:

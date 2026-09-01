@@ -113,6 +113,13 @@ transition chain, and never validates a proposal, skips a stage, or grants
 execution authority. Unready, unavailable, or unconfigured evidence produces
 no mutation.
 
+Readiness thresholds may be supplied globally through
+`RolloutReadinessRequirements` or overridden per executable stage with
+ordered `RolloutStageReadiness` entries in `stage_readiness`. The override is
+selected for the next stage under review; stages without an entry use the
+global requirements. Per-stage thresholds affect only the readiness decision
+and never bypass validation, authority, pause, expiry, or lifecycle checks.
+
 The decision checks that the current policy fingerprint matches the rollout,
 rejects expired or terminal records, and returns a decision hash with the
 selected implementation. It does not invoke either implementation, activate a
