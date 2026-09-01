@@ -67,7 +67,11 @@ Defaults for these features are intentionally inactive/unset. Their presence in 
 `GuardTargetPolicy.periodic.compare_behavior` is now an executable opt-in. It
 compares current same-generation statistics with an accepted baseline during
 periodic function inspection and emits only bounded evidence and, when a
-change is found, the normal policy-governed Guard signal. The separate
+change is found, the normal policy-governed Guard signal. Its comparison
+evidence includes a bounded variance-aware duration report when both snapshots
+have at least 20 duration samples and compatible online variance summaries;
+three-sigma signals are review evidence, not a policy or authority decision.
+The separate
 `rotate_generation_on_behavior_change` opt-in seals the prior statistics and
 starts a fresh behavior revision after a verified same-code change. Neither
 setting accepts a baseline, changes policy, or grants authority. Missing,

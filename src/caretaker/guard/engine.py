@@ -1931,6 +1931,9 @@ class GuardEngine(GuardFacade):
             if int(item.get("before") or 0) == 0 and int(item.get("after") or 0) > 0
         ][:64]
         return_novelty = dict(comparison.get("return_novelty") or {})
+        duration_distribution = dict(
+            comparison.get("duration_distribution") or {}
+        )
         failure_change = dict((comparison.get("outcomes") or {}).get("failure") or {})
         reasons: list[str] = []
         if semantic_changes:
@@ -1939,6 +1942,8 @@ class GuardEngine(GuardFacade):
             reasons.append("new-event-kind")
         if return_novelty.get("state") == "new-observations":
             reasons.append("new-return-observation")
+        if duration_distribution.get("state") == "shift-signal":
+            reasons.append("duration-distribution-shift")
         if int(failure_change.get("absolute") or 0) > 0:
             reasons.append("additional-failures")
         return {
@@ -1964,6 +1969,7 @@ class GuardEngine(GuardFacade):
                 "new_categories": list(return_novelty.get("new_categories") or ())[:64],
                 "new_shapes": list(return_novelty.get("new_shapes") or ())[:64],
             },
+            "duration_distribution": duration_distribution,
             "failure_change": {
                 "before": int(failure_change.get("before") or 0),
                 "after": int(failure_change.get("after") or 0),

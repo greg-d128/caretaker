@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import tarfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 from caretaker.behavior import BehaviorSnapshotStore, compare_snapshots
@@ -158,6 +159,93 @@ def test_return_novelty_requires_successful_sample_minimum(tmp_path: Path):
     assert novelty["reason"] == "minimum-success-samples-not-reached"
     assert novelty["new_categories"] == []
     assert novelty["absence_claim_allowed"] is False
+
+
+def test_duration_distribution_report_surfaces_three_sigma_shift(
+    tmp_path: Path, monkeypatch
+):
+    store = BehaviorSnapshotStore(tmp_path)
+    older = _capture(code_hash="a" * 64, events=100)
+    older["profile"]["statistics"] = {
+        "duration_seconds": {
+            "count": 100,
+            "average": 0.010,
+            "standard_deviation": 0.001,
+            "p50": 0.010,
+            "p95": 0.012,
+        }
+    }
+    newer = _capture(code_hash="a" * 64, events=100)
+    newer["profile"]["statistics"] = {
+        "duration_seconds": {
+            "count": 100,
+            "average": 0.020,
+            "standard_deviation": 0.001,
+            "p50": 0.020,
+            "p95": 0.022,
+        }
+    }
+    timestamps = iter(
+        (
+            datetime(2026, 1, 1, tzinfo=timezone.utc),
+            datetime(2026, 1, 1, tzinfo=timezone.utc),
+            datetime(2026, 1, 2, tzinfo=timezone.utc),
+            datetime(2026, 1, 2, tzinfo=timezone.utc),
+            datetime(2026, 1, 3, tzinfo=timezone.utc),
+        )
+    )
+    monkeypatch.setattr("caretaker.behavior.utcnow", lambda: next(timestamps))
+
+    left = store.create(older)
+    right = store.create(newer)
+    report = compare_snapshots(left, right)["duration_distribution"]
+
+    assert report["evidence_only"] is True
+    assert report["state"] == "shift-signal"
+    assert report["reason"] == "three-sigma-distribution-signal"
+    assert report["mean_shift_at_three_sigma"] is True
+    assert report["spread_shift_at_three_sigma"] is False
+    assert report["reference"]["count"] == 100
+    assert report["selected"]["count"] == 100
+    assert report["mean_sigma"] > 3.0
+    assert report["quantile_changes"]["p50"]["absolute"] == 0.010
+
+
+def test_duration_distribution_report_preserves_insufficient_or_legacy_evidence(
+    tmp_path: Path, monkeypatch
+):
+    store = BehaviorSnapshotStore(tmp_path)
+    older = _capture(code_hash="a" * 64, events=10)
+    older["profile"]["statistics"] = {
+        "duration_seconds": {"count": 10, "average": 0.010}
+    }
+    newer = _capture(code_hash="a" * 64, events=100)
+    newer["profile"]["statistics"] = {
+        "duration_seconds": {
+            "count": 100,
+            "average": 0.020,
+            "standard_deviation": 0.001,
+        }
+    }
+    timestamps = iter(
+        (
+            datetime(2026, 2, 1, tzinfo=timezone.utc),
+            datetime(2026, 2, 1, tzinfo=timezone.utc),
+            datetime(2026, 2, 2, tzinfo=timezone.utc),
+            datetime(2026, 2, 2, tzinfo=timezone.utc),
+            datetime(2026, 2, 3, tzinfo=timezone.utc),
+        )
+    )
+    monkeypatch.setattr("caretaker.behavior.utcnow", lambda: next(timestamps))
+
+    report = compare_snapshots(store.create(older), store.create(newer))[
+        "duration_distribution"
+    ]
+
+    assert report["state"] == "insufficient-evidence"
+    assert report["reason"] == "minimum-duration-samples-not-reached"
+    assert report["mean_shift_at_three_sigma"] is False
+    assert report["absence_claim_allowed"] is False
 
 
 def test_operator_capture_provenance_is_bounded_persisted_and_hash_protected(tmp_path: Path):

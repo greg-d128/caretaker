@@ -30,7 +30,7 @@ Represents one normalized operation. Events may record imports, network operatio
 
 ### `BehaviorWindow`
 
-Aggregates a bounded interval of events into counts, rates, resource sets, and representative samples.
+Aggregates a bounded interval of events into counts, rates, resource sets, and representative samples. Duration windows retain compact numeric summaries; persisted behavior snapshots can compare their bounded mean, variance, and quantiles without retaining raw duration observations.
 
 ### `RuntimeInspection`
 
@@ -43,6 +43,11 @@ Represents explicitly accepted behavior for one exact code identity, workload la
 ### `BehaviorDeviation`
 
 Keeps expected and observed evidence plus separate novelty, magnitude, sensitivity, confidence, persistence, and total significance scores.
+
+Snapshot and periodic comparison reports may include a three-sigma duration
+distribution signal when compatible samples are sufficient. This is bounded,
+read-only evidence and never accepts a baseline, changes policy, or grants
+Repair authority.
 
 ## Guard engine
 

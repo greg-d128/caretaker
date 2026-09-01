@@ -3118,6 +3118,12 @@ def compare_snapshots(
         duration_changes[key] = _float_change(
             key, float(before_value or 0.0), float(after_value or 0.0)
         )
+    duration_distribution = _duration_distribution_report(
+        older,
+        newer,
+        left,
+        right,
+    )
     return_novelty = _return_novelty_report(older, newer, left, right)
     return {
         "comparison_id": str(uuid4()),
@@ -3138,6 +3144,7 @@ def compare_snapshots(
         "events": _numeric_change("events", left["event_count"], right["event_count"]),
         "events_per_call": _float_change("events_per_call", before_rate, after_rate),
         "duration_statistics": duration_changes,
+        "duration_distribution": duration_distribution,
         "event_kind_changes": kind_changes,
         "resource_changes": set_changes,
         "semantic_changes": semantic_changes,
@@ -3152,6 +3159,161 @@ def compare_snapshots(
         "return_novelty": return_novelty,
         "tree_changes": _compare_children(older.get("children") or (), newer.get("children") or ()),
     }
+
+
+_DISTRIBUTION_MINIMUM_SAMPLES = 20
+_DISTRIBUTION_SIGMA_THRESHOLD = 3.0
+
+
+def _duration_distribution_report(
+    older: Mapping[str, Any],
+    newer: Mapping[str, Any],
+    left: Mapping[str, Any],
+    right: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Compare bounded duration summaries without making an authority decision.
+
+    The report uses total sample counts and online standard deviations retained
+    by ``BehaviorStatisticsRepository``.  It deliberately does not inspect or
+    retain raw observations, and a no-shift result is never an absence claim.
+    The three-sigma signal is a review aid for operators and downstream
+    analysis; it is not consumed by Guard, Repair, policy, or authority.
+    """
+    report: dict[str, Any] = {
+        "evidence_only": True,
+        "state": "incomparable",
+        "reason": None,
+        "minimum_samples_per_snapshot": _DISTRIBUTION_MINIMUM_SAMPLES,
+        "sigma_threshold": _DISTRIBUTION_SIGMA_THRESHOLD,
+        "absence_claim_allowed": False,
+        "mean_shift_at_three_sigma": False,
+        "spread_shift_at_three_sigma": False,
+        "reference": {},
+        "selected": {},
+        "quantile_changes": {},
+    }
+
+    subject_a = older.get("subject_key")
+    subject_b = newer.get("subject_key")
+    if not subject_a or subject_a != subject_b:
+        report["reason"] = "different-subject"
+        return report
+    generation_a = older.get("generation_id")
+    generation_b = newer.get("generation_id")
+    if not generation_a or not generation_b or generation_a != generation_b:
+        report["reason"] = "different-generation"
+        return report
+    if older.get("monitoring_fingerprint") != newer.get("monitoring_fingerprint"):
+        report["reason"] = "different-monitoring"
+        return report
+    schema_a = older.get("statistics_schema_version")
+    schema_b = newer.get("statistics_schema_version")
+    if schema_a is None or schema_b is None or schema_a != schema_b:
+        report["reason"] = "different-statistics-schema"
+        return report
+
+    created_a = _comparison_datetime(older.get("created_at"))
+    created_b = _comparison_datetime(newer.get("created_at"))
+    if created_a is None or created_b is None:
+        report["reason"] = "missing-or-invalid-freshness"
+        return report
+    if created_b <= created_a:
+        report["reason"] = "selected-snapshot-is-not-newer"
+        return report
+
+    old_duration = dict((left.get("statistics") or {}).get("duration_seconds") or {})
+    new_duration = dict((right.get("statistics") or {}).get("duration_seconds") or {})
+    old_count = _finite_nonnegative_int(old_duration.get("count"))
+    new_count = _finite_nonnegative_int(new_duration.get("count"))
+    report["reference"]["count"] = old_count
+    report["selected"]["count"] = new_count
+    if old_count < _DISTRIBUTION_MINIMUM_SAMPLES or new_count < _DISTRIBUTION_MINIMUM_SAMPLES:
+        report["state"] = "insufficient-evidence"
+        report["reason"] = "minimum-duration-samples-not-reached"
+        return report
+
+    old_mean = _finite_number(old_duration.get("average"))
+    new_mean = _finite_number(new_duration.get("average"))
+    old_deviation = _finite_number(old_duration.get("standard_deviation"))
+    new_deviation = _finite_number(new_duration.get("standard_deviation"))
+    if (
+        old_mean is None
+        or new_mean is None
+        or old_deviation is None
+        or new_deviation is None
+        or old_deviation < 0.0
+        or new_deviation < 0.0
+    ):
+        report["state"] = "insufficient-evidence"
+        report["reason"] = "variance-summary-unavailable"
+        return report
+
+    report["reference"].update({
+        "mean": old_mean,
+        "standard_deviation": old_deviation,
+    })
+    report["selected"].update({
+        "mean": new_mean,
+        "standard_deviation": new_deviation,
+    })
+    for key in ("p10", "p50", "p90", "p95", "p99"):
+        old_value = _finite_number(old_duration.get(key))
+        new_value = _finite_number(new_duration.get(key))
+        if old_value is None and new_value is None:
+            continue
+        report["quantile_changes"][key] = {
+            "reference": old_value,
+            "selected": new_value,
+            "absolute": (new_value - old_value)
+            if old_value is not None and new_value is not None
+            else None,
+        }
+
+    mean_difference = new_mean - old_mean
+    standard_error_squared = (
+        (old_deviation * old_deviation) / old_count
+        + (new_deviation * new_deviation) / new_count
+    )
+    if standard_error_squared > 0.0:
+        sigma = abs(mean_difference) / math.sqrt(standard_error_squared)
+    else:
+        sigma = 0.0 if mean_difference == 0.0 else float("inf")
+    if old_deviation == 0.0 and new_deviation == 0.0:
+        spread_ratio = 1.0
+    elif min(old_deviation, new_deviation) == 0.0:
+        spread_ratio = float("inf")
+    else:
+        spread_ratio = max(old_deviation, new_deviation) / min(old_deviation, new_deviation)
+    report.update({
+        "state": "shift-signal"
+        if sigma >= _DISTRIBUTION_SIGMA_THRESHOLD or spread_ratio >= _DISTRIBUTION_SIGMA_THRESHOLD
+        else "no-shift-signal",
+        "reason": "three-sigma-distribution-signal"
+        if sigma >= _DISTRIBUTION_SIGMA_THRESHOLD or spread_ratio >= _DISTRIBUTION_SIGMA_THRESHOLD
+        else "no-three-sigma-distribution-signal",
+        "mean_difference": mean_difference,
+        "mean_sigma": sigma,
+        "spread_ratio": spread_ratio,
+        "mean_shift_at_three_sigma": sigma >= _DISTRIBUTION_SIGMA_THRESHOLD,
+        "spread_shift_at_three_sigma": spread_ratio >= _DISTRIBUTION_SIGMA_THRESHOLD,
+    })
+    return report
+
+
+def _finite_number(value: Any) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def _finite_nonnegative_int(value: Any) -> int:
+    try:
+        result = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return max(0, result)
 
 
 def _return_novelty_report(
