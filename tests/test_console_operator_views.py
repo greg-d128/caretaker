@@ -1764,6 +1764,20 @@ def test_console_displays_read_only_adaptive_transition_deadlines(tmp_path):
                         "stale_worker_ids": ["worker-a"],
                         "expires_at": "2026-08-30T12:00:30+00:00",
                         "context_status": "STALE_POLICY",
+                    }, {
+                        "request_id": "request-repair-proposal",
+                        "request_kind": "ADAPTIVE_REPAIR_PROPOSAL",
+                        "target_id": "app:charge",
+                        "aggregation_target_id": "app:charge::aggregation-scope::blue",
+                        "aggregation_scope": "blue",
+                        "generation_id": "generation-1",
+                        "status": "PROPOSAL_ONLY",
+                        "required_workers": [{"worker_id": "worker-a"}],
+                        "evidence": {
+                            "behavior_samples": 12,
+                            "behavior_observation_calls": 100,
+                        },
+                        "created_at": "2026-08-31T12:00:00+00:00",
                     }],
                     "policy_context_available": True,
                     "policy_contexts": [{
@@ -1791,8 +1805,19 @@ def test_console_displays_read_only_adaptive_transition_deadlines(tmp_path):
             await app.refresh_adaptive_aggregation()
 
             assert requests == [("adaptive-aggregation-status", {})]
-            assert app.query_one("#adaptive-aggregation-table", DataTable).row_count == 3
-            assert app._adaptive_aggregation_records[-1]["status"] == "STALE_CONTEXT"
+            assert app.query_one("#adaptive-aggregation-table", DataTable).row_count == 4
+            assert any(
+                item["kind"] == "REPAIR_PROPOSAL"
+                for item in app._adaptive_aggregation_records
+            )
+            assert "ADAPTIVE REPAIR PROPOSAL" in {
+                item["kind"] for item in app._attention_records
+            }
+            stale_transition = next(
+                item for item in app._adaptive_aggregation_records
+                if item["kind"] == "TRANSITION"
+            )
+            assert stale_transition["status"] == "STALE_CONTEXT"
             assert "ADAPTIVE TRANSITION STALE" in {
                 item["kind"] for item in app._attention_records
             }
@@ -1800,7 +1825,7 @@ def test_console_displays_read_only_adaptive_transition_deadlines(tmp_path):
                 app.query_one("#adaptive-aggregation-status", Static).render()
             )
             assert "Aggregates 1" in status
-            assert "Transitions 1" in status
+            assert "Transitions 2" in status
             assert "Expired 1" in status
             assert "Distribution conflicts 1" in status
             assert "Read-only" in status
@@ -1865,6 +1890,39 @@ def test_console_displays_policy_lineage_as_read_only_history(tmp_path):
             assert app._selected_adaptive_transition_request_id is None
             assert app.query_one("#adaptive-threshold-apply", Button).disabled is True
             assert app.query_one("#adaptive-threshold-rollback", Button).disabled is True
+
+    asyncio.run(exercise())
+
+
+def test_console_surfaces_adaptive_repair_proposal_as_read_only_attention(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            app._adaptive_aggregation_records = [{
+                "kind": "REPAIR_PROPOSAL",
+                "target_id": "app:charge::aggregation-scope::blue",
+                "status": "PROPOSAL_ONLY",
+                "payload": {
+                    "request_kind": "ADAPTIVE_REPAIR_PROPOSAL",
+                    "created_at": "2026-08-31T12:00:00+00:00",
+                    "evidence": {
+                        "behavior_samples": 12,
+                        "behavior_observation_calls": 100,
+                    },
+                },
+            }]
+            app._refresh_attention()
+
+            proposal = next(
+                item for item in app._attention_records
+                if item["kind"] == "ADAPTIVE REPAIR PROPOSAL"
+            )
+            assert proposal["related_tab"] == "adaptive"
+            assert proposal["priority"] == "WARNING"
+            assert "proposal-only Repair evidence" in proposal["summary"]
+            assert "12 behavior sample(s)" in proposal["summary"]
+            assert "100 observation call(s)" in proposal["summary"]
 
     asyncio.run(exercise())
 

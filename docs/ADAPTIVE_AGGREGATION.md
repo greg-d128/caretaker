@@ -367,3 +367,10 @@ The authenticated review, application, and pre-acceptance rollback operations
 also emit attributable `POLICY_REVIEWED`, `POLICY_APPLIED`, and
 `POLICY_ROLLED_BACK` records to `caretaker_audit.log`; these audit records are
 evidence only and do not grant authority.
+
+Supervisor-generated `ADAPTIVE_REPAIR_PROPOSAL` records are displayed as an
+explicit `REPAIR_PROPOSAL` row and as a warning in the console's attention
+queue. This is an operator-visibility projection only: selecting or reviewing
+the row does not create a Repair episode, activate a candidate, acknowledge a
+transition, or grant execution authority. The ordinary Repair policy,
+validation, approval, and authority gates remain required.

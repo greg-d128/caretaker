@@ -2243,6 +2243,25 @@ class CaretakerConsoleApp(App):
                     "related_tab": "adaptive",
                     "payload": payload,
                 })
+            elif kind == "REPAIR_PROPOSAL" and str(
+                adaptive_record.get("status") or ""
+            ).upper() == "PROPOSAL_ONLY":
+                evidence = payload.get("evidence")
+                evidence = evidence if isinstance(evidence, Mapping) else {}
+                records.append({
+                    "priority": "WARNING",
+                    "kind": "ADAPTIVE REPAIR PROPOSAL",
+                    "target_id": target_id,
+                    "timestamp": str(payload.get("created_at") or ""),
+                    "summary": (
+                        "Supervisor recorded a proposal-only Repair evidence decision for "
+                        f"{target_id}; review the retained evidence before using the ordinary "
+                        f"Repair workflow ({evidence.get('behavior_samples', 0)} behavior sample(s), "
+                        f"{evidence.get('behavior_observation_calls', 0)} observation call(s))."
+                    ),
+                    "related_tab": "adaptive",
+                    "payload": payload,
+                })
             elif kind in {"TRANSITION", "THRESHOLD"} and str(adaptive_record.get("status") or "").upper() in {
                 "EXPIRED",
                 "STALE_CONTEXT",
@@ -4836,6 +4855,8 @@ class CaretakerConsoleApp(App):
             row_kind = (
                 "THRESHOLD"
                 if request_kind == "ADAPTIVE_THRESHOLD_PROPOSAL"
+                else "REPAIR_PROPOSAL"
+                if request_kind == "ADAPTIVE_REPAIR_PROPOSAL"
                 else "TRANSITION"
             )
             if row_kind == "THRESHOLD" and displayed_status != "STALE_CONTEXT":
