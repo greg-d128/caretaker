@@ -2,7 +2,7 @@
 
 This document records intentionally incomplete, deferred, or proposed Caretaker capabilities. An item listed here is not an implicit security guarantee and must not be treated as implemented until it has code, policy semantics, tests, and documentation.
 
-Last reviewed: 2026-08-31
+Last reviewed: 2026-09-01
 
 ## Long-term roadmap and multi-scope research
 
@@ -1971,6 +1971,270 @@ Each integration requires an explicit source-of-truth, freshness model, offline/
 - Define a reproducible release procedure that binds source revision, wheel/sdist hashes, manifests, and signatures.
 - Add dependency review, constraints/lock inputs for release testing, and periodic vulnerability review.
 - Maintain a supported-platform matrix and a private vulnerability-reporting path.
+
+## Deep architectural review follow-up — 2026-09-01
+
+**Status: Proposed implementation backlog; not implemented.**
+
+The deep architectural review of Caretaker `2df0fce` found a coherent but
+additively evolved Application Caretaker. This section is the implementation
+handoff for the Caretaker project. It is intentionally narrower than a rewrite:
+preserve the existing application-scoped authority boundary, Guard/Validation/
+Repair/Rollout/Recovery/Integrity separation, process-local repair behavior,
+and current public behavior unless a finding below requires a correction.
+
+The full evidence-backed review is maintained in the architecture repository.
+The implementation work should use this section as the actionable summary and
+keep each stage working and testable before starting the next one.
+
+### Priority 1: close correctness and authority defects
+
+#### 1. Make terminal worker states monotonic
+
+**Location:** `src/caretaker/logging/supervisor.py`,
+`WorkerRegistry.heartbeat()` (currently around lines 730–791),
+`mark_failed()`, `record_restart()`, and
+`reconcile_authority_expiry()`.
+
+`heartbeat()` currently writes the supplied state unconditionally. A late
+heartbeat can change a worker from `FAILED` to `HEALTHY`, even though authority
+expiry and failure reconciliation treat `FAILED` and `UNAUTHORIZED` as terminal.
+
+Implement one transition owner in `WorkerRegistry` with this minimum rule:
+
+```text
+STARTING -> HEALTHY | DEGRADED | FAILED | UNAUTHORIZED
+HEALTHY/DEGRADED -> HEALTHY | DEGRADED | FAILED | UNAUTHORIZED
+FAILED/UNAUTHORIZED -> terminal until record_restart()
+```
+
+Heartbeats may update diagnostics, queue depth, work IDs, and completion
+sequence, but must not revive a terminal state. `record_restart()` must remain
+the only re-entry path and must create a new process-start identity.
+
+Preserve authority expiry, failure audit, acceptance-failure behavior,
+idempotent reconciliation, and explicit restart semantics. Add regression tests
+for late heartbeats after both terminal states, explicit restart identity, and
+diagnostic updates that do not change state. Do not introduce a generic state
+machine framework.
+
+#### 2. Establish active IPC endpoint ownership
+
+**Location:** `src/caretaker/logging/ipc.py`,
+`SocketLogServer.start()` (around lines 345–355) and
+`ControlSocketServer.start()` (around lines 541–552).
+
+Both servers currently unlink the Unix socket path before binding. Unlinking an
+active socket leaves the old listener alive and permits a new listener to bind
+the same pathname, creating split-brain logging or control endpoints.
+
+Add one shared endpoint-ownership helper. When the path exists, perform a
+bounded owner probe using an instance token plus PID/process-start identity. A
+live owner must cause startup to fail with an already-running result. Remove a
+stale path only after verifying that the prior owner is dead. Keep current
+permissions, UID/GID checks, optional signed authorization, client bounds, and
+clean shutdown.
+
+Add tests for active duplicate startup, dead-owner stale cleanup, PID reuse
+without matching instance identity, and equivalent behavior for both servers.
+Retain an explicit operator cleanup/diagnostic path for genuinely stale
+development endpoints; do not silently delete a live endpoint. Do not create a
+general service registry.
+
+#### 3. Give consequential baseline acceptance one authority owner
+
+**Locations:** `src/caretaker/guard/analytics.py` (`BaselineManager.accept()`),
+`src/caretaker/guard/engine.py`, `src/caretaker/logging/baselines.py`
+(`BaselineStore.accept()`), `src/caretaker/logging/cli.py`, and `operator.py`.
+
+Guard/operator paths accept runtime behavior baselines, while the historical
+logging baseline CLI directly accepts and writes an
+`ApplicationLoggingBaseline`. These are different evidence types, but both
+establish an accepted reference and currently expose parallel authority paths.
+
+Define baseline acceptance as one authoritative operation for any baseline that
+can influence runtime decisions. It must carry actor, target/scope, reason,
+policy generation/fingerprint, authority generation/fingerprint, timestamp,
+and durable audit. Keep historical logging baseline generation and comparison,
+but mark it explicitly offline/non-authoritative unless it uses the same
+authority operation.
+
+Update or remove runtime significance from `BaselineStore.accept()` and route
+the CLI through the authoritative control path when appropriate. Add tests that
+direct/offline acceptance cannot alter runtime Guard state, while authoritative
+acceptance remains usable and auditable. Preserve operator agency and the
+distinction between behavior and logging evidence.
+
+#### 4. Reconcile required-isolation semantics and release evidence
+
+**Locations:** `README.md` around the validation policy description,
+`docs/ISOLATED_EXECUTION.md`, `docs/FUTURE_WORK.md`, `VERIFICATION.txt`,
+`src/caretaker/validation.py`, and `src/caretaker/engine.py`.
+
+Current `RepairEngine` behavior records required-tier-unavailable approval as
+`validation_isolation_satisfied=False` and does not deploy the candidate.
+`docs/ISOLATED_EXECUTION.md` and the future-work section describe this hard,
+non-overridable minimum correctly, but `README.md` still describes approval as
+capable of activation below the requested tier.
+
+Update the README and any stale prose so `minimum_isolation`/required isolation
+is hard. If a future operator-overridable preference is needed, introduce the
+separate term `preferred_isolation` and record an explicit assurance downgrade;
+never overload “minimum.” Add a regression test proving that approval cannot
+activate below a required tier.
+
+Reconcile `VERIFICATION.txt` with the current implementation and exact test
+run. The validation protocol now includes transaction binding, finite
+measurement checks, explicit data encoding, and backend/isolation identity;
+those should not remain listed as current open debts. Preserve remaining debts
+for validator provisioning, key rotation/revocation, remote replay/attestation,
+VM provenance, same-UID administration, and unsupported domain-object codecs.
+Keep source-tree tests, installed-wheel tests, and signed-publication checks as
+separate release gates. Resolve the signing-workflow test assertion against the
+current normalized-version wheel-selection rule rather than weakening the
+current-version check.
+
+### Priority 2: make lifecycle persistence and operations explicit
+
+#### 5. Add a narrow atomic lifecycle commit
+
+**Locations:** `src/caretaker/store.py` (`RepairStore` and
+`SQLiteRepairStore`), `src/caretaker/repair_rollout.py`, and
+`src/caretaker/repair_recovery.py`.
+
+SQLite currently opens a connection and commits for each `_write()`. A rollout
+transition updates the aggregate, writes a transition, and appends an event via
+separate calls. A crash between calls can leave individually valid but
+relationally partial lifecycle evidence.
+
+Add a narrow operation such as `commit_rollout_transition()` or
+`commit_repair_milestone()` that commits only the records that must be atomic
+(aggregate, transition, and local event) in one SQLite transaction. Include a
+schema version and idempotency key. Keep independently durable evidence and
+append-only streams separate. Migrate one lifecycle at a time and retain
+adapters for existing store methods during transition.
+
+Preserve inspectable partial state, stale-plan rejection, transition hashes and
+signatures, InMemory testability, and the rule that recovery never reactivates
+process-local code. Add fault-injection tests at each write boundary, repeated
+commit/idempotency tests, SQLite/InMemory equivalence tests, and recovery tests.
+Do not add a universal transaction-everything framework.
+
+#### 6. Define durable schema, migration, and retention contracts
+
+**Locations:** store schema metadata, domain records, capsule/evidence/
+integrity loaders, `repair_recovery.py`, and logging/attachment retention.
+
+Document, for each durable artifact family, its schema ID, supported read range,
+explicit migration or named fail-closed incompatibility, unknown-field rule,
+and whether it is operational, audit-retained, or disposable derived evidence.
+Keep recovery markers tied to the versions they summarize.
+
+Classify retention for repair, rollout, recovery, worker, behavior, capsule, and
+regression records as well as logging segments. Provide inspectable dry-run
+archive/compaction and preservation exceptions for incident and signed audit
+evidence. Do not automatically delete records until ownership and policy are
+explicit. Add old-fixture, deterministic/idempotent migration, protected-
+evidence, bounded-query, resumable-archive, and reference-preservation tests.
+Use small family-local migrations rather than a universal migration framework.
+
+#### 7. Bound the control plane and classify long-running commands
+
+**Locations:** `src/caretaker/control_plane.py` (`RuntimeControlPlane`),
+`src/caretaker/logging/ipc.py`, and command handlers in `run.py`/`operator.py`.
+
+`signals`, `decisions`, and `actions` are retained in unbounded in-memory lists.
+The control endpoint also shares capacity with health and authority traffic,
+while capsule replay and similar operations can be long-running.
+
+Keep a bounded recent history and send durable records to the appropriate audit
+or evidence owner. Classify short requests versus long jobs within the existing
+protocol; return a job ID and bounded status for long jobs, and reserve capacity
+or priority for health/authority traffic.
+
+Preserve duplicate suppression, action-depth and scope-rate limits, audit,
+bounded client slots, and local control. Add memory-pressure, health-liveness,
+timeout/job-completion, and request/job-audit identity tests. Do not create a
+second control protocol or a general asynchronous framework.
+
+### Priority 3: consolidate ownership after the invariants are fixed
+
+#### 8. Introduce a small immutable operation context
+
+At repair and rollout admission, create an immutable context containing
+operation ID, target identity, effective policy snapshot/fingerprint, authority
+generation/fingerprint, and evidence identity. Policy/authority resolution owns
+construction; orchestrators consume it and revalidate only at declared
+boundaries. This removes repeated ad hoc runtime reads without merging policy
+dataclasses or making the context a service locator.
+
+Test policy changes during an operation, stale authority, approval, rollout, and
+audit-context equality before using the context to drive persistence changes.
+
+#### 9. Split consumer interfaces without multiplying physical stores
+
+`RepairStore` currently exposes policy, incidents, episodes, candidates,
+attempts, events, observations, integrity, rollouts, workers, comparisons, and
+recovery. Add narrow capability views such as lifecycle, evidence,
+worker/recovery, and integrity records over the existing SQLite implementation.
+Move ownership before changing the storage format. Preserve the InMemory seam,
+SQLite deployment simplicity, existing data, and recovery queries. Test that
+components depend only on the capability they use.
+
+#### 10. Move runtime supervision ownership out of logging
+
+`logging/supervisor.py` and `logging/__init__.py` currently include application
+supervision, worker health/authority, adaptive coordination, and recovery
+alongside logging. Create an application-runtime owner for workers, health,
+endpoint ownership, control, scheduling, and shutdown; keep logging as an
+observability dependency. Reduce `run.py` toward composition and runtime
+invocation. Move ownership/imports first and retain temporary compatibility
+re-exports. Do not introduce a generic service framework.
+
+Test logging-disabled runtime behavior, worker restart, startup/shutdown,
+imports, CLI/console behavior, and public compatibility before removing any
+export.
+
+#### 11. Consolidate provenance and classify the public API last
+
+Behavior, capsule, adaptive, transport, recovery, and integrity artifacts
+repeat identity, policy/authority fingerprints, versions, hashes, and JSON
+conversion. Introduce a small shared provenance envelope only for fields with
+the same meaning; retain family-specific schemas, explicit validation codecs,
+and exact signed bytes. Add legacy readers and signature/hash compatibility
+fixtures before changing formats.
+
+Classify top-level exports as stable integration, advanced, compatibility, or
+internal and generate a public inventory. Deprecate only unused historical
+exports after a consumer search and compatibility window. Do not make this
+breaking cleanup a prerequisite for Application Caretaker operation.
+
+#### 12. Make dependency reproducibility explicit without pinning users
+
+Keep library-friendly dependency lower bounds in `pyproject.toml`, but record a
+tested Python/dependency matrix and a release constraints/lock artifact for
+reproducible source and wheel verification. Periodically test compatibility
+with newer dependency versions and tie release evidence to the exact resolved
+environment. Do not impose runtime pins or add a dependency manager without a
+demonstrated need.
+
+### Implementation gates
+
+For each item above, implementation is complete only when:
+
+1. the authority and policy semantics are explicit;
+2. terminal and failure behavior is deterministic and fail-closed where required;
+3. persistence/restart behavior is tested where state is durable;
+4. performance and resource bounds are measured for the ordinary application path;
+5. operator status and audit output explain the result and any lost guarantee;
+6. focused regression tests pass before broader refactoring begins; and
+7. README, architecture, policy, release, and future-work documentation agree
+   with the implemented behavior.
+
+This backlog does not authorize Host Caretaker, Infrastructure Caretaker,
+universal hostile-code containment, automatic repository patching, global
+cross-process repair persistence, or remote attestation. Those remain separate
+future-scope decisions.
 
 ## Review rule for future capabilities
 
