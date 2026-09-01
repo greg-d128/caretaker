@@ -158,7 +158,12 @@ retained event, or an explicit flush/close, writes a critical
 `AUDIT_DATA_LOSS` record describing the suppressed priority counts. The default
 rates are all `1.0`, so the least-friction configuration retains the complete
 local audit stream. Critical sampling or dropping is rejected by policy
-validation, and audit policy changes require a new run.
+validation, and audit policy changes require a new run. The optional
+`maximum_segment_bytes` and `maximum_segment_seconds` settings enable
+manifest-backed audit rotation. They default to unlimited, preserving the
+least-friction single-file behavior; rotation does not delete retained
+segments, and external retention/deletion requires a separately secured
+retention policy.
 
 ## Incident communication drafts
 

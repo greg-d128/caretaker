@@ -1497,7 +1497,7 @@ Until this exists, restart is a rollback to deployed application code, not conti
 
 ## Other logging and storage work
 
-**Status: Implemented in development tree for the local hash-chained stream, optional per-event runtime signing, a bounded synchronous output-only external sink with local store-and-forward, and optional record-hash delivery acknowledgements; remote delivery assurance remains future work.**
+**Status: Implemented in development tree for the local hash-chained stream, optional per-event runtime signing, manifest-backed policy-controlled local segment rotation, a bounded synchronous output-only external sink with local store-and-forward, and optional record-hash delivery acknowledgements; remote delivery assurance and retention/deletion policy remain future work.**
 
 - Extract the writer, attachment store, and system collector into independently restartable worker processes while preserving the current IPC and evidence contracts.
 - Add external `LogSink` implementations and connect the audit sink boundary to
@@ -1552,6 +1552,12 @@ Until this exists, restart is a rollback to deployed application code, not conti
   transport authentication, replay handling, and the
   security review for injection, redaction, key lifecycle, and disk-full
   behavior remain future work. The sink is never a command channel.
+- Optional byte/time audit bounds now rotate the local stream into immutable,
+  content-hashed segments with a manifest. Verification checks the manifest,
+  closed-segment hashes, sequence ranges, and cross-segment chain continuity;
+  rotation does not delete old segments. Crash recovery at the rename/manifest
+  boundary fails closed rather than guessing, and policy-controlled retention
+  or deletion remains future work.
 - Add a durable adaptive-policy transition ledger with immutable lineage,
   resulting-policy IDs/fingerprints, effective and recorded timestamps, scope,
   validation/acknowledgement references, and operator/deployment attribution.

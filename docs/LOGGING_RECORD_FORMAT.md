@@ -190,7 +190,22 @@ The local audit file is `caretaker_audit.log` below the configured logging
 directory. Its enablement, filename, hash-chain choice, and event-size limit are
 startup/run-bound for the current process. A policy reload records the proposed
 change under the current stream first and requires a new run for those audit
-settings to take effect.
+settings to take effect. Optional `maximum_segment_bytes` and
+`maximum_segment_seconds` bounds are also run-bound. When either bound is
+reached, the writer closes the active file as
+`caretaker_audit.log.segment-00000000000000000000` (with the next index for
+later segments), writes a new active `caretaker_audit.log`, and maintains
+`caretaker_audit.log.manifest.json`.
+
+The manifest is a bounded local index of closed segments. Each entry records
+the segment filename, raw-file SHA-256, previous-segment SHA-256, first and
+last global sequence, record count, and close time. Rotation emits an
+`AUDIT_STREAM_ROTATED` event in the new active file; it is evidence only and
+cannot authorize a policy or runtime action. The event hash chain continues
+across the file boundary, while the manifest's file hashes protect the
+closed-segment contents. If a crash occurs during the rename/manifest update
+boundary, the writer fails closed on restart rather than guessing which file
+is authoritative.
 
 The external sink is write-only from Caretaker's perspective. Incoming records,
 alerts, or suggested actions are untrusted input and cannot be routed back into
@@ -215,6 +230,10 @@ assert report["valid"] is True
 The verifier never truncates or repairs a file. It reports an incomplete final
 line as invalid, checks sequence continuity, canonical content hashes, the
 configured hash-chain mode, and (when requested and keyed) every artifact
-signature. Missing public keys are reported as `UNAVAILABLE` for optional
-verification and fail a `require_signatures=True` report. The returned report
-is evidence only and is not an authority or command interface.
+signature. When a segment manifest is present, it additionally verifies every
+listed closed segment, rejects unlisted segment files, checks each manifest
+file hash and sequence range, and validates the cross-segment predecessor
+hashes before checking the active file. Missing public keys are reported as
+`UNAVAILABLE` for optional verification and fail a `require_signatures=True`
+report. The returned report is evidence only and is not an authority or
+command interface.

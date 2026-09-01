@@ -99,6 +99,83 @@ def test_audit_stream_is_hash_chained_and_recovers_across_restart(tmp_path: Path
     assert second["stream_sequence"] == 2
 
 
+def test_audit_stream_rotation_writes_manifest_and_verifies_all_segments(tmp_path: Path) -> None:
+    policy = AuditStreamPolicy(maximum_segment_bytes=4096)
+    writer = AuditStreamWriter(
+        policy,
+        directory=tmp_path,
+        run_id=uuid4(),
+        process_start_id=uuid4(),
+    )
+    for _ in range(12):
+        writer.emit("INCIDENT_CAPTURED", details={"message": "bounded incident evidence"})
+    writer.close()
+
+    manifest_path = tmp_path / "caretaker_audit.log.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["schema_version"] == 1
+    assert len(manifest["segments"]) >= 1
+    assert manifest["active_previous_segment_hash"] == manifest["segments"][-1]["content_sha256"]
+    assert all(
+        (tmp_path / segment["file_name"]).is_file()
+        for segment in manifest["segments"]
+    )
+
+    report = verify_audit_stream(tmp_path / "caretaker_audit.log")
+    assert report["valid"] is True
+    assert report["hash_chain_valid"] is True
+    assert report["event_count"] == 12 + len(manifest["segments"])
+
+
+def test_audit_stream_rotation_recovers_and_continues_global_chain(tmp_path: Path) -> None:
+    policy = AuditStreamPolicy(maximum_segment_bytes=4096)
+    first = AuditStreamWriter(policy, directory=tmp_path, run_id=uuid4(), process_start_id=uuid4())
+    for _ in range(12):
+        first.emit("INCIDENT_CAPTURED", details={"message": "rotation recovery"})
+    first.close()
+
+    restarted = AuditStreamWriter(policy, directory=tmp_path, run_id=uuid4(), process_start_id=uuid4())
+    event = restarted.emit("RECOVERY_DECISION", priority=EvidencePriority.CRITICAL)
+    restarted.close()
+
+    assert event["stream_sequence"] > 12
+    report = verify_audit_stream(tmp_path / "caretaker_audit.log")
+    assert report["valid"] is True
+    assert report["last_sequence"] == event["stream_sequence"]
+
+
+def test_audit_stream_rotation_fails_closed_when_closed_segment_changes(tmp_path: Path) -> None:
+    policy = AuditStreamPolicy(maximum_segment_bytes=4096)
+    writer = AuditStreamWriter(policy, directory=tmp_path, run_id=uuid4(), process_start_id=uuid4())
+    for _ in range(12):
+        writer.emit("INCIDENT_CAPTURED")
+    writer.close()
+    manifest = json.loads((tmp_path / "caretaker_audit.log.manifest.json").read_text())
+    segment_path = tmp_path / manifest["segments"][0]["file_name"]
+    segment_path.write_bytes(segment_path.read_bytes() + b" ")
+
+    report = verify_audit_stream(tmp_path / "caretaker_audit.log")
+    assert report["valid"] is False
+    assert any("content hash does not match" in error for error in report["errors"])
+    with pytest.raises(AuditStreamError, match="content hash"):
+        AuditStreamWriter(policy, directory=tmp_path, run_id=uuid4(), process_start_id=uuid4())
+
+
+def test_audit_stream_verifier_reports_malformed_segment_manifest(tmp_path: Path) -> None:
+    policy = AuditStreamPolicy(maximum_segment_bytes=4096)
+    writer = AuditStreamWriter(policy, directory=tmp_path, run_id=uuid4(), process_start_id=uuid4())
+    writer.emit("INCIDENT_CAPTURED")
+    writer.rotate()
+    writer.close()
+    (tmp_path / "caretaker_audit.log.manifest.json").write_text(
+        '{"schema_version":"invalid"}\n'
+    )
+
+    report = verify_audit_stream(tmp_path / "caretaker_audit.log")
+    assert report["valid"] is False
+    assert any("manifest schema" in error for error in report["errors"])
+
+
 def test_audit_writer_redacts_event_values_before_hashing(tmp_path: Path) -> None:
     writer = AuditStreamWriter(
         AuditStreamPolicy(),

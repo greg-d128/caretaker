@@ -230,6 +230,15 @@ POLICY_CAPABILITIES: tuple[PolicyCapability, ...] = (
         "Review metric disclosure, record bounds, local file permissions, dialect compatibility, and the fact that the stream cannot act as a command or authority channel.",
         ("logging.monitoring.",),
     ),
+    PolicyCapability(
+        "logging.audit-segment-rotation",
+        11,
+        "0.6.1",
+        "Manifest-backed audit segment rotation",
+        "Controls optional byte/time bounds that rotate the local audit stream while preserving verifiable segment and hash-chain continuity.",
+        "Review segment bounds, manifest permissions, crash recovery behavior, and the fact that rotation does not delete retained evidence or provide external anchoring.",
+        ("logging.audit.maximum_segment_",),
+    ),
 )
 
 CURRENT_POLICY_SURFACE_VERSION = max(

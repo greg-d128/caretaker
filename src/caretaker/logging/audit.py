@@ -3,6 +3,7 @@ from __future__ import annotations
 import binascii
 import hashlib
 import json
+import math
 import os
 import random
 import re
@@ -27,7 +28,9 @@ from .signing import (
 
 AUDIT_SCHEMA_VERSION = 1
 AUDIT_DELIVERY_QUEUE_SCHEMA_VERSION = 1
+AUDIT_SEGMENT_MANIFEST_SCHEMA_VERSION = 1
 _EVENT_TYPE = re.compile(r"^[A-Z][A-Z0-9_]{2,63}$")
+_SEGMENT_FILE = re.compile(r"^.+\.segment-(\d{20})$")
 _DEFAULT_AUDIT_SECRET_FIELD_NAMES = frozenset({
     "password", "passwd", "token", "secret", "authorization", "api_key", "apikey",
 })
@@ -383,6 +386,106 @@ def _copy_mapping(value: Mapping[str, Any] | None) -> dict[str, Any]:
     return {str(key): item for key, item in value.items()}
 
 
+def _audit_manifest_path(path: Path) -> Path:
+    return path.with_name(f"{path.name}.manifest.json")
+
+
+def _audit_segment_path(path: Path, index: int) -> Path:
+    return path.with_name(f"{path.name}.segment-{index:020d}")
+
+
+def _write_atomic_json(path: Path, value: Mapping[str, Any]) -> None:
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        with temporary.open("wb") as stream:
+            stream.write(_canonical(value))
+            stream.write(b"\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.chmod(0o600)
+        temporary.replace(path)
+    except OSError as exc:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        raise AuditStreamError(f"Unable to persist audit segment manifest: {exc}") from exc
+
+
+def _read_audit_manifest(path: Path, stream_path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AuditStreamError("Audit segment manifest is unreadable") from exc
+    if not isinstance(value, Mapping):
+        raise AuditStreamError("Audit segment manifest is not an object")
+    try:
+        schema_version = int(value.get("schema_version") or 0)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise AuditStreamError("Audit segment manifest schema is invalid") from exc
+    if schema_version != AUDIT_SEGMENT_MANIFEST_SCHEMA_VERSION:
+        raise AuditStreamError("Unsupported audit segment manifest schema")
+    if value.get("stream_file") != stream_path.name:
+        raise AuditStreamError("Audit segment manifest stream filename does not match")
+    if value.get("active_file") != stream_path.name:
+        raise AuditStreamError("Audit segment manifest active filename does not match")
+    if not isinstance(value.get("hash_chain"), bool):
+        raise AuditStreamError("Audit segment manifest hash-chain mode is invalid")
+    if "active_previous_segment_hash" not in value:
+        raise AuditStreamError("Audit segment manifest is missing active previous hash")
+    active_previous = value["active_previous_segment_hash"]
+    if active_previous is not None and (
+        not isinstance(active_previous, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", active_previous)
+    ):
+        raise AuditStreamError("Audit segment manifest active previous hash is invalid")
+    segments = value.get("segments")
+    if not isinstance(segments, list):
+        raise AuditStreamError("Audit segment manifest segments are invalid")
+    if len(segments) > 100_000:
+        raise AuditStreamError("Audit segment manifest contains too many segments")
+    for expected_index, segment in enumerate(segments):
+        if not isinstance(segment, Mapping):
+            raise AuditStreamError("Audit segment manifest contains an invalid segment")
+        if segment.get("segment_id") != f"segment-{expected_index:020d}":
+            raise AuditStreamError("Audit segment manifest IDs are not contiguous")
+        file_name = segment.get("file_name")
+        if not isinstance(file_name, str) or _SEGMENT_FILE.fullmatch(file_name) is None:
+            raise AuditStreamError("Audit segment manifest contains an unsafe filename")
+        if file_name != _audit_segment_path(stream_path, expected_index).name:
+            raise AuditStreamError("Audit segment manifest filename does not match its index")
+        for field_name in (
+            "content_sha256", "previous_segment_hash", "first_sequence",
+            "last_sequence", "record_count", "closed_at",
+        ):
+            if field_name not in segment:
+                raise AuditStreamError(f"Audit segment manifest is missing {field_name}")
+        if not isinstance(segment["closed_at"], str) or not segment["closed_at"].strip():
+            raise AuditStreamError("Audit segment manifest close time is invalid")
+        for field_name in ("first_sequence", "last_sequence", "record_count"):
+            if (
+                isinstance(segment[field_name], bool)
+                or not isinstance(segment[field_name], int)
+                or segment[field_name] <= 0
+            ):
+                raise AuditStreamError(f"Audit segment manifest {field_name} is invalid")
+        if segment["first_sequence"] > segment["last_sequence"]:
+            raise AuditStreamError("Audit segment manifest sequence range is invalid")
+        if segment["record_count"] != segment["last_sequence"] - segment["first_sequence"] + 1:
+            raise AuditStreamError("Audit segment manifest record count is invalid")
+        if (
+            not isinstance(segment["content_sha256"], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", segment["content_sha256"])
+        ):
+            raise AuditStreamError("Audit segment manifest content hash is invalid")
+        previous = segment["previous_segment_hash"]
+        if previous is not None and (
+            not isinstance(previous, str) or not re.fullmatch(r"[0-9a-f]{64}", previous)
+        ):
+            raise AuditStreamError("Audit segment manifest previous hash is invalid")
+    return dict(value)
+
+
 def _redact_audit_value(
     value: Any,
     *,
@@ -475,119 +578,187 @@ def verify_audit_stream(
     signature_failures = 0
     signature_unavailable = 0
     hash_failures = 0
-    try:
-        stream = stream_path.open("rb")
-    except OSError as exc:
-        errors.append(f"audit stream cannot be read: {exc}")
-        return report
-    with stream:
-        for line_number, line in enumerate(stream, start=1):
-            if len(line) > maximum_event_bytes:
+    manifest_path = _audit_manifest_path(stream_path)
+    source_paths: list[tuple[str, Path, Mapping[str, Any] | None]] = []
+    manifest: dict[str, Any] | None = None
+    if manifest_path.exists():
+        try:
+            manifest = _read_audit_manifest(manifest_path, stream_path)
+        except AuditStreamError as exc:
+            errors.append(str(exc))
+            return report
+        if manifest["hash_chain"] is not hash_chain:
+            errors.append("audit segment manifest hash-chain mode does not match policy")
+            hash_failures += 1
+        prior_segment_hash: str | None = None
+        listed_segment_names: set[str] = set()
+        for segment in manifest["segments"]:
+            segment_path = stream_path.parent / str(segment["file_name"])
+            listed_segment_names.add(segment_path.name)
+            if segment["previous_segment_hash"] != prior_segment_hash:
                 errors.append(
-                    f"line {line_number}: audit record exceeds maximum_event_bytes"
+                    f"{segment_path.name}: previous-segment hash does not match manifest"
                 )
                 hash_failures += 1
-                continue
-            if not line.endswith(b"\n"):
-                errors.append(f"line {line_number}: incomplete final audit record")
-                hash_failures += 1
-                break
             try:
-                event = json.loads(line.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                errors.append(f"line {line_number}: malformed audit record: {exc}")
+                actual_segment_hash = hashlib.sha256(segment_path.read_bytes()).hexdigest()
+            except OSError as exc:
+                errors.append(f"{segment_path.name}: audit segment cannot be read: {exc}")
                 hash_failures += 1
-                continue
-            if not isinstance(event, Mapping):
-                errors.append(f"line {line_number}: audit record is not an object")
+                actual_segment_hash = None
+            if actual_segment_hash != segment["content_sha256"]:
+                errors.append(f"{segment_path.name}: audit segment content hash does not match")
                 hash_failures += 1
-                continue
-            sequence = event.get("stream_sequence")
-            if not isinstance(sequence, int) or sequence != previous_sequence + 1:
-                errors.append(f"line {line_number}: audit stream sequence is not contiguous")
+            source_paths.append((segment_path.name, segment_path, segment))
+            prior_segment_hash = str(segment["content_sha256"])
+        if manifest["active_previous_segment_hash"] != prior_segment_hash:
+            errors.append("audit segment manifest active previous hash does not match")
+            hash_failures += 1
+        for extra in stream_path.parent.glob(f"{stream_path.name}.segment-*"):
+            if extra.name not in listed_segment_names:
+                errors.append(f"unlisted audit segment: {extra.name}")
                 hash_failures += 1
-            else:
-                previous_sequence = sequence
-                report["event_count"] += 1
-                if report["first_sequence"] is None:
-                    report["first_sequence"] = sequence
-                report["last_sequence"] = sequence
-            integrity = event.get("integrity")
-            if not isinstance(integrity, Mapping):
-                errors.append(f"line {line_number}: audit record has no integrity object")
-                hash_failures += 1
-                continue
-            if "hash_chain" in integrity and integrity.get("hash_chain") is not hash_chain:
-                errors.append(f"line {line_number}: audit hash-chain mode does not match policy")
-                hash_failures += 1
-            if hash_chain and integrity.get("previous_event_hash") != previous_hash:
-                errors.append(f"line {line_number}: previous-event hash does not match")
-                hash_failures += 1
-            body = dict(event)
-            body.pop("integrity", None)
-            expected_content = hashlib.sha256(_canonical(body)).hexdigest()
-            if integrity.get("content_sha256") != expected_content:
-                errors.append(f"line {line_number}: audit record content hash does not match")
-                hash_failures += 1
-            else:
-                previous_hash = expected_content
+    elif any(stream_path.parent.glob(f"{stream_path.name}.segment-*")):
+        errors.append("audit segments exist without a segment manifest")
+        hash_failures += 1
+    source_paths.append((stream_path.name, stream_path, None))
+    if not stream_path.is_file():
+        errors.append("audit stream does not exist")
+        hash_failures += 1
 
-            signature_value = integrity.get("artifact_signature")
-            if not isinstance(signature_value, Mapping):
-                report["unsigned_event_count"] += 1
-                if require_signatures:
-                    signature_failures += 1
-                    errors.append(f"line {line_number}: required audit signature is missing")
-                continue
-            report["signed_event_count"] += 1
-            try:
-                artifact = deserialize_signed_artifact(signature_value)
-                if artifact.artifact_kind != "caretaker-audit-event":
-                    raise ValueError("wrong artifact kind")
-                if artifact.run_id != UUID(str(event.get("run_id") or "")):
-                    raise ValueError("runtime identity does not match")
-                if artifact.process_start_id != UUID(str(event.get("process_start_id") or "")):
-                    raise ValueError("process identity does not match")
-                if artifact.content_hash != expected_content:
-                    raise ValueError("content hash does not match")
-                expected_context = {
-                    "event_id": str(event.get("event_id") or ""),
-                    "event_type": str(event.get("event_type") or ""),
-                    "stream_sequence": event.get("stream_sequence"),
-                }
-                if dict(artifact.context) != expected_context:
-                    raise ValueError("context does not match")
-                if integrity.get("signature_state") != artifact.signer_mode.name:
-                    raise ValueError("signature state does not match")
-                if integrity.get("signer_fingerprint") != artifact.public_key_fingerprint:
-                    raise ValueError("signer fingerprint does not match")
-            except Exception as exc:
-                signature_failures += 1
-                errors.append(f"line {line_number}: malformed audit signature: {exc}")
-                continue
-            fingerprint = artifact.public_key_fingerprint
-            key = keys.get(fingerprint) if fingerprint else None
-            if key is None:
-                signature_unavailable += 1
-                if require_signatures:
-                    signature_failures += 1
-                    errors.append(f"line {line_number}: public key is unavailable")
-                continue
-            if isinstance(key, str):
+    for label, source_path, descriptor in source_paths:
+        if not source_path.is_file():
+            hash_failures += 1
+            continue
+        file_event_count = 0
+        file_first_sequence: int | None = None
+        file_last_sequence: int | None = None
+        try:
+            stream = source_path.open("rb")
+        except OSError as exc:
+            errors.append(f"{label}: audit stream cannot be read: {exc}")
+            hash_failures += 1
+            continue
+        with stream:
+            for line_number, line in enumerate(stream, start=1):
+                location = f"{label} line {line_number}"
+                if len(line) > maximum_event_bytes:
+                    errors.append(f"{location}: audit record exceeds maximum_event_bytes")
+                    hash_failures += 1
+                    continue
+                if not line.endswith(b"\n"):
+                    errors.append(f"{location}: incomplete final audit record")
+                    hash_failures += 1
+                    break
                 try:
-                    key = base64.b64decode(key)
+                    event = json.loads(line.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    errors.append(f"{location}: malformed audit record: {exc}")
+                    hash_failures += 1
+                    continue
+                if not isinstance(event, Mapping):
+                    errors.append(f"{location}: audit record is not an object")
+                    hash_failures += 1
+                    continue
+                sequence = event.get("stream_sequence")
+                if not isinstance(sequence, int) or sequence != previous_sequence + 1:
+                    errors.append(f"{location}: audit stream sequence is not contiguous")
+                    hash_failures += 1
+                else:
+                    previous_sequence = sequence
+                    file_event_count += 1
+                    file_first_sequence = sequence if file_first_sequence is None else file_first_sequence
+                    file_last_sequence = sequence
+                    report["event_count"] += 1
+                    if report["first_sequence"] is None:
+                        report["first_sequence"] = sequence
+                    report["last_sequence"] = sequence
+                integrity = event.get("integrity")
+                if not isinstance(integrity, Mapping):
+                    errors.append(f"{location}: audit record has no integrity object")
+                    hash_failures += 1
+                    continue
+                if "hash_chain" in integrity and integrity.get("hash_chain") is not hash_chain:
+                    errors.append(f"{location}: audit hash-chain mode does not match policy")
+                    hash_failures += 1
+                if hash_chain and integrity.get("previous_event_hash") != previous_hash:
+                    errors.append(f"{location}: previous-event hash does not match")
+                    hash_failures += 1
+                body = dict(event)
+                body.pop("integrity", None)
+                expected_content = hashlib.sha256(_canonical(body)).hexdigest()
+                if integrity.get("content_sha256") != expected_content:
+                    errors.append(f"{location}: audit record content hash does not match")
+                    hash_failures += 1
+                else:
+                    previous_hash = expected_content
+
+                signature_value = integrity.get("artifact_signature")
+                if not isinstance(signature_value, Mapping):
+                    report["unsigned_event_count"] += 1
+                    if require_signatures:
+                        signature_failures += 1
+                        errors.append(f"{location}: required audit signature is missing")
+                    continue
+                report["signed_event_count"] += 1
+                try:
+                    artifact = deserialize_signed_artifact(signature_value)
+                    if artifact.artifact_kind != "caretaker-audit-event":
+                        raise ValueError("wrong artifact kind")
+                    if artifact.run_id != UUID(str(event.get("run_id") or "")):
+                        raise ValueError("runtime identity does not match")
+                    if artifact.process_start_id != UUID(str(event.get("process_start_id") or "")):
+                        raise ValueError("process identity does not match")
+                    if artifact.content_hash != expected_content:
+                        raise ValueError("content hash does not match")
+                    expected_context = {
+                        "event_id": str(event.get("event_id") or ""),
+                        "event_type": str(event.get("event_type") or ""),
+                        "stream_sequence": event.get("stream_sequence"),
+                    }
+                    if dict(artifact.context) != expected_context:
+                        raise ValueError("context does not match")
+                    if integrity.get("signature_state") != artifact.signer_mode.name:
+                        raise ValueError("signature state does not match")
+                    if integrity.get("signer_fingerprint") != artifact.public_key_fingerprint:
+                        raise ValueError("signer fingerprint does not match")
                 except Exception as exc:
                     signature_failures += 1
-                    errors.append(f"line {line_number}: public key is malformed: {exc}")
+                    errors.append(f"{location}: malformed audit signature: {exc}")
                     continue
-            try:
-                verified = verify_signed_artifact(artifact, key)
-            except Exception as exc:
-                verified = False
-                errors.append(f"line {line_number}: signature verification failed: {exc}")
-            if not verified:
-                signature_failures += 1
-                errors.append(f"line {line_number}: audit signature is invalid")
+                fingerprint = artifact.public_key_fingerprint
+                key = keys.get(fingerprint) if fingerprint else None
+                if key is None:
+                    signature_unavailable += 1
+                    if require_signatures:
+                        signature_failures += 1
+                        errors.append(f"{location}: public key is unavailable")
+                    continue
+                if isinstance(key, str):
+                    try:
+                        key = base64.b64decode(key)
+                    except Exception as exc:
+                        signature_failures += 1
+                        errors.append(f"{location}: public key is malformed: {exc}")
+                        continue
+                try:
+                    verified = verify_signed_artifact(artifact, key)
+                except Exception as exc:
+                    verified = False
+                    errors.append(f"{location}: signature verification failed: {exc}")
+                if not verified:
+                    signature_failures += 1
+                    errors.append(f"{location}: audit signature is invalid")
+        if descriptor is not None:
+            if file_event_count != descriptor["record_count"]:
+                errors.append(f"{label}: audit segment record count does not match manifest")
+                hash_failures += 1
+            if file_first_sequence != descriptor["first_sequence"]:
+                errors.append(f"{label}: audit segment first sequence does not match manifest")
+                hash_failures += 1
+            if file_last_sequence != descriptor["last_sequence"]:
+                errors.append(f"{label}: audit segment last sequence does not match manifest")
+                hash_failures += 1
 
     report["hash_chain_valid"] = hash_failures == 0
     report["unverified_signature_count"] = signature_unavailable
@@ -635,6 +806,7 @@ class AuditStreamWriter:
         self._redaction_replacement = "<redacted>"
         self._set_redaction_policy(redaction_policy)
         self.path = Path(directory) / policy.file_name
+        self.manifest_path = _audit_manifest_path(self.path)
         self.delivery_queue_path = self.path.with_name(
             f"{self.path.name}.delivery.queue"
         )
@@ -642,6 +814,12 @@ class AuditStreamWriter:
         self._closed = False
         self._sequence = 0
         self._previous_hash: str | None = None
+        self._segment_index = 0
+        self._segment_descriptors: list[dict[str, Any]] = []
+        self._segment_first_sequence: int | None = None
+        self._segment_record_count = 0
+        self._segment_opened_at = datetime.now(timezone.utc)
+        self._rotating = False
         self._recovered_truncated_bytes = 0
         self._pending_loss_count = 0
         self._pending_loss_priorities: dict[str, int] = {}
@@ -826,6 +1004,23 @@ class AuditStreamWriter:
             value = getattr(self.policy, name, None)
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise AuditStreamError(f"logging.audit.{name} must be a positive integer")
+        for name in ("maximum_segment_bytes", "maximum_segment_seconds"):
+            value = getattr(self.policy, name, None)
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or value <= 0
+            ):
+                raise AuditStreamError(
+                    f"logging.audit.{name} must be greater than zero when configured"
+                )
+        maximum_event_bytes = getattr(self.policy, "maximum_event_bytes", 0)
+        maximum_segment_bytes = getattr(self.policy, "maximum_segment_bytes", None)
+        if maximum_segment_bytes is not None and maximum_segment_bytes < maximum_event_bytes:
+            raise AuditStreamError(
+                "logging.audit.maximum_segment_bytes cannot be less than maximum_event_bytes"
+            )
 
     def _set_redaction_policy(self, redaction_policy: Any | None) -> None:
         if redaction_policy is None:
@@ -869,21 +1064,31 @@ class AuditStreamWriter:
                 "external audit acknowledgement is bound to a different record"
             )
 
-    def _recover_existing(self) -> None:
-        if not self.path.exists():
-            return
+    def _scan_existing_file(
+        self,
+        path: Path,
+        *,
+        previous_sequence: int,
+        previous_hash: str | None,
+        allow_incomplete_tail: bool,
+    ) -> tuple[int, int, str | None, int | None, int]:
+        """Validate one audit file and return its recovery boundary."""
         last_valid_offset = 0
-        last_sequence = 0
-        previous_hash: str | None = None
-        with self.path.open("rb") as stream:
+        last_sequence = previous_sequence
+        last_hash = previous_hash
+        first_sequence: int | None = None
+        record_count = 0
+        with path.open("rb") as stream:
             while True:
                 line_start = stream.tell()
                 line = stream.readline()
                 if not line:
                     break
                 if not line.endswith(b"\n"):
-                    # A process can die after writing a complete prefix.  It is
-                    # safe to discard only this incomplete final line.
+                    if not allow_incomplete_tail:
+                        raise AuditStreamError(
+                            f"Incomplete audit record in closed segment at byte {line_start}"
+                        )
                     break
                 try:
                     event = json.loads(line.decode("utf-8"))
@@ -891,16 +1096,221 @@ class AuditStreamWriter:
                     raise AuditStreamError(
                         f"Malformed complete audit record at byte {line_start}"
                     ) from exc
-                self._validate_existing(event, last_sequence, previous_hash)
+                self._validate_existing(event, last_sequence, last_hash)
+                sequence = int(event["stream_sequence"])
+                if first_sequence is None:
+                    first_sequence = sequence
+                record_count += 1
                 last_valid_offset = stream.tell()
-                last_sequence = int(event["stream_sequence"])
-                previous_hash = str(event["integrity"]["content_sha256"])
-        if last_valid_offset != self.path.stat().st_size:
-            self._recovered_truncated_bytes = self.path.stat().st_size - last_valid_offset
+                last_sequence = sequence
+                last_hash = str(event["integrity"]["content_sha256"])
+        return last_valid_offset, last_sequence, last_hash, first_sequence, record_count
+
+    def _write_segment_manifest(self) -> None:
+        previous_hash = (
+            self._segment_descriptors[-1]["content_sha256"]
+            if self._segment_descriptors
+            else None
+        )
+        _write_atomic_json(
+            self.manifest_path,
+            {
+                "schema_version": AUDIT_SEGMENT_MANIFEST_SCHEMA_VERSION,
+                "stream_file": self.path.name,
+                "active_file": self.path.name,
+                "hash_chain": bool(self.policy.hash_chain),
+                "active_previous_segment_hash": previous_hash,
+                "segments": [dict(item) for item in self._segment_descriptors],
+            },
+        )
+
+    def _describe_closed_segment(self, path: Path, index: int) -> dict[str, Any]:
+        try:
+            raw = path.read_bytes()
+        except OSError as exc:
+            raise AuditStreamError("Unable to read closed audit segment") from exc
+        if not raw or not raw.endswith(b"\n"):
+            raise AuditStreamError("Closed audit segment is empty or incomplete")
+        events: list[Mapping[str, Any]] = []
+        for line in raw.splitlines():
+            try:
+                event = json.loads(line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise AuditStreamError("Closed audit segment is malformed") from exc
+            if not isinstance(event, Mapping):
+                raise AuditStreamError("Closed audit segment contains a non-object record")
+            events.append(event)
+        first_sequence = events[0].get("stream_sequence")
+        last_sequence = events[-1].get("stream_sequence")
+        if (
+            isinstance(first_sequence, bool)
+            or not isinstance(first_sequence, int)
+            or isinstance(last_sequence, bool)
+            or not isinstance(last_sequence, int)
+            or first_sequence <= 0
+            or last_sequence < first_sequence
+            or len(events) != last_sequence - first_sequence + 1
+        ):
+            raise AuditStreamError("Closed audit segment sequence range is invalid")
+        previous_segment_hash = (
+            self._segment_descriptors[-1]["content_sha256"]
+            if self._segment_descriptors
+            else None
+        )
+        return {
+            "segment_id": f"segment-{index:020d}",
+            "file_name": path.name,
+            "content_sha256": hashlib.sha256(raw).hexdigest(),
+            "previous_segment_hash": previous_segment_hash,
+            "first_sequence": first_sequence,
+            "last_sequence": last_sequence,
+            "record_count": len(events),
+            "closed_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def _should_rotate(self) -> bool:
+        if self._rotating or self._file is None or self._segment_first_sequence is None:
+            return False
+        maximum_bytes = getattr(self.policy, "maximum_segment_bytes", None)
+        if maximum_bytes is not None:
+            try:
+                if self.path.stat().st_size >= int(maximum_bytes):
+                    return True
+            except OSError as exc:
+                raise AuditStreamError("Unable to inspect audit segment size") from exc
+        maximum_seconds = getattr(self.policy, "maximum_segment_seconds", None)
+        if maximum_seconds is not None:
+            age = (datetime.now(timezone.utc) - self._segment_opened_at).total_seconds()
+            if age >= float(maximum_seconds):
+                return True
+        return False
+
+    def _rotate_segment(self) -> dict[str, Any] | None:
+        if self._file is None or self._segment_first_sequence is None:
+            return None
+        self._file.flush()
+        os.fsync(self._file.fileno())
+        self._file.close()
+        self._file = None
+        segment_path = _audit_segment_path(self.path, self._segment_index)
+        if segment_path.exists():
+            raise AuditStreamError("Audit segment destination already exists")
+        try:
+            self.path.replace(segment_path)
+        except OSError as exc:
+            raise AuditStreamError("Unable to close audit segment") from exc
+        descriptor = self._describe_closed_segment(segment_path, self._segment_index)
+        self._segment_descriptors.append(descriptor)
+        self._segment_index += 1
+        self._segment_first_sequence = None
+        self._segment_record_count = 0
+        self._segment_opened_at = datetime.now(timezone.utc)
+        try:
+            self._file = self.path.open("ab", buffering=0)
+            self._write_segment_manifest()
+        except OSError as exc:
+            raise AuditStreamError("Unable to open new audit segment") from exc
+        self._rotating = True
+        try:
+            return self._write_event(
+                "AUDIT_STREAM_ROTATED",
+                details={
+                    "segment_id": descriptor["segment_id"],
+                    "file_name": descriptor["file_name"],
+                    "content_sha256": descriptor["content_sha256"],
+                    "first_sequence": descriptor["first_sequence"],
+                    "last_sequence": descriptor["last_sequence"],
+                    "record_count": descriptor["record_count"],
+                    "manifest_file": self.manifest_path.name,
+                    "authority_granted": False,
+                },
+                priority=EvidencePriority.IMPORTANT,
+            )
+        finally:
+            self._rotating = False
+
+    def rotate(self) -> dict[str, Any] | None:
+        """Close the current segment and begin a manifest-backed segment."""
+        with self._lock:
+            if self._closed or self._file is None:
+                return None
+            return self._rotate_segment()
+
+    def _recover_existing(self) -> None:
+        if self.manifest_path.exists():
+            manifest = _read_audit_manifest(self.manifest_path, self.path)
+            if manifest["hash_chain"] is not bool(self.policy.hash_chain):
+                raise AuditStreamError(
+                    "Audit segment manifest hash-chain mode does not match policy"
+                )
+            self._segment_descriptors = [dict(item) for item in manifest["segments"]]
+            previous_sequence = 0
+            previous_hash: str | None = None
+            previous_segment_hash: str | None = None
+            for descriptor in self._segment_descriptors:
+                segment_path = self.path.parent / str(descriptor["file_name"])
+                if descriptor["previous_segment_hash"] != previous_segment_hash:
+                    raise AuditStreamError("Audit segment manifest chain is not contiguous")
+                try:
+                    actual_hash = hashlib.sha256(segment_path.read_bytes()).hexdigest()
+                except OSError as exc:
+                    raise AuditStreamError(
+                        "Audit segment cannot be read during recovery"
+                    ) from exc
+                if actual_hash != descriptor["content_sha256"]:
+                    raise AuditStreamError("Audit segment content hash does not match manifest")
+                _, previous_sequence, previous_hash, first, count = self._scan_existing_file(
+                    segment_path,
+                    previous_sequence=previous_sequence,
+                    previous_hash=previous_hash,
+                    allow_incomplete_tail=False,
+                )
+                if (
+                    first != descriptor["first_sequence"]
+                    or previous_sequence != descriptor["last_sequence"]
+                    or count != descriptor["record_count"]
+                ):
+                    raise AuditStreamError("Audit segment records do not match manifest")
+                previous_segment_hash = actual_hash
+            if manifest["active_previous_segment_hash"] != previous_segment_hash:
+                raise AuditStreamError("Audit active segment predecessor does not match manifest")
+            self._segment_index = len(self._segment_descriptors)
+            self._sequence = previous_sequence
+            self._previous_hash = previous_hash
+        elif any(self.path.parent.glob(f"{self.path.name}.segment-*")):
+            raise AuditStreamError("Audit segments exist without a segment manifest")
+
+        if not self.path.exists():
+            if self._segment_descriptors:
+                raise AuditStreamError("Audit active segment is missing")
+            return
+        (
+            last_valid_offset,
+            last_sequence,
+            last_hash,
+            first_sequence,
+            record_count,
+        ) = self._scan_existing_file(
+            self.path,
+            previous_sequence=self._sequence,
+            previous_hash=self._previous_hash,
+            allow_incomplete_tail=True,
+        )
+        file_size = self.path.stat().st_size
+        if last_valid_offset != file_size:
+            self._recovered_truncated_bytes = file_size - last_valid_offset
             with self.path.open("r+b") as stream:
                 stream.truncate(last_valid_offset)
         self._sequence = last_sequence
-        self._previous_hash = previous_hash
+        self._previous_hash = last_hash
+        self._segment_first_sequence = first_sequence
+        self._segment_record_count = record_count
+        try:
+            self._segment_opened_at = datetime.fromtimestamp(
+                self.path.stat().st_mtime, timezone.utc
+            )
+        except OSError:
+            self._segment_opened_at = datetime.now(timezone.utc)
 
     def _validate_existing(
         self,
@@ -1005,6 +1415,11 @@ class AuditStreamWriter:
             warnings.append("logging.audit.sign_events is run-bound; a new run is required")
         if policy.maximum_event_bytes != self.policy.maximum_event_bytes:
             warnings.append("logging.audit.maximum_event_bytes is startup-bound; the existing limit remains active")
+        for field_name in ("maximum_segment_bytes", "maximum_segment_seconds"):
+            if getattr(policy, field_name) != getattr(self.policy, field_name):
+                warnings.append(
+                    f"logging.audit.{field_name} is run-bound; the existing segment bound remains active"
+                )
         for field_name in (
             "always_preserve_priorities",
             "debug_rate",
@@ -1150,6 +1565,12 @@ class AuditStreamWriter:
         if self._closed or self._file is None:
             raise AuditStreamError("Audit stream is not open")
         with self._lock:
+            if (
+                event_type != "AUDIT_STREAM_ROTATED"
+                and not self._rotating
+                and self._should_rotate()
+            ):
+                self._rotate_segment()
             self._sequence += 1
             timestamp = occurred_at or datetime.now(timezone.utc)
             body: dict[str, Any] = {
@@ -1227,6 +1648,9 @@ class AuditStreamWriter:
             except OSError as exc:
                 raise AuditStreamError("Unable to persist audit event") from exc
             self._previous_hash = content_hash
+            if self._segment_first_sequence is None:
+                self._segment_first_sequence = self._sequence
+            self._segment_record_count += 1
             if deliver_external:
                 self._deliver_external(encoded)
             return event

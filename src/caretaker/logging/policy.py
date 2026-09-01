@@ -231,6 +231,11 @@ class AuditStreamPolicy:
     external_delivery_max_pending_records: int = 1024
     external_delivery_max_pending_bytes: int = 8 * 1024 * 1024
     external_delivery_require_ack: bool = False
+    # Optional local segment bounds. A rotated stream is verified through its
+    # immutable segment manifest; the default remains one legacy-compatible
+    # file for least-friction local use.
+    maximum_segment_bytes: int | None = None
+    maximum_segment_seconds: float | None = None
 
 
 def runtime_integrity_assurance(policy: RuntimeSigningPolicy) -> dict[str, object]:
@@ -419,6 +424,22 @@ def validate_operator_logging_policy(policy: OperatorLoggingPolicy) -> None:
         value = getattr(policy.audit, name)
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             errors.append(f"logging.audit.{name} must be a positive integer")
+    for name in ("maximum_segment_bytes", "maximum_segment_seconds"):
+        value = getattr(policy.audit, name)
+        if value is not None and (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or value <= 0
+        ):
+            errors.append(f"logging.audit.{name} must be greater than zero when configured")
+    if (
+        policy.audit.maximum_segment_bytes is not None
+        and policy.audit.maximum_segment_bytes < policy.audit.maximum_event_bytes
+    ):
+        errors.append(
+            "logging.audit.maximum_segment_bytes cannot be less than maximum_event_bytes"
+        )
     if policy.interrogation.maximum_records <= 0:
         errors.append("interrogation.maximum_records must be greater than zero")
     if policy.interrogation.maximum_representative_records <= 0:
