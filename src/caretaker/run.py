@@ -254,6 +254,105 @@ def _emit_adaptive_aggregation_audit(
     )
 
 
+def _emit_behavior_collection_audit(
+    runtime: Any,
+    *,
+    request: Mapping[str, Any],
+    capture: Mapping[str, Any] | None = None,
+    result: Mapping[str, Any] | None = None,
+    actor_id: str,
+    error: BaseException | str | None = None,
+) -> None:
+    """Record one supervisor-mediated behavior collection outcome.
+
+    The application worker returns a bounded collection projection, but never
+    submits an audit event. The supervisor constructs this evidence record and
+    derives the actor from the authenticated control-socket peer. No snapshot
+    payload or authority operation is included in the audit projection.
+    """
+    audit = getattr(runtime, "audit", None)
+    emit = getattr(audit, "emit", None)
+    if not callable(emit):
+        return
+    collection = capture.get("collection_request") if isinstance(capture, Mapping) else None
+    collection = collection if isinstance(collection, Mapping) else {}
+    scope = str(collection.get("scope") or request.get("scope") or "function").strip().lower()
+    subject = str(collection.get("subject") or request.get("subject") or "").strip()
+    if not subject:
+        subject = "unknown"
+    state = str(
+        collection.get("outcome")
+        or collection.get("status")
+        or ("FAILED" if error is not None else "FAILED")
+    ).strip().upper()
+    if state not in {"CAPTURED", "FAILED", "CANCELLED", "DEFERRED"}:
+        state = "FAILED"
+
+    def bounded_text(value: Any, limit: int = 500) -> str | None:
+        if value in (None, ""):
+            return None
+        return str(value)[:limit]
+
+    def bounded_nonnegative_int(value: Any) -> int | None:
+        if value in (None, "") or isinstance(value, bool):
+            return None
+        try:
+            return max(0, min(int(value), 1000))
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    details: dict[str, Any] = {
+        "requested_by": bounded_text(
+            collection.get("requested_by") or request.get("requested_by"), 128
+        ),
+        "reason": bounded_text(collection.get("reason") or request.get("reason")),
+        "requested_calls": bounded_nonnegative_int(
+            collection.get("requested_calls") or request.get("calls")
+        ),
+        "observed_calls": bounded_nonnegative_int(collection.get("observed_calls")),
+        "requested_generation": bounded_text(collection.get("requested_generation"), 128),
+        "observed_generation": bounded_text(collection.get("observed_generation"), 128),
+        "duration_seconds": None,
+        "authority_granted": False,
+    }
+    duration = collection.get("duration_seconds")
+    if duration not in (None, "") and not isinstance(duration, bool):
+        try:
+            duration_value = float(duration)
+        except (TypeError, ValueError, OverflowError):
+            duration_value = None
+        if duration_value is not None and math.isfinite(duration_value):
+            details["duration_seconds"] = max(0.0, min(duration_value, 86_400.0))
+    if error is not None:
+        details["error"] = bounded_text(error)
+    elif isinstance(result, Mapping) and result.get("ok") is False:
+        raw_error = result.get("error")
+        if isinstance(raw_error, Mapping):
+            raw_error = raw_error.get("message") or raw_error.get("failure_kind")
+        details["error"] = bounded_text(raw_error)
+    details = {key: value for key, value in details.items() if value is not None}
+    effective = getattr(runtime, "effective", None)
+    emit(
+        "BEHAVIOR_COLLECTION_OUTCOME",
+        actor={"type": "operator", "id": str(actor_id)[:128]},
+        scope={
+            "scope": scope[:32],
+            "subject": subject[:500],
+            "collection_request_id": bounded_text(collection.get("request_id"), 128),
+        },
+        policy={
+            "fingerprint": getattr(effective, "fingerprint", None),
+            "generation": getattr(effective, "generation", None),
+        },
+        outcome={
+            "state": state,
+            "authority_granted": False,
+        },
+        details=details,
+        priority=EvidencePriority.IMPORTANT,
+    )
+
+
 def _handle_console_invocation_event(
     runtime: Any,
     request: Mapping[str, Any],
@@ -2726,21 +2825,34 @@ def main(argv: list[str] | None = None) -> int:
             request_id = str(uuid4())
             authority_fingerprint = authority.effective.fingerprint
             deployment_fingerprint_value = deployment_fingerprint()
-            response = control_request(
-                runtime_control_socket,
-                {
-                    "command": "behavior-capture",
-                    "scope": scope,
-                    "subject": subject,
-                    "calls": requested_calls,
-                    "requested_by": f"uid:{credentials[1]}",
-                    "reason": reason,
-                    "priority": int(request.get("priority", 100)),
-                    "deadline": request.get("deadline"),
-                    "requested_generation": request.get("requested_generation"),
-                },
-            )
+            capture_request = {
+                "command": "behavior-capture",
+                "scope": scope,
+                "subject": subject,
+                "calls": requested_calls,
+                "requested_by": f"uid:{credentials[1]}",
+                "reason": reason,
+                "priority": int(request.get("priority", 100)),
+                "deadline": request.get("deadline"),
+                "requested_generation": request.get("requested_generation"),
+            }
+            try:
+                response = control_request(runtime_control_socket, capture_request)
+            except OSError as exc:
+                _emit_behavior_collection_audit(
+                    runtime,
+                    request=capture_request,
+                    actor_id=f"uid:{credentials[1]}",
+                    error=exc,
+                )
+                raise
             if response.get("ok") is False:
+                _emit_behavior_collection_audit(
+                    runtime,
+                    request=capture_request,
+                    result=response,
+                    actor_id=f"uid:{credentials[1]}",
+                )
                 return response
             capture = dict(response["capture"])
             profile = capture.get("profile")
@@ -2804,6 +2916,12 @@ def main(argv: list[str] | None = None) -> int:
                     "content_sha256": envelope["integrity"]["content_sha256"],
                     "signature_state": envelope["integrity"]["signature_state"],
                 },
+            )
+            _emit_behavior_collection_audit(
+                runtime,
+                request=capture_request,
+                capture=capture,
+                actor_id=f"uid:{credentials[1]}",
             )
             return {"ok": True, "envelope": envelope}
 

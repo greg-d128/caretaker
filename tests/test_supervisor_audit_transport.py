@@ -10,6 +10,7 @@ from caretaker.console_identity import ConsoleIdentityStore
 from caretaker.run import (
     _handle_console_invocation_event,
     _handle_console_identity_request,
+    _emit_behavior_collection_audit,
     _handle_validation_audit_submission,
 )
 
@@ -117,6 +118,46 @@ def test_supervisor_rejects_nested_or_unknown_worker_audit_fields():
             (4321, 1000, 1000),
             SimpleNamespace(pid=4321, poll=lambda: None),
         )
+
+
+def test_behavior_collection_audit_is_bounded_and_authority_free():
+    audit = _Audit()
+    runtime = _runtime(audit)
+    request = {
+        "scope": "function",
+        "subject": "demo.target",
+        "calls": 50,
+        "reason": "r" * 1000,
+    }
+    _emit_behavior_collection_audit(
+        runtime,
+        request=request,
+        capture={
+            "collection_request": {
+                "request_id": str(uuid4()),
+                "scope": "function",
+                "subject": "demo.target",
+                "requested_by": "uid:1000",
+                "reason": "operator capture",
+                "requested_calls": 50,
+                "observed_calls": 48,
+                "status": "CAPTURED",
+                "outcome": "CAPTURED",
+                "duration_seconds": 0.125,
+                "observed_generation": "generation-1",
+            }
+        },
+        actor_id="uid:1000",
+    )
+
+    call = audit.calls[0]
+    assert call["event_type"] == "BEHAVIOR_COLLECTION_OUTCOME"
+    assert call["actor"] == {"type": "operator", "id": "uid:1000"}
+    assert call["scope"]["subject"] == "demo.target"
+    assert call["details"]["duration_seconds"] == 0.125
+    assert call["details"]["reason"] == "operator capture"
+    assert call["outcome"]["state"] == "CAPTURED"
+    assert call["outcome"]["authority_granted"] is False
 
 
 def test_remote_audit_stream_only_allows_validation_decisions(monkeypatch):

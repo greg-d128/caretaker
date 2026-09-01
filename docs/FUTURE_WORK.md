@@ -1519,6 +1519,10 @@ Until this exists, restart is a rollback to deployed application code, not conti
   Meaningful supervisor adaptive-aggregation reconciliations now emit
   `ADAPTIVE_AGGREGATION_RECONCILED` records with bounded merge, rejection,
   conflict, pending, and promotion counts; these records are evidence only.
+  Supervisor-mediated behavior captures now emit bounded
+  `BEHAVIOR_COLLECTION_OUTCOME` records for captured, failed, cancelled,
+  deferred, and unavailable requests; these records contain collection
+  metadata only and cannot modify policy or authority.
   Supervised application validation decisions cross an output-only, PID-bound,
   allow-listed control-socket submission path; worker identity is derived by the
   supervisor and the submitted policy context remains evidence. Remaining work

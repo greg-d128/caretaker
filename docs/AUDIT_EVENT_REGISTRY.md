@@ -88,6 +88,7 @@ All event types share these redaction rules:
 | `INCIDENT_CAPTURED` | `IMPORTANT` | — | `{"incident_id": "incident-uuid", "capture_level": "STANDARD"}` |
 | `INCIDENT_REPLAY_OUTCOME` | `IMPORTANT` | `scope.replay_scope`, `outcome.state` | `{"scope": "all", "state": "PARTIAL", "fixture_count": 4, "completed_count": 3, "capsule_modified": false, "authority_granted": false}` |
 | `ADAPTIVE_AGGREGATION_RECONCILED` | `IMPORTANT` | `scope.aggregation_scope`, `outcome.state` | `{"scope": "application", "state": "RECONCILED", "merged": 3, "rejected": 0, "authority_granted": false}` |
+| `BEHAVIOR_COLLECTION_OUTCOME` | `IMPORTANT` | `scope.scope`, `scope.subject`, `outcome.state` | `{"scope": "function", "subject": "demo.target", "state": "CAPTURED", "observed_calls": 50, "authority_granted": false}` |
 | `VALIDATION_DECISION` | `IMPORTANT` | — | `{"state": "ELIGIBLE", "validation_id": "validation-uuid"}` |
 | `RECOVERY_DECISION` | `CRITICAL` | — | `{"state": "PLANNED_ONLY", "action": "ROLLBACK_TO_DEPLOYED_CODE"}` |
 | `REPAIR_ROLLOUT_TRANSITION` | `CRITICAL` | `scope.rollout_id`, `scope.transition_id`, `outcome.state` | `{"rollout_id": "rollout-uuid", "transition_id": "transition-uuid", "state": "validated", "action": "advance"}` |
@@ -104,6 +105,13 @@ event actor from peer credentials. The submitted validation policy is retained
 as reported evidence; the audit envelope's policy identifies the supervisor's
 current audit policy. This path is output-only: it cannot submit arbitrary
 event types, change policy, grant authority, or invoke a control operation.
+Supervisor-mediated behavior captures likewise produce a bounded
+`BEHAVIOR_COLLECTION_OUTCOME` record after the application returns its
+collection projection. The supervisor derives the operator identity from the
+authenticated console request and records only request metadata, generation
+identifiers, counts, duration, and outcome; snapshot contents remain in the
+behavior evidence store. A failed, cancelled, deferred, or unavailable
+collection is recorded as evidence and does not change policy or authority.
 Console clients likewise register a UUID-scoped invocation start and end; the
 supervisor binds the session to the console's Unix peer PID and records the OS
 UID/GID. When the signing extra is available, the console keeps a fresh

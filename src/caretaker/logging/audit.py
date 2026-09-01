@@ -245,6 +245,18 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
             "authority_granted": False,
         },
     ),
+    "BEHAVIOR_COLLECTION_OUTCOME": _event_definition(
+        description="A bounded behavior collection request completed or failed.",
+        minimum_priority=EvidencePriority.IMPORTANT,
+        required_fields=("scope.scope", "scope.subject", "outcome.state"),
+        example={
+            "scope": "function",
+            "subject": "demo.target",
+            "state": "CAPTURED",
+            "observed_calls": 50,
+            "authority_granted": False,
+        },
+    ),
     "VALIDATION_DECISION": _event_definition(
         description="A validation result or gate decision was recorded.",
         minimum_priority=EvidencePriority.IMPORTANT,
