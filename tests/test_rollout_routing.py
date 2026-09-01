@@ -21,6 +21,8 @@ from caretaker import (
     RolloutFailureAction,
     RepairPolicy,
     RolloutReadinessRequirements,
+    RolloutRampPolicy,
+    RolloutRampStep,
     RolloutRoutingPolicy,
     SQLiteRepairStore,
     ShadowExecutionError,
@@ -1361,6 +1363,88 @@ def test_rollout_readiness_requires_policy_thresholds_and_current_worker() -> No
     assert after["status"] == "READY"
     assert after["checks"]["candidate_authoritative_observations"]["passed"] is True
     assert len(ledger.transitions(record.rollout_id)) == 3
+
+
+def test_supervisor_advances_policy_defined_ramp_only_when_ready() -> None:
+    store = InMemoryRepairStore()
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            allow_adaptive_stage_progression=True,
+            ramp=RolloutRampPolicy(
+                steps=(
+                    RolloutRampStep(
+                        RepairRolloutStage.SHADOW,
+                        shadow_sample_percentage=100,
+                    ),
+                    RolloutRampStep(
+                        RepairRolloutStage.CANARY,
+                        canary_percentage=20,
+                    ),
+                    RolloutRampStep(
+                        RepairRolloutStage.ACTIVE,
+                        active_candidate_percentage=100,
+                    ),
+                )
+            ),
+            readiness=RolloutReadinessRequirements(minimum_current_workers=0),
+        ),
+        store=store,
+    )
+    record = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    coordinator = RepairRolloutCoordinator(
+        ledger,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        store=store,
+    )
+
+    shadow = coordinator.advance_if_ready(
+        record.rollout_id,
+        authority_id="supervisor-1",
+        reason="policy-defined shadow evidence is ready",
+    )
+    assert shadow["status"] == "ADVANCED"
+    assert shadow["authority_granted"] is False
+    assert shadow["record"]["stage"] == "shadow"
+
+    canary = coordinator.advance_if_ready(
+        record.rollout_id,
+        authority_id="supervisor-1",
+        reason="policy-defined canary evidence is ready",
+    )
+    assert canary["status"] == "ADVANCED"
+    assert canary["record"]["stage"] == "canary"
+    assert canary["record"]["routing_policy"]["canary_percentage"] == 20
+
+
+def test_supervisor_ramp_advancement_retains_unready_state_without_mutation() -> None:
+    store = InMemoryRepairStore()
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            allow_adaptive_stage_progression=True,
+            readiness=RolloutReadinessRequirements(minimum_current_workers=1),
+        ),
+        store=store,
+    )
+    record = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    coordinator = RepairRolloutCoordinator(
+        ledger,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        store=store,
+    )
+
+    result = coordinator.advance_if_ready(
+        record.rollout_id,
+        authority_id="supervisor-1",
+        reason="wait for a worker",
+    )
+    assert result["status"] == "NOT_READY"
+    assert result["authority_granted"] is False
+    assert result["record"]["stage"] == "validated"
+    assert len(ledger.transitions(record.rollout_id)) == 2
 
 
 def test_operator_rollout_advance_requires_confirmation_and_records_identity() -> None:

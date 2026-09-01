@@ -105,6 +105,13 @@ advances a stage automatically or grants authority; the normal lifecycle and
 readiness checks still apply. If a step increases any percentage, readiness is
 required unless the operator explicitly overrides it, and the override is
 recorded. An empty ramp preserves the existing manual percentage controls.
+When `allow_adaptive_stage_progression` is enabled, a supervisor may call
+`RepairRolloutCoordinator.advance_if_ready()` during its control cycle. The
+method advances only validated/shadow/canary rollouts whose configured
+readiness result is `READY`; it uses adaptive authority, records the same
+transition chain, and never validates a proposal, skips a stage, or grants
+execution authority. Unready, unavailable, or unconfigured evidence produces
+no mutation.
 
 The decision checks that the current policy fingerprint matches the rollout,
 rejects expired or terminal records, and returns a decision hash with the

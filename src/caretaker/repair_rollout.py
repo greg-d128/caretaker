@@ -1258,8 +1258,8 @@ class RepairRolloutCoordinator:
 
     Workers do ordinary invocation work. This coordinator only verifies that
     a worker has acknowledged the exact current rollout context before it may
-    request a routing decision. It does not advance lifecycle stages or grant
-    execution authority.
+    request a routing decision. Its optional policy-driven advancement method
+    records a stage transition but never grants execution authority.
     """
 
     def __init__(
@@ -1564,6 +1564,76 @@ class RepairRolloutCoordinator:
             "evidence_hash": summary.evidence_hash,
         })
         return result
+
+    def advance_if_ready(
+        self,
+        rollout_id: UUID,
+        *,
+        authority_id: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Advance one eligible stage when policy and readiness permit it.
+
+        This is an explicit supervisor-cycle operation, not a background
+        thread or an implicit stage mutation. It requires adaptive stage
+        progression to be enabled, configured readiness evidence to report
+        ``READY``, and an authorized context transition through the ledger.
+        Validation, retirement, and revocation remain outside this helper.
+        """
+
+        if not str(authority_id).strip():
+            raise ValueError("adaptive rollout advancement requires an authority identity")
+        if not str(reason).strip():
+            raise ValueError("adaptive rollout advancement requires a reason")
+        record = self.ledger.get(rollout_id)
+        if not self.ledger.policy.allow_adaptive_stage_progression:
+            return {
+                "status": "POLICY_DISABLED",
+                "authority_granted": False,
+                "readiness": self.readiness(rollout_id),
+                "record": _json_safe(record),
+            }
+        if record.stage not in {
+            RepairRolloutStage.VALIDATED,
+            RepairRolloutStage.SHADOW,
+            RepairRolloutStage.CANARY,
+        }:
+            return {
+                "status": "NOT_APPLICABLE",
+                "authority_granted": False,
+                "readiness": self.readiness(rollout_id),
+                "record": _json_safe(record),
+            }
+        readiness = self.readiness(rollout_id)
+        if readiness.get("status") != "READY":
+            return {
+                "status": "NOT_READY",
+                "authority_granted": False,
+                "readiness": readiness,
+                "record": _json_safe(record),
+            }
+        next_stage = {
+            RepairRolloutStage.VALIDATED: RepairRolloutStage.SHADOW,
+            RepairRolloutStage.SHADOW: RepairRolloutStage.CANARY,
+            RepairRolloutStage.CANARY: RepairRolloutStage.ACTIVE,
+        }[record.stage]
+        updated = self.ledger.advance(
+            rollout_id,
+            to_stage=next_stage,
+            authority_type=RepairRolloutAuthority.ADAPTIVE,
+            authority_id=str(authority_id).strip(),
+            reason=str(reason).strip(),
+            policy_fingerprint=self.policy_fingerprint,
+            authority_fingerprint=self.authority_fingerprint,
+            readiness_status="READY",
+        )
+        return {
+            "status": "ADVANCED",
+            "authority_granted": False,
+            "readiness": readiness,
+            "record": _json_safe(updated),
+            "transition": _json_safe(self.ledger.transitions(rollout_id)[-1]),
+        }
 
     def _execution_evidence(self, record: RepairRolloutRecord) -> dict[str, Any]:
         if self.store is None:

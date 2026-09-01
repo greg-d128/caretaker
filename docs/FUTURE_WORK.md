@@ -993,7 +993,7 @@ Future work may export a signed review bundle containing a unified diff, origina
 
 ## Policy-controlled Repair rollout, mirroring, and shadow execution
 
-**Status: In progress in development tree; effect-aware contract, evidence gate, deterministic routing decision, registry-aware FunctionSlot invocation bridge, explicit application-owned raw-result callable binding, conservative pure-only candidate-failure fallback, policy-controlled candidate-authoritative mirroring, and policy-defined staged routing ramps implemented; automatic ramp advancement, richer fallback policy, fleet-wide routing, implicit arbitrary-callable replacement, and deployment-owned orchestration remain future work.**
+**Status: In progress in development tree; effect-aware contract, evidence gate, deterministic routing decision, registry-aware FunctionSlot invocation bridge, explicit application-owned raw-result callable binding, conservative pure-only candidate-failure fallback, policy-controlled candidate-authoritative mirroring, policy-defined staged routing ramps, and readiness-gated supervisor-cycle advancement implemented; richer fallback policy, fleet-wide routing, implicit arbitrary-callable replacement, and deployment-owned orchestration remain future work.**
 
 Caretaker currently supports candidate probation and a narrow
 `PURE_FUNCTION` differential-execution mode. For explicitly confirmed pure
@@ -1110,8 +1110,10 @@ stage-specific routing percentages as an authorized rollout enters shadow,
 canary, or active. A ramp is still operator- or policy-transition driven: it
 does not advance stages by itself, and any percentage increase uses the same
 readiness/explicit-override gate as a direct routing update. Each applied ramp
-is retained in transition evidence. Automatic advancement based on observation
-windows and fleet-wide ramp coordination remain future work.
+is retained in transition evidence. When adaptive stage progression is enabled,
+the supervisor can explicitly advance one ready stage during its control cycle;
+unready or unavailable evidence remains unchanged. Observation-window policy
+and fleet-wide ramp coordination remain future work.
 Optional `RolloutReadinessRequirements` now evaluates explicit evidence
 thresholds for the next stage and reports each passing or failing check without
 advancing the rollout. Thresholds remain disabled by default; staged authority,
