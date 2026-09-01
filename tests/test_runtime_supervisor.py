@@ -82,6 +82,11 @@ def test_runtime_boundary_functions_are_application_owned() -> None:
         handle_worker_failure,
         handle_worker_failure_cohort,
         reconcile_worker_failures,
+        accept_comparison_worker_result,
+        compare_comparison_worker_result,
+        issue_comparison_worker_assignment,
+        join_worker_evidence_reconciliations,
+        reconcile_comparison_worker_reports,
         build_authorized_restart_callback,
         build_replacement_action_handler,
         stop_application,
@@ -93,6 +98,11 @@ def test_runtime_boundary_functions_are_application_owned() -> None:
     assert handle_expired_worker_cohort.__module__ == "caretaker.runtime_supervision"
     assert handle_worker_failure.__module__ == "caretaker.runtime_supervision"
     assert reconcile_worker_failures.__module__ == "caretaker.runtime_supervision"
+    assert accept_comparison_worker_result.__module__ == "caretaker.runtime_supervision"
+    assert compare_comparison_worker_result.__module__ == "caretaker.runtime_supervision"
+    assert issue_comparison_worker_assignment.__module__ == "caretaker.runtime_supervision"
+    assert join_worker_evidence_reconciliations.__module__ == "caretaker.runtime_supervision"
+    assert reconcile_comparison_worker_reports.__module__ == "caretaker.runtime_supervision"
     assert build_authorized_restart_callback.__module__ == "caretaker.runtime_supervision"
     assert build_replacement_action_handler.__module__ == "caretaker.runtime_supervision"
     assert handle_worker_failure_cohort.__module__ == "caretaker.runtime_supervision"

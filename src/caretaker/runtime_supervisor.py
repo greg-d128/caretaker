@@ -18,13 +18,18 @@ from .logging.supervisor import CaretakerApplicationSupervisor
 from .runtime_supervision import (
     AdaptiveAggregationQueueRegistry,
     ApplicationWorkerLifecycle,
+    accept_comparison_worker_result,
     build_authorized_restart_callback,
     build_replacement_action_handler,
     capture_worker_failure_evidence,
+    compare_comparison_worker_result,
     handle_expired_worker_cohort,
     handle_worker_failure,
     handle_worker_failure_cohort,
+    issue_comparison_worker_assignment,
+    join_worker_evidence_reconciliations,
     reconcile_worker_failures,
+    reconcile_comparison_worker_reports,
     Watchdog,
     WorkRegistry,
     WorkerRegistry,
@@ -199,6 +204,26 @@ class ApplicationRuntimeSupervisor:
     def build_authorized_restart_callback(self, **kwargs: Any) -> Callable[[Any], dict[str, Any]]:
         """Build a packet-verified restart callback through the runtime seam."""
         return build_authorized_restart_callback(self._implementation, **kwargs)
+
+    def issue_comparison_worker_assignment(self, *args: Any, **kwargs: Any) -> Any:
+        """Issue a bounded comparison assignment through the runtime seam."""
+        return issue_comparison_worker_assignment(self._implementation, *args, **kwargs)
+
+    def accept_comparison_worker_result(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """Accept a packet-bound comparison result through the runtime seam."""
+        return accept_comparison_worker_result(self._implementation, *args, **kwargs)
+
+    def compare_comparison_worker_result(self, *args: Any, **kwargs: Any) -> Any:
+        """Compare comparison-worker evidence through the runtime seam."""
+        return compare_comparison_worker_result(self._implementation, *args, **kwargs)
+
+    def reconcile_comparison_worker_reports(self, *args: Any, **kwargs: Any) -> Any:
+        """Reconcile comparison reports through the runtime seam."""
+        return reconcile_comparison_worker_reports(self._implementation, *args, **kwargs)
+
+    def join_worker_evidence_reconciliations(self, *args: Any, **kwargs: Any) -> Any:
+        """Join worker evidence through the runtime seam."""
+        return join_worker_evidence_reconciliations(self._implementation, *args, **kwargs)
 
     def handle_expired_worker_cohort(
         self,

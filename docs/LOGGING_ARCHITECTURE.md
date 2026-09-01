@@ -104,6 +104,12 @@ The runtime validates the supervisor-issued packet and replacement admission;
 the embedding application still supplies process creation and cleanup, and a
 callback cannot turn diagnostic evidence into authority.
 
+Comparison-worker evidence is runtime-owned from assignment through result
+acceptance, comparison, reconciliation, and joining with post-mortem evidence.
+These operations validate identity and provenance, persist evidence where
+configured, and remain authority-neutral; they do not accept policy changes or
+authorize repairs.
+
 Application monitoring and application-boundary shutdown are also implemented
 in the application-runtime package. The legacy logging supervisor delegates to
 those functions, and the runtime owner exposes them directly while preserving

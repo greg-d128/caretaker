@@ -76,6 +76,11 @@ from ..runtime_supervision import (
     handle_worker_failure_cohort as runtime_handle_worker_failure_cohort,
     build_authorized_restart_callback as runtime_build_authorized_restart_callback,
     build_replacement_action_handler as runtime_build_replacement_action_handler,
+    accept_comparison_worker_result as runtime_accept_comparison_worker_result,
+    compare_comparison_worker_result as runtime_compare_comparison_worker_result,
+    issue_comparison_worker_assignment as runtime_issue_comparison_worker_assignment,
+    join_worker_evidence_reconciliations as runtime_join_worker_evidence_reconciliations,
+    reconcile_comparison_worker_reports as runtime_reconcile_comparison_worker_reports,
     reconcile_worker_failures as runtime_reconcile_worker_failures,
     MAX_WORKER_FAILURE_COHORT,
     monitor_application,
@@ -621,55 +626,17 @@ class CaretakerApplicationSupervisor:
         policy: RepairRecoveryPolicy | None = None,
         store: Any | None = None,
     ) -> ComparisonWorkerAssignment:
-        """Issue and optionally persist a bounded independent evidence task.
-
-        The embedding application still owns worker creation and transport.
-        This method only binds the task to an existing supervisor-issued
-        packet and records its provenance; the assignment cannot grant
-        capabilities or advance policy state.
-        """
-
-        assignment = create_comparison_worker_assignment(
+        """Issue a comparison assignment through runtime ownership."""
+        return runtime_issue_comparison_worker_assignment(
+            self,
             packet,
             scope=scope,
             evidence_refs=evidence_refs,
             supervisor_time=supervisor_time,
             worker_kind=worker_kind,
             policy=policy,
+            store=store,
         )
-        target_store = store if store is not None else self.failure_store
-        persisted = False
-        if target_store is not None:
-            recorder = getattr(target_store, "record_comparison_worker_assignment", None)
-            if not callable(recorder):
-                raise TypeError(
-                    "comparison assignment store does not support assignments"
-                )
-            recorder(assignment)
-            persisted = True
-        self._audit_event(
-            "WORKER_COMPARISON_ASSIGNMENT",
-            actor={"type": "supervisor", "id": str(self.supervisor_health.worker_id)},
-            scope={
-                "assignment_id": str(assignment.assignment_id),
-                "target_id": assignment.target_id,
-                "reconciliation_scope": assignment.scope,
-            },
-            policy={
-                "fingerprint": assignment.policy_fingerprint,
-                "authority_policy_generation": assignment.authority_policy_generation,
-                "authority_policy_fingerprint": assignment.authority_policy_fingerprint,
-            },
-            outcome={"state": "ISSUED", "authority_granted": False},
-            details={
-                "authority_packet_id": str(assignment.authority_packet_id),
-                "expires_at": assignment.expires_at.isoformat(),
-                "worker_kind": assignment.worker_kind,
-                "evidence_ref_count": len(assignment.evidence_refs),
-                "persisted": persisted,
-            },
-        )
-        return assignment
 
     def accept_comparison_worker_result(
         self,
@@ -684,134 +651,19 @@ class CaretakerApplicationSupervisor:
         policy: RepairRecoveryPolicy | None = None,
         store: Any | None = None,
     ) -> dict[str, Any]:
-        """Accept a result only from the registered, packet-bound worker.
-
-        Result acceptance is evidence persistence only. It does not mark the
-        worker accepted, modify policy, authorize a repair, or select a
-        recovery action.
-        """
-
-        result_worker_id = (
-            result.get("worker_id")
-            if isinstance(result, Mapping)
-            else result.worker_id
-        )
-        try:
-            worker_id = UUID(str(result_worker_id))
-        except (TypeError, ValueError) as exc:
-            raise PermissionError("comparison result worker identity is invalid") from exc
-        worker = self.workers.get(worker_id)
-        if worker_process_id != worker.process_id:
-            raise PermissionError("comparison result process identity does not match worker")
-        if str(worker_process_start_id) != str(worker.process_start_id):
-            raise PermissionError("comparison result process start identity does not match worker")
-        if worker.state in {
-            WorkerState.FAILED,
-            WorkerState.UNAUTHORIZED,
-            WorkerState.STOPPING,
-        }:
-            raise PermissionError("failed or unauthorized worker cannot submit comparison evidence")
-        assignment_worker_kind = (
-            assignment.get("worker_kind")
-            if isinstance(assignment, Mapping)
-            else assignment.worker_kind
-        )
-        if worker.worker_kind.name != str(assignment_worker_kind):
-            raise PermissionError("comparison result worker kind does not match assignment")
-        assignment_target = (
-            assignment.get("target_id")
-            if isinstance(assignment, Mapping)
-            else assignment.target_id
-        )
-        for name, expected in (
-            ("target_id", assignment_target),
-            ("generation_id", assignment.get("generation_id") if isinstance(assignment, Mapping) else assignment.generation_id),
-            ("code_hash", assignment.get("code_hash") if isinstance(assignment, Mapping) else assignment.code_hash),
-            ("policy_fingerprint", assignment.get("policy_fingerprint") if isinstance(assignment, Mapping) else assignment.policy_fingerprint),
-        ):
-            if getattr(worker, name, None) != str(expected):
-                raise PermissionError(f"comparison result worker context does not match assignment: {name}")
-        packet_id = packet.packet_id
-        if worker.authority_packet_id != packet_id:
-            raise PermissionError("comparison result worker packet does not match assignment packet")
-        assignment_check = verify_comparison_worker_assignment(
+        """Accept a comparison result through runtime ownership."""
+        return runtime_accept_comparison_worker_result(
+            self,
             assignment,
             packet,
+            result,
             supervisor_time=supervisor_time,
-            target_id=str(assignment_target),
-            generation_id=str(assignment.get("generation_id") if isinstance(assignment, Mapping) else assignment.generation_id),
-            code_hash=str(assignment.get("code_hash") if isinstance(assignment, Mapping) else assignment.code_hash),
-            policy_fingerprint=str(assignment.get("policy_fingerprint") if isinstance(assignment, Mapping) else assignment.policy_fingerprint),
-            authority_policy_generation=str(assignment.get("authority_policy_generation") if isinstance(assignment, Mapping) else assignment.authority_policy_generation),
-            authority_policy_fingerprint=str(assignment.get("authority_policy_fingerprint") if isinstance(assignment, Mapping) else assignment.authority_policy_fingerprint),
+            worker_process_id=worker_process_id,
+            worker_process_start_id=worker_process_start_id,
             allowed_capabilities=allowed_capabilities,
             policy=policy,
+            store=store,
         )
-        result_check = verify_comparison_worker_result(
-            result,
-            assignment=assignment,
-            worker_id=str(worker_id),
-            supervisor_time=supervisor_time,
-            policy=policy,
-        )
-        if not assignment_check["valid"]:
-            raise PermissionError(
-                "comparison assignment verification failed: "
-                + ", ".join(str(item) for item in assignment_check["failures"])
-            )
-        if not result_check["valid"]:
-            raise ValueError(
-                "comparison result verification failed: "
-                + ", ".join(str(item) for item in result_check["failures"])
-            )
-        target_store = store if store is not None else self.failure_store
-        persisted = False
-        if target_store is not None:
-            recorder = getattr(target_store, "record_comparison_worker_result", None)
-            if not callable(recorder):
-                raise TypeError("comparison result store does not support results")
-            if not isinstance(result, ComparisonWorkerResult):
-                raise TypeError("persisting a mapping result requires a ComparisonWorkerResult")
-            recorder(result)
-            persisted = True
-        self._audit_event(
-            "WORKER_COMPARISON_RESULT",
-            actor={"type": "supervisor", "id": str(self.supervisor_health.worker_id)},
-            scope={
-                "assignment_id": str(
-                    assignment.get("assignment_id")
-                    if isinstance(assignment, Mapping)
-                    else assignment.assignment_id
-                ),
-                "worker_id": str(worker_id),
-                "target_id": str(assignment_target),
-            },
-            policy={"fingerprint": str(
-                assignment.get("policy_fingerprint")
-                if isinstance(assignment, Mapping)
-                else assignment.policy_fingerprint
-            )},
-            outcome={"state": "ACCEPTED", "authority_granted": False},
-            details={
-                "result_id": result_check["result_id"],
-                "status": result_check["status"],
-                "content_sha256": (
-                    result.get("content_sha256")
-                    if isinstance(result, Mapping)
-                    else result.content_sha256
-                ),
-                "persisted": persisted,
-            },
-        )
-        return {
-            "accepted": True,
-            "authority_granted": False,
-            "assignment_id": assignment_check["assignment_id"],
-            "result_id": result_check["result_id"],
-            "worker_id": str(worker_id),
-            "status": result_check["status"],
-            "persisted": persisted,
-        }
 
     def compare_comparison_worker_result(
         self,
@@ -824,42 +676,17 @@ class CaretakerApplicationSupervisor:
         compared_at: datetime | None = None,
         store: Any | None = None,
     ) -> ComparisonWorkerComparisonReport:
-        """Compare independent evidence and persist the read-only report."""
-
-        report = compare_comparison_worker_result(
+        """Compare a worker result through runtime ownership."""
+        return runtime_compare_comparison_worker_result(
+            self,
+            assignment,
             result,
-            assignment=assignment,
             baseline_signatures=baseline_signatures,
             minimum_sample_count=minimum_sample_count,
             z_threshold=z_threshold,
             compared_at=compared_at,
+            store=store,
         )
-        target_store = store if store is not None else self.failure_store
-        persisted = False
-        if target_store is not None:
-            recorder = getattr(target_store, "record_comparison_worker_comparison", None)
-            if not callable(recorder):
-                raise TypeError("comparison report store does not support reports")
-            recorder(report)
-            persisted = True
-        self._audit_event(
-            "WORKER_COMPARISON_RECONCILED",
-            actor={"type": "supervisor", "id": str(self.supervisor_health.worker_id)},
-            scope={
-                "assignment_id": str(report.assignment_id),
-                "result_id": str(report.result_id),
-                "reconciliation_scope": report.scope,
-            },
-            outcome={"state": report.status, "authority_granted": False},
-            details={
-                "comparison_id": str(report.comparison_id),
-                "baseline_count": report.baseline_count,
-                "source_count": len(report.source_ids),
-                "outlier_count": len(report.outliers),
-                "persisted": persisted,
-            },
-        )
-        return report
 
     def reconcile_comparison_worker_reports(
         self,
@@ -871,40 +698,14 @@ class CaretakerApplicationSupervisor:
         reconciled_at: datetime | None = None,
         store: Any | None = None,
     ) -> ComparisonWorkerReconciliationReport:
-        """Consolidate independent comparison reports as evidence only."""
-
-        report = reconcile_comparison_worker_reports(
+        """Reconcile comparison reports through runtime ownership."""
+        return runtime_reconcile_comparison_worker_reports(
+            self,
             reports,
             assignment_contexts=assignment_contexts,
             reconciled_at=reconciled_at,
+            store=store,
         )
-        target_store = store if store is not None else self.failure_store
-        persisted = False
-        if target_store is not None:
-            recorder = getattr(
-                target_store, "record_comparison_worker_reconciliation", None
-            )
-            if not callable(recorder):
-                raise TypeError(
-                    "comparison reconciliation store does not support reports"
-                )
-            recorder(report)
-            persisted = True
-        self._audit_event(
-            "WORKER_COMPARISON_RECONCILED",
-            actor={"type": "supervisor", "id": str(self.supervisor_health.worker_id)},
-            scope={"reconciliation_scope": report.scope},
-            outcome={"state": report.status, "authority_granted": False},
-            details={
-                "reconciliation_id": str(report.reconciliation_id),
-                "report_count": report.report_count,
-                "unique_report_count": report.unique_report_count,
-                "conflict_report_count": report.conflict_report_count,
-                "incomplete_report_count": report.incomplete_report_count,
-                "persisted": persisted,
-            },
-        )
-        return report
 
     def join_worker_evidence_reconciliations(
         self,
@@ -917,37 +718,15 @@ class CaretakerApplicationSupervisor:
         joined_at: datetime | None = None,
         store: Any | None = None,
     ) -> WorkerEvidenceJoinReport:
-        """Link post-mortem and comparison evidence without granting authority."""
-
-        report = join_worker_evidence_reconciliations(
+        """Join worker evidence through runtime ownership."""
+        return runtime_join_worker_evidence_reconciliations(
+            self,
             postmortem_reconciliation,
             comparison_reconciliation,
             assignment_contexts=assignment_contexts,
             joined_at=joined_at,
+            store=store,
         )
-        target_store = store if store is not None else self.failure_store
-        persisted = False
-        if target_store is not None:
-            recorder = getattr(target_store, "record_worker_evidence_join", None)
-            if not callable(recorder):
-                raise TypeError("evidence join store does not support joins")
-            recorder(report)
-            persisted = True
-        self._audit_event(
-            "WORKER_COMPARISON_RECONCILED",
-            actor={"type": "supervisor", "id": str(self.supervisor_health.worker_id)},
-            scope={"reconciliation_scope": report.scope},
-            outcome={"state": report.status, "authority_granted": False},
-            details={
-                "join_id": str(report.join_id),
-                "postmortem_status": report.postmortem_status,
-                "comparison_status": report.comparison_status,
-                "postmortem_conflict": report.postmortem_conflict,
-                "comparison_conflict": report.comparison_conflict,
-                "persisted": persisted,
-            },
-        )
-        return report
 
     @staticmethod
     def build_incident_action_handler(
