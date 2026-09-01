@@ -2198,13 +2198,12 @@ observation manager consumes the evidence view, while the physical stores,
 schema, and recovery queries remain unchanged. Migrating the remaining
 consumers and tightening ownership boundaries is still pending.
 
-`RepairStore` currently exposes policy, incidents, episodes, candidates,
-attempts, events, observations, integrity, rollouts, workers, comparisons, and
-recovery. Add narrow capability views such as lifecycle, evidence,
-worker/recovery, and integrity records over the existing SQLite implementation.
-Move ownership before changing the storage format. Preserve the InMemory seam,
-SQLite deployment simplicity, existing data, and recovery queries. Test that
-components depend only on the capability they use.
+`RepairStore` remains the compatibility/root seam and still exposes policy,
+incidents, episodes, candidates, attempts, events, observations, integrity,
+rollouts, workers, comparisons, and recovery. Continue migrating consumers to
+the narrowest view before changing storage ownership. Preserve the InMemory
+seam, SQLite deployment simplicity, existing data, and recovery queries; do
+not multiply physical stores.
 
 #### 10. Move runtime supervision ownership out of logging
 
