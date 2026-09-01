@@ -12,7 +12,9 @@ import pytest
 from caretaker import (
     create_recovery_authority_packet,
     deserialize_recovery_authority_packet,
+    deserialize_worker_replacement_request,
     serialize_recovery_authority_packet,
+    serialize_worker_replacement_request,
     verify_recovery_authority_packet,
 )
 from caretaker import WorkerAcceptancePolicy
@@ -23,6 +25,7 @@ from caretaker.logging import (
     WorkerRegistry,
     WorkerState,
     submit_worker_authority_packet,
+    submit_worker_replacement_request,
 )
 import caretaker.logging.supervisor as supervisor_module
 
@@ -256,6 +259,92 @@ def test_local_authority_packet_socket_binds_peer_and_refreshes_identity(tmp_pat
                 supervisor_time=refreshed_time,
                 **supervisor_context,
             )
+    finally:
+        server.stop()
+        thread.join(timeout=2)
+
+
+def test_replacement_request_transport_round_trip_and_tamper_rejection() -> None:
+    registry = WorkerRegistry()
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    original = registry.register(WorkerKind.REPAIR_ANALYZER, 1234)
+    registry.mark_failed(original.worker_id, error_fingerprint="worker-crash")
+    request = registry.prepare_replacement(
+        original.worker_id,
+        _packet(supervisor_time=supervisor_time),
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+        reason="replace after crash",
+    )
+
+    encoded = serialize_worker_replacement_request(request)
+    assert deserialize_worker_replacement_request(encoded) == request
+    envelope = json.loads(encoded)
+    envelope["request"]["reason"] = "tampered"
+    with pytest.raises(ValueError, match="content hash is invalid"):
+        deserialize_worker_replacement_request(envelope)
+
+
+def test_local_replacement_packet_socket_is_single_use_and_peer_bound(tmp_path) -> None:
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    supervisor = supervisor_module.CaretakerApplicationSupervisor(object())
+    original = supervisor.workers.register(WorkerKind.REPAIR_ANALYZER, os.getpid())
+    supervisor.workers.mark_failed(original.worker_id, error_fingerprint="worker-crash")
+    request = supervisor.workers.prepare_replacement(
+        original.worker_id,
+        _packet(supervisor_time=supervisor_time),
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+    )
+    socket_path = tmp_path / "supervisor.sock"
+    context = {
+        "target_id": "app:charge",
+        "generation_id": "generation-7",
+        "code_hash": "code-hash",
+        "policy_fingerprint": "policy-hash",
+        "authority_policy_generation": "authority-8",
+        "authority_policy_fingerprint": "authority-hash",
+        "allowed_capabilities": {"observe"},
+    }
+    server = ControlSocketServer(
+        socket_path,
+        lambda request, credentials: supervisor.handle_worker_replacement_packet(
+            request,
+            credentials,
+            allowed_worker_kinds={WorkerKind.REPAIR_ANALYZER},
+            supervisor_time=supervisor_time,
+            **context,
+        ),
+        allowed_uids={os.getuid()},
+    )
+    server.start()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for _ in range(50):
+            if socket_path.exists():
+                break
+            time.sleep(0.01)
+        response = submit_worker_replacement_request(socket_path, request=request)
+        assert response["ok"] is True
+        assert response["process_id"] == os.getpid()
+        assert response["replaced_worker_id"] == str(original.worker_id)
+
+        replay = submit_worker_replacement_request(socket_path, request=request)
+        assert replay["ok"] is False
+        assert "consumed" in replay["error"]
     finally:
         server.stop()
         thread.join(timeout=2)

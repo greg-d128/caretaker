@@ -22,7 +22,12 @@ from uuid import UUID
 from .models import AttachmentReference, EvidencePriority, LogEnvelope
 from .records import TLVLogCodec
 from .segments import SegmentWriter
-from ..repair_recovery import RecoveryAuthorityPacket, serialize_recovery_authority_packet
+from ..repair_recovery import (
+    RecoveryAuthorityPacket,
+    WorkerReplacementRequest,
+    serialize_recovery_authority_packet,
+    serialize_worker_replacement_request,
+)
 
 
 _PEERCRED = struct.Struct("3i")
@@ -722,6 +727,28 @@ def submit_worker_authority_packet(
     elif worker_id is not None or process_start_id is not None:
         raise ValueError("worker_id and process_start_id are only valid for refresh")
     return control_request(path, request, timeout=timeout)
+
+
+def submit_worker_replacement_request(
+    path: str | Path,
+    *,
+    request: WorkerReplacementRequest,
+    timeout: float = 5.0,
+) -> dict[str, Any]:
+    """Submit one supervisor-issued replacement handoff over local transport.
+
+    The caller is expected to start the replacement process before calling
+    this function. The supervisor binds the resulting registration to the
+    socket peer PID and consumes the request's single-use request ID.
+    """
+    return control_request(
+        path,
+        {
+            "command": "worker-replacement-packet",
+            "replacement": json.loads(serialize_worker_replacement_request(request)),
+        },
+        timeout=timeout,
+    )
 
 
 def list_adaptive_transition_requests(

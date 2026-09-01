@@ -38,6 +38,7 @@ from ..repair_recovery import (
     verify_comparison_worker_assignment,
     verify_comparison_worker_result,
     deserialize_recovery_authority_packet,
+    deserialize_worker_replacement_request,
     verify_recovery_authority_packet,
 )
 from .models import (
@@ -597,6 +598,48 @@ class WorkerRegistry:
             )
             self._workers[replacement.worker_id] = replacement
             return replacement
+
+    def register_transported_replacement(
+        self,
+        request: WorkerReplacementRequest | bytes | bytearray | str | Mapping[str, Any],
+        peer_pid: int,
+        *,
+        supervisor_time: datetime,
+        target_id: str,
+        generation_id: str,
+        code_hash: str,
+        policy_fingerprint: str,
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        allowed_capabilities: set[str] | frozenset[str] = frozenset(),
+        policy: RepairRecoveryPolicy | None = None,
+        acceptance_policy: WorkerAcceptancePolicy | None = None,
+    ) -> WorkerHealth:
+        """Admit an application-started replacement from local transport.
+
+        The replacement request's existing request ID is the replay key. The
+        only process identity accepted is the authenticated transport peer;
+        no PID supplied inside transport data is consulted.
+        """
+        if isinstance(peer_pid, bool) or not isinstance(peer_pid, int) or peer_pid <= 0:
+            raise ValueError("worker replacement handoff requires a positive peer PID")
+        if not isinstance(request, WorkerReplacementRequest):
+            request = deserialize_worker_replacement_request(request)
+        return self.register_replacement(
+            request,
+            WorkerKind[request.worker_kind],
+            peer_pid,
+            supervisor_time=supervisor_time,
+            target_id=target_id,
+            generation_id=generation_id,
+            code_hash=code_hash,
+            policy_fingerprint=policy_fingerprint,
+            authority_policy_generation=authority_policy_generation,
+            authority_policy_fingerprint=authority_policy_fingerprint,
+            allowed_capabilities=allowed_capabilities,
+            policy=policy,
+            acceptance_policy=acceptance_policy,
+        )
 
     def record_acceptance_observation(
         self,
@@ -2391,6 +2434,82 @@ class CaretakerApplicationSupervisor:
             ),
             "state": worker.state.name,
             "acceptance_state": worker.acceptance_state.name,
+            "authority_granted": False,
+        }
+
+    def handle_worker_replacement_packet(
+        self,
+        request: Mapping[str, Any],
+        credentials: tuple[int, int, int],
+        *,
+        allowed_worker_kinds: set[WorkerKind] | frozenset[WorkerKind],
+        supervisor_time: datetime,
+        target_id: str,
+        generation_id: str,
+        code_hash: str,
+        policy_fingerprint: str,
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        allowed_capabilities: set[str] | frozenset[str] = frozenset(),
+        policy: RepairRecoveryPolicy | None = None,
+        acceptance_policy: WorkerAcceptancePolicy | None = None,
+    ) -> dict[str, Any]:
+        """Admit an application-started replacement over local transport.
+
+        The replacement request is a supervisor-issued, single-use handoff.
+        The application still starts the process; this handler only binds the
+        authenticated peer PID and performs the existing replacement gates.
+        """
+        if request.get("command") != "worker-replacement-packet":
+            raise ValueError("unsupported worker replacement command")
+        transport_value = request.get("replacement")
+        if not isinstance(transport_value, Mapping):
+            raise ValueError("worker replacement requires a JSON transport envelope")
+        replacement_request = deserialize_worker_replacement_request(transport_value)
+        try:
+            kind = WorkerKind[replacement_request.worker_kind]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("worker replacement request has an invalid worker kind") from exc
+        if kind not in allowed_worker_kinds:
+            raise PermissionError("worker replacement kind is not permitted")
+        replacement = self.workers.register_transported_replacement(
+            replacement_request,
+            credentials[0],
+            supervisor_time=supervisor_time,
+            target_id=target_id,
+            generation_id=generation_id,
+            code_hash=code_hash,
+            policy_fingerprint=policy_fingerprint,
+            authority_policy_generation=authority_policy_generation,
+            authority_policy_fingerprint=authority_policy_fingerprint,
+            allowed_capabilities=allowed_capabilities,
+            policy=policy,
+            acceptance_policy=acceptance_policy,
+        )
+        return {
+            "ok": True,
+            "operation": "replacement",
+            "worker_id": str(replacement.worker_id),
+            "process_id": replacement.process_id,
+            "process_start_id": str(replacement.process_start_id),
+            "worker_kind": replacement.worker_kind.name,
+            "replaced_worker_id": (
+                str(replacement.replaced_worker_id)
+                if replacement.replaced_worker_id is not None
+                else None
+            ),
+            "authority_packet_id": (
+                str(replacement.authority_packet_id)
+                if replacement.authority_packet_id is not None
+                else None
+            ),
+            "authority_packet_expires_at": (
+                replacement.authority_packet_expires_at.isoformat()
+                if replacement.authority_packet_expires_at is not None
+                else None
+            ),
+            "state": replacement.state.name,
+            "acceptance_state": replacement.acceptance_state.name,
             "authority_granted": False,
         }
 

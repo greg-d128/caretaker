@@ -39,6 +39,17 @@ verification and registry admission remain the gates that record a worker as
 authorized. Shared-memory, queue, cross-host authentication, and durable
 cross-restart replay state remain future transport work.
 
+Replacement workers use the existing `WorkerReplacementRequest` as a second
+bounded local handoff. `serialize_worker_replacement_request()` includes the
+failed-worker identity, worker kind, issuance time, reason, and nested
+authority-packet envelope with a request content hash. The
+`worker-replacement-packet` handler accepts only allow-listed kinds, binds the
+new registration to the authenticated peer PID, and passes the request through
+the existing failed-worker, exact-context, expiry, and acceptance gates. The
+request ID is already single-use in the registry, so a successful replacement
+handoff cannot be replayed. The handler returns the newly assigned worker and
+process-start identities for subsequent worker IPC.
+
 ## Comparison worker assignment
 
 When the supervisor needs an independent check—for example, because a worker's

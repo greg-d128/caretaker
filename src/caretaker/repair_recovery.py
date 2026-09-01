@@ -40,6 +40,8 @@ WORKER_EVIDENCE_JOIN_MAX_RECORDS = 256
 RECOVERY_AUTHORITY_PACKET_TRANSPORT_SCHEMA_VERSION = 1
 RECOVERY_AUTHORITY_PACKET_MAX_BYTES = 64 * 1024
 RECOVERY_AUTHORITY_PACKET_MAX_CAPABILITIES = 64
+WORKER_REPLACEMENT_REQUEST_TRANSPORT_SCHEMA_VERSION = 1
+WORKER_REPLACEMENT_REQUEST_MAX_BYTES = 128 * 1024
 _WORKER_POSTMORTEM_REQUIRED_EVIDENCE = (
     "milestone",
     "partial_queue",
@@ -1610,6 +1612,150 @@ def deserialize_recovery_authority_packet(
     if packet_sha256 != packet.content_sha256 or _packet_hash(packet) != packet.content_sha256:
         raise ValueError("authority packet content hash is invalid")
     return packet
+
+
+def _replacement_request_payload(
+    request: WorkerReplacementRequest,
+) -> dict[str, Any]:
+    return {
+        "request_id": str(request.request_id),
+        "failed_worker_id": str(request.failed_worker_id),
+        "worker_kind": request.worker_kind,
+        "issued_at": request.issued_at.isoformat(),
+        "authority_packet": json.loads(
+            serialize_recovery_authority_packet(request.authority_packet)
+        ),
+        "reason": request.reason[:256],
+    }
+
+
+def _replacement_request_hash(payload: Mapping[str, Any]) -> str:
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def serialize_worker_replacement_request(
+    request: WorkerReplacementRequest,
+) -> bytes:
+    """Encode one bounded, integrity-checked replacement handoff.
+
+    The request ID remains the registry's single-use replay key. This
+    envelope only transports the existing supervisor decision; it does not
+    create a process or grant authority to its recipient.
+    """
+    if not isinstance(request, WorkerReplacementRequest):
+        raise TypeError("replacement request must be a WorkerReplacementRequest")
+    if not isinstance(request.worker_kind, str) or not request.worker_kind.strip():
+        raise ValueError("replacement request worker_kind cannot be empty")
+    if len(request.worker_kind) > 64:
+        raise ValueError("replacement request worker_kind exceeds 64 characters")
+    if not isinstance(request.reason, str) or len(request.reason) > 256:
+        raise ValueError("replacement request reason exceeds 256 characters")
+    payload = _replacement_request_payload(request)
+    envelope = {
+        "schema_version": WORKER_REPLACEMENT_REQUEST_TRANSPORT_SCHEMA_VERSION,
+        "request": payload,
+        "request_sha256": _replacement_request_hash(payload),
+    }
+    try:
+        encoded = json.dumps(
+            envelope,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("replacement request is not JSON transport data") from exc
+    if len(encoded) > WORKER_REPLACEMENT_REQUEST_MAX_BYTES:
+        raise ValueError(
+            f"replacement request exceeds {WORKER_REPLACEMENT_REQUEST_MAX_BYTES} bytes"
+        )
+    return encoded
+
+
+def deserialize_worker_replacement_request(
+    value: bytes | bytearray | str | Mapping[str, Any],
+) -> WorkerReplacementRequest:
+    """Decode and integrity-check a transported replacement handoff."""
+    if isinstance(value, Mapping):
+        try:
+            encoded = json.dumps(
+                value,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("replacement request transport value is not JSON data") from exc
+    elif isinstance(value, (bytes, bytearray)):
+        encoded = bytes(value)
+    elif isinstance(value, str):
+        encoded = value.encode("utf-8")
+    else:
+        raise TypeError("replacement request transport value must be JSON data")
+    if len(encoded) > WORKER_REPLACEMENT_REQUEST_MAX_BYTES:
+        raise ValueError(
+            f"replacement request exceeds {WORKER_REPLACEMENT_REQUEST_MAX_BYTES} bytes"
+        )
+    try:
+        envelope = json.loads(encoded.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("replacement request transport envelope is invalid JSON") from exc
+    if not isinstance(envelope, Mapping):
+        raise ValueError("replacement request transport envelope must be an object")
+    if envelope.get("schema_version") != WORKER_REPLACEMENT_REQUEST_TRANSPORT_SCHEMA_VERSION:
+        raise ValueError("unsupported replacement request transport schema")
+    payload = envelope.get("request")
+    if not isinstance(payload, Mapping):
+        raise ValueError("replacement request transport envelope is missing its request")
+    request_hash = envelope.get("request_sha256")
+    if not isinstance(request_hash, str) or len(request_hash) != 64:
+        raise ValueError("replacement request transport hash is invalid")
+    expected_fields = {
+        "request_id",
+        "failed_worker_id",
+        "worker_kind",
+        "issued_at",
+        "authority_packet",
+        "reason",
+    }
+    if set(payload) != expected_fields:
+        raise ValueError("replacement request transport fields are invalid")
+    if request_hash != _replacement_request_hash(payload):
+        raise ValueError("replacement request content hash is invalid")
+    try:
+        request_id = UUID(str(payload["request_id"]))
+        failed_worker_id = UUID(str(payload["failed_worker_id"]))
+        worker_kind = payload["worker_kind"]
+        if not isinstance(worker_kind, str) or not worker_kind.strip() or len(worker_kind) > 64:
+            raise ValueError("replacement request worker_kind is invalid")
+        issued_at = datetime.fromisoformat(str(payload["issued_at"]))
+        if issued_at.tzinfo is None:
+            raise ValueError("replacement request issued_at must include a timezone")
+        reason = payload["reason"]
+        if not isinstance(reason, str) or len(reason) > 256:
+            raise ValueError("replacement request reason is invalid")
+        packet = deserialize_recovery_authority_packet(payload["authority_packet"])
+    except (KeyError, TypeError, ValueError) as exc:
+        if isinstance(exc, ValueError) and str(exc).startswith("replacement request"):
+            raise
+        raise ValueError("replacement request payload is invalid") from exc
+    return WorkerReplacementRequest(
+        request_id=request_id,
+        failed_worker_id=failed_worker_id,
+        worker_kind=worker_kind,
+        issued_at=issued_at,
+        authority_packet=packet,
+        reason=reason,
+    )
 
 
 def create_recovery_authority_packet(

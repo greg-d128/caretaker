@@ -1254,8 +1254,13 @@ single-use replacement request and admits a replacement only when the failed
 worker, worker kind, exact context, packet integrity, and packet expiry all
 match. The admitted worker retains the failed worker ID as bounded replacement
 provenance. This is lifecycle enforcement inside the existing registry; OS
-process spawning, cross-process packet transport, and replacement orchestration
-remain future work.
+process spawning and replacement orchestration remain future work. The
+application-owned local control socket now transports both initial/refresh
+packets and the existing single-use replacement request; it binds each
+registration to the authenticated Unix peer PID and returns the registry's
+process-start identity. Shared-memory/queue and cross-host packet transport,
+durable replay state, and deployment-specific process orchestration remain
+future work.
 
 The registry also supports `refresh_authorized()` for a live worker that needs
 to reacquire an expiring approval packet. Refresh requires the worker to remain
