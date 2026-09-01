@@ -944,6 +944,11 @@ hook is a deliberate handoff for policy-selected replacement or reconciliation;
 it does not spawn processes, grant replacement authority, or automatically
 stop the application. Automatic replacement or unauthorized-worker process
 orchestration remains future work.
+The `handle_expired_worker_cohort()` helper connects that handoff to the
+existing durable failure-envelope, post-mortem, reconciliation, and
+policy-action pipeline after revalidating worker identity and an explicit
+transaction scope. Application-owned effects still require explicit handler
+acknowledgements.
 
 Recovery action dispatch now has application-owned adapters for incident
 creation and application shutdown. Both effects remain outside Caretaker's

@@ -14,8 +14,11 @@ from caretaker import (
     create_recovery_authority_packet,
     deserialize_recovery_authority_packet,
     deserialize_worker_replacement_request,
+    InMemoryRepairStore,
     QueueWorkerAuthorityPacketTransport,
     QueueWorkerReplacementRequestTransport,
+    RecoveryAction,
+    RepairRecoveryPolicy,
     serialize_recovery_authority_packet,
     serialize_worker_replacement_request,
     verify_recovery_authority_packet,
@@ -816,6 +819,83 @@ def test_supervisor_control_cycle_retains_expiry_callback_failure() -> None:
         "authority_granted": False,
     }
     assert result["expired_workers"][0]["state"] == "UNAUTHORIZED"
+
+
+def test_expired_worker_cohort_reuses_policy_recovery_and_persists_evidence() -> None:
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    store = InMemoryRepairStore()
+    supervisor = supervisor_module.CaretakerApplicationSupervisor(
+        object(), failure_store=store
+    )
+    packet = _packet(supervisor_time=supervisor_time)
+    worker = supervisor.workers.register_authorized(
+        WorkerKind.REPAIR_ANALYZER,
+        4321,
+        packet,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+    )
+    expired = supervisor.workers.reconcile_authority_expiry(packet.expires_at)
+
+    result = supervisor.handle_expired_worker_cohort(
+        expired,
+        supervisor_time=packet.expires_at,
+        scope="transaction:expired-worker-1",
+        recovery_policy=RepairRecoveryPolicy(
+            worker_failure_action=RecoveryAction.CONTINUE_DEGRADED,
+        ),
+    )
+
+    assert result["ok"] is True
+    assert result["worker_ids"] == [str(worker.worker_id)]
+    assert result["scope"] == "transaction:expired-worker-1"
+    assert len(store.all_worker_failures()) == 1
+    decision = result["reconciliation"]["recovery_decisions"][0]
+    assert decision["policy_action"]["selected_action"] == RecoveryAction.CONTINUE_DEGRADED.name
+    assert decision["action_execution"]["status"] == "FALLBACK_ONLY"
+    assert decision["authority_granted"] is False
+
+
+def test_expired_worker_cohort_rejects_stale_or_live_snapshot() -> None:
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    supervisor = supervisor_module.CaretakerApplicationSupervisor(
+        object(), failure_store=InMemoryRepairStore()
+    )
+    packet = _packet(supervisor_time=supervisor_time)
+    worker = supervisor.workers.register_authorized(
+        WorkerKind.REPAIR_ANALYZER,
+        4321,
+        packet,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+    )
+    with pytest.raises(PermissionError, match="unauthorized worker"):
+        supervisor.handle_expired_worker_cohort(
+            [worker],
+            supervisor_time=packet.expires_at,
+            scope="transaction:expired-worker-2",
+            recovery_policy=RepairRecoveryPolicy(),
+        )
+    expired = supervisor.workers.reconcile_authority_expiry(packet.expires_at)
+    with pytest.raises(ValueError, match="timezone-aware"):
+        supervisor.handle_expired_worker_cohort(
+            expired,
+            supervisor_time=datetime(2026, 8, 30, 12, 0),
+            scope="transaction:expired-worker-2",
+            recovery_policy=RepairRecoveryPolicy(),
+        )
 
 
 def test_supervisor_control_cycle_retains_callback_failure_as_bounded_evidence() -> None:

@@ -1477,6 +1477,81 @@ class CaretakerApplicationSupervisor:
             "authority_granted": False,
         }
 
+    def handle_expired_worker_cohort(
+        self,
+        workers: Iterable[WorkerHealth],
+        *,
+        supervisor_time: datetime,
+        scope: str,
+        recovery_policy: RepairRecoveryPolicy,
+        recovery_handlers: Mapping[str, Callable[[Mapping[str, Any]], Any]] | None = None,
+        diagnostic_debug: bool | None = None,
+        critical_evidence: bool = False,
+        collect_postmortem: Callable[[WorkerHealth, Mapping[str, Any]], Any] | None = None,
+        require_complete_postmortem: bool = False,
+        minimum_sample_count: int = 30,
+        z_threshold: float = 3.0,
+    ) -> dict[str, Any]:
+        """Route newly expired workers through the cohort recovery boundary.
+
+        This is the explicit application-owned handoff used by
+        ``on_expired_workers``.  It accepts only snapshots that are still the
+        registered worker identity, are already ``UNAUTHORIZED``, and are
+        expired according to the authoritative supervisor time.  The helper
+        then reuses the normal failure-envelope, post-mortem, reconciliation,
+        and policy-handler gates.  A caller must provide a scope so workers
+        from unrelated transactions cannot be merged accidentally.
+        """
+        if supervisor_time.tzinfo is None or supervisor_time.utcoffset() is None:
+            raise ValueError("expired-worker recovery time must be timezone-aware")
+        if not isinstance(recovery_policy, RepairRecoveryPolicy):
+            raise TypeError("expired-worker recovery requires a RepairRecoveryPolicy")
+        supplied = tuple(workers)
+        if not supplied:
+            raise ValueError("expired-worker recovery requires at least one worker")
+        current_workers: list[WorkerHealth] = []
+        seen: set[UUID] = set()
+        for worker in supplied:
+            if not isinstance(worker, WorkerHealth):
+                raise TypeError("expired-worker recovery requires WorkerHealth snapshots")
+            if worker.worker_id in seen:
+                raise ValueError("expired-worker recovery contains a duplicate worker")
+            seen.add(worker.worker_id)
+            try:
+                current = self.workers.get(worker.worker_id)
+            except KeyError as exc:
+                raise PermissionError(
+                    "expired-worker recovery snapshot is no longer registered"
+                ) from exc
+            if current.process_start_id != worker.process_start_id:
+                raise PermissionError(
+                    "expired-worker recovery snapshot does not match the live process"
+                )
+            if current.state is not WorkerState.UNAUTHORIZED:
+                raise PermissionError(
+                    "expired-worker recovery requires an unauthorized worker"
+                )
+            if (
+                current.authority_packet_expires_at is None
+                or supervisor_time < current.authority_packet_expires_at
+            ):
+                raise PermissionError(
+                    "expired-worker recovery requires an authority packet at or before supervisor time"
+                )
+            current_workers.append(current)
+        return self.handle_worker_failure_cohort(
+            current_workers,
+            scope=scope,
+            recovery_policy=recovery_policy,
+            recovery_handlers=recovery_handlers,
+            diagnostic_debug=diagnostic_debug,
+            critical_evidence=critical_evidence,
+            collect_postmortem=collect_postmortem,
+            require_complete_postmortem=require_complete_postmortem,
+            minimum_sample_count=minimum_sample_count,
+            z_threshold=z_threshold,
+        )
+
     def handle_worker_failure(
         self,
         worker: WorkerHealth,

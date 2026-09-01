@@ -33,6 +33,14 @@ they do not grant authority, select recovery, spawn a process, or cause
 Caretaker to stop the application automatically. A repeated cycle does not
 re-invoke the expiry callback for an already unauthorized worker.
 
+An expiry callback that wants the standard recovery path can pass the supplied
+snapshots and timestamp to `handle_expired_worker_cohort()`. That helper
+revalidates the registered worker and process-start identity, requires an
+explicit transaction scope, and then reuses the normal failure envelope,
+post-mortem, reconciliation, and policy-handler gates. Replacement, incident,
+and shutdown callbacks remain application-owned and must explicitly
+acknowledge their effects.
+
 ## Authority packet transport
 
 `serialize_recovery_authority_packet()` provides a bounded canonical JSON
