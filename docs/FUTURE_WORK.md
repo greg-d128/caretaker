@@ -2232,6 +2232,9 @@ export.
 
 #### 11. Consolidate provenance and classify the public API last
 
+**Status: API inventory implemented; provenance schema consolidation remains
+future work.**
+
 Behavior, capsule, adaptive, transport, recovery, and integrity artifacts
 repeat identity, policy/authority fingerprints, versions, hashes, and JSON
 conversion. Introduce a small shared provenance envelope only for fields with
@@ -2239,10 +2242,12 @@ the same meaning; retain family-specific schemas, explicit validation codecs,
 and exact signed bytes. Add legacy readers and signature/hash compatibility
 fixtures before changing formats.
 
-Classify top-level exports as stable integration, advanced, compatibility, or
-internal and generate a public inventory. Deprecate only unused historical
-exports after a consumer search and compatibility window. Do not make this
-breaking cleanup a prerequisite for Application Caretaker operation.
+The public root inventory and stability classifications are documented in
+`docs/PUBLIC_API.md`, with `src/caretaker/__init__.py::__all__` as the
+authoritative membership list. No exports were removed or deprecated. The
+shared provenance envelope, legacy readers, signature/hash compatibility
+fixtures, and any serialized-format migration remain future work; do not make
+this breaking cleanup a prerequisite for Application Caretaker operation.
 
 #### 12. Make dependency reproducibility explicit without pinning users
 
