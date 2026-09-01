@@ -493,6 +493,41 @@ def test_recovery_plan_application_revalidates_live_binding_before_dispatch() ->
     assert store.all_recovery_lifecycle_marks() == ()
 
 
+def test_recovery_plan_application_fails_closed_when_live_binding_is_unavailable() -> None:
+    store = InMemoryRepairStore()
+    interrupted = _attempt(
+        target_id="app:charge",
+        completed=False,
+        outcome=RepairAttemptOutcome.PENDING,
+    )
+    store.record_attempt(interrupted)
+    plan = build_repair_recovery_plan(store)
+    calls: list[Mapping[str, object]] = []
+
+    with pytest.raises(RecoveryPlanStaleError, match="binding is unavailable"):
+        apply_repair_recovery_plan(
+            store,
+            plan,
+            live_context_by_target={
+                interrupted.target_id: {
+                    "target_id": interrupted.target_id,
+                    "code_hash": interrupted.base_source_hash,
+                    "policy_fingerprint": "policy-hash",
+                    "authority_policy_generation": interrupted.authority_policy_generation,
+                    "authority_policy_fingerprint": interrupted.authority_policy_fingerprint,
+                }
+            },
+            handlers={
+                "GENERATE_INCIDENT": lambda decision: calls.append(decision)
+                or {"accepted": True, "incident_id": "incident-new"}
+            },
+        )
+
+    assert calls == []
+    assert store.all_recoveries() == ()
+    assert store.all_recovery_lifecycle_marks() == ()
+
+
 def test_recovery_plan_marks_process_local_pending_approval_stale() -> None:
     store = InMemoryRepairStore()
     interrupted = _attempt(

@@ -69,6 +69,13 @@ the supervisor. A caller cannot weaken that requirement by omitting the
 per-call completeness flag; missing collection remains an explicit incomplete
 post-mortem record.
 
+Recovery-plan application is fail-closed when invoked with a live runtime
+context. The persisted candidate, target source hash, policy snapshot, and
+supervisor authority generation/fingerprint must all resolve and match before
+recovery lifecycle marks or application-owned callbacks are reached. A missing
+binding is not equivalent to an unchanged binding. Read-only plan inspection
+does not require that live context and never grants authority.
+
 ## Authority packet transport
 
 `serialize_recovery_authority_packet()` provides a bounded canonical JSON

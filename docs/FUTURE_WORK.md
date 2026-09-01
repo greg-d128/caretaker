@@ -1676,8 +1676,10 @@ Recovery-plan application also revalidates the current registered target's
 source hash, policy fingerprint, and supervisor authority generation/fingerprint
 when the engine has a live target context. A changed or unavailable binding is
 treated as a stale plan before lifecycle marks or application-owned handlers are
-run. This remains a fail-closed validation boundary, not candidate
-reactivation authority.
+run. It now also fails closed when a runtime-supplied live context cannot
+resolve a complete candidate binding; two equally incomplete projections are
+not treated as an unchanged binding. This remains a fail-closed validation
+boundary, not candidate reactivation authority.
 
 - verify the current candidate source and policy/authority bindings again after restart;
 - recover probation and long-term observation state without double counting;

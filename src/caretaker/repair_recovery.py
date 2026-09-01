@@ -4177,7 +4177,11 @@ def apply_repair_recovery_plan(
     incident, or policy record. Reapplying the same plan is idempotent by
     ``attempt_id``. Handlers are application-owned callbacks and must return
     ``{"accepted": True}`` before a dispatched action is recorded as executed;
-    missing or rejected handlers remain explicit evidence in the record.
+    missing or rejected handlers remain explicit evidence in the record. When
+    ``live_context_by_target`` is supplied by a running engine, the matching
+    candidate, target source, policy, and supervisor authority binding must be
+    fully valid; an unavailable binding fails closed before lifecycle marks or
+    handlers are reached.
     """
     if plan.get("schema_version") != RECOVERY_PLAN_SCHEMA_VERSION:
         raise ValueError("unsupported Repair recovery plan schema version")
@@ -4216,6 +4220,11 @@ def apply_repair_recovery_plan(
                 _records_by_id(store, "all_attempts", "attempt_id").get(attempt_id),
                 live_context=live_context_by_target.get(target_id),
             )
+            if not current_binding.get("execution_valid", False):
+                raise RecoveryPlanStaleError(
+                    "recovery plan cannot be applied: live candidate, policy, or "
+                    "authority binding is unavailable or invalid"
+                )
             planned_binding = decision.get("candidate_binding")
             if (
                 not isinstance(planned_binding, Mapping)
