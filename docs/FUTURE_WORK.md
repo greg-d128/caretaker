@@ -1459,7 +1459,6 @@ stores and are written before any application-owned recovery callback. They are
 explicit recovery evidence, not mutations to source records and not authority
 to continue or reactivate a candidate; repeated application is idempotent.
 
-- reconstruct pending approvals or deliberately stale them for every restart path;
 - verify the current candidate source and policy/authority bindings again after restart;
 - recover probation and long-term observation state without double counting;
 - collect complete individual post-mortem packets from every affected worker

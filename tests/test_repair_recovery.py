@@ -469,6 +469,12 @@ def test_recovery_plan_marks_process_local_pending_approval_stale() -> None:
         and item["state"] == "STALE_AFTER_RESTART"
         for item in store.all_recoveries()[0].incomplete_records
     )
+    approval_marks = [
+        mark for mark in store.all_recovery_lifecycle_marks()
+        if mark.record_type == "approval"
+    ]
+    assert len(approval_marks) == 1
+    assert approval_marks[0].state == "STALE_AFTER_RESTART"
 
 
 def test_recovery_policy_surfaces_packet_skew_and_failure_actions() -> None:
