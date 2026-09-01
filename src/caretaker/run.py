@@ -23,7 +23,12 @@ from .authority import (
 )
 from .capsule import IncidentCapsuleStore
 from .capsule_assistance import assist_capsules
-from .control_plane import RuntimeJob, RuntimeJobRegistry, RuntimeJobState
+from .control_plane import (
+    RuntimeJob,
+    RuntimeJobRegistry,
+    RuntimeJobState,
+    SQLiteRuntimeJobStore,
+)
 from .llm import LLMRequestGate
 from .adaptive_aggregation import (
     SupervisorAdaptiveAggregationStore,
@@ -1743,6 +1748,7 @@ def main(argv: list[str] | None = None) -> int:
     runtime_jobs = RuntimeJobRegistry(
         interaction_policy=runtime.active_policy.control_plane,
         on_transition=emit_job_transition,
+        job_store=SQLiteRuntimeJobStore(Path(policy.directory) / "control-jobs.sqlite"),
     )
     runtime_llm_gate = LLMRequestGate(runtime.active_policy.llm_usage)
 

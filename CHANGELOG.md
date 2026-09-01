@@ -17,6 +17,8 @@
   boundaries explicitly for the pre-version-1 release.
 - Record the supported interpreter matrix and a release-verification dependency
   constraints snapshot without pinning library consumers.
+- Persist bounded control-plane job summaries and cooperative progress across
+  restarts without replaying unfinished application work.
 
 ## 0.6.1
 

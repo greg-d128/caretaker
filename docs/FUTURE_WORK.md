@@ -2142,14 +2142,14 @@ Use small family-local migrations rather than a universal migration framework.
 
 **Status: Implemented in development tree for bounded control-plane history,
 authenticated job submission/status/cancellation, per-client and global job
-capacity, bounded results and deadlines, cooperative interruption, and
-policy-controlled LLM rate/concurrency limits. Durable restart-visible job
-records and richer progress reporting remain future work.**
+capacity, bounded results and deadlines, cooperative interruption, durable
+restart-visible job summaries, bounded progress reporting, and
+policy-controlled LLM rate/concurrency limits.**
 
 **Locations:** `src/caretaker/control_plane.py` (`RuntimeControlPlane`),
 `src/caretaker/logging/ipc.py`, and command handlers in `run.py`/`operator.py`.
 
-`signals`, `decisions`, and `actions` are retained in unbounded in-memory lists.
+`signals`, `decisions`, and `actions` are retained in bounded in-memory lists.
 The control endpoint also shares capacity with health and authority traffic,
 while capsule replay and similar operations can be long-running.
 

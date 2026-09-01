@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import threading
 import time
+from datetime import datetime, timezone
+from uuid import uuid4
 
 import pytest
 
@@ -12,6 +14,8 @@ from caretaker import (
     RuntimeInteractionPolicy,
     RuntimeJobRegistry,
     RuntimeJobState,
+    RuntimeJob,
+    SQLiteRuntimeJobStore,
 )
 from caretaker.logging.policy import load_operator_policy
 
@@ -92,6 +96,56 @@ def test_long_job_result_size_is_fail_closed() -> None:
         )
         _wait_for_state(registry, job.job_id, RuntimeJobState.FAILED)
         assert "exceeds" in (registry.status(job.job_id).error or "")
+    finally:
+        registry.close()
+
+
+def test_long_job_progress_is_bounded_and_restart_visible(tmp_path) -> None:
+    store = SQLiteRuntimeJobStore(tmp_path / "control-jobs.sqlite")
+    registry = RuntimeJobRegistry(job_store=store)
+    try:
+        job = registry.submit(
+            "progress-operation",
+            client_id="uid:1000",
+            operation=lambda context: (
+                context.report_progress({"completed": 1, "total": 2}),
+                {"ok": True},
+            )[-1],
+        )
+        _wait_for_state(registry, job.job_id, RuntimeJobState.SUCCEEDED)
+        assert registry.status(job.job_id).progress == {"completed": 1, "total": 2}
+    finally:
+        registry.close()
+
+    restarted = RuntimeJobRegistry(job_store=store)
+    try:
+        restored = restarted.status(job.job_id)
+        assert restored.state is RuntimeJobState.SUCCEEDED
+        assert restored.progress == {"completed": 1, "total": 2}
+        assert restored.public_dict()["result"] == {"ok": True}
+    finally:
+        restarted.close()
+
+
+def test_restart_marks_persisted_active_job_interrupted(tmp_path) -> None:
+    store = SQLiteRuntimeJobStore(tmp_path / "control-jobs.sqlite")
+    job = RuntimeJob(
+        job_id=uuid4(),
+        command="unfinished-operation",
+        client_id="uid:1000",
+        submitted_at=datetime.now(timezone.utc),
+        state=RuntimeJobState.RUNNING,
+        started_at=datetime.now(timezone.utc),
+        progress={"phase": "working"},
+    )
+    store.save(job)
+
+    registry = RuntimeJobRegistry(job_store=store)
+    try:
+        restored = registry.status(job.job_id)
+        assert restored.state is RuntimeJobState.INTERRUPTED
+        assert restored.progress == {"phase": "working"}
+        assert "restarted" in (restored.error or "")
     finally:
         registry.close()
 

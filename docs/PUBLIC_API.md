@@ -45,6 +45,8 @@ surface:
   LLM assessment/provider interfaces;
 - incident-capsule assistance, `LLMRequestGate`, `LLMUsagePolicy`, and
   communication-draft policy helpers;
+- `RuntimeJobStore`, `RuntimeJobStoreError`, and `SQLiteRuntimeJobStore` for
+  bounded restart-visible control-plane job summaries;
 - rollout, recovery, worker authority/acceptance, comparison-worker evidence,
   post-mortem, and packet transport types and helpers;
 - integrity verification, signed publication monitoring, isolated replay, and

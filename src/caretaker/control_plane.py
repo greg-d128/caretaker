@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from enum import Enum, auto
 from collections import OrderedDict, deque
 from concurrent.futures import Future, ThreadPoolExecutor
+from pathlib import Path
 from threading import Event, RLock
 from time import monotonic
 from typing import Any, Callable, Mapping, Protocol
@@ -285,6 +287,7 @@ class RuntimeJob:
     completed_at: datetime | None = None
     result: Mapping[str, Any] | None = None
     error: str | None = None
+    progress: Mapping[str, Any] | None = None
 
     def public_dict(self, *, include_result: bool = True) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -297,17 +300,199 @@ class RuntimeJob:
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
             "error": self.error,
         }
+        if self.progress is not None:
+            payload["progress"] = dict(self.progress)
         if include_result and self.result is not None:
             payload["result"] = dict(self.result)
         return payload
 
 
+RUNTIME_JOB_STORE_SCHEMA_VERSION = 1
+
+
+class RuntimeJobStore(Protocol):
+    """Durable owner for bounded control-plane job records."""
+
+    def load(self, *, limit: int) -> tuple[RuntimeJob, ...]: ...
+    def save(self, job: RuntimeJob) -> None: ...
+    def delete(self, job_id: UUID) -> None: ...
+    def prune(self, *, limit: int) -> None: ...
+
+
+class RuntimeJobStoreError(RuntimeError):
+    """Raised when a durable control-plane job record is invalid."""
+
+
+class SQLiteRuntimeJobStore:
+    """Small SQLite store for restart-visible control-plane job summaries.
+
+    Callable operations are never persisted.  On a new process, any queued or
+    running record is therefore reclassified as interrupted by the registry.
+    """
+
+    def __init__(self, path: str | Any) -> None:
+        self.path = str(path)
+        parent = Path(self.path).parent
+        parent.mkdir(parents=True, exist_ok=True)
+        self._lock = RLock()
+        self._initialize()
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.path, timeout=5.0)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    def _initialize(self) -> None:
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS caretaker_runtime_job_metadata "
+                "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+            )
+            row = connection.execute(
+                "SELECT value FROM caretaker_runtime_job_metadata WHERE key='schema_version'"
+            ).fetchone()
+            if row is None:
+                connection.execute(
+                    "INSERT INTO caretaker_runtime_job_metadata(key, value) VALUES (?, ?)",
+                    ("schema_version", str(RUNTIME_JOB_STORE_SCHEMA_VERSION)),
+                )
+            elif int(row["value"]) != RUNTIME_JOB_STORE_SCHEMA_VERSION:
+                raise RuntimeJobStoreError(
+                    f"unsupported runtime job store schema: {row['value']}"
+                )
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS caretaker_runtime_jobs (
+                    job_id TEXT PRIMARY KEY,
+                    command TEXT NOT NULL,
+                    client_id TEXT NOT NULL,
+                    submitted_at TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    progress_json TEXT,
+                    result_json TEXT,
+                    error TEXT
+                )"""
+            )
+
+    @staticmethod
+    def _timestamp(value: str | None) -> datetime | None:
+        if value is None:
+            return None
+        try:
+            return datetime.fromisoformat(value)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeJobStoreError("runtime job timestamp is invalid") from exc
+
+    @staticmethod
+    def _json_mapping(value: str | None, field_name: str) -> Mapping[str, Any] | None:
+        if value is None:
+            return None
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeJobStoreError(f"runtime job {field_name} is invalid JSON") from exc
+        if not isinstance(parsed, Mapping):
+            raise RuntimeJobStoreError(f"runtime job {field_name} is not a mapping")
+        return dict(parsed)
+
+    @classmethod
+    def _row_to_job(cls, row: sqlite3.Row) -> RuntimeJob:
+        try:
+            job_id = UUID(str(row["job_id"]))
+            state = RuntimeJobState(str(row["state"]))
+            submitted_at = cls._timestamp(row["submitted_at"])
+        except (TypeError, ValueError, KeyError) as exc:
+            raise RuntimeJobStoreError("runtime job identity or state is invalid") from exc
+        if submitted_at is None:
+            raise RuntimeJobStoreError("runtime job submitted_at is missing")
+        return RuntimeJob(
+            job_id=job_id,
+            command=str(row["command"]),
+            client_id=str(row["client_id"]),
+            submitted_at=submitted_at,
+            state=state,
+            started_at=cls._timestamp(row["started_at"]),
+            completed_at=cls._timestamp(row["completed_at"]),
+            progress=cls._json_mapping(row["progress_json"], "progress"),
+            result=cls._json_mapping(row["result_json"], "result"),
+            error=row["error"],
+        )
+
+    def load(self, *, limit: int) -> tuple[RuntimeJob, ...]:
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("runtime job store load limit must be a positive integer")
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM caretaker_runtime_jobs "
+                "ORDER BY submitted_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return tuple(self._row_to_job(row) for row in reversed(rows))
+
+    def save(self, job: RuntimeJob) -> None:
+        result = (
+            json.dumps(dict(job.result), default=str, sort_keys=True, separators=(",", ":"))
+            if job.result is not None
+            else None
+        )
+        progress = (
+            json.dumps(dict(job.progress), default=str, sort_keys=True, separators=(",", ":"))
+            if job.progress is not None
+            else None
+        )
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """INSERT OR REPLACE INTO caretaker_runtime_jobs
+                (job_id, command, client_id, submitted_at, state, started_at,
+                 completed_at, progress_json, result_json, error)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    str(job.job_id),
+                    job.command,
+                    job.client_id,
+                    job.submitted_at.isoformat(),
+                    job.state.value,
+                    job.started_at.isoformat() if job.started_at else None,
+                    job.completed_at.isoformat() if job.completed_at else None,
+                    progress,
+                    result,
+                    job.error,
+                ),
+            )
+
+    def delete(self, job_id: UUID) -> None:
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                "DELETE FROM caretaker_runtime_jobs WHERE job_id=?", (str(job_id),)
+            )
+
+    def prune(self, *, limit: int) -> None:
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("runtime job store prune limit must be a positive integer")
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """DELETE FROM caretaker_runtime_jobs
+                WHERE job_id NOT IN (
+                    SELECT job_id FROM caretaker_runtime_jobs
+                    ORDER BY submitted_at DESC LIMIT ?
+                )""",
+                (limit,),
+            )
+
+
 class RuntimeJobContext:
     """Cancellation and deadline context passed to one long-running job."""
 
-    def __init__(self, cancel_event: Event, deadline: float) -> None:
+    def __init__(
+        self,
+        cancel_event: Event,
+        deadline: float,
+        report_progress: Callable[[Mapping[str, Any]], None] | None = None,
+    ) -> None:
         self._cancel_event = cancel_event
         self._deadline = deadline
+        self._report_progress = report_progress
 
     @property
     def cancelled(self) -> bool:
@@ -322,6 +507,16 @@ class RuntimeJobContext:
             raise RuntimeJobCancelled("job cancellation was requested")
         if self.expired:
             raise RuntimeJobExpired("job execution deadline was reached")
+
+    def report_progress(self, progress: Mapping[str, Any]) -> None:
+        """Publish a bounded status mapping for operator polling."""
+
+        if not isinstance(progress, Mapping):
+            raise TypeError("job progress must be a mapping")
+        if self._report_progress is None:
+            return
+        self.checkpoint()
+        self._report_progress(progress)
 
 
 JobOperation = Callable[[RuntimeJobContext], Mapping[str, Any]]
@@ -340,6 +535,7 @@ class RuntimeJobRegistry:
         *,
         interaction_policy: RuntimeInteractionPolicy | None = None,
         on_transition: Callable[[RuntimeJob], None] | None = None,
+        job_store: RuntimeJobStore | None = None,
     ) -> None:
         self.policy = interaction_policy or RuntimeInteractionPolicy()
         self._jobs: OrderedDict[UUID, RuntimeJob] = OrderedDict()
@@ -347,13 +543,51 @@ class RuntimeJobRegistry:
         self._futures: dict[UUID, Future[Any]] = {}
         self._lock = RLock()
         self._on_transition = on_transition
+        self._job_store = job_store
         self._executor = ThreadPoolExecutor(
             max_workers=self.policy.maximum_long_jobs,
             thread_name_prefix="caretaker-long-job",
         )
         self._closed = False
+        self._restore_jobs()
+
+    def _restore_jobs(self) -> None:
+        store = self._job_store
+        if store is None:
+            return
+        store.prune(limit=self.policy.maximum_job_history_entries)
+        restored: list[RuntimeJob] = []
+        for job in store.load(limit=self.policy.maximum_job_history_entries):
+            if job.state in {
+                RuntimeJobState.QUEUED,
+                RuntimeJobState.RUNNING,
+                RuntimeJobState.CANCEL_REQUESTED,
+            }:
+                job = RuntimeJob(
+                    job_id=job.job_id,
+                    command=job.command,
+                    client_id=job.client_id,
+                    submitted_at=job.submitted_at,
+                    state=RuntimeJobState.INTERRUPTED,
+                    started_at=job.started_at,
+                    completed_at=utcnow(),
+                    progress=job.progress,
+                    error="runtime control plane restarted before job completion",
+                )
+                restored.append(job)
+            self._jobs[job.job_id] = job
+        for job in restored:
+            self._notify(job)
 
     def _notify(self, job: RuntimeJob) -> None:
+        store = self._job_store
+        if store is not None:
+            try:
+                store.save(job)
+            except Exception:
+                # A persistence failure must not change the outcome of a
+                # running operation or prevent the in-memory audit callback.
+                pass
         callback = self._on_transition
         if callback is not None:
             try:
@@ -385,6 +619,12 @@ class RuntimeJobRegistry:
             self._jobs.pop(job_id)
             self._cancel_events.pop(job_id, None)
             self._futures.pop(job_id, None)
+            store = self._job_store
+            if store is not None:
+                try:
+                    store.delete(job_id)
+                except Exception:
+                    pass
 
     def submit(
         self,
@@ -427,11 +667,41 @@ class RuntimeJobRegistry:
             cancel_event = Event()
             self._jobs[job.job_id] = job
             self._cancel_events[job.job_id] = cancel_event
+            # Publish the admission state before the executor can observe the
+            # job. This keeps durable transition order monotonic for fast jobs.
+            self._notify(job)
             future = self._executor.submit(self._execute, job.job_id, operation)
             self._futures[job.job_id] = future
             self._prune_locked()
-        self._notify(job)
         return job
+
+    def _update_progress(self, job_id: UUID, progress: Mapping[str, Any]) -> None:
+        encoded = json.dumps(dict(progress), separators=(",", ":")).encode()
+        if len(encoded) > self.policy.maximum_job_result_bytes:
+            raise ValueError(
+                "job progress exceeds the configured byte limit "
+                f"({self.policy.maximum_job_result_bytes})"
+            )
+        with self._lock:
+            current = self._jobs.get(job_id)
+            if current is None or current.state not in {
+                RuntimeJobState.RUNNING,
+                RuntimeJobState.CANCEL_REQUESTED,
+            }:
+                return
+            updated = RuntimeJob(
+                job_id=current.job_id,
+                command=current.command,
+                client_id=current.client_id,
+                submitted_at=current.submitted_at,
+                state=current.state,
+                started_at=current.started_at,
+                completed_at=current.completed_at,
+                progress=dict(progress),
+                result=current.result,
+                error=current.error,
+            )
+        self._replace(updated)
 
     def _execute(self, job_id: UUID, operation: JobOperation) -> None:
         with self._lock:
@@ -447,11 +717,13 @@ class RuntimeJobRegistry:
             submitted_at=current.submitted_at,
             state=RuntimeJobState.RUNNING,
             started_at=utcnow(),
+            progress=current.progress,
         )
         self._replace(started)
         context = RuntimeJobContext(
             cancel_event,
             monotonic() + float(self.policy.maximum_job_duration_seconds),
+            lambda progress: self._update_progress(job_id, progress),
         )
         try:
             context.checkpoint()
@@ -481,6 +753,7 @@ class RuntimeJobRegistry:
                     ),
                     started_at=current.started_at,
                     completed_at=utcnow(),
+                    progress=current.progress,
                     result=dict(result) if current.state is not RuntimeJobState.CANCEL_REQUESTED else None,
                     error=("job cancellation was requested" if current.state is RuntimeJobState.CANCEL_REQUESTED else None),
                 )
@@ -505,6 +778,7 @@ class RuntimeJobRegistry:
                 state=state,
                 started_at=current.started_at,
                 completed_at=utcnow(),
+                progress=current.progress,
                 error=str(error)[:2048],
             )
         self._replace(final)
@@ -542,6 +816,7 @@ class RuntimeJobRegistry:
                     submitted_at=current.submitted_at,
                     state=RuntimeJobState.CANCELLED,
                     completed_at=utcnow(),
+                    progress=current.progress,
                     error="job cancelled before execution",
                 )
             else:
@@ -552,10 +827,12 @@ class RuntimeJobRegistry:
                     submitted_at=current.submitted_at,
                     state=RuntimeJobState.CANCEL_REQUESTED,
                     started_at=current.started_at,
+                    progress=current.progress,
                 )
         return self._replace(final)
 
     def close(self) -> None:
+        interrupted: list[RuntimeJob] = []
         with self._lock:
             if self._closed:
                 return
@@ -569,7 +846,7 @@ class RuntimeJobRegistry:
                     RuntimeJobState.RUNNING,
                     RuntimeJobState.CANCEL_REQUESTED,
                 }:
-                    self._jobs[job.job_id] = RuntimeJob(
+                    interrupted_job = RuntimeJob(
                         job_id=job.job_id,
                         command=job.command,
                         client_id=job.client_id,
@@ -577,9 +854,14 @@ class RuntimeJobRegistry:
                         state=RuntimeJobState.INTERRUPTED,
                         started_at=job.started_at,
                         completed_at=utcnow(),
+                        progress=job.progress,
                         error="runtime control plane shut down",
                     )
+                    self._jobs[job.job_id] = interrupted_job
+                    interrupted.append(interrupted_job)
         self._executor.shutdown(wait=False, cancel_futures=True)
+        for job in interrupted:
+            self._notify(job)
 
 
 
