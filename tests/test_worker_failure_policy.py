@@ -113,6 +113,85 @@ def test_worker_failure_records_incident_and_uses_callback_owned_restart() -> No
     assert runtime.audit.events[3]["outcome"]["state"] == "RESTARTED"
 
 
+def test_worker_failure_cohort_captures_all_postmortems_before_one_policy_action() -> None:
+    runtime = FakeRuntime()
+    store = InMemoryRepairStore()
+    supervisor = CaretakerApplicationSupervisor(runtime, failure_store=store)
+    first = supervisor.workers.register(WorkerKind.REPAIR_ANALYZER, 1234)
+    second = supervisor.workers.register(WorkerKind.REPAIR_ANALYZER, 5678)
+    failed_first = supervisor.workers.mark_failed(
+        first.worker_id,
+        error_fingerprint="worker-crash-a",
+    )
+    failed_second = supervisor.workers.mark_failed(
+        second.worker_id,
+        error_fingerprint="worker-crash-b",
+    )
+    collected = []
+
+    def collect(worker, envelope):
+        collected.append(str(worker.worker_id))
+        return {
+            "milestone": "VALIDATION",
+            "partial_queue": [str(worker.worker_id)],
+            "policy_state": {"repair": "reviewed"},
+            "behavior_signature": {
+                "sample_count": 2,
+                "metrics": {
+                    "duration_seconds": {
+                        "mean": 1.0,
+                        "standard_deviation": 0.0,
+                    }
+                },
+            },
+        }
+
+    result = supervisor.handle_worker_failure_cohort(
+        [failed_first, failed_second],
+        scope="transaction:txn-1",
+        recovery_policy=RepairRecoveryPolicy(
+            worker_failure_action=RecoveryAction.CONTINUE_DEGRADED,
+        ),
+        collect_postmortem=collect,
+        critical_evidence=True,
+        require_complete_postmortem=True,
+        minimum_sample_count=1,
+    )
+
+    assert result["ok"] is True
+    assert result["scope"] == "transaction:txn-1"
+    assert collected == [str(first.worker_id), str(second.worker_id)]
+    assert len(store.all_worker_failures()) == 2
+    assert all(item["postmortem_status"] == "COMPLETE" for item in result["evidence"])
+    reconciliation = result["reconciliation"]
+    assert len(reconciliation["recovery_decisions"]) == 1
+    decision = reconciliation["recovery_decisions"][0]
+    assert decision["reconciliation"]["comparison"]["status"] == "COMBINED"
+    assert decision["action_execution"]["status"] == "FALLBACK_ONLY"
+    assert decision["authority_granted"] is False
+
+
+def test_worker_failure_cohort_rejects_live_or_duplicate_workers() -> None:
+    runtime = FakeRuntime()
+    supervisor = CaretakerApplicationSupervisor(runtime, failure_store=InMemoryRepairStore())
+    worker = supervisor.workers.register(WorkerKind.REPAIR_ANALYZER, 1234)
+
+    with pytest.raises(ValueError, match="failed or unauthorized"):
+        supervisor.handle_worker_failure_cohort(
+            [worker],
+            scope="transaction:txn-1",
+            recovery_policy=RepairRecoveryPolicy(),
+        )
+
+    failed = supervisor.workers.mark_failed(worker.worker_id, error_fingerprint="crash")
+    with pytest.raises(ValueError, match="duplicate worker"):
+        supervisor.handle_worker_failure_cohort(
+            [failed, failed],
+            scope="transaction:txn-1",
+            recovery_policy=RepairRecoveryPolicy(),
+        )
+
+
 def test_authorized_worker_cannot_restart_without_packet_verified_replacement() -> None:
     runtime = FakeRuntime()
     supervisor = CaretakerApplicationSupervisor(runtime)

@@ -4,6 +4,7 @@ import os
 import signal
 import threading
 import time
+from collections.abc import Iterable
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -39,6 +40,9 @@ from .models import (
     WorkerKind,
     WorkerState,
 )
+
+
+MAX_WORKER_FAILURE_COHORT = 128
 
 
 class WorkRegistry:
@@ -897,27 +901,19 @@ class CaretakerApplicationSupervisor:
             )
         return envelope
 
-    def handle_worker_failure(
+    def _capture_worker_failure_evidence(
         self,
         worker: WorkerHealth,
         *,
-        policy: Any,
-        create_incident: Callable[[Mapping[str, Any]], Any] | None = None,
-        restart_worker: Callable[[WorkerHealth], Any] | None = None,
-        disable_component: Callable[[WorkerHealth], Any] | None = None,
         diagnostic_debug: bool | None = None,
         critical_evidence: bool = False,
         collect_postmortem: Callable[[WorkerHealth, Mapping[str, Any]], Any] | None = None,
         require_complete_postmortem: bool = False,
         reconciliation_scope: str | None = None,
-    ) -> dict[str, Any]:
-        """Apply the policy boundary for one failed worker.
-
-        The supervisor records failure evidence and chooses an action, but
-        worker creation and component-specific shutdown remain callbacks owned
-        by the application boundary. A callback must report success before the
-        registry treats a worker as restarted.
-        """
+    ) -> tuple[dict[str, Any], Any | None, dict[str, Any]]:
+        """Capture and durably store one failed worker before any action."""
+        if worker.state not in {WorkerState.FAILED, WorkerState.UNAUTHORIZED}:
+            raise ValueError("worker failure evidence requires a failed or unauthorized worker")
         envelope = self.worker_failure_envelope(
             worker,
             diagnostic_debug=diagnostic_debug,
@@ -943,7 +939,7 @@ class CaretakerApplicationSupervisor:
             },
         )
         postmortem_evidence: Mapping[str, Any] | None = None
-        postmortem_error = None
+        postmortem_error: str | None = None
         if collect_postmortem is not None:
             try:
                 collected = collect_postmortem(worker, envelope)
@@ -955,13 +951,21 @@ class CaretakerApplicationSupervisor:
                 postmortem_error = (
                     f"post-mortem callback failed: {type(exc).__name__}: {exc}"
                 )[:256]
-        failure_persistence_error = None
-        failure_record = None
         postmortem_status = (
             "INCOMPLETE"
             if critical_evidence and require_complete_postmortem
-            else ("INVALID" if postmortem_error else ("COLLECTED" if postmortem_evidence is not None else "NOT_REQUESTED"))
+            else (
+                "INVALID"
+                if postmortem_error
+                else (
+                    "COLLECTED"
+                    if postmortem_evidence is not None
+                    else "NOT_REQUESTED"
+                )
+            )
         )
+        failure_record = None
+        failure_persistence_error = None
         if self.failure_store is not None:
             try:
                 failure_record = create_worker_failure_record(
@@ -980,6 +984,156 @@ class CaretakerApplicationSupervisor:
                 failure_persistence_error = f"{type(exc).__name__}: {exc}"[:256]
         else:
             failure_persistence_status = "NOT_CONFIGURED"
+        return envelope, failure_record, {
+            "failure_persistence_status": failure_persistence_status,
+            "failure_persistence_error": failure_persistence_error,
+            "postmortem_status": postmortem_status,
+            "postmortem_error": postmortem_error,
+            "reconciliation_scope": (
+                failure_record.reconciliation_scope
+                if failure_record is not None
+                else reconciliation_scope
+            ),
+        }
+
+    def capture_worker_failure_evidence(
+        self,
+        worker: WorkerHealth,
+        *,
+        diagnostic_debug: bool | None = None,
+        critical_evidence: bool = False,
+        collect_postmortem: Callable[[WorkerHealth, Mapping[str, Any]], Any] | None = None,
+        require_complete_postmortem: bool = False,
+        reconciliation_scope: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist one rollback envelope without selecting a recovery action.
+
+        This is the evidence half of coordinated failure handling. It is safe
+        to call for every worker in one transaction before invoking
+        ``reconcile_worker_failures``; it never creates authority or starts a
+        replacement process.
+        """
+        envelope, failure_record, metadata = self._capture_worker_failure_evidence(
+            worker,
+            diagnostic_debug=diagnostic_debug,
+            critical_evidence=critical_evidence,
+            collect_postmortem=collect_postmortem,
+            require_complete_postmortem=require_complete_postmortem,
+            reconciliation_scope=reconciliation_scope,
+        )
+        return {
+            "ok": failure_record is not None,
+            "worker_id": str(worker.worker_id),
+            "failure_id": str(failure_record.failure_id) if failure_record else None,
+            "failure_envelope": envelope,
+            "authority_granted": False,
+            **metadata,
+        }
+
+    def handle_worker_failure_cohort(
+        self,
+        workers: Iterable[WorkerHealth],
+        *,
+        scope: str,
+        recovery_policy: RepairRecoveryPolicy,
+        recovery_handlers: Mapping[str, Callable[[Mapping[str, Any]], Any]] | None = None,
+        diagnostic_debug: bool | None = None,
+        critical_evidence: bool = False,
+        collect_postmortem: Callable[[WorkerHealth, Mapping[str, Any]], Any] | None = None,
+        require_complete_postmortem: bool = False,
+        minimum_sample_count: int = 30,
+        z_threshold: float = 3.0,
+    ) -> dict[str, Any]:
+        """Capture a failed-worker cohort before one scope-level action.
+
+        The caller supplies the workers belonging to one continuous
+        transaction. Every member is persisted under the same reconciliation
+        scope before the supervisor compares evidence and dispatches the
+        policy-selected action. Application-owned handlers remain responsible
+        for incident creation, replacement, or shutdown.
+        """
+        if self.failure_store is None:
+            raise RuntimeError("worker failure cohort handling requires a failure store")
+        normalized_scope = resolve_worker_failure_scope({}, scope=scope)
+        unique_workers: dict[UUID, WorkerHealth] = {}
+        for worker in workers:
+            if not isinstance(worker, WorkerHealth):
+                raise TypeError("worker failure cohort must contain WorkerHealth records")
+            if len(unique_workers) >= MAX_WORKER_FAILURE_COHORT:
+                raise ValueError(
+                    "worker failure cohort cannot contain more than "
+                    f"{MAX_WORKER_FAILURE_COHORT} workers"
+                )
+            if worker.worker_id in unique_workers:
+                raise ValueError("worker failure cohort contains a duplicate worker")
+            if worker.state not in {WorkerState.FAILED, WorkerState.UNAUTHORIZED}:
+                raise ValueError(
+                    "worker failure cohort requires failed or unauthorized workers"
+                )
+            unique_workers[worker.worker_id] = worker
+        if not unique_workers:
+            raise ValueError("worker failure cohort must contain at least one worker")
+
+        evidence = [
+            self.capture_worker_failure_evidence(
+                worker,
+                diagnostic_debug=diagnostic_debug,
+                critical_evidence=critical_evidence,
+                collect_postmortem=collect_postmortem,
+                require_complete_postmortem=require_complete_postmortem,
+                reconciliation_scope=normalized_scope,
+            )
+            for worker in unique_workers.values()
+        ]
+        reconciliation = self.reconcile_worker_failures(
+            scope=normalized_scope,
+            minimum_sample_count=minimum_sample_count,
+            z_threshold=z_threshold,
+            recovery_policy=recovery_policy,
+            recovery_handlers=recovery_handlers,
+        )
+        return {
+            "ok": all(item["failure_persistence_status"] == "PERSISTED" for item in evidence),
+            "scope": normalized_scope,
+            "worker_ids": [str(item.worker_id) for item in unique_workers.values()],
+            "evidence": evidence,
+            "reconciliation": reconciliation,
+            "authority_granted": False,
+        }
+
+    def handle_worker_failure(
+        self,
+        worker: WorkerHealth,
+        *,
+        policy: Any,
+        create_incident: Callable[[Mapping[str, Any]], Any] | None = None,
+        restart_worker: Callable[[WorkerHealth], Any] | None = None,
+        disable_component: Callable[[WorkerHealth], Any] | None = None,
+        diagnostic_debug: bool | None = None,
+        critical_evidence: bool = False,
+        collect_postmortem: Callable[[WorkerHealth, Mapping[str, Any]], Any] | None = None,
+        require_complete_postmortem: bool = False,
+        reconciliation_scope: str | None = None,
+    ) -> dict[str, Any]:
+        """Apply the policy boundary for one failed worker.
+
+        The supervisor records failure evidence and chooses an action, but
+        worker creation and component-specific shutdown remain callbacks owned
+        by the application boundary. A callback must report success before the
+        registry treats a worker as restarted.
+        """
+        envelope, failure_record, failure_metadata = self._capture_worker_failure_evidence(
+            worker,
+            diagnostic_debug=diagnostic_debug,
+            critical_evidence=critical_evidence,
+            collect_postmortem=collect_postmortem,
+            require_complete_postmortem=require_complete_postmortem,
+            reconciliation_scope=reconciliation_scope,
+        )
+        failure_persistence_status = failure_metadata["failure_persistence_status"]
+        failure_persistence_error = failure_metadata["failure_persistence_error"]
+        postmortem_status = failure_metadata["postmortem_status"]
+        postmortem_error = failure_metadata["postmortem_error"]
         incident_error = None
         incident_result: Mapping[str, Any] | None = None
         if create_incident is not None:

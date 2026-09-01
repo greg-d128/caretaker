@@ -1325,6 +1325,16 @@ does not rerun a completed handler, and a pending checkpoint is surfaced for
 deliberate handling. Deployment-specific durable incident,
 replacement, and shutdown lifecycle integration remains future work.
 
+The supervisor also exposes `handle_worker_failure_cohort()` for one
+continuous transaction. The caller supplies all affected failed or
+unauthorized workers and a bounded reconciliation scope; Caretaker persists
+each rollback envelope and, when required, each complete post-mortem packet
+before reconciling the cohort and selecting one policy action per target. This
+prevents an early worker callback from causing a replacement or shutdown before
+the remaining worker evidence has been collected. Application-owned handlers
+still perform external incident, replacement, and shutdown effects, and the
+cohort API does not grant authority or spawn processes.
+
 The read-only `worker-failure-recovery-status` control command now provides a
 bounded operator projection of persisted failure, conflict, and recovery
 checkpoint state without returning packet payloads or exposing an action

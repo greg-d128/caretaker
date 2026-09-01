@@ -54,6 +54,14 @@ in `<policy.directory>/repair.sqlite` before applying its configured worker
 failure action. This record is available for restart reconciliation but does
 not itself authorize a replacement or claim complete post-mortem coverage.
 
+For a continuous transaction involving multiple workers, the supervisor's
+`handle_worker_failure_cohort()` captures every supplied failed or unauthorized
+worker under one bounded reconciliation scope before selecting a recovery
+action. Critical-evidence callers can supply a post-mortem collector; all
+packets are retained and compared before an application-owned handler is
+acknowledged. The cohort boundary is evidence coordination only and does not
+grant worker authority or start processes.
+
 
 ## Storage-unavailable default
 
