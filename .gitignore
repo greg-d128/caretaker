@@ -7,6 +7,7 @@ build/
 dist/
 *.egg-info/
 .caretaker/
+caretaker-data/
 coverage.xml
 .coverage
 htmlcov/
