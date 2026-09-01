@@ -854,8 +854,12 @@ least-loss default, while `DROP` and `REDUCE` are explicit bounded choices;
 retaining the failed batch. Callback acceptance is explicit and notifications
 are deduplicated for the pending episode. When configured, the same episode
 also emits a bounded `ADAPTIVE_AGGREGATION_BACKPRESSURE` envelope through an
-application-owned output-only audit callback. Parallel stores and
-transport-level throttling remain future integrations.
+application-owned output-only audit callback. In a supervised run,
+`RemoteAuditStream` can forward that envelope through the authenticated local
+control socket; the supervisor binds the live application PID and actor,
+replaces the policy envelope with current supervisor context, and forces
+critical priority. Parallel stores and transport-level throttling remain
+future integrations.
 The supervisor also records delayed, context-bound threshold proposals as
 proposal-only evidence. An authenticated control-plane operation now applies
 an approved, effective proposal through a target-scoped runtime authority
