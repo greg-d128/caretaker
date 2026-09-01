@@ -1450,6 +1450,10 @@ class CaretakerApplicationSupervisor:
         if not unique_workers:
             raise ValueError("worker failure cohort must contain at least one worker")
 
+        require_complete_postmortem = bool(require_complete_postmortem) or (
+            critical_evidence
+            and recovery_policy.require_full_worker_postmortem_for_critical_evidence
+        )
         evidence = [
             self.capture_worker_failure_evidence(
                 worker,

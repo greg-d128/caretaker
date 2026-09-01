@@ -63,6 +63,12 @@ workers. The application supplies the continuous-transaction scope (fixed or
 resolved from the cohort), and the callback persists and reconciles all
 members before selecting one policy action per target.
 
+When a recovery policy marks the evidence as critical, its
+`require_full_worker_postmortem_for_critical_evidence` setting is enforced by
+the supervisor. A caller cannot weaken that requirement by omitting the
+per-call completeness flag; missing collection remains an explicit incomplete
+post-mortem record.
+
 ## Authority packet transport
 
 `serialize_recovery_authority_packet()` provides a bounded canonical JSON

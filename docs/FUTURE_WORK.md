@@ -1457,8 +1457,10 @@ failure state. Standard failure envelopes omit that supplemental context;
 `CARETAKER_DIAGNOSTIC_DEBUG=1` includes it as diagnostic evidence for controlled
 diagnosis, including the last milestone, partial queue, and policy-state
 snapshot when supplied. This does not persist a complete post-mortem packet or
-authorize recovery, and the critical-evidence and durable recovery workflows
-remain future work. The supervisor can now persist each handled failure
+authorize recovery. The critical-evidence policy now enforces complete
+post-mortem collection for cohort handling; missing collection remains durable
+incomplete evidence rather than being treated as optional. The supervisor can
+now persist each handled failure
 envelope as a data-only `WorkerFailureRecord`; the supervised runtime stores
 these records in `<policy.directory>/repair.sqlite` before selecting a restart,
 degraded, disable, or stop action. This is durable failure evidence, not a

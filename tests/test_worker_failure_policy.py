@@ -172,6 +172,31 @@ def test_worker_failure_cohort_captures_all_postmortems_before_one_policy_action
     assert decision["authority_granted"] is False
 
 
+def test_critical_worker_cohort_cannot_weaken_policy_postmortem_requirement() -> None:
+    runtime = FakeRuntime()
+    store = InMemoryRepairStore()
+    supervisor = CaretakerApplicationSupervisor(runtime, failure_store=store)
+    worker = supervisor.workers.register(WorkerKind.REPAIR_ANALYZER, 1234)
+    failed = supervisor.workers.mark_failed(
+        worker.worker_id,
+        error_fingerprint="worker-crash",
+    )
+
+    result = supervisor.handle_worker_failure_cohort(
+        [failed],
+        scope="transaction:critical-postmortem",
+        recovery_policy=RepairRecoveryPolicy(),
+        critical_evidence=True,
+        require_complete_postmortem=False,
+    )
+
+    assert result["evidence"][0]["postmortem_status"] == "INCOMPLETE"
+    assert store.all_worker_failures()[0].postmortem_errors == (
+        "critical evidence requires a complete worker post-mortem packet",
+    )
+    assert store.all_worker_failures()[0].postmortem_status == "INCOMPLETE"
+
+
 def test_worker_failure_cohort_rejects_live_or_duplicate_workers() -> None:
     runtime = FakeRuntime()
     supervisor = CaretakerApplicationSupervisor(runtime, failure_store=InMemoryRepairStore())
