@@ -435,6 +435,64 @@ def test_recovery_candidate_binding_requires_live_context_and_rejects_mismatch()
     assert "LIVE_CONTEXT_MISMATCH:target_id" in mismatch["failures"]
 
 
+def test_recovery_plan_application_revalidates_live_binding_before_dispatch() -> None:
+    store = InMemoryRepairStore()
+    interrupted = _attempt(
+        target_id="app:charge",
+        completed=False,
+        outcome=RepairAttemptOutcome.PENDING,
+    )
+    store.record_attempt(interrupted)
+    store.candidates[interrupted.candidate_id] = SimpleNamespace(
+        candidate_id=interrupted.candidate_id,
+        episode_id=interrupted.episode_id,
+        incident_id=interrupted.incident_id,
+        target_id=interrupted.target_id,
+        created_at=interrupted.created_at,
+        base_source_hash=interrupted.base_source_hash,
+        authority_policy_generation=interrupted.authority_policy_generation,
+        authority_policy_fingerprint=interrupted.authority_policy_fingerprint,
+    )
+    store.policies[interrupted.policy_snapshot_id] = SimpleNamespace(
+        policy_snapshot_id=interrupted.policy_snapshot_id,
+        fingerprint="policy-hash",
+        created_at=interrupted.created_at,
+    )
+    live_context = {
+        "target_id": interrupted.target_id,
+        "code_hash": interrupted.base_source_hash,
+        "policy_fingerprint": "policy-hash",
+        "authority_policy_generation": interrupted.authority_policy_generation,
+        "authority_policy_fingerprint": interrupted.authority_policy_fingerprint,
+    }
+    plan = build_repair_recovery_plan(
+        store,
+        live_context_by_target={interrupted.target_id: live_context},
+    )
+    assert plan["decisions"][0]["candidate_binding"]["execution_valid"] is True
+
+    calls: list[Mapping[str, object]] = []
+    with pytest.raises(RecoveryPlanStaleError, match="live candidate"):
+        apply_repair_recovery_plan(
+            store,
+            plan,
+            live_context_by_target={
+                interrupted.target_id: {
+                    **live_context,
+                    "code_hash": "changed-code-hash",
+                }
+            },
+            handlers={
+                "GENERATE_INCIDENT": lambda decision: calls.append(decision)
+                or {"accepted": True, "incident_id": "incident-new"}
+            },
+        )
+
+    assert calls == []
+    assert store.all_recoveries() == ()
+    assert store.all_recovery_lifecycle_marks() == ()
+
+
 def test_recovery_plan_marks_process_local_pending_approval_stale() -> None:
     store = InMemoryRepairStore()
     interrupted = _attempt(

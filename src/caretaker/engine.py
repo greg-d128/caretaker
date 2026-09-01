@@ -288,21 +288,29 @@ class RepairEngine:
             target = self.registry.find(target_id)
             if target is not None:
                 policy = target.policy.recovery
-                authority = get_authority_runtime_context().effective
-                policy_snapshot = target.policy.snapshot()
-                live_context_by_target[target_id] = {
-                    "target_id": target_id,
-                    "code_hash": target.slot.load().source_hash,
-                    "policy_fingerprint": policy_snapshot.fingerprint,
-                    "authority_policy_generation": authority.generation,
-                    "authority_policy_fingerprint": authority.fingerprint,
-                }
+                context = self._current_recovery_context(target_id)
+                if context is not None:
+                    live_context_by_target[target_id] = context
         return build_repair_recovery_plan(
             self.store,
             target_id=target_id,
             policy=policy,
             live_context_by_target=live_context_by_target,
         )
+
+    def _current_recovery_context(self, target_id: str) -> dict[str, Any] | None:
+        target = self.registry.find(target_id)
+        if target is None:
+            return None
+        authority = get_authority_runtime_context().effective
+        policy_snapshot = target.policy.snapshot()
+        return {
+            "target_id": target_id,
+            "code_hash": target.slot.load().source_hash,
+            "policy_fingerprint": policy_snapshot.fingerprint,
+            "authority_policy_generation": authority.generation,
+            "authority_policy_fingerprint": authority.fingerprint,
+        }
 
     def apply_recovery_plan(
         self,
@@ -315,7 +323,21 @@ class RepairEngine:
         The handlers remain owned by the embedding application. Caretaker does
         not create authority for a callback and defaults to no dispatch.
         """
-        return apply_repair_recovery_plan(self.store, plan, handlers=handlers)
+        live_context_by_target: dict[str, dict[str, Any]] = {}
+        for decision in plan.get("decisions", ()):
+            if not isinstance(decision, Mapping):
+                continue
+            target_id = str(decision.get("target_id") or "")
+            if target_id:
+                context = self._current_recovery_context(target_id)
+                if context is not None:
+                    live_context_by_target[target_id] = context
+        return apply_repair_recovery_plan(
+            self.store,
+            plan,
+            handlers=handlers,
+            live_context_by_target=live_context_by_target,
+        )
 
     def invoke_rollout(
         self,

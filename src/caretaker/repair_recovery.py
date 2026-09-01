@@ -4001,6 +4001,7 @@ def apply_repair_recovery_plan(
     *,
     now: datetime | None = None,
     handlers: Mapping[str, Callable[[Mapping[str, Any]], Any]] | None = None,
+    live_context_by_target: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Acknowledge recovery decisions and optionally dispatch app callbacks.
 
@@ -4040,6 +4041,22 @@ def apply_repair_recovery_plan(
             skipped += 1
             continue
         _validate_recovery_decision_source(store, decision)
+        if live_context_by_target is not None:
+            target_id = str(decision.get("target_id") or "")
+            current_binding = _candidate_binding_for_attempt(
+                store,
+                _records_by_id(store, "all_attempts", "attempt_id").get(attempt_id),
+                live_context=live_context_by_target.get(target_id),
+            )
+            planned_binding = decision.get("candidate_binding")
+            if (
+                not isinstance(planned_binding, Mapping)
+                or _recovery_json(planned_binding) != _recovery_json(current_binding)
+            ):
+                raise RecoveryPlanStaleError(
+                    "recovery plan is stale: live candidate, policy, or authority "
+                    "binding changed"
+                )
         validated_decisions.append(decision)
 
     lifecycle_writer = getattr(store, "record_recovery_lifecycle_mark", None)

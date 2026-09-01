@@ -1520,6 +1520,13 @@ stores and are written before any application-owned recovery callback. They are
 explicit recovery evidence, not mutations to source records and not authority
 to continue or reactivate a candidate; repeated application is idempotent.
 
+Recovery-plan application also revalidates the current registered target's
+source hash, policy fingerprint, and supervisor authority generation/fingerprint
+when the engine has a live target context. A changed or unavailable binding is
+treated as a stale plan before lifecycle marks or application-owned handlers are
+run. This remains a fail-closed validation boundary, not candidate
+reactivation authority.
+
 - verify the current candidate source and policy/authority bindings again after restart;
 - recover probation and long-term observation state without double counting;
 - collect complete individual post-mortem packets from every affected worker

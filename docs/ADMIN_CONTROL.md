@@ -470,6 +470,10 @@ use `CaretakerApplicationSupervisor.build_replacement_action_handler()` so the
 new process is admitted only through the supervisor-issued packet and
 `WorkerRegistry` acceptance checks. Process creation remains application-owned
 and cross-process orchestration is not provided by this API.
+When the engine has a registered live target, plan application also revalidates
+the target source hash, policy fingerprint, and supervisor authority context
+before writing lifecycle marks or invoking a handler; a changed or unavailable
+binding is rejected as a stale plan.
 For the direct worker-failure path, `build_authorized_restart_callback()`
 provides the same packet-verified handoff in the callback shape accepted by
 `handle_worker_failure()`. An already-authorized worker cannot be counted as
