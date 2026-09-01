@@ -612,6 +612,41 @@ def test_recovery_action_dispatch_requires_application_callback_acknowledgement(
     assert received == [decision]
 
 
+def test_deployed_code_rollback_dispatch_requires_explicit_application_gate() -> None:
+    decision = {
+        "target_id": "app:charge",
+        "policy_action": {
+            "requested_action": "ROLLBACK_TO_DEPLOYED_CODE",
+            "selected_action": "ROLLBACK_TO_DEPLOYED_CODE",
+            "policy_enabled": True,
+        },
+    }
+
+    rejected = dispatch_recovery_action(
+        decision,
+        handlers={
+            "ROLLBACK_TO_DEPLOYED_CODE": lambda _decision: {"accepted": True},
+        },
+    )
+    assert rejected["status"] == "REJECTED_BY_HANDLER"
+    assert rejected["authority_granted"] is False
+    assert rejected["required_gates"] == ["rollback_applied"]
+
+    executed = dispatch_recovery_action(
+        decision,
+        handlers={
+            "ROLLBACK_TO_DEPLOYED_CODE": lambda _decision: {
+                "accepted": True,
+                "rollback_applied": True,
+                "deployed_code_hash": "deployed-hash",
+            },
+        },
+    )
+    assert executed["status"] == "EXECUTED"
+    assert executed["authority_granted"] is False
+    assert executed["handler_result"]["deployed_code_hash"] == "deployed-hash"
+
+
 def test_replacement_dispatch_requires_verified_packet_and_acceptance_state() -> None:
     decision = {
         "policy_action": {

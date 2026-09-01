@@ -230,9 +230,10 @@ def evaluate_worker_acceptance(
 class RepairRecoveryPolicy:
     """Policy controls for restart and failed-worker recovery.
 
-    The action vocabulary is broader than the current executor. Until worker
-    replacement and application shutdown orchestration are implemented, the
-    recovery planner remains fail-safe and never performs those actions.
+    The action vocabulary is broader than the current executor. The planner
+    remains fail-safe and never performs an action itself; an embedding
+    application must explicitly provide any callback that can affect runtime
+    state.
     """
 
     enabled: bool = True
@@ -2078,17 +2079,20 @@ def dispatch_recovery_action(
             "authority_granted": False,
             "reason": "recovery action is inconsistent with its policy decision",
         }
-    if selected in {
-        RecoveryAction.ROLLBACK_TO_DEPLOYED_CODE.name,
-        RecoveryAction.CONTINUE_DEGRADED.name,
-    }:
+    if selected == RecoveryAction.CONTINUE_DEGRADED.name:
         return {
             "status": "FALLBACK_ONLY",
             "action": selected,
             "authority_granted": False,
-        }
+    }
     handler = (handlers or {}).get(selected)
     if handler is None:
+        if selected == RecoveryAction.ROLLBACK_TO_DEPLOYED_CODE.name:
+            return {
+                "status": "FALLBACK_ONLY",
+                "action": selected,
+                "authority_granted": False,
+            }
         return {
             "status": "NOT_CONFIGURED",
             "action": selected,
@@ -2113,6 +2117,7 @@ def dispatch_recovery_action(
     required_gates: dict[str, str] = {
         RecoveryAction.GENERATE_INCIDENT.name: "incident_id",
         RecoveryAction.STOP_APPLICATION.name: "shutdown_requested",
+        RecoveryAction.ROLLBACK_TO_DEPLOYED_CODE.name: "rollback_applied",
     }
     if selected == RecoveryAction.REPLACE_WORKER.name:
         missing = [

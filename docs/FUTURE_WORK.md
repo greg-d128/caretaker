@@ -1420,7 +1420,7 @@ The recovery planner now also resolves the configured interrupted-transaction
 action into an explicit, durable policy decision. It records whether the
 action is enabled, remains planned-only, falls back to deployed code, and
 requires application orchestration. It still does not execute worker
-replacement, application shutdown, or incident callbacks itself.
+replacement, application shutdown, incident, or rollback callbacks itself.
 
 `RepairEngine.apply_recovery_plan()` may now receive an explicit application-
 owned handler map for those actions. A handler must return
@@ -1437,6 +1437,15 @@ provides `build_authorized_restart_callback()`, which accepts an application-
 owned spawn result only after the replacement has been admitted with that
 packet. A generic `started=true` callback cannot replace an already-authorized
 worker.
+
+The recovery dispatcher now accepts an explicit application-owned
+`ROLLBACK_TO_DEPLOYED_CODE` callback. The callback must acknowledge both the
+action and `rollback_applied: true`; a generic acceptance is rejected. This
+records the deployed-code transition as executed without granting authority,
+and preserves `FALLBACK_ONLY` when no callback is supplied. The application
+owns the concrete slot/process transition and should include the deployed code
+identity in the bounded handler result when available. `CONTINUE_DEGRADED`
+remains evidence-only because it has no concrete Caretaker action to dispatch.
 
 The supervisor can now consume coordinated worker-failure evidence and select
 the ordinary or critical-evidence recovery action per scope. Dispatch still

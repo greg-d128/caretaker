@@ -497,6 +497,10 @@ When the engine has a registered live target, plan application also revalidates
 the target source hash, policy fingerprint, and supervisor authority context
 before writing lifecycle marks or invoking a handler; a changed or unavailable
 binding is rejected as a stale plan.
+For `ROLLBACK_TO_DEPLOYED_CODE`, a callback must return both
+`accepted: true` and `rollback_applied: true`; this is an explicit application
+acknowledgement that the deployed runtime is active, not a Caretaker authority
+grant. Without that callback, the durable result remains `FALLBACK_ONLY`.
 For the direct worker-failure path, `build_authorized_restart_callback()`
 provides the same packet-verified handoff in the callback shape accepted by
 `handle_worker_failure()`. An already-authorized worker cannot be counted as
