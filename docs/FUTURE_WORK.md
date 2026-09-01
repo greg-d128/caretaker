@@ -2209,45 +2209,22 @@ existing data, and recovery queries; do not multiply physical stores.
 
 #### 10. Move runtime supervision ownership out of logging
 
-**Status: Partially implemented in development tree.**
+**Status: Implemented in development tree for the current application scope; compatibility surface retained.**
 
 `ApplicationRuntimeSupervisor` now provides the application-runtime ownership
-boundary and `run.py` composes through it. It delegates to the historical
-logging supervisor during the compatibility phase, so some worker, health,
-control, and recovery implementation still needs to be extracted
-method-by-method. Runtime scheduling (`WorkRegistry`) and health monitoring
-(`Watchdog`) now live in the application package, with compatibility
-re-exports from logging. Adaptive aggregation queue binding state now lives in
-the same application-runtime package. Worker admission, health state, control,
-queue coordination, failed-worker cohort handling, and expired-worker
-validation are now application-runtime implementations, as is single-worker
-failure handling; a compatibility wrapper remains in logging. No host-level or
-infrastructure-level authority is added. `ApplicationWorkerLifecycle`
-is also application-runtime code, with a logging compatibility re-export;
-process creation and cleanup remain application-owned callbacks. The bounded
-control-cycle implementation now lives in the application package and is
-exposed directly by `ApplicationRuntimeSupervisor`. Application monitoring,
-process-boundary shutdown, failure evidence capture, single-worker failure
-handling, and failure reconciliation/action checkpoints now use
-application-runtime implementations. Packet-verified replacement and restart
-callback construction is also runtime-owned. Recovery handlers and process
-creation remain application-owned; remaining work is to extract only the other
-specialized orchestration boundaries without broadening the application
-authority boundary. Comparison-worker evidence assignment, acceptance, and
-reconciliation now use the same runtime owner. Worker acceptance observations
-and authority/replacement packet handoffs now use it as well.
-Adaptive aggregation queue reconciliation now uses the same runtime owner.
-Incident and shutdown recovery adapter construction now uses the runtime
-owner while preserving application-owned effects.
-Bounded worker failure envelope and diagnostic construction is runtime-owned.
+boundary and `run.py` composes through it. Runtime scheduling (`WorkRegistry`),
+health monitoring (`Watchdog`), adaptive aggregation, worker admission and
+control, failure evidence and recovery, comparison-worker evidence, packet
+handoffs, bounded diagnostics, and application-boundary lifecycle operations
+are implemented in the application-runtime package. Logging retains the
+historical supervisor class and imports as compatibility delegates, plus
+logging-specific composition and audit emission. Process creation, incident
+persistence, recovery handlers, and cleanup remain application-owned callbacks.
+No host-level or infrastructure-level authority is added.
 
-`logging/supervisor.py` and `logging/__init__.py` currently include application
-supervision, worker health/authority, adaptive coordination, and recovery
-alongside logging. Create an application-runtime owner for workers, health,
-endpoint ownership, control, scheduling, and shutdown; keep logging as an
-observability dependency. Reduce `run.py` toward composition and runtime
-invocation. Move ownership/imports first and retain temporary compatibility
-re-exports. Do not introduce a generic service framework.
+`logging/supervisor.py` and `logging/__init__.py` still export the compatibility
+surface so existing integrations do not break. Keep this surface narrow and
+do not introduce a generic service framework or host-level process manager.
 
 Test logging-disabled runtime behavior, worker restart, startup/shutdown,
 imports, CLI/console behavior, and public compatibility before removing any
