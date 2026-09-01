@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from enum import Enum, auto
+from collections import deque
 from threading import RLock
 from typing import Any, Callable, Mapping, Protocol
 from uuid import UUID, uuid4
@@ -210,6 +211,17 @@ class RuntimeInteractionPolicy:
     minimum_internal_change_interval_seconds: float = 30.0
     maximum_scope_actions_per_window: int = 3
     scope_action_window_seconds: float = 300.0
+    maximum_history_entries: int = 4096
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.maximum_history_entries, bool)
+            or not isinstance(self.maximum_history_entries, int)
+            or not 1 <= self.maximum_history_entries <= 1_000_000
+        ):
+            raise ValueError(
+                "maximum_history_entries must be an integer from 1 through 1000000"
+            )
 
 
 
@@ -224,9 +236,10 @@ class RuntimeControlPlane:
         self.policy_engine = policy_engine or DefaultRuntimePolicyEngine()
         self.interaction_policy = interaction_policy or RuntimeInteractionPolicy(maximum_action_depth=maximum_action_depth)
         self.maximum_action_depth = self.interaction_policy.maximum_action_depth
-        self.signals: list[RuntimeSignal] = []
-        self.decisions: list[RuntimeDecision] = []
-        self.actions: list[RuntimeAction] = []
+        history_limit = self.interaction_policy.maximum_history_entries
+        self.signals: deque[RuntimeSignal] = deque(maxlen=history_limit)
+        self.decisions: deque[RuntimeDecision] = deque(maxlen=history_limit)
+        self.actions: deque[RuntimeAction] = deque(maxlen=history_limit)
         self._handlers: dict[RuntimeActionKind, list[ActionHandler]] = {}
         self._seen: dict[tuple[str, str | None, str | None], datetime] = {}
         self._scope_action_history: dict[tuple[str | None, RuntimeActionKind], list[datetime]] = {}

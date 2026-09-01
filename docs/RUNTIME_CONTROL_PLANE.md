@@ -67,6 +67,12 @@ Bidirectional Guard–Repair integration can produce feedback loops. Every actio
 - related repair episodes and deviations.
 
 The control plane also deduplicates repeated signals and enforces a maximum action depth.
+Recent signals, decisions, and actions are retained in bounded deques controlled
+by `RuntimeInteractionPolicy.maximum_history_entries` (4096 by default). This
+history is an inspection cache, not the durable audit record; owners should
+persist consequential decisions through their existing evidence or audit
+stores. Health and authority traffic therefore cannot exhaust memory through
+unbounded control-plane history.
 
 ## Custom policy engine
 
