@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -385,6 +386,8 @@ def test_recovery_candidate_binding_requires_live_context_and_rejects_mismatch()
         completed=False,
         outcome=RepairAttemptOutcome.PENDING,
     )
+    candidate_source = "def candidate():\n    return 1\n"
+    candidate_source_hash = hashlib.sha256(candidate_source.encode()).hexdigest()
     candidate = SimpleNamespace(
         candidate_id=attempt.candidate_id,
         episode_id=attempt.episode_id,
@@ -393,6 +396,14 @@ def test_recovery_candidate_binding_requires_live_context_and_rejects_mismatch()
         base_source_hash=attempt.base_source_hash,
         authority_policy_generation=attempt.authority_policy_generation,
         authority_policy_fingerprint=attempt.authority_policy_fingerprint,
+        artifact=SimpleNamespace(
+            kind="FUNCTION_REPLACEMENT",
+            files=(SimpleNamespace(
+                content=candidate_source,
+                content_hash=candidate_source_hash,
+            ),),
+            artifact_hash=candidate_source_hash,
+        ),
     )
 
     persisted = validate_recovery_candidate_binding(
@@ -420,6 +431,33 @@ def test_recovery_candidate_binding_requires_live_context_and_rejects_mismatch()
         current_authority_policy_fingerprint=attempt.authority_policy_fingerprint,
     )
     assert live["execution_valid"] is True
+    assert live["artifact_integrity"]["valid"] is True
+
+    tampered = SimpleNamespace(
+        **{
+            **vars(candidate),
+            "artifact": SimpleNamespace(
+                kind="FUNCTION_REPLACEMENT",
+                files=(SimpleNamespace(
+                    content="def candidate():\n    return 2\n",
+                    content_hash=candidate_source_hash,
+                ),),
+                artifact_hash=candidate_source_hash,
+            ),
+        }
+    )
+    tampered_result = validate_recovery_candidate_binding(
+        attempt,
+        tampered,
+        current_target_id=attempt.target_id,
+        current_code_hash=attempt.base_source_hash,
+        persisted_policy_fingerprint="policy-hash",
+        current_policy_fingerprint="policy-hash",
+        current_authority_policy_generation=attempt.authority_policy_generation,
+        current_authority_policy_fingerprint=attempt.authority_policy_fingerprint,
+    )
+    assert tampered_result["execution_valid"] is False
+    assert "PERSISTED_ARTIFACT_CONTENT_HASH_MISMATCH:0" in tampered_result["failures"]
 
     mismatch = validate_recovery_candidate_binding(
         attempt,
@@ -443,6 +481,8 @@ def test_recovery_plan_application_revalidates_live_binding_before_dispatch() ->
         outcome=RepairAttemptOutcome.PENDING,
     )
     store.record_attempt(interrupted)
+    candidate_source = "def candidate():\n    return 1\n"
+    candidate_source_hash = hashlib.sha256(candidate_source.encode()).hexdigest()
     store.candidates[interrupted.candidate_id] = SimpleNamespace(
         candidate_id=interrupted.candidate_id,
         episode_id=interrupted.episode_id,
@@ -452,6 +492,14 @@ def test_recovery_plan_application_revalidates_live_binding_before_dispatch() ->
         base_source_hash=interrupted.base_source_hash,
         authority_policy_generation=interrupted.authority_policy_generation,
         authority_policy_fingerprint=interrupted.authority_policy_fingerprint,
+        artifact=SimpleNamespace(
+            kind="FUNCTION_REPLACEMENT",
+            files=(SimpleNamespace(
+                content=candidate_source,
+                content_hash=candidate_source_hash,
+            ),),
+            artifact_hash=candidate_source_hash,
+        ),
     )
     store.policies[interrupted.policy_snapshot_id] = SimpleNamespace(
         policy_snapshot_id=interrupted.policy_snapshot_id,

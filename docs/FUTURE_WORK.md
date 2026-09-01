@@ -1681,6 +1681,12 @@ resolve a complete candidate binding; two equally incomplete projections are
 not treated as an unchanged binding. This remains a fail-closed validation
 boundary, not candidate reactivation authority.
 
+Candidate recovery bindings now also verify the persisted candidate artifact's
+file content hashes, and the current single-file function-replacement artifact
+hash, before a live plan can be applied. Tampered or structurally incomplete
+candidate source remains reviewable evidence but cannot reach lifecycle marks
+or application-owned callbacks.
+
 - verify the current candidate source and policy/authority bindings again after restart;
 - recover probation and long-term observation state without double counting;
 - collect complete individual post-mortem packets from every affected worker

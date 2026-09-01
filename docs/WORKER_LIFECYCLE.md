@@ -75,6 +75,10 @@ supervisor authority generation/fingerprint must all resolve and match before
 recovery lifecycle marks or application-owned callbacks are reached. A missing
 binding is not equivalent to an unchanged binding. Read-only plan inspection
 does not require that live context and never grants authority.
+The persisted candidate artifact is also checked without executing it: each
+stored file content hash must match its contents, and the current
+single-file function-replacement artifact hash must match that file. Failed
+artifact verification remains evidence only and fails closed for recovery.
 
 ## Authority packet transport
 

@@ -3576,6 +3576,48 @@ def _enum_name(value: Any) -> str:
     return str(getattr(value, "name", value or ""))
 
 
+def _candidate_artifact_integrity(candidate: Any) -> dict[str, Any]:
+    """Verify persisted candidate file hashes without executing candidate code."""
+    artifact = _field(candidate, "artifact")
+    if artifact is None:
+        return {
+            "valid": False,
+            "artifact_hash": None,
+            "file_count": 0,
+            "failures": ["PERSISTED_ARTIFACT_UNAVAILABLE"],
+        }
+    artifact_hash = str(_field(artifact, "artifact_hash", "") or "").strip()
+    failures: list[str] = []
+    if not artifact_hash:
+        failures.append("PERSISTED_ARTIFACT_HASH_UNAVAILABLE")
+    files = _field(artifact, "files", ())
+    if isinstance(files, (str, bytes)) or not isinstance(files, Sequence) or not files:
+        failures.append("PERSISTED_ARTIFACT_FILES_INVALID")
+        files = ()
+    file_hashes: list[str] = []
+    for index, item in enumerate(files):
+        content = _field(item, "content")
+        supplied_hash = str(_field(item, "content_hash", "") or "").strip()
+        if not isinstance(content, str) or not supplied_hash:
+            failures.append(f"PERSISTED_ARTIFACT_FILE_INVALID:{index}")
+            continue
+        expected_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        file_hashes.append(supplied_hash)
+        if supplied_hash != expected_hash:
+            failures.append(f"PERSISTED_ARTIFACT_CONTENT_HASH_MISMATCH:{index}")
+
+    kind = _enum_name(_field(artifact, "kind")).replace("-", "_").upper()
+    if kind == "FUNCTION_REPLACEMENT" and len(file_hashes) == 1:
+        if artifact_hash != file_hashes[0]:
+            failures.append("PERSISTED_ARTIFACT_HASH_MISMATCH")
+    return {
+        "valid": not failures,
+        "artifact_hash": artifact_hash or None,
+        "file_count": len(files),
+        "failures": failures,
+    }
+
+
 def _attempts(store: Any, target_id: str | None) -> tuple[Any, ...]:
     if target_id is not None:
         return tuple(store.attempts_for_target(target_id))
@@ -3717,6 +3759,8 @@ def validate_recovery_candidate_binding(
     for name in ("authority_policy_generation", "authority_policy_fingerprint"):
         if _field(attempt, name) != _field(candidate, name):
             failures.append(f"PERSISTED_CONTEXT_MISMATCH:{name}")
+    artifact_integrity = _candidate_artifact_integrity(candidate)
+    failures.extend(artifact_integrity["failures"])
 
     if not persisted_policy_fingerprint:
         failures.append("PERSISTED_POLICY_SNAPSHOT_UNAVAILABLE")
@@ -3757,6 +3801,7 @@ def validate_recovery_candidate_binding(
         "execution_valid": not failures and not live_failures and not missing_live_context,
         "failures": failures + live_failures,
         "missing_live_context": missing_live_context,
+        "artifact_integrity": artifact_integrity,
         "policy_snapshot_id": str(_field(attempt, "policy_snapshot_id", "")),
         "persisted_policy_fingerprint": persisted_policy_fingerprint,
         "policy_snapshot_revalidation_required": (
