@@ -27,7 +27,8 @@
   audit events and partial-archive status inspection; source deletion and
   compaction are now available through an explicit opt-in Repair retention
   policy with archive verification, bounded reference scanning, and critical
-  audit events.
+  audit events. Refresh the machine-readable capability and reserved-setting
+  catalogs for the 0.6.5a policy surface.
 
 ## 0.6.1
 

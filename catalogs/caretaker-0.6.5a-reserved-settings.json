@@ -1,0 +1,31 @@
+{
+  "caretaker_version": "0.6.5a",
+  "catalog": "reserved-policy-settings",
+  "policy_semantics_review_generation": 33,
+  "policy_surface_version": 12,
+  "reviewed_policy_surface_hash": "5cef8a4f943b52647d9952d01ba411c60420847a6aff4aaa66cb0e00d6236b2b",
+  "schema_version": 1,
+  "settings": {
+    "guard.collectors.environment_reads": "environment-read audit attribution is not implemented",
+    "guard.collectors.function_calls": "general Python function-call collection is not implemented",
+    "guard.retention.aggregate_seconds": "durable aggregate retention is not implemented",
+    "guard.retention.raw_event_seconds": "durable time-based raw-event pruning is not implemented",
+    "guard.targets[].function_patterns": "periodic inspection currently operates at module scope",
+    "guard.targets[].periodic.execution_window": "execution-window periodic scheduling is not implemented",
+    "logging.baseline.enabled": "automatic logging-baseline generation is not implemented; Guard behavior snapshots are used instead",
+    "logging.compression.compression_workers": "compression is single-worker",
+    "logging.retention.preserve_baseline_segments": "segment-class-aware retention is not implemented",
+    "logging.retention.preserve_incident_segments": "segment-class-aware retention is not implemented",
+    "logging.rotation.maximum_open_segments": "the writer currently owns exactly one open segment",
+    "repair.context.previous_incidents": "incident-history retrieval is not implemented",
+    "repair.guard.baseline_name": "named Guard baselines are not implemented",
+    "repair.limits.structural_review_after_repairs": "automatic structural-review scheduling is not implemented",
+    "repair.stability.oscillation_window_incidents": "incident-window oscillation detection is not implemented",
+    "repair.stability.require_regression_replay_before_reactivation": "automatic regression replay before reactivation is not implemented",
+    "system.collection_failure_action.DEGRADE_GUARD": "system-collector-driven Guard degradation is not implemented",
+    "system.collection_failure_action.REFUSE_RESEARCH_MODE": "system-collector-driven research-mode refusal is not implemented",
+    "system.selector.include_same_cgroup": "cgroup process discovery is future work",
+    "system.unavailable_source_action.DEGRADE_HIGHER_MODE": "system-collector-driven mode degradation is not implemented",
+    "system.unavailable_source_action.REFUSE_MODE": "system-collector-driven mode refusal is not implemented"
+  }
+}

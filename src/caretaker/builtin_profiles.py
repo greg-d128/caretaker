@@ -31,7 +31,7 @@ _PROFILE_FILES = {
     "observe-only": ("caretaker-observe-only-v1.json", True),
     "balanced": ("caretaker-balanced-v1.json", True),
     "high-assurance": ("caretaker-high-assurance-v1.json", True),
-    "sandbox": ("caretaker-sandbox-v1.json", False),
+    "sandbox": ("caretaker-sandbox-v2.json", False),
 }
 
 

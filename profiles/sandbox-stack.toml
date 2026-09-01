@@ -4,5 +4,5 @@ schema_version = 1
 # sandbox profile preserves the per-target policies embedded in the lab.
 [[layers]]
 kind = "framework"
-path = "caretaker-sandbox-v1.json"
+path = "caretaker-sandbox-v2.json"
 require_signature = false

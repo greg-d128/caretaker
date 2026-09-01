@@ -50,7 +50,14 @@ Package version, authority-manifest schema, profile version, and **policy-surfac
 
 The policy-surface generation advances when Caretaker introduces new policy-controlled functionality that an older profile could not have reviewed. Caretaker maintains a catalog of capabilities with stable IDs, their introduction version, affected policy paths, and a review explanation.
 
-Caretaker 0.6.5a advances the policy surface to generation 11. The new review capabilities cover adaptive `lightweight.*` instrumentation, persistent Guard behavior snapshots, opt-in randomized behavior snapshot boundaries, bounded return-behavior categories and policy-gated live return novelty, policy-governed operator behavior collection scheduling, minimum Repair validation-isolation requirements, retention of the runtime signing-identity journal, opt-in persistent adaptive-policy acceptance, policy-bound Repair rollout authority, the optional output-only monitoring stream, and optional manifest-backed audit segment rotation. A strict surface-1, surface-2, surface-3, surface-4, surface-5, surface-6, surface-7, surface-8, surface-9, or surface-10 profile must therefore be reviewed and continued before it can claim complete coverage under 0.6.5a.
+Caretaker 0.6.5a advances the policy surface to generation 12. The new review capabilities cover adaptive `lightweight.*` instrumentation, persistent Guard behavior snapshots, opt-in randomized behavior snapshot boundaries, bounded return-behavior categories and policy-gated live return novelty, policy-governed operator behavior collection scheduling, minimum Repair validation-isolation requirements, retention of the runtime signing-identity journal, opt-in persistent adaptive-policy acceptance, policy-bound Repair rollout authority, the optional output-only monitoring stream, optional manifest-backed audit segment rotation, and policy-authorized Repair retention compaction. A strict surface-1 through surface-11 profile must therefore be reviewed and continued before it can claim complete coverage under 0.6.5a.
+
+The checked-in machine-readable snapshots are generated into `catalogs/` by
+`make policy-catalogs`. The retention catalog entry describes the explicit
+`repair.retention.*` policy boundary: compaction is disabled by default, may
+run without a live operator only when the effective policy enables it, and
+must archive, verify, boundedly scan references, and emit critical audit
+evidence before deleting ordinary records.
 
 This makes the following state detectable:
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,6 +38,7 @@ from caretaker.profiles import (
     profile_identity,
     validate_runtime_profile,
 )
+from caretaker.policy_semantics import RESERVED_SETTINGS
 
 
 def _profile(**changes) -> PolicyAuthorityLayer:
@@ -75,7 +77,7 @@ def test_profile_identity_separates_lineage_name_and_version() -> None:
 @pytest.mark.repository
 def test_repository_sandbox_profile_and_stack_are_explicitly_nonproduction() -> None:
     profile = load_policy_authority_layer(
-        Path(__file__).parents[1] / "profiles/caretaker-sandbox-v1.json"
+        Path(__file__).parents[1] / "profiles/caretaker-sandbox-v2.json"
     )
     identity = profile_identity(profile, required=True)
     assert identity is not None
@@ -102,6 +104,24 @@ def test_builtin_profile_catalog_marks_only_sandbox_nonproduction() -> None:
     assert builtin_profile("sandbox").production is False
     sandbox = load_builtin_profile_supervisor("sandbox")
     assert sandbox.effective.overall_assurance == "PARTIAL_OR_UNSIGNED"
+
+
+@pytest.mark.repository
+def test_versioned_policy_catalogs_match_runtime_definitions() -> None:
+    root = Path(__file__).parents[1]
+    capabilities = json.loads(
+        (root / f"catalogs/caretaker-{caretaker.__version__}-policy-capabilities.json").read_text()
+    )
+    reserved = json.loads(
+        (root / f"catalogs/caretaker-{caretaker.__version__}-reserved-settings.json").read_text()
+    )
+
+    assert capabilities["caretaker_version"] == caretaker.__version__
+    assert capabilities["policy_surface_version"] == CURRENT_POLICY_SURFACE_VERSION
+    assert capabilities["capabilities"] == list(profiles_module.capability_catalog())
+    assert reserved["caretaker_version"] == caretaker.__version__
+    assert reserved["policy_surface_version"] == CURRENT_POLICY_SURFACE_VERSION
+    assert reserved["settings"] == dict(sorted(RESERVED_SETTINGS.items()))
 
 
 def test_continuation_binds_exact_predecessor_fingerprint() -> None:
@@ -175,6 +195,7 @@ def test_policy_surface_two_requires_review_of_adaptive_instrumentation() -> Non
         "guard.return-novelty",
         "logging.monitoring-stream",
         "logging.audit-segment-rotation",
+        "repair.retention-compaction",
     ]
 
 def test_policy_surface_reports_capabilities_added_after_profile(monkeypatch) -> None:

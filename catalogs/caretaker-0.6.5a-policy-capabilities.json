@@ -1,0 +1,225 @@
+{
+  "capabilities": [
+    {
+      "capability_id": "authority.runtime-leases",
+      "description": "Controls temporary authority leases and whether higher-assurance deployments require signed leases.",
+      "introduced_in": "0.6.0",
+      "paths": [
+        "authority.runtime."
+      ],
+      "review_note": "Review who may change effective policy during an incident and whether unsigned runtime authority is acceptable.",
+      "surface_version": 1,
+      "title": "Runtime policy authority"
+    },
+    {
+      "capability_id": "repair.lifecycle",
+      "description": "Controls whether Repair runs, what authority it has, validation, retry, observation, rollback, and candidate restrictions.",
+      "introduced_in": "0.2.0a1",
+      "paths": [
+        "repair."
+      ],
+      "review_note": "Review changes for repair autonomy, validation strength, replay safety, and activation boundaries.",
+      "surface_version": 1,
+      "title": "Repair lifecycle and authority"
+    },
+    {
+      "capability_id": "guard.behavior",
+      "description": "Controls Guard collection, behavior comparison, target inspection, baselines, deviations, and actions.",
+      "introduced_in": "0.4.0a1",
+      "paths": [
+        "guard.",
+        "repair.guard."
+      ],
+      "review_note": "Review changes for new observation scope, enforcement behavior, and evidence requirements.",
+      "surface_version": 1,
+      "title": "Guard behavior analysis"
+    },
+    {
+      "capability_id": "logging.evidence",
+      "description": "Controls application evidence capture, buffering, retention, attachments, signing, redaction, indexing, and failure behavior.",
+      "introduced_in": "0.5.0a1",
+      "paths": [
+        "logging."
+      ],
+      "review_note": "Review changes for evidence loss, privacy exposure, retention, and tamper-evidence guarantees.",
+      "surface_version": 1,
+      "title": "Logging and retained evidence"
+    },
+    {
+      "capability_id": "system.evidence",
+      "description": "Controls host/process collection used to correlate Caretaker activity with operating-system state.",
+      "introduced_in": "0.5.0a1",
+      "paths": [
+        "system."
+      ],
+      "review_note": "Review changes for collection scope, privacy, storage volume, and failure behavior.",
+      "surface_version": 1,
+      "title": "System evidence collection"
+    },
+    {
+      "capability_id": "adaptive.instrumentation",
+      "description": "Controls lightweight dependency/function observation, promotion, evidence-gated repair escalation, sampling, and demotion.",
+      "introduced_in": "0.6.0",
+      "paths": [
+        "lightweight."
+      ],
+      "review_note": "Review changes for hot-path overhead, observation scope, repair eligibility, evidence sufficiency, and demotion behavior.",
+      "surface_version": 2,
+      "title": "Adaptive lightweight instrumentation"
+    },
+    {
+      "capability_id": "guard.behavior-snapshots",
+      "description": "Controls bounded behavior statistics, automatic materialization, restart reconstruction, and accepted-baseline snapshot handling.",
+      "introduced_in": "0.6.0",
+      "paths": [
+        "guard.snapshots."
+      ],
+      "review_note": "Review sampling/statistics cost, generation compatibility, automatic materialization, and baseline persistence semantics.",
+      "surface_version": 2,
+      "title": "Persistent behavior statistics and snapshots"
+    },
+    {
+      "capability_id": "guard.randomized-behavior-regimes",
+      "description": "Controls opt-in randomized, bounded behavior epochs that preserve disjoint sample ranges and provenance.",
+      "introduced_in": "0.6.1",
+      "paths": [
+        "guard.snapshots.randomized_epoch_"
+      ],
+      "review_note": "Review reproducibility, minimum useful epoch size, snapshot rate, and the fact that randomized snapshots remain evidence rather than an automatic baseline.",
+      "surface_version": 3,
+      "title": "Randomized behavior snapshot boundaries"
+    },
+    {
+      "capability_id": "guard.return-behavior-categories",
+      "description": "Controls bounded, type-only categories and non-value structural buckets observed from successful Behavior-stage returns.",
+      "introduced_in": "0.6.1",
+      "paths": [
+        "guard.snapshots.maximum_return_categories",
+        "guard.snapshots.maximum_return_shapes"
+      ],
+      "review_note": "Review category/shape cardinality, type-name disclosure, generation provenance, safe container handling, and overflow handling.",
+      "surface_version": 5,
+      "title": "Bounded return behavior categories and shapes"
+    },
+    {
+      "capability_id": "guard.behavior-collection-scheduler",
+      "description": "Controls bounded durable operator-directed behavior capture requests and opt-in automatic backlog promotion.",
+      "introduced_in": "0.6.1",
+      "paths": [
+        "guard.snapshots.collection_"
+      ],
+      "review_note": "Review queue backpressure, priority/deadline handling, restart recovery, cancellation, automatic-promotion limits, and evidence-only provenance.",
+      "surface_version": 5,
+      "title": "Policy-governed operator behavior collection scheduling"
+    },
+    {
+      "capability_id": "repair.validation-isolation",
+      "description": "Controls the minimum isolation capability required before a repair candidate may pass validation and the fail-closed action when that backend is unavailable.",
+      "introduced_in": "0.6.0",
+      "paths": [
+        "repair.validation.minimum_isolation",
+        "repair.validation.backend_unavailable_action",
+        "repair.validation.require_result_authentication"
+      ],
+      "review_note": "Review whether automatic repair can run with PROCESS, CONTAINER, VM, or EXTERNAL isolation and how unavailable stronger isolation is handled.",
+      "surface_version": 2,
+      "title": "Validation isolation requirements"
+    },
+    {
+      "capability_id": "logging.signing-identity-journal",
+      "description": "Controls the independent signing-identity journal used to retain public identities and ephemeral key transitions required to verify signed runtime artifacts.",
+      "introduced_in": "0.6.0",
+      "paths": [
+        "logging.signing.identity_journal_"
+      ],
+      "review_note": "Review identity retention against the longest retained signed artifact and the configured runtime signing assurance mode.",
+      "surface_version": 2,
+      "title": "Runtime signing identity retention"
+    },
+    {
+      "capability_id": "adaptive.persistent-policy-acceptance",
+      "description": "Controls whether an operator may record an applied adaptive transition as a durable deployment handoff.",
+      "introduced_in": "0.6.1",
+      "paths": [
+        "lightweight.aggregation.allow_persistent_acceptance"
+      ],
+      "review_note": "Review that acceptance remains opt-in, context-bound, signed when available, and unable to mutate authority or reactivate policy.",
+      "surface_version": 6,
+      "title": "Persistent adaptive-policy acceptance"
+    },
+    {
+      "capability_id": "logging.communication-llm-tailoring",
+      "description": "Allows a local LLM to suggest clearer wording for an already redacted incident communication draft.",
+      "introduced_in": "0.6.1",
+      "paths": [
+        "logging.communications.llm_tailoring_enabled"
+      ],
+      "review_note": "Review that tailoring is opt-in, bounded, advisory-only, preserves the canonical draft, and cannot authorize delivery or change incident state.",
+      "surface_version": 7,
+      "title": "Advisory incident communication language tailoring"
+    },
+    {
+      "capability_id": "repair.rollout-authority",
+      "description": "Controls the lifecycle and authority boundaries for field repairs and their later deployment promotion.",
+      "introduced_in": "0.6.1",
+      "paths": [
+        "repair.rollout."
+      ],
+      "review_note": "Review validation gates, staged rollout permissions, expiry, revocation, and the requirement for deployment authority before permanence.",
+      "surface_version": 8,
+      "title": "Policy-bound Repair rollout authority"
+    },
+    {
+      "capability_id": "guard.return-novelty",
+      "description": "Controls bounded detection of newly observed return categories and structural shapes against an accepted Guard baseline.",
+      "introduced_in": "0.6.1",
+      "paths": [
+        "guard.deviations.detect_return_novelty",
+        "guard.deviations.minimum_return_novelty_success_samples",
+        "guard.deviations.minimum_new_return_observations"
+      ],
+      "review_note": "Review generation, successful-sample, and repeated-observation requirements; novelty remains evidence and cannot by itself authorize Repair or treat an incomplete return table as proof of absence.",
+      "surface_version": 9,
+      "title": "Policy-gated live return novelty detection"
+    },
+    {
+      "capability_id": "logging.monitoring-stream",
+      "description": "Controls the optional bounded metric stream and its external-monitoring serialization dialects.",
+      "introduced_in": "0.6.1",
+      "paths": [
+        "logging.monitoring."
+      ],
+      "review_note": "Review metric disclosure, record bounds, local file permissions, dialect compatibility, and the fact that the stream cannot act as a command or authority channel.",
+      "surface_version": 10,
+      "title": "Output-only monitoring stream"
+    },
+    {
+      "capability_id": "logging.audit-segment-rotation",
+      "description": "Controls optional byte/time bounds that rotate the local audit stream while preserving verifiable segment and hash-chain continuity.",
+      "introduced_in": "0.6.1",
+      "paths": [
+        "logging.audit.maximum_segment_"
+      ],
+      "review_note": "Review segment bounds, manifest permissions, crash recovery behavior, and the fact that rotation does not delete retained evidence or provide external anchoring.",
+      "surface_version": 11,
+      "title": "Manifest-backed audit segment rotation"
+    },
+    {
+      "capability_id": "repair.retention-compaction",
+      "description": "Controls bounded archive-before-delete compaction of ordinary, unreferenced Repair records without requiring a live operator when explicitly enabled.",
+      "introduced_in": "0.6.5a",
+      "paths": [
+        "repair.retention."
+      ],
+      "review_note": "Review automatic-compaction authority, archive verification, reference-scan bounds, protected evidence, idempotency, and critical audit requirements.",
+      "surface_version": 12,
+      "title": "Policy-authorized Repair retention compaction"
+    }
+  ],
+  "caretaker_version": "0.6.5a",
+  "catalog": "policy-capabilities",
+  "policy_semantics_review_generation": 33,
+  "policy_surface_version": 12,
+  "reviewed_policy_surface_hash": "5cef8a4f943b52647d9952d01ba411c60420847a6aff4aaa66cb0e00d6236b2b",
+  "schema_version": 1
+}

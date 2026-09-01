@@ -1,11 +1,20 @@
 # Caretaker framework policy profiles
 
-These canonical JSON files are unsigned review candidates for Caretaker 0.6.5a. They are not trusted publication artifacts until their settings have been reviewed and the exact bytes have been signed by the identities authorized for the `protected` role in `root.json`.
+The production canonical JSON files are the previously signed profile
+revisions and remain review candidates for Caretaker 0.6.5a. Their metadata
+currently targets policy surface 11 and Caretaker 0.6.1, so they require a new
+profile revision and fresh signatures before claiming complete 0.6.5a
+coverage. The current unsigned sandbox revision is `caretaker-sandbox-v2.json`;
+it is intentionally unsigned and carries the reviewed 0.6.5a surface. The
+current capability and reserved-setting catalogs are in
+`../catalogs/`; run `make policy-catalogs` to regenerate them. A profile is not
+a trusted 0.6.5a publication artifact until its exact reviewed bytes are
+signed by the identities authorized for the `protected` role in `root.json`.
 
 - `caretaker-observe-only-v1.json` is the conservative adoption profile. Repair may analyze incidents but cannot propose or activate replacements.
 - `caretaker-balanced-v1.json` is the recommended general-purpose starting point. Repair may prepare work, but activation requires operator approval.
 - `caretaker-high-assurance-v1.json` is the strict profile. It requires signed runtime leases, VM-level validation isolation, and externally signed runtime records; deployments must provide those facilities or fail closed.
-- `caretaker-sandbox-v1.json` is the non-production laboratory profile. It preserves each lab target's deliberately different Repair authority while enabling common evidence facilities. `sandbox-stack.toml` selects it automatically for `make lab` and `make lab-verified`.
+- `caretaker-sandbox-v2.json` is the current non-production laboratory profile. It preserves each lab target's deliberately different Repair authority while enabling common evidence facilities and explicitly keeps automatic Repair retention compaction disabled. `sandbox-stack.toml` selects it automatically for `make lab` and `make lab-verified`. The v1 profile remains as the predecessor for lineage review.
 
 Inspect a profile with:
 

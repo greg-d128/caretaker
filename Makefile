@@ -28,7 +28,7 @@ PODMAN_CGROUP_MANAGER ?= cgroupfs
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup test compile check wheel podman-image podman-failure-corpus-image podman-verify build package-check verify-wheel publish-testpypi publish-pypi publish-test publish root-check signing-check signing-status signing-bundle release-check release-manifest protected-manifest manifests generate-release-manifest generate-protected-manifest generate-manifests wheel-manifests inspect-integrity sign-check sign-all verify-signature verify-all verify-publication lab lab-verified lab-console profile clean distclean
+.PHONY: help setup test compile check wheel podman-image podman-failure-corpus-image podman-verify build package-check verify-wheel publish-testpypi publish-pypi publish-test publish root-check signing-check signing-status signing-bundle release-check release-manifest protected-manifest manifests generate-release-manifest generate-protected-manifest generate-manifests wheel-manifests inspect-integrity sign-check sign-all verify-signature verify-all verify-publication policy-catalogs lab lab-verified lab-console profile clean distclean
 
 help: ## Show commands grouped by operator role
 	@printf '%s\n' \
@@ -46,6 +46,7 @@ help: ## Show commands grouped by operator role
 	  'Release coordinator:' \
 	  '  release-check            Check root policy, clean source, and release inputs' \
 	  '  generate-manifests       Generate release and protected manifests' \
+	  '  policy-catalogs          Generate the versioned policy capability catalogs' \
 	  '  wheel-manifests          Generate installed-layout manifests after profile signing' \
 	  '  inspect-integrity        Display root/manifest metadata and hashes' \
 	  '  signing-status           Show missing artifacts, keys, and signatures' \
@@ -216,6 +217,10 @@ generate-release-manifest: release-manifest ## Generate the ordinary release man
 generate-protected-manifest: protected-manifest ## Generate the protected-code manifest
 
 generate-manifests: manifests ## Generate both publication manifests
+
+policy-catalogs: ## Generate versioned policy capability and reserved-setting catalogs
+	PYTHONPATH=src $(TOOLS_PYTHON) scripts/generate-policy-catalogs.py \
+	  --output-dir catalogs --package-version "$(PACKAGE_VERSION)" --force
 
 verify-signature: ## Verify detached SIGNATURE over MANIFEST with local GnuPG
 	@test -f "$(MANIFEST)" || { echo "Manifest not found: $(MANIFEST)" >&2; exit 2; }

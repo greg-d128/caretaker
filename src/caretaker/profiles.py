@@ -239,6 +239,15 @@ POLICY_CAPABILITIES: tuple[PolicyCapability, ...] = (
         "Review segment bounds, manifest permissions, crash recovery behavior, and the fact that rotation does not delete retained evidence or provide external anchoring.",
         ("logging.audit.maximum_segment_",),
     ),
+    PolicyCapability(
+        "repair.retention-compaction",
+        12,
+        "0.6.5a",
+        "Policy-authorized Repair retention compaction",
+        "Controls bounded archive-before-delete compaction of ordinary, unreferenced Repair records without requiring a live operator when explicitly enabled.",
+        "Review automatic-compaction authority, archive verification, reference-scan bounds, protected evidence, idempotency, and critical audit requirements.",
+        ("repair.retention.",),
+    ),
 )
 
 CURRENT_POLICY_SURFACE_VERSION = max(
