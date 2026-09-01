@@ -125,6 +125,73 @@ _VALIDATION_AUDIT_DETAIL_FIELDS = frozenset({
 })
 
 
+def _emit_adaptive_policy_transition_audit(
+    runtime: Any,
+    transition: Mapping[str, Any],
+    *,
+    state: str,
+    actor_type: str,
+    actor_id: str,
+    details: Mapping[str, Any] | None = None,
+) -> None:
+    """Record adaptive policy lineage without turning audit input into authority."""
+    audit = getattr(runtime, "audit", None)
+    emit = getattr(audit, "emit", None)
+    if not callable(emit):
+        return
+    transition_id = str(
+        transition.get("transition_id") or transition.get("request_id") or ""
+    ).strip()
+    if not transition_id:
+        return
+    policy: dict[str, Any] = {}
+    for output_name, input_name in (
+        ("policy_id", "policy_id"),
+        ("prior_policy_id", "prior_policy_id"),
+        ("fingerprint", "policy_fingerprint"),
+        ("prior_fingerprint", "previous_policy_fingerprint"),
+        ("authority_type", "authority_type"),
+        ("authority_generation", "authority_policy_generation"),
+        ("authority_fingerprint", "authority_policy_fingerprint"),
+    ):
+        value = transition.get(input_name)
+        if value is not None:
+            policy[output_name] = str(value)[:512]
+    fields = transition.get("changes")
+    if isinstance(fields, Mapping):
+        policy["fields_affected"] = sorted(str(name)[:256] for name in fields)[:100]
+    bounded_details = {
+        str(name)[:128]: value
+        for name, value in (details or {}).items()
+        if isinstance(name, str)
+    }
+    emit(
+        "ADAPTIVE_POLICY_TRANSITION",
+        actor={"type": str(actor_type)[:32], "id": str(actor_id)[:128]},
+        scope={
+            "target_id": str(transition.get("target_id") or "")[:512] or None,
+            "aggregation_scope": transition.get("aggregation_scope"),
+            "transition_id": transition_id[:128],
+        },
+        policy=policy,
+        outcome={
+            "state": str(state).strip().upper()[:64],
+            "policy_applied": bool(transition.get("policy_applied", False)),
+            "authority_granted": False,
+            "effective_at": transition.get("effective_at"),
+        },
+        details={
+            **bounded_details,
+            "record_id": str(transition.get("record_id") or "")[:128] or None,
+            "proposal_request_id": str(transition.get("proposal_request_id") or "")[:128] or None,
+            "authority_lease_id": str(transition.get("authority_lease_id") or "")[:128] or None,
+            "signature_status": str(transition.get("signature_status") or "")[:64] or None,
+            "authority_granted": False,
+        },
+        priority=EvidencePriority.CRITICAL,
+    )
+
+
 def _emit_incident_replay_audit(
     runtime: Any,
     *,
@@ -2093,6 +2160,18 @@ def main(argv: list[str] | None = None) -> int:
                 },
                 priority=EvidencePriority.CRITICAL,
             )
+            _emit_adaptive_policy_transition_audit(
+                runtime,
+                transition,
+                state="PENDING",
+                actor_type="operator",
+                actor_id=f"uid:{credentials[1]}",
+                details={
+                    "proposal_reviewed": True,
+                    "worker_verification_required": True,
+                    "required_worker_count": len(required_workers),
+                },
+            )
             return {
                 "ok": True,
                 "proposal_request_id": request_id,
@@ -2197,6 +2276,17 @@ def main(argv: list[str] | None = None) -> int:
                     "deployment_handoff_required": True,
                 },
                 priority=EvidencePriority.CRITICAL,
+            )
+            _emit_adaptive_policy_transition_audit(
+                runtime,
+                {**transition, **acceptance},
+                state="ACCEPTED",
+                actor_type="operator",
+                actor_id=f"uid:{credentials[1]}",
+                details={
+                    "acceptance_id": acceptance.get("acceptance_id"),
+                    "deployment_handoff_required": True,
+                },
             )
             return {
                 "ok": True,
@@ -2305,6 +2395,14 @@ def main(argv: list[str] | None = None) -> int:
                 },
                 priority=EvidencePriority.CRITICAL,
             )
+            _emit_adaptive_policy_transition_audit(
+                runtime,
+                {**transition, **rollback},
+                state="ROLLED_BACK",
+                actor_type="operator",
+                actor_id=f"uid:{credentials[1]}",
+                details={"rollback_recorded": True},
+            )
             return {
                 "ok": True,
                 "transition_request_id": request_id,
@@ -2320,16 +2418,30 @@ def main(argv: list[str] | None = None) -> int:
                 )
             current_generations, policy_fingerprints, _ = adaptive_context
             effective_authority = authority.effective
+            acknowledgement = adaptive_aggregation_store.acknowledge_transition(
+                request,
+                peer_pid=credentials[0],
+                current_generations=current_generations,
+                policy_fingerprints=policy_fingerprints,
+                authority_policy_generation=str(effective_authority.generation),
+                authority_policy_fingerprint=effective_authority.fingerprint,
+            )
+            _emit_adaptive_policy_transition_audit(
+                runtime,
+                request,
+                state=str(acknowledgement.get("transition_status") or "ACKNOWLEDGED"),
+                actor_type="worker",
+                actor_id=str(request.get("worker_id") or "worker"),
+                details={
+                    "acknowledgement_status": acknowledgement.get("status"),
+                    "worker_pid": credentials[0],
+                    "applied": request.get("applied"),
+                    "observed_level": request.get("observed_level"),
+                },
+            )
             return {
                 "ok": True,
-                "acknowledgement": adaptive_aggregation_store.acknowledge_transition(
-                    request,
-                    peer_pid=credentials[0],
-                    current_generations=current_generations,
-                    policy_fingerprints=policy_fingerprints,
-                    authority_policy_generation=str(effective_authority.generation),
-                    authority_policy_fingerprint=effective_authority.fingerprint,
-                ),
+                "acknowledgement": acknowledgement,
             }
         if command == "adaptive-aggregation-ack":
             batch_id = str(request.get("batch_id") or "").strip()

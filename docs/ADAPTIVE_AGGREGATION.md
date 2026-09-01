@@ -184,6 +184,13 @@ append-only and read-only: they do
 not replace the authority stack, reapply policy after restart, or allow an
 adaptive actor to activate its own proposal.
 
+Each apply, worker verification, pre-acceptance rollback, and persistent
+acceptance decision also emits a critical `ADAPTIVE_POLICY_TRANSITION` record
+to `caretaker_audit.log`. The record carries the transition identity, policy
+lineage when available, lifecycle state, bounded worker/lease references, and
+`authority_granted: false`; it is audit evidence and never acts as a policy or
+authority input.
+
 `adaptive-aggregation-status` and `adaptive-transition-list` include the bounded
 policy-lineage projection. The projection is for operator history and analytics;
 it does not turn a runtime lease into a permanent deployment policy.

@@ -131,6 +131,17 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
         minimum_priority=EvidencePriority.CRITICAL,
         example={"state": "ROLLED_BACK", "transition_id": "transition-uuid"},
     ),
+    "ADAPTIVE_POLICY_TRANSITION": _event_definition(
+        description="An adaptive policy transition changed lifecycle state.",
+        minimum_priority=EvidencePriority.CRITICAL,
+        required_fields=("scope.transition_id", "outcome.state"),
+        example={
+            "state": "PENDING",
+            "transition_id": "transition-uuid",
+            "policy_applied": True,
+            "authority_granted": False,
+        },
+    ),
     "POLICY_SUPERSEDED": _event_definition(
         description="A policy record was superseded by a later accepted record.",
         minimum_priority=EvidencePriority.IMPORTANT,

@@ -72,6 +72,7 @@ All event types share these redaction rules:
 | `POLICY_ACCEPTED` | `CRITICAL` | `policy.policy_id`, `policy.fingerprint`, `outcome.state` | `{"state": "ACCEPTED", "policy_mutated": false}` |
 | `POLICY_REJECTED` | `CRITICAL` | — | `{"state": "REJECTED", "reason": "stale_context"}` |
 | `POLICY_ROLLED_BACK` | `CRITICAL` | — | `{"state": "ROLLED_BACK", "transition_id": "transition-uuid"}` |
+| `ADAPTIVE_POLICY_TRANSITION` | `CRITICAL` | `scope.transition_id`, `outcome.state` | `{"state": "PENDING", "transition_id": "transition-uuid", "policy_applied": true, "authority_granted": false}` |
 | `POLICY_SUPERSEDED` | `IMPORTANT` | — | `{"state": "SUPERSEDED", "replacement_policy_id": "policy-new-uuid"}` |
 | `AUTHORITY_SNAPSHOT_CHANGED` | `CRITICAL` | `scope.lease_id`, `outcome.state` | `{"state": "APPLIED", "lease_id": "lease-uuid"}` |
 | `WORKER_AUTHORITY_ISSUED` | `CRITICAL` | — | `{"worker_id": "worker-uuid", "authority_packet_id": "packet-uuid"}` |

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -559,7 +560,8 @@ def test_audit_registry_is_complete_and_exposes_redaction_contract() -> None:
         "AUDIT_STREAM_STARTED", "AUDIT_STREAM_ROTATED", "AUDIT_DELIVERY_STATUS",
         "AUDIT_DATA_LOSS", "CONSOLE_INVOCATION_STARTED", "CONSOLE_INVOCATION_ENDED",
             "POLICY_PROPOSED", "POLICY_REVIEWED", "POLICY_APPLIED", "POLICY_REJECTED",
-            "POLICY_ACCEPTED", "POLICY_ROLLED_BACK", "POLICY_SUPERSEDED", "AUTHORITY_SNAPSHOT_CHANGED",
+            "POLICY_ACCEPTED", "POLICY_ROLLED_BACK", "ADAPTIVE_POLICY_TRANSITION",
+            "POLICY_SUPERSEDED", "AUTHORITY_SNAPSHOT_CHANGED",
         "WORKER_AUTHORITY_ISSUED", "WORKER_AUTHORITY_REFRESHED",
         "WORKER_AUTHORITY_EXPIRED", "WORKER_FAILED", "WORKER_POSTMORTEM_RECONCILED",
         "WORKER_REPLACEMENT_REQUESTED",
@@ -601,6 +603,46 @@ def test_registered_audit_events_enforce_priority_and_required_fields(tmp_path: 
     )
     writer.close()
     assert event["event_type"] == "POLICY_APPLIED"
+
+
+def test_adaptive_policy_transition_audit_projection_is_critical_and_non_authoritative(
+    tmp_path: Path,
+) -> None:
+    from caretaker.run import _emit_adaptive_policy_transition_audit
+
+    writer = _writer(tmp_path)
+    _emit_adaptive_policy_transition_audit(
+        SimpleNamespace(audit=writer),
+        {
+            "request_id": "transition-1",
+            "target_id": "demo.target",
+            "aggregation_scope": "checkout",
+            "prior_policy_id": "policy-old",
+            "policy_id": "policy-new",
+            "previous_policy_fingerprint": "sha256:old",
+            "policy_fingerprint": "sha256:new",
+            "authority_type": "operator",
+            "authority_policy_generation": "7",
+            "authority_policy_fingerprint": "sha256:authority",
+            "changes": {"exception.occurrences": 4},
+            "policy_applied": True,
+        },
+        state="PENDING",
+        actor_type="operator",
+        actor_id="uid:1001",
+    )
+    writer.close()
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "caretaker_audit.log").read_text().splitlines()
+        if json.loads(line)["event_type"] == "ADAPTIVE_POLICY_TRANSITION"
+    ]
+    assert len(rows) == 1
+    assert rows[0]["scope"]["transition_id"] == "transition-1"
+    assert rows[0]["outcome"]["state"] == "PENDING"
+    assert rows[0]["outcome"]["authority_granted"] is False
+    assert rows[0]["policy"]["fields_affected"] == ["exception.occurrences"]
 
 
 def test_audit_policy_sampling_records_loss_before_next_retained_event(tmp_path: Path) -> None:
