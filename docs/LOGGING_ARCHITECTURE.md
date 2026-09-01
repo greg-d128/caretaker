@@ -116,6 +116,11 @@ packet, and application-bound PID before updating worker state. The logging
 compatibility surface forwards these operations and does not expand them into
 host-level process management.
 
+Adaptive aggregation queue reconciliation is runtime-owned as well. The
+runtime enforces bounded per-worker and total drains, validates worker state
+and process identity, reconciles generation/policy context, and evaluates
+configured promotions without granting authority.
+
 Application monitoring and application-boundary shutdown are also implemented
 in the application-runtime package. The legacy logging supervisor delegates to
 those functions, and the runtime owner exposes them directly while preserving

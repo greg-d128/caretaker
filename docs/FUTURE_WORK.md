@@ -2236,6 +2236,7 @@ specialized orchestration boundaries without broadening the application
 authority boundary. Comparison-worker evidence assignment, acceptance, and
 reconciliation now use the same runtime owner. Worker acceptance observations
 and authority/replacement packet handoffs now use it as well.
+Adaptive aggregation queue reconciliation now uses the same runtime owner.
 
 `logging/supervisor.py` and `logging/__init__.py` currently include application
 supervision, worker health/authority, adaptive coordination, and recovery

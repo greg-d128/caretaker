@@ -35,6 +35,7 @@ from .runtime_supervision import (
     join_worker_evidence_reconciliations,
     reconcile_worker_failures,
     reconcile_comparison_worker_reports,
+    reconcile_adaptive_aggregation_queues,
     Watchdog,
     WorkRegistry,
     WorkerRegistry,
@@ -249,6 +250,10 @@ class ApplicationRuntimeSupervisor:
     def handle_worker_replacement_queue_handoff(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         """Handle a replacement queue handoff through the runtime seam."""
         return handle_worker_replacement_queue_handoff(self._implementation, *args, **kwargs)
+
+    def reconcile_adaptive_aggregation_queues(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """Reconcile adaptive aggregation queues through the runtime seam."""
+        return reconcile_adaptive_aggregation_queues(self._implementation, *args, **kwargs)
 
     def handle_expired_worker_cohort(
         self,
