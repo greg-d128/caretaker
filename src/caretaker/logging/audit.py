@@ -159,6 +159,17 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
         minimum_priority=EvidencePriority.CRITICAL,
         example={"transaction_state": "ROLLED_BACK", "failure_id": "failure-uuid"},
     ),
+    "WORKER_POSTMORTEM_RECONCILED": _event_definition(
+        description="Worker post-mortem evidence was reconciled for one failure scope.",
+        minimum_priority=EvidencePriority.CRITICAL,
+        required_fields=("scope.reconciliation_scope", "outcome.state"),
+        example={
+            "state": "COMBINED",
+            "unique_packet_count": 2,
+            "conflict": False,
+            "authority_granted": False,
+        },
+    ),
     "WORKER_REPLACEMENT_REQUESTED": _event_definition(
         description="A policy-authorized worker replacement was requested.",
         minimum_priority=EvidencePriority.CRITICAL,

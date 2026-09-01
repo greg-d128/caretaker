@@ -78,6 +78,7 @@ All event types share these redaction rules:
 | `WORKER_AUTHORITY_REFRESHED` | `CRITICAL` | — | `{"worker_id": "worker-uuid", "authority_packet_id": "packet-uuid"}` |
 | `WORKER_AUTHORITY_EXPIRED` | `CRITICAL` | — | `{"worker_id": "worker-uuid", "authority_packet_id": "packet-uuid"}` |
 | `WORKER_FAILED` | `CRITICAL` | — | `{"transaction_state": "ROLLED_BACK", "failure_id": "failure-uuid"}` |
+| `WORKER_POSTMORTEM_RECONCILED` | `CRITICAL` | `scope.reconciliation_scope`, `outcome.state` | `{"state": "COMBINED", "unique_packet_count": 2, "conflict": false, "authority_granted": false}` |
 | `WORKER_REPLACEMENT_REQUESTED` | `CRITICAL` | — | `{"failed_worker_id": "worker-old", "replacement_request_id": "request-uuid"}` |
 | `WORKER_REPLACED` | `CRITICAL` | — | `{"failed_worker_id": "worker-old", "replacement_worker_id": "worker-new"}` |
 | `WORKER_COMPARISON_ASSIGNMENT` | `CRITICAL` | — | `{"assignment_id": "assignment-uuid", "authority_packet_id": "packet-uuid", "state": "ISSUED", "authority_granted": false}` |

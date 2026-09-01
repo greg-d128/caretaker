@@ -826,6 +826,11 @@ def test_supervisor_reconciliation_selects_critical_action_and_requires_handler_
     assert decision["authority_granted"] is False
     assert len(store.all_worker_failure_recoveries()) == 1
     assert calls == ["transaction:txn-critical"]
+    assert runtime.audit.events[0]["event_type"] == "WORKER_POSTMORTEM_RECONCILED"
+    assert runtime.audit.events[0]["scope"]["reconciliation_scope"] == (
+        "transaction:txn-critical"
+    )
+    assert runtime.audit.events[0]["outcome"]["authority_granted"] is False
 
     repeated = supervisor.reconcile_worker_failures(
         recovery_policy=RepairRecoveryPolicy(

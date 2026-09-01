@@ -1398,6 +1398,32 @@ class CaretakerApplicationSupervisor:
         for reconciliation in result["reconciliations"]:
             reconciliation_scope = str(reconciliation["scope"])
             reconciliation_target = str(reconciliation.get("target_id") or "")
+            comparison = reconciliation.get("comparison")
+            comparison = comparison if isinstance(comparison, Mapping) else {}
+            packet_context = comparison.get("packet_context")
+            self._audit_event(
+                "WORKER_POSTMORTEM_RECONCILED",
+                actor={"type": "supervisor", "id": str(self.supervisor_health.worker_id)},
+                scope={
+                    "reconciliation_scope": reconciliation_scope,
+                    "target_id": reconciliation_target or None,
+                },
+                outcome={
+                    "state": str(comparison.get("status") or "INCOMPLETE_EVIDENCE"),
+                    "authority_granted": False,
+                },
+                details={
+                    "input_count": reconciliation.get("input_count", 0),
+                    "unique_packet_count": reconciliation.get("unique_packet_count", 0),
+                    "duplicate_count": reconciliation.get("duplicate_count", 0),
+                    "conflict": bool(reconciliation.get("conflict")),
+                    "packet_context_status": (
+                        str(packet_context.get("status") or "")
+                        if isinstance(packet_context, Mapping)
+                        else None
+                    ),
+                },
+            )
             scoped_records = tuple(
                 record
                 for record in records
