@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import functools
 import hashlib
 import inspect
 import logging
@@ -480,6 +481,76 @@ class RepairEngine:
             )
 
         return invoke
+
+    def bind_rollout_callable(
+        self,
+        function: Callable[..., Any],
+        rollout: "RepairRolloutRecord | Callable[[], RepairRolloutRecord]",
+        *,
+        policy: "RepairRolloutPolicy | None" = None,
+        policy_fingerprint: str,
+        routing_scope: str,
+        routing_key: str | Callable[[tuple[Any, ...], Mapping[str, Any]], str],
+        effect_observation: "EffectObservation | None" = None,
+        behavior_capture: Mapping[str, Any] | None = None,
+        behavior_capture_complete: bool = False,
+        isolation_adapter: "ShadowExecutionAdapter | None" = None,
+        comparator: Callable[[Any, Any], Any] | None = None,
+        audit_event: Callable[..., Any] | None = None,
+        record_observation: bool = True,
+        execution_store: Any | None = None,
+        coordinator: Any | None = None,
+        worker_id: str | None = None,
+        worker_process_id: int | None = None,
+    ) -> Callable[..., Any]:
+        """Return a raw-result callable bound to a decorated target.
+
+        Applications commonly need their existing function boundary to retain
+        its normal return-value contract. This adapter performs the same
+        strict slot-bound rollout execution as :meth:`bind_rollout`, then
+        unwraps only the execution result. It accepts only a callable already
+        registered by this engine; all rollout policy, authority, worker, and
+        side-effect gates remain in the executor.
+        """
+        if not callable(function):
+            raise TypeError("rollout callable binding requires a callable")
+        target = getattr(function, "__caretaker_target__", None)
+        bound_engine = getattr(function, "__caretaker_engine__", None)
+        target_id = str(getattr(target, "target_id", "") or "").strip()
+        if not target_id or bound_engine is not self:
+            raise ValueError(
+                "rollout callable binding requires a target decorated by this engine"
+            )
+        if self.registry.find(target_id) is None:
+            raise ValueError("rollout callable target is no longer registered")
+
+        invoke = self.bind_rollout(
+            rollout,
+            policy=policy,
+            policy_fingerprint=policy_fingerprint,
+            routing_scope=routing_scope,
+            routing_key=routing_key,
+            effect_observation=effect_observation,
+            behavior_capture=behavior_capture,
+            behavior_capture_complete=behavior_capture_complete,
+            isolation_adapter=isolation_adapter,
+            comparator=comparator,
+            audit_event=audit_event,
+            record_observation=record_observation,
+            execution_store=execution_store,
+            coordinator=coordinator,
+            worker_id=worker_id,
+            worker_process_id=worker_process_id,
+        )
+
+        @functools.wraps(function)
+        def routed(*args: Any, **kwargs: Any) -> Any:
+            return invoke(*args, **kwargs).result
+
+        setattr(routed, "__caretaker_target__", target)
+        setattr(routed, "__caretaker_engine__", self)
+        setattr(routed, "__caretaker_rollout_bound__", True)
+        return routed
 
     def record_candidate_observation_success(
         self,

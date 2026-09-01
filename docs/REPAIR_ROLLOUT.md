@@ -290,7 +290,9 @@ activate a slot, change lifecycle state, or create authority, and applications
 remain responsible for choosing the routing key and deciding when to use this
 boundary. Automatic replacement of an existing decorated callable with a
 rollout-aware path, fleet-wide routing, and deployment-owned worker lifecycle
-remain future work.
+remain future work. The application-owned `engine.bind_rollout_callable()`
+adapter can replace a decorated function at an explicit application traffic
+boundary while preserving its raw return-value contract.
 
 `engine.bind_rollout()` provides a convenience wrapper for applications that
 want an ordinary callable at their traffic boundary. Its `routing_key` may be
@@ -313,6 +315,13 @@ result = invoke(request)
 The binding is an application integration convenience, not a background
 traffic controller. It does not infer routing identity, cache mutable rollout
 state as authoritative, activate a slot, or grant authority.
+
+When the traffic boundary expects the function's result directly rather than
+a `RolloutExecutionResult` envelope, applications may use
+`engine.bind_rollout_callable(decorated_function, ...)`. The adapter requires
+that the function was decorated and registered by the same engine, resolves
+the current slot on each call, and preserves the existing rollout policy,
+worker-context, authority, and effect-isolation gates.
 
 For example:
 
@@ -353,9 +362,9 @@ explicitly marked `UNSIGNED`.
 not change. When enabled, validation is required, direct field activation is
 allowed only for an operator, active revocation requires a new incident, and
 permanent promotion requires deployment authority. The routing decision itself
-is implemented, while application traffic integration, side-effect isolation,
-and supervisor-wide traffic coordination remain separate capabilities and are
-not implied by this ledger. The execution-contract/effect-evidence layer does
+is implemented, while side-effect isolation and supervisor-wide traffic
+coordination remain separate capabilities and are not implied by this ledger.
+The execution-contract/effect-evidence layer does
 provide a partial safety signal: a rollout adapter can pass a Guard behavior
 capture through `EffectObservation.from_behavior_capture()` before requesting
 shadow execution. Positive network, filesystem, subprocess, import, or

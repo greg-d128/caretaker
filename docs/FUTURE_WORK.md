@@ -993,7 +993,7 @@ Future work may export a signed review bundle containing a unified diff, origina
 
 ## Policy-controlled Repair rollout, mirroring, and shadow execution
 
-**Status: Design clarified; effect-aware contract, evidence gate, deterministic routing decision, and registry-aware FunctionSlot invocation bridge implemented; automatic application traffic orchestration remains future work.**
+**Status: Design clarified; effect-aware contract, evidence gate, deterministic routing decision, registry-aware FunctionSlot invocation bridge, and explicit application-owned raw-result callable binding implemented; fleet-wide routing, implicit arbitrary-callable replacement, and deployment-owned orchestration remain future work.**
 
 Caretaker currently supports candidate probation and a narrow
 `PURE_FUNCTION` differential-execution mode. For explicitly confirmed pure
@@ -1036,6 +1036,10 @@ coordinator. `execute_rollout()` now consumes that decision for caller-supplied
 already-authorized callables and delegates sampled shadow work to the
 original-authoritative primitive. FunctionSlot activation, application-specific
 failure/fallback policy, and supervisor-wide coordination remain future work.
+Applications can explicitly bind an existing Caretaker-decorated callable with
+`RepairEngine.bind_rollout_callable()`; that wrapper preserves the callable's
+raw return-value contract and still does not activate a slot or coordinate a
+fleet.
 `execute_slot_rollout()` now adds strict binding to an installed FunctionSlot
 candidate and its preceding deployed version without mutating slot state. When
 the application supplies its `ObservationManager`, authoritative candidate

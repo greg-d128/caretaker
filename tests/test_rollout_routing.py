@@ -26,6 +26,7 @@ from caretaker import (
     decide_rollout_routing,
     execute_rollout,
     execute_slot_rollout,
+    repair,
 )
 from caretaker.domain import ReplaySafety, SideEffectClass
 from caretaker.observation import ObservationManager
@@ -387,6 +388,76 @@ def test_engine_binds_rollout_to_callable_with_fresh_record_and_key() -> None:
     assert provider_calls == ["loaded"]
     assert target.slot.observation().successful_executions == 1
     assert len(store.observations) == 1
+
+
+def test_engine_binds_rollout_callable_with_existing_raw_result_contract() -> None:
+    ledger = _ledger(canary_percentage=100)
+    store = InMemoryRepairStore()
+    engine = RepairEngine(store=store)
+
+    def deployed(value: int) -> int:
+        return value
+
+    wrapped = repair(
+        policy=RepairPolicy(rollout=ledger.policy),
+        engine=engine,
+        target_id="example.decorated-target",
+        execution_contract=_pure_contract(),
+    )(deployed)
+    target = wrapped.__caretaker_target__
+    candidate_id = uuid4()
+    lease = target.slot.begin_repair()
+    target.slot.activate(
+        lease=lease,
+        implementation=lambda value: value + 1,
+        source="candidate-source",
+        source_hash="candidate-hash",
+        repair_attempt_id=uuid4(),
+        candidate_id=candidate_id,
+    )
+    record = ledger.create(
+        target_id=target.target_id,
+        incident_id=uuid4(),
+        candidate_id=candidate_id,
+        candidate_source_hash="candidate-hash",
+        base_source_hash=target.slot.previous().source_hash,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        proposed_by="advisory-engine",
+    )
+    record = _advance(ledger, record, RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, record, RepairRolloutStage.CANARY)
+
+    routed = engine.bind_rollout_callable(
+        wrapped,
+        record,
+        policy=ledger.policy,
+        policy_fingerprint="policy-hash",
+        routing_scope="tenant",
+        routing_key=lambda args, kwargs: f"tenant-{args[0]}",
+        effect_observation=EffectObservation(complete=True),
+    )
+
+    assert routed(4) == 5
+    assert routed.__name__ == deployed.__name__
+    assert routed.__caretaker_rollout_bound__ is True
+    assert target.slot.observation() is not None
+    assert target.slot.observation().successful_executions == 1
+
+
+def test_engine_rejects_rollout_binding_for_an_unrelated_callable() -> None:
+    ledger = _ledger(canary_percentage=100)
+    engine, _target, _store, record = _engine_slot_and_record(ledger)
+
+    with pytest.raises(ValueError, match="decorated by this engine"):
+        engine.bind_rollout_callable(
+            lambda value: value,
+            record,
+            policy=ledger.policy,
+            policy_fingerprint="policy-hash",
+            routing_scope="tenant",
+            routing_key="tenant-1",
+        )
 
 
 def test_engine_rollout_binding_rejects_empty_resolved_key() -> None:
