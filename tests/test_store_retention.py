@@ -106,6 +106,10 @@ def test_retention_archive_is_compressed_idempotent_and_does_not_delete(tmp_path
     assert lines[1]["payload"] == {"kind": "derived"}
     assert lines[-1]["kind"] == "retention_archive_footer"
     assert store.query_records("candidates", limit=100)[0]["kind"] == "derived"
+    status = store.retention_archive_status(archive_path)
+    assert status["complete"] is True
+    assert status["record_count"] == 1
+    assert status["record_families"] == ["candidates"]
 
     repeated = store.retention_archive(plan, archive_path=archive_path)
     assert repeated["complete"] is True

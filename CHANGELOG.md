@@ -22,8 +22,9 @@
 - Add a read-only, bounded Repair-store retention plan that identifies ordinary
   candidates and preserves incident-linked, signed, and audit evidence.
 - Add a resumable, archive-only Repair-store retention operation with canonical
-  JSONL records, gzip compression, stale-plan rechecks, and atomic completion;
-  source deletion and compaction remain deferred.
+  JSONL records, gzip compression, stale-plan rechecks, atomic completion, and
+  read-only archive verification; source deletion and compaction remain
+  deferred.
 
 ## 0.6.1
 

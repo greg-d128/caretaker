@@ -1529,6 +1529,23 @@ class SQLiteRepairStore:
             "resumed_records": len(existing) - len(new_records),
         }
 
+    def retention_archive_status(
+        self,
+        archive_path: str | Path,
+    ) -> Mapping[str, Any]:
+        """Verify and summarize a completed Repair retention archive."""
+
+        destination = Path(archive_path)
+        summary = _read_retention_archive(destination)
+        return {
+            "schema_version": REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION,
+            "archive_path": str(destination),
+            "complete": True,
+            "plan_sha256": summary["plan_sha256"],
+            "record_count": summary["record_count"],
+            "record_families": sorted({family for family, _ in summary["record_keys"]}),
+        }
+
     def query_records(
         self,
         table: str,
@@ -1616,9 +1633,17 @@ def _read_retention_archive(path: Path) -> dict[str, Any]:
         raise ValueError("retention archive contains invalid JSON") from exc
     if len(lines) < 2 or lines[0].get("kind") != "retention_archive_header":
         raise ValueError("retention archive header is missing")
+    if (
+        lines[0].get("schema_version") != REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION
+        or lines[0].get("store_schema_version") != REPAIR_STORE_SCHEMA_VERSION
+        or lines[0].get("format") != "caretaker-repair-retention-jsonl-v1"
+    ):
+        raise ValueError("retention archive header is unsupported")
     footer = lines[-1]
     if footer.get("kind") != "retention_archive_footer":
         raise ValueError("retention archive footer is missing")
+    if footer.get("schema_version") != REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION:
+        raise ValueError("retention archive footer is unsupported")
     digest = hashlib.sha256()
     count = 0
     record_keys: set[tuple[str, str]] = set()
