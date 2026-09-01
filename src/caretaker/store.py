@@ -1349,6 +1349,13 @@ class SQLiteRepairStore:
                 raise ValueError("retention plan contains an unknown family")
             if not isinstance(record_id, str) or not record_id:
                 raise ValueError("retention plan contains an invalid record ID")
+            plan_families = plan.get("families", ())
+            if (
+                isinstance(plan_families, (str, bytes))
+                or not isinstance(plan_families, Sequence)
+                or family not in plan_families
+            ):
+                raise ValueError("retention plan candidate is outside its family scope")
             key = (family, record_id)
             if key in candidate_keys:
                 raise ValueError("retention plan contains a duplicate record")
@@ -1379,6 +1386,8 @@ class SQLiteRepairStore:
             summary = _read_retention_archive(destination)
             if summary["plan_sha256"] != plan_sha256:
                 raise ValueError("existing retention archive belongs to a different plan")
+            if summary["record_keys"] != candidate_keys:
+                raise ValueError("existing retention archive does not match the retention plan")
             return {
                 "schema_version": REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION,
                 "archive_path": str(destination),
@@ -1402,6 +1411,8 @@ class SQLiteRepairStore:
             existing_header, existing = _read_retention_partial(partial)
             if existing_header != header:
                 raise ValueError("existing retention partial belongs to a different plan")
+            if not set(existing).issubset(candidate_keys):
+                raise ValueError("existing retention partial contains an unplanned record")
         else:
             partial.touch(mode=0o600)
             partial.chmod(0o600)
@@ -1610,6 +1621,7 @@ def _read_retention_archive(path: Path) -> dict[str, Any]:
         raise ValueError("retention archive footer is missing")
     digest = hashlib.sha256()
     count = 0
+    record_keys: set[tuple[str, str]] = set()
     for item, line in zip(lines[1:-1], raw.splitlines()[1:-1]):
         if item.get("kind") != "retention_archive_record":
             raise ValueError("retention archive contains an unexpected record")
@@ -1618,11 +1630,28 @@ def _read_retention_archive(path: Path) -> dict[str, Any]:
         unsigned.pop("record_sha256", None)
         if record_sha256 != hashlib.sha256(_canonical_json_bytes(unsigned)).hexdigest():
             raise ValueError("retention archive record integrity check failed")
+        family = item.get("family")
+        record_id = item.get("record_id")
+        if (
+            not isinstance(family, str)
+            or family not in SQLiteRepairStore._TABLES
+            or not isinstance(record_id, str)
+            or not record_id
+        ):
+            raise ValueError("retention archive record identity is invalid")
+        key = (family, record_id)
+        if key in record_keys:
+            raise ValueError("retention archive contains a duplicate record")
+        record_keys.add(key)
         digest.update(line + b"\n")
         count += 1
     if footer.get("record_count") != count or footer.get("records_sha256") != digest.hexdigest():
         raise ValueError("retention archive footer integrity check failed")
-    return {"plan_sha256": lines[0].get("plan_sha256"), "record_count": count}
+    return {
+        "plan_sha256": lines[0].get("plan_sha256"),
+        "record_count": count,
+        "record_keys": record_keys,
+    }
 
 
 def _record_time(record: object) -> datetime:

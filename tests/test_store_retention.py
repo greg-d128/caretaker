@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import sqlite3
 from contextlib import closing
@@ -162,4 +163,43 @@ def test_retention_archive_rejects_truncated_or_stale_plan(tmp_path) -> None:
         )
         connection.commit()
     with pytest.raises(ValueError, match="stale"):
+        store.retention_archive(plan, archive_path=archive_path)
+
+
+def test_retention_archive_rejects_valid_archive_with_wrong_record_set(tmp_path) -> None:
+    path = tmp_path / "repair.sqlite"
+    store = SQLiteRepairStore(path)
+    old = datetime.now(timezone.utc) - timedelta(days=2)
+    _insert_record(path, "candidates", target_id="planned.target", payload={}, created_at=old)
+    plan = store.retention_dry_run(
+        older_than=datetime.now(timezone.utc) - timedelta(days=1),
+        families=("candidates",),
+    )
+    archive_path = tmp_path / "repair.jsonl.gz"
+    store.retention_archive(plan, archive_path=archive_path)
+
+    with gzip.open(archive_path, "rb") as stream:
+        lines = stream.read().splitlines()
+    record = json.loads(lines[1])
+    record["record_id"] = str(uuid4())
+    unsigned = dict(record)
+    unsigned.pop("record_sha256")
+    record["record_sha256"] = hashlib.sha256(
+        json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    lines[1] = json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
+    lines[-1] = json.dumps(
+        {
+            "kind": "retention_archive_footer",
+            "record_count": 1,
+            "records_sha256": hashlib.sha256(lines[1] + b"\n").hexdigest(),
+            "schema_version": 1,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    with gzip.open(archive_path, "wb") as stream:
+        stream.write(b"\n".join(lines) + b"\n")
+
+    with pytest.raises(ValueError, match="does not match"):
         store.retention_archive(plan, archive_path=archive_path)
