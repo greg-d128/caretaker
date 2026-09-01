@@ -1504,6 +1504,10 @@ Until this exists, restart is a rollback to deployed application code, not conti
   validation-decision, replacement, recovery-decision, shadow-execution,
   worker-postmortem-reconciliation, and rollout-routing, rollout-execution-outcome, and candidate-observation events and preserves a
   policy-controlled hash chain.
+  Selected and non-interactive historical Incident Capsule replay attempts now
+  also emit `INCIDENT_REPLAY_OUTCOME` records, including rejected and failed
+  requests, with bounded scope and counts; replay output remains separate
+  evidence and the event cannot modify a capsule or grant authority.
   Supervised application validation decisions cross an output-only, PID-bound,
   allow-listed control-socket submission path; worker identity is derived by the
   supervisor and the submitted policy context remains evidence. Remaining work

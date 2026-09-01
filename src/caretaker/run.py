@@ -125,6 +125,82 @@ _VALIDATION_AUDIT_DETAIL_FIELDS = frozenset({
 })
 
 
+def _emit_incident_replay_audit(
+    runtime: Any,
+    *,
+    replay_scope: str,
+    actor_id: str,
+    request: Mapping[str, Any],
+    result: Mapping[str, Any] | None = None,
+    error: BaseException | str | None = None,
+) -> None:
+    """Record replay activity in the canonical, output-only audit stream.
+
+    Replay is evidence production, not an authority operation. Keep the audit
+    projection bounded and identity-focused; replay output remains in the
+    response or the separately content-addressed replay-result store.
+    """
+    audit = getattr(runtime, "audit", None)
+    emit = getattr(audit, "emit", None)
+    if not callable(emit):
+        return
+    payload = result if isinstance(result, Mapping) else {}
+    raw_results = payload.get("results")
+    batch_results = raw_results if isinstance(raw_results, list) else []
+    if error is not None:
+        state = "REJECTED"
+    elif replay_scope == "selected":
+        state = str(payload.get("outcome") or "COMPLETED").strip().upper()
+        if state not in {"PASSED", "FAILED", "ERROR", "COMPLETED"}:
+            state = "COMPLETED"
+    else:
+        state = (
+            "PARTIAL"
+            if any(
+                str(item.get("status") or "") != "COMPLETED"
+                for item in batch_results
+                if isinstance(item, Mapping)
+            )
+            else "COMPLETED"
+        )
+    scope = {
+        "replay_scope": str(replay_scope)[:32],
+        "capsule_id": payload.get("capsule_id") or request.get("capsule_id"),
+        "incident_id": payload.get("incident_id") or request.get("incident_id"),
+        "fixture_id": payload.get("fixture_id") or request.get("fixture_id"),
+    }
+    details: dict[str, Any] = {
+        "non_interactive": replay_scope != "selected",
+        "capsule_modified": False,
+        "authority_granted": False,
+    }
+    for name in (
+        "backend_name",
+        "isolation_level",
+        "fixture_count",
+        "completed_count",
+        "dispatched_count",
+        "replay_status",
+    ):
+        if name in payload:
+            details[name] = payload[name]
+    if error is not None:
+        details["error"] = str(error)[:500]
+    emit(
+        "INCIDENT_REPLAY_OUTCOME",
+        actor={"type": "operator", "id": str(actor_id)[:128]},
+        scope=scope,
+        outcome={
+            "state": state,
+            "capsule_modified": False,
+            "authority_granted": False,
+            "integrity_verified": error is None,
+        },
+        details=details,
+        priority=EvidencePriority.IMPORTANT,
+    )
+
+
 def _handle_console_invocation_event(
     runtime: Any,
     request: Mapping[str, Any],
@@ -2176,13 +2252,30 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("incident-capsule-replay requires entrypoint")
             if not isinstance(source, str) or not source:
                 raise ValueError("incident-capsule-replay requires source text")
-            result = execute_capsule_replay(
-                replay_coordinator,
-                capsule_store,
-                capsule_id=raw_capsule_id,
-                fixture_id=fixture_id,
-                entrypoint=entrypoint,
-                source=source,
+            try:
+                result = execute_capsule_replay(
+                    replay_coordinator,
+                    capsule_store,
+                    capsule_id=raw_capsule_id,
+                    fixture_id=fixture_id,
+                    entrypoint=entrypoint,
+                    source=source,
+                )
+            except Exception as exc:
+                _emit_incident_replay_audit(
+                    runtime,
+                    replay_scope="selected",
+                    actor_id=f"uid:{credentials[1]}",
+                    request=request,
+                    error=exc,
+                )
+                raise
+            _emit_incident_replay_audit(
+                runtime,
+                replay_scope="selected",
+                actor_id=f"uid:{credentials[1]}",
+                request=request,
+                result=result,
             )
             runtime.event(
                 logger_name="caretaker.capsule",
@@ -2234,13 +2327,30 @@ def main(argv: list[str] | None = None) -> int:
                     summary for summary in summaries
                     if str(summary.get("source_incident_id") or "") == str(incident_id)
                 )
-            result = execute_historical_capsule_replays(
-                replay_coordinator,
-                capsule_store,
-                summaries,
-                entrypoint=entrypoint,
-                source=source,
-                limit=limit,
+            try:
+                result = execute_historical_capsule_replays(
+                    replay_coordinator,
+                    capsule_store,
+                    summaries,
+                    entrypoint=entrypoint,
+                    source=source,
+                    limit=limit,
+                )
+            except Exception as exc:
+                _emit_incident_replay_audit(
+                    runtime,
+                    replay_scope=scope,
+                    actor_id=f"uid:{credentials[1]}",
+                    request=request,
+                    error=exc,
+                )
+                raise
+            _emit_incident_replay_audit(
+                runtime,
+                replay_scope=scope,
+                actor_id=f"uid:{credentials[1]}",
+                request=request,
+                result=result,
             )
             runtime.event(
                 logger_name="caretaker.capsule",

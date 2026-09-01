@@ -220,6 +220,19 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
         minimum_priority=EvidencePriority.IMPORTANT,
         example={"incident_id": "incident-uuid", "capture_level": "STANDARD"},
     ),
+    "INCIDENT_REPLAY_OUTCOME": _event_definition(
+        description="An isolated historical Incident Capsule replay attempt completed or was rejected.",
+        minimum_priority=EvidencePriority.IMPORTANT,
+        required_fields=("scope.replay_scope", "outcome.state"),
+        example={
+            "scope": "all",
+            "state": "PARTIAL",
+            "fixture_count": 4,
+            "completed_count": 3,
+            "capsule_modified": False,
+            "authority_granted": False,
+        },
+    ),
     "VALIDATION_DECISION": _event_definition(
         description="A validation result or gate decision was recorded.",
         minimum_priority=EvidencePriority.IMPORTANT,

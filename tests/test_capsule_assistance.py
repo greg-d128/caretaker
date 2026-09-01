@@ -128,3 +128,59 @@ def test_noninteractive_replay_cli_submits_historical_batch_to_control_plane(
     assert captured["request"]["target_id"] == "app:charge"
     assert captured["request"]["limit"] == 10
     assert captured["timeout"] == 360.0
+
+
+def test_replay_audit_projection_is_bounded_and_advisory() -> None:
+    from caretaker.run import _emit_incident_replay_audit
+
+    class Audit:
+        def __init__(self) -> None:
+            self.events = []
+
+        def emit(self, event_type, **fields):
+            self.events.append((event_type, fields))
+
+    class Runtime:
+        def __init__(self) -> None:
+            self.audit = Audit()
+
+    runtime = Runtime()
+    _emit_incident_replay_audit(
+        runtime,
+        replay_scope="all",
+        actor_id="uid:1001",
+        request={"incident_id": "incident-1"},
+        result={
+            "fixture_count": 2,
+            "completed_count": 1,
+            "dispatched_count": 1,
+            "results": [
+                {"status": "COMPLETED"},
+                {"status": "FAILED"},
+            ],
+        },
+    )
+    _emit_incident_replay_audit(
+        runtime,
+        replay_scope="selected",
+        actor_id="uid:1001",
+        request={"fixture_id": "fixture-1"},
+        error="fixture rejected",
+    )
+
+    assert [event[0] for event in runtime.audit.events] == [
+        "INCIDENT_REPLAY_OUTCOME",
+        "INCIDENT_REPLAY_OUTCOME",
+    ]
+    batch = runtime.audit.events[0][1]
+    assert batch["scope"]["replay_scope"] == "all"
+    assert batch["outcome"] == {
+        "state": "PARTIAL",
+        "capsule_modified": False,
+        "authority_granted": False,
+        "integrity_verified": True,
+    }
+    rejected = runtime.audit.events[1][1]
+    assert rejected["outcome"]["state"] == "REJECTED"
+    assert rejected["outcome"]["authority_granted"] is False
+    assert rejected["details"]["error"] == "fixture rejected"
