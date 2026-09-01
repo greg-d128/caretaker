@@ -602,8 +602,9 @@ verified same-code behavior change seals the prior active evidence and starts a
 new behavior revision. The rollover preserves the old evidence, does not
 accept a baseline, and does not grant Repair or policy authority. The new
 revision must collect fresh evidence before it can be compared or accepted.
-Dynamic threshold administration, configurable distribution thresholds, and
-full distribution-shape analysis remain future work.
+Full distribution-shape analysis remains future work. The minimum sample count
+and sigma threshold for this bounded duration signal are policy-configurable;
+dynamic administration of those settings remains future work.
 
 ### Randomized behavioral-regime snapshots
 
@@ -817,7 +818,13 @@ absence claims from incomplete tables.
 
 ## Supervisor-owned multiprocess adaptive aggregation
 
-**Status: In progress in development tree for durable worker-batch aggregation, supervisor-authorized Behavior transition requests, an operator-gated adaptive Repair handoff, and an application-local bounded queue transport; automatic fleet Repair promotion, cross-host transport, and process orchestration remain future work.**
+**Status: Implemented in development tree for the accepted application-local
+slice: durable worker-batch aggregation, supervisor-authorized Behavior
+transition requests, an operator-gated adaptive Repair handoff, scoped
+aggregation identities, bounded queue transport, policy-controlled loss and
+backpressure, worker comparison evidence, and delayed policy transitions.
+Automatic fleet Repair promotion, cross-host transport, and process
+orchestration remain future work.**
 
 The first implementation slice is documented in
 [`ADAPTIVE_AGGREGATION.md`](ADAPTIVE_AGGREGATION.md). A durable
@@ -1037,7 +1044,14 @@ Future work may export a signed review bundle containing a unified diff, origina
 
 ## Policy-controlled Repair rollout, mirroring, and shadow execution
 
-**Status: In progress in development tree; effect-aware contract, evidence gate, deterministic routing decision, registry-aware FunctionSlot invocation bridge, explicit application-owned raw-result callable binding, conservative pure and opt-in complete-evidence read-only candidate-failure fallback, policy-controlled candidate-authoritative mirroring, policy-defined staged routing ramps, stage-specific readiness requirements, readiness-gated supervisor-cycle advancement, and durable supervisor-owned application-wide route allocation implemented; cross-host or multi-supervisor fleet coordination, implicit arbitrary-callable replacement, and deployment-owned orchestration remain future work.**
+**Status: Implemented in development tree for the accepted application-local
+slice: effect-aware contracts, evidence gates, deterministic routing decisions,
+registry-aware FunctionSlot invocation, explicit application-owned callable
+binding, conservative read-only fallback, candidate-authoritative mirroring,
+staged routing ramps, stage-specific readiness, readiness-gated advancement,
+and durable supervisor-owned route allocation. Cross-host or multi-supervisor
+fleet coordination, implicit arbitrary-callable replacement, and
+deployment-owned orchestration remain future work.**
 
 Caretaker currently supports candidate probation and a narrow
 `PURE_FUNCTION` differential-execution mode. For explicitly confirmed pure
@@ -1336,7 +1350,13 @@ infrastructure, source-control, package-publication, or deployment authority.
 
 ## Repair workflow restart and crash recovery
 
-**Status: Design clarified; implementation unblocked but not complete.**
+**Status: Implemented in development tree for the accepted application-local
+recovery contract: durable failure and post-mortem evidence, rollback and
+degraded-mode acknowledgement gates, authorized replacement admission,
+cohort reconciliation, comparison-worker evidence, recovery-plan inspection
+and application, and application-owned lifecycle callbacks. Deployment-specific
+process spawning, replacement, incident, shutdown, and automatic candidate
+reactivation remain future work.**
 
 The default Repair engine, pending approvals, active work, repair-rate history, regression corpus, FunctionSlot replacements, and candidate observation lifecycle are process-local. Historical records may be written to logging or an explicitly supplied SQLite Repair store, but a new engine does not reconstruct an actionable workflow or reactivate a runtime replacement from those records.
 
