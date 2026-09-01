@@ -26,6 +26,7 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 ADAPTIVE_AGGREGATION_SCHEMA_VERSION = 1
 ADAPTIVE_POLICY_LEDGER_SCHEMA_VERSION = 1
 ADAPTIVE_POLICY_ACCEPTANCE_SCHEMA_VERSION = 1
+ADAPTIVE_POLICY_INSTALLATION_SCHEMA_VERSION = 1
 ADAPTIVE_BATCH_REVALIDATION_SCHEMA_VERSION = 1
 MAX_BATCH_TEXT = 256
 MAX_AGGREGATION_SCOPE_TEXT = 256
@@ -54,6 +55,7 @@ MAX_THRESHOLD_PROPOSAL_TTL_SECONDS = 86_400.0
 MAX_BATCH_REVALIDATION_RESULT_BYTES = 8 * 1024
 MAX_BATCH_REVALIDATION_IDS = 256
 MAX_TRANSITION_SIGNATURE_BYTES = 16 * 1024
+MAX_POLICY_INSTALLATION_RESULT_BYTES = 4 * 1024
 _ADAPTIVE_POLICY_ID_NAMESPACE = uuid5(
     NAMESPACE_URL, "https://caretaker.dev/adaptive-policy-id"
 )
@@ -1818,6 +1820,7 @@ class SupervisorAdaptiveAggregationStore:
         self.transition_rollback_directory = self.root / "adaptive" / "aggregation" / "transition-rollbacks"
         self.policy_ledger_directory = self.root / "adaptive" / "policy-ledger"
         self.policy_acceptance_directory = self.root / "adaptive" / "policy-acceptance"
+        self.policy_installation_directory = self.root / "adaptive" / "policy-installation"
         self.conflict_directory = self.root / "adaptive" / "aggregation" / "conflicts"
         self.revalidation_directory = self.root / "adaptive" / "aggregation" / "revalidations"
         for directory in (
@@ -1832,6 +1835,7 @@ class SupervisorAdaptiveAggregationStore:
             self.transition_rollback_directory,
             self.policy_ledger_directory,
             self.policy_acceptance_directory,
+            self.policy_installation_directory,
             self.conflict_directory,
             self.revalidation_directory,
         ):
@@ -1886,6 +1890,59 @@ class SupervisorAdaptiveAggregationStore:
                     "aggregate_modified": False,
                 },
                 priority=EvidencePriority.IMPORTANT,
+            )
+        except Exception as exc:
+            return f"{type(exc).__name__}: {exc}"[:256]
+        return None
+
+    def _emit_policy_installation_audit(
+        self,
+        record: Mapping[str, Any],
+        *,
+        duplicate: bool = False,
+    ) -> str | None:
+        if self.audit_event is None:
+            return None
+        try:
+            from .logging.models import EvidencePriority
+
+            self.audit_event(
+                "ADAPTIVE_POLICY_INSTALLATION",
+                actor={
+                    "type": "deployment",
+                    "id": str(
+                        record.get("installed_by")
+                        or record.get("deployment_authority_id")
+                        or "deployment"
+                    )[:128],
+                },
+                scope={
+                    "target_id": str(record.get("target_id") or "")[:512],
+                    "aggregation_scope": record.get("aggregation_scope"),
+                    "acceptance_id": str(record.get("acceptance_id") or "")[:128],
+                    "installation_id": str(record.get("installation_id") or "")[:128],
+                },
+                policy={
+                    "policy_id": str(record.get("policy_id") or "")[:128],
+                    "fingerprint": str(record.get("policy_fingerprint") or "")[:512],
+                    "prior_policy_id": str(record.get("prior_policy_id") or "")[:128],
+                    "prior_fingerprint": str(
+                        record.get("prior_policy_fingerprint") or ""
+                    )[:512],
+                    "authority_type": "deployment",
+                },
+                outcome={
+                    "state": str(record.get("status") or "UNKNOWN")[:64],
+                    "policy_mutated": False,
+                    "authority_granted": False,
+                },
+                details={
+                    "deployment_artifact_hash": record.get("deployment_artifact_hash"),
+                    "reason": record.get("reason"),
+                    "duplicate": duplicate,
+                    "handler_status": record.get("handler_status"),
+                },
+                priority=EvidencePriority.CRITICAL,
             )
         except Exception as exc:
             return f"{type(exc).__name__}: {exc}"[:256]
@@ -2204,6 +2261,50 @@ class SupervisorAdaptiveAggregationStore:
 
     def _policy_acceptance_path(self, acceptance_id: str) -> Path:
         return self.policy_acceptance_directory / f"{acceptance_id}.json"
+
+    def _policy_installation_path(self, installation_id: str, status: str) -> Path:
+        return self.policy_installation_directory / f"{installation_id}-{status.lower()}.json"
+
+    def _load_policy_installation_record(self, path: Path) -> dict[str, Any]:
+        try:
+            envelope = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise AdaptiveAggregationError(
+                "adaptive policy installation record is unreadable"
+            ) from exc
+        if not isinstance(envelope, Mapping):
+            raise AdaptiveAggregationError(
+                "adaptive policy installation envelope must be an object"
+            )
+        if int(envelope.get("schema_version") or 0) != ADAPTIVE_POLICY_INSTALLATION_SCHEMA_VERSION:
+            raise AdaptiveAggregationError(
+                "unsupported adaptive policy installation schema"
+            )
+        record = envelope.get("record")
+        if not isinstance(record, Mapping):
+            raise AdaptiveAggregationError(
+                "adaptive policy installation record is missing"
+            )
+        try:
+            installation_id = str(UUID(str(record.get("installation_id"))))
+            acceptance_id = str(UUID(str(record.get("acceptance_id"))))
+        except (TypeError, ValueError) as exc:
+            raise AdaptiveAggregationError(
+                "adaptive policy installation IDs are invalid"
+            ) from exc
+        if not path.name.startswith(f"{installation_id}-"):
+            raise AdaptiveAggregationError(
+                "adaptive policy installation ID does not match its filename"
+            )
+        if not acceptance_id:
+            raise AdaptiveAggregationError(
+                "adaptive policy installation acceptance ID is missing"
+            )
+        if str(envelope.get("record_sha256") or "") != _content_hash(record):
+            raise AdaptiveAggregationError(
+                "adaptive policy installation hash is invalid"
+            )
+        return dict(record)
 
     def _load_policy_ledger_record(self, path: Path) -> dict[str, Any]:
         envelope = json.loads(path.read_text(encoding="utf-8"))
@@ -3905,6 +4006,9 @@ class SupervisorAdaptiveAggregationStore:
             "target_id": stored.get("target_id"),
             "aggregation_scope": stored.get("aggregation_scope"),
             "aggregation_target_id": stored.get("aggregation_target_id"),
+            "generation_id": stored.get("generation_id"),
+            "code_hash": stored.get("code_hash"),
+            "monitoring_fingerprint": stored.get("monitoring_fingerprint"),
             "prior_policy_id": stored.get("prior_policy_id"),
             "policy_id": stored.get("policy_id"),
             "prior_policy_fingerprint": stored.get("previous_policy_fingerprint"),
@@ -3959,6 +4063,288 @@ class SupervisorAdaptiveAggregationStore:
             },
         )
         return {**acceptance, "duplicate": False}
+
+    def install_policy_acceptance(
+        self,
+        acceptance_id: str,
+        *,
+        deployment_authority_id: str,
+        deployment_authority_fingerprint: str,
+        current_generations: Mapping[str, str],
+        current_policy_fingerprints: Mapping[str, str],
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        installer: Callable[[Mapping[str, Any]], Any],
+        reason: str,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Install an accepted policy through an explicit deployment callback.
+
+        The callback is the deployment-owned boundary that may update a
+        deployment artifact or persistent policy source.  Caretaker only
+        validates the immutable acceptance and current context, supplies a
+        bounded handoff packet, and records the callback outcome.  It never
+        edits the authority stack, grants authority, or treats a callback's
+        response as proof of external effects.
+
+        A successful callback must return ``accepted=True``, the exact
+        accepted policy fingerprint, and a non-empty deployment artifact hash.
+        A pending handoff is retained as evidence and is not automatically
+        replayed after restart; deployment must reconcile it deliberately.
+        """
+        try:
+            normalized_acceptance_id = str(UUID(str(acceptance_id)))
+        except (TypeError, ValueError) as exc:
+            raise AdaptiveAggregationError(
+                "adaptive policy acceptance_id must be a UUID"
+            ) from exc
+        if not callable(installer):
+            raise TypeError("adaptive policy installer must be callable")
+        deployment_actor = _text(
+            deployment_authority_id,
+            name="deployment_authority_id",
+            limit=MAX_BATCH_TEXT,
+        )
+        deployment_fingerprint = _text(
+            deployment_authority_fingerprint,
+            name="deployment_authority_fingerprint",
+            limit=MAX_BATCH_TEXT,
+        )
+        installation_reason = _text(
+            reason,
+            name="reason",
+            limit=MAX_TRANSITION_REASON,
+        )
+        assert deployment_actor is not None
+        assert deployment_fingerprint is not None
+        assert installation_reason is not None
+
+        acceptance_path = self._policy_acceptance_path(normalized_acceptance_id)
+        if not acceptance_path.exists():
+            raise KeyError(f"No adaptive policy acceptance found for {normalized_acceptance_id}")
+        acceptance = self._load_policy_acceptance_record(acceptance_path)
+        if str(acceptance.get("request_kind")) != "ADAPTIVE_POLICY_ACCEPTANCE":
+            raise PermissionError("only an adaptive policy acceptance can be installed")
+        if acceptance.get("policy_mutated") is not False:
+            raise PermissionError("adaptive policy acceptance has an invalid mutation marker")
+        if acceptance.get("authority_granted") is not False:
+            raise PermissionError("adaptive policy acceptance has an invalid authority marker")
+
+        observed_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        expiry = self._transition_expiry(
+            {"expires_at": acceptance.get("authority_expires_at")}
+        )
+        if expiry is not None and observed_at >= expiry:
+            raise PermissionError("adaptive policy acceptance authority has expired")
+        context_error = self._context_error(
+            acceptance,
+            current_generations=current_generations,
+            policy_fingerprints=current_policy_fingerprints,
+            policy_fingerprint=None,
+            authority_policy_generation=str(authority_policy_generation),
+            authority_policy_fingerprint=str(authority_policy_fingerprint),
+        )
+        if context_error is not None:
+            raise PermissionError(
+                f"adaptive policy acceptance context is stale: {context_error}"
+            )
+
+        with self._lock:
+            records = [
+                self._load_policy_installation_record(path)
+                for path in sorted(self.policy_installation_directory.glob("*.json"))
+            ]
+            for existing in records:
+                if str(existing.get("acceptance_id")) != normalized_acceptance_id:
+                    continue
+                if existing.get("status") == "INSTALLED":
+                    audit_error = self._emit_policy_installation_audit(
+                        existing,
+                        duplicate=True,
+                    )
+                    result = {**existing, "duplicate": True}
+                    if audit_error is not None:
+                        result["audit_errors"] = [audit_error]
+                    return result
+                if existing.get("status") == "PENDING":
+                    return {
+                        **existing,
+                        "duplicate": True,
+                        "requires_reconciliation": True,
+                    }
+
+            installation_id = str(uuid4())
+            packet = {
+                "acceptance_id": normalized_acceptance_id,
+                "transition_id": acceptance.get("transition_id"),
+                "target_id": acceptance.get("target_id"),
+                "aggregation_scope": acceptance.get("aggregation_scope"),
+                "generation_id": acceptance.get("generation_id"),
+                "code_hash": acceptance.get("code_hash"),
+                "monitoring_fingerprint": acceptance.get("monitoring_fingerprint"),
+                "prior_policy_id": acceptance.get("prior_policy_id"),
+                "policy_id": acceptance.get("policy_id"),
+                "prior_policy_fingerprint": acceptance.get("prior_policy_fingerprint"),
+                "policy_fingerprint": acceptance.get("policy_fingerprint"),
+                "fields_affected": list(acceptance.get("fields_affected") or ()),
+                "changes": dict(acceptance.get("changes") or {}),
+                "effective_at": acceptance.get("effective_at"),
+                "accepted_at": acceptance.get("accepted_at"),
+                "acceptance_sha256": _content_hash(acceptance),
+            }
+            encoded_packet = json.dumps(
+                packet,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+            if len(encoded_packet) > MAX_POLICY_INSTALLATION_RESULT_BYTES:
+                raise AdaptiveAggregationError(
+                    "adaptive policy installation packet is too large"
+                )
+            pending = {
+                "installation_id": installation_id,
+                "acceptance_id": normalized_acceptance_id,
+                "transition_id": acceptance.get("transition_id"),
+                "target_id": acceptance.get("target_id"),
+                "aggregation_scope": acceptance.get("aggregation_scope"),
+                "generation_id": acceptance.get("generation_id"),
+                "prior_policy_id": acceptance.get("prior_policy_id"),
+                "policy_id": acceptance.get("policy_id"),
+                "prior_policy_fingerprint": acceptance.get("prior_policy_fingerprint"),
+                "policy_fingerprint": acceptance.get("policy_fingerprint"),
+                "deployment_authority_id": deployment_actor,
+                "deployment_authority_fingerprint": deployment_fingerprint,
+                "installed_by": deployment_actor,
+                "reason": installation_reason,
+                "status": "PENDING",
+                "handler_status": "NOT_CALLED",
+                "created_at": observed_at.isoformat(),
+                "recorded_at": observed_at.isoformat(),
+                "authority_policy_generation": str(authority_policy_generation),
+                "authority_policy_fingerprint": str(authority_policy_fingerprint),
+                "authority_expires_at": acceptance.get("authority_expires_at"),
+                "acceptance_sha256": _content_hash(acceptance),
+                "policy_mutated": False,
+                "authority_granted": False,
+            }
+            _immutable_write(
+                self._policy_installation_path(installation_id, "PENDING"),
+                {
+                    "schema_version": ADAPTIVE_POLICY_INSTALLATION_SCHEMA_VERSION,
+                    "record": pending,
+                    "record_sha256": _content_hash(pending),
+                },
+            )
+        audit_errors: list[str] = []
+        audit_error = self._emit_policy_installation_audit(pending)
+        if audit_error is not None:
+            audit_errors.append(audit_error)
+
+        try:
+            handler_result = installer(dict(packet))
+        except Exception as exc:
+            final_status = "FAILED"
+            handler_status = "EXCEPTION"
+            error = f"{type(exc).__name__}: {exc}"[:256]
+            handler_result = None
+        else:
+            error = None
+            if not isinstance(handler_result, Mapping):
+                final_status = "REJECTED"
+                handler_status = "INVALID_RESULT"
+            elif handler_result.get("accepted") is not True:
+                final_status = "REJECTED"
+                handler_status = "REJECTED_BY_DEPLOYMENT"
+            else:
+                installed_fingerprint = str(
+                    handler_result.get("policy_fingerprint")
+                    or handler_result.get("installed_policy_fingerprint")
+                    or ""
+                ).strip()
+                artifact_hash = str(
+                    handler_result.get("deployment_artifact_hash") or ""
+                ).strip()
+                if installed_fingerprint != str(acceptance.get("policy_fingerprint")):
+                    final_status = "REJECTED"
+                    handler_status = "POLICY_FINGERPRINT_MISMATCH"
+                elif not artifact_hash or len(artifact_hash) > MAX_BATCH_TEXT:
+                    final_status = "REJECTED"
+                    handler_status = "DEPLOYMENT_ARTIFACT_HASH_REQUIRED"
+                else:
+                    final_status = "INSTALLED"
+                    handler_status = "ACCEPTED"
+
+        final = {
+            **pending,
+            "status": final_status,
+            "handler_status": handler_status,
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if error is not None:
+            final["error"] = error
+        if final_status == "INSTALLED" and isinstance(handler_result, Mapping):
+            final["deployment_artifact_hash"] = str(
+                handler_result.get("deployment_artifact_hash")
+            )[:MAX_BATCH_TEXT]
+            final["installed_policy_fingerprint"] = str(
+                handler_result.get("policy_fingerprint")
+                or handler_result.get("installed_policy_fingerprint")
+            )[:MAX_BATCH_TEXT]
+        elif isinstance(handler_result, Mapping) and handler_result.get("reason"):
+            final["handler_reason"] = str(handler_result.get("reason"))[:MAX_TRANSITION_REASON]
+        encoded_final = json.dumps(
+            final,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        if len(encoded_final) > MAX_POLICY_INSTALLATION_RESULT_BYTES:
+            final.pop("handler_reason", None)
+            final.pop("error", None)
+        _immutable_write(
+            self._policy_installation_path(installation_id, final_status),
+            {
+                "schema_version": ADAPTIVE_POLICY_INSTALLATION_SCHEMA_VERSION,
+                "record": final,
+                "record_sha256": _content_hash(final),
+            },
+        )
+        audit_error = self._emit_policy_installation_audit(final)
+        if audit_error is not None:
+            audit_errors.append(audit_error)
+        return {
+            **final,
+            "duplicate": False,
+            **({"audit_errors": audit_errors} if audit_errors else {}),
+        }
+
+    def list_policy_installations(
+        self,
+        *,
+        acceptance_id: str | None = None,
+        limit: int = 500,
+    ) -> tuple[dict[str, Any], ...]:
+        """List immutable deployment installation outcomes, newest first."""
+        normalized_acceptance = None
+        if acceptance_id is not None:
+            try:
+                normalized_acceptance = str(UUID(str(acceptance_id)))
+            except (TypeError, ValueError) as exc:
+                raise AdaptiveAggregationError("acceptance_id must be a UUID") from exc
+        bounded = max(1, min(int(limit), 500))
+        records: list[dict[str, Any]] = []
+        for path in sorted(self.policy_installation_directory.glob("*.json"), reverse=True):
+            record = self._load_policy_installation_record(path)
+            if normalized_acceptance is not None and str(record.get("acceptance_id")) != normalized_acceptance:
+                continue
+            records.append(record)
+            if len(records) >= bounded:
+                break
+        records.sort(key=lambda item: str(item.get("recorded_at") or ""), reverse=True)
+        return tuple(records)
 
     def list_policy_transition_acceptances(
         self,
@@ -4300,6 +4686,9 @@ class SupervisorAdaptiveAggregationStore:
             ),
             "policy_acceptance_records": sum(
                 1 for _ in self.policy_acceptance_directory.glob("*.json")
+            ),
+            "policy_installation_records": sum(
+                1 for _ in self.policy_installation_directory.glob("*.json")
             ),
             "revalidations": sum(
                 1 for _ in self.revalidation_directory.glob("*.json")

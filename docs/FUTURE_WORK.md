@@ -866,9 +866,15 @@ editing an existing proposal still means creating a new immutable proposal.
 Persistent acceptance beyond the bounded runtime lease is now implemented as
 an opt-in, operator-authorized, signed deployment-handoff record. It remains
 evidence only: it does not mutate the active authority stack or reapply policy
-after restart. Remaining work is deployment-authorized installation of an
-accepted policy and deployment-specific worker/process orchestration. The
-current slice also records immutable `PENDING`, `APPLIED`, `FAILED`, and `ROLLED_BACK`
+after restart. A deployment-owned installation callback now consumes that
+handoff only with current target/generation/policy/authority context and must
+acknowledge the exact policy fingerprint plus a deployment artifact hash.
+Installation records are immutable and idempotent for completed handoffs;
+`PENDING`, `INSTALLED`, `REJECTED`, and `FAILED` outcomes remain evidence and
+are never replayed automatically after restart. Remaining work is deployment-
+specific worker/process orchestration and deliberate reconciliation of a
+pending external installation. The current slice also records immutable
+`PENDING`, `APPLIED`, `FAILED`, and `ROLLED_BACK`
 lineage records with policy IDs/fingerprints, scope, effective/recorded times,
 authority metadata, and worker acknowledgement counts. These records are
 visible through the adaptive aggregation status response; they remain evidence

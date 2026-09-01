@@ -140,6 +140,7 @@ All event types share these redaction rules:
 | `INCIDENT_COMMUNICATION_REVIEWED` | `CRITICAL` | `scope.communication_id`, `outcome.state` | `{"communication_id": "communication-uuid", "state": "APPROVED", "delivery_authorized": false}` |
 | `ADAPTIVE_AGGREGATION_RECONCILED` | `IMPORTANT` | `scope.aggregation_scope`, `outcome.state` | `{"scope": "application", "state": "RECONCILED", "merged": 3, "rejected": 0, "authority_granted": false}` |
 | `ADAPTIVE_BATCH_REVALIDATED` | `IMPORTANT` | `scope.batch_id`, `outcome.state` | `{"batch_id": "batch-uuid", "state": "VALIDATED", "aggregate_modified": false, "authority_granted": false}` |
+| `ADAPTIVE_POLICY_INSTALLATION` | `CRITICAL` | `scope.acceptance_id`, `outcome.state` | `{"acceptance_id": "acceptance-uuid", "installation_id": "installation-uuid", "state": "INSTALLED", "policy_mutated": false, "authority_granted": false}` |
 | `BEHAVIOR_COLLECTION_OUTCOME` | `IMPORTANT` | `scope.scope`, `scope.subject`, `outcome.state` | `{"scope": "function", "subject": "demo.target", "state": "CAPTURED", "observed_calls": 50, "authority_granted": false}` |
 | `VALIDATION_DECISION` | `IMPORTANT` | — | `{"state": "ELIGIBLE", "validation_id": "validation-uuid"}` |
 | `RECOVERY_DECISION` | `CRITICAL` | — | `{"state": "PLANNED_ONLY", "action": "ROLLBACK_TO_DEPLOYED_CODE"}` |

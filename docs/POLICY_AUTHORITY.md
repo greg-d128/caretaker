@@ -340,8 +340,12 @@ operator acceptance record. Acceptance is allowed only for an already-`APPLIED`
 adaptive transition while its exact runtime context and authority lease are
 still current. The record is signed when runtime signing is configured and is
 stored below `adaptive/policy-acceptance/`. It is a durable decision and
-deployment handoff, not a policy mutation or a new authority layer; applying
-it permanently remains a deployment-authorized workflow.
+deployment handoff, not a policy mutation or a new authority layer. A
+deployment-owned installer may consume it only while the exact context remains
+current, and must return the accepted policy fingerprint and a deployment
+artifact hash. Caretaker records that outcome but does not edit the authority
+stack or grant authority; deployment remains responsible for the actual
+persistent policy installation.
 
 ## Policy generations and Repair
 

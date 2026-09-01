@@ -305,6 +305,18 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
             "authority_granted": False,
         },
     ),
+    "ADAPTIVE_POLICY_INSTALLATION": _event_definition(
+        description="A deployment-owned installation of an accepted adaptive policy was attempted.",
+        minimum_priority=EvidencePriority.CRITICAL,
+        required_fields=("scope.acceptance_id", "outcome.state"),
+        example={
+            "acceptance_id": "acceptance-uuid",
+            "installation_id": "installation-uuid",
+            "state": "INSTALLED",
+            "policy_mutated": False,
+            "authority_granted": False,
+        },
+    ),
     "BEHAVIOR_COLLECTION_OUTCOME": _event_definition(
         description="A bounded behavior collection request completed or failed.",
         minimum_priority=EvidencePriority.IMPORTANT,

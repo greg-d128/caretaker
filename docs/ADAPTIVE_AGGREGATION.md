@@ -259,6 +259,20 @@ workflow with its own authority must apply the accepted policy; until then the
 record remains reviewable evidence. The default policy keeps persistent
 acceptance disabled.
 
+`SupervisorAdaptiveAggregationStore.install_policy_acceptance()` provides the
+next deployment-owned boundary. It requires the current target, generation,
+policy, and authority context, an explicit deployment identity/fingerprint,
+and an application/deployment callback. The callback receives a bounded,
+content-bound handoff packet and must acknowledge the exact accepted policy
+fingerprint together with a deployment artifact hash. Caretaker records an
+immutable `PENDING` record before calling it, then records `INSTALLED`,
+`REJECTED`, or `FAILED` evidence. A completed installation is idempotent;
+pending handoffs are not replayed automatically after restart. The callback
+may update deployment-owned material, but this API does not edit the active
+authority stack or grant authority. Installation outcomes are also emitted as
+critical `ADAPTIVE_POLICY_INSTALLATION` audit events when an audit callback is
+configured.
+
 The supervisor exposes `adaptive-observation-submit`,
 `adaptive-aggregation-status`,
 `adaptive-aggregation-reconcile`, `adaptive-aggregation-ack`,

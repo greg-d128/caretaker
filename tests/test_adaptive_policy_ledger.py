@@ -302,6 +302,214 @@ def test_persistent_acceptance_requires_policy_and_live_authority(tmp_path: Path
         )
 
 
+def test_deployment_installs_accepted_policy_through_explicit_callback(
+    tmp_path: Path,
+) -> None:
+    store = SupervisorAdaptiveAggregationStore(tmp_path)
+    transition = _transition(store, now=datetime(2030, 1, 1, tzinfo=timezone.utc))
+    context = {
+        "current_generations": {"payments.charge": "generation-1"},
+        "current_policy_fingerprints": {"payments.charge": "policy-new"},
+        "authority_policy_generation": "5",
+        "authority_policy_fingerprint": "authority-new",
+    }
+    store.acknowledge_transition(
+        {
+            **transition,
+            "worker_id": "worker-a",
+            "applied": True,
+            "observed_level": "POLICY",
+        },
+        peer_pid=101,
+        current_generations=context["current_generations"],
+        policy_fingerprints=context["current_policy_fingerprints"],
+        authority_policy_generation=context["authority_policy_generation"],
+        authority_policy_fingerprint=context["authority_policy_fingerprint"],
+    )
+    acceptance = store.record_policy_transition_acceptance(
+        str(transition["transition_id"]),
+        accepted_by="uid:1001",
+        reason="operator accepted for deployment",
+        policy_allows_persistent_acceptance=True,
+        now=datetime(2030, 1, 1, 0, 0, 30, tzinfo=timezone.utc),
+        **context,
+    )
+    calls: list[dict[str, object]] = []
+
+    def installer(packet: dict[str, object]) -> dict[str, object]:
+        calls.append(packet)
+        return {
+            "accepted": True,
+            "policy_fingerprint": "policy-new",
+            "deployment_artifact_hash": "sha256:deployment-artifact",
+        }
+
+    installed = store.install_policy_acceptance(
+        str(acceptance["acceptance_id"]),
+        deployment_authority_id="deployment:production",
+        deployment_authority_fingerprint="deployment-authority-fingerprint",
+        installer=installer,
+        reason="install reviewed policy in the next deployment",
+        now=datetime(2030, 1, 1, 0, 0, 45, tzinfo=timezone.utc),
+        **context,
+    )
+
+    assert installed["status"] == "INSTALLED"
+    assert installed["policy_mutated"] is False
+    assert installed["authority_granted"] is False
+    assert installed["deployment_artifact_hash"] == "sha256:deployment-artifact"
+    assert calls[0]["acceptance_id"] == acceptance["acceptance_id"]
+    assert calls[0]["policy_fingerprint"] == "policy-new"
+    assert "signature" not in calls[0]
+    listed = store.list_policy_installations(
+        acceptance_id=str(acceptance["acceptance_id"])
+    )
+    assert len(listed) == 2
+    assert {item["status"] for item in listed} == {"PENDING", "INSTALLED"}
+
+    def should_not_run(_packet: dict[str, object]) -> dict[str, object]:
+        raise AssertionError("completed deployment installation was replayed")
+
+    duplicate = store.install_policy_acceptance(
+        str(acceptance["acceptance_id"]),
+        deployment_authority_id="deployment:production",
+        deployment_authority_fingerprint="deployment-authority-fingerprint",
+        installer=should_not_run,
+        reason="retry completed installation",
+        now=datetime(2030, 1, 1, 0, 0, 50, tzinfo=timezone.utc),
+        **context,
+    )
+    assert duplicate["status"] == "INSTALLED"
+    assert duplicate["duplicate"] is True
+
+
+def test_deployment_installation_rejects_bad_callback_and_stale_context(
+    tmp_path: Path,
+) -> None:
+    store = SupervisorAdaptiveAggregationStore(tmp_path)
+    transition = _transition(store, now=datetime(2030, 1, 1, tzinfo=timezone.utc))
+    context = {
+        "current_generations": {"payments.charge": "generation-1"},
+        "current_policy_fingerprints": {"payments.charge": "policy-new"},
+        "authority_policy_generation": "5",
+        "authority_policy_fingerprint": "authority-new",
+    }
+    store.acknowledge_transition(
+        {
+            **transition,
+            "worker_id": "worker-a",
+            "applied": True,
+            "observed_level": "POLICY",
+        },
+        peer_pid=101,
+        current_generations=context["current_generations"],
+        policy_fingerprints=context["current_policy_fingerprints"],
+        authority_policy_generation=context["authority_policy_generation"],
+        authority_policy_fingerprint=context["authority_policy_fingerprint"],
+    )
+    acceptance = store.record_policy_transition_acceptance(
+        str(transition["transition_id"]),
+        accepted_by="uid:1001",
+        reason="operator accepted for deployment",
+        policy_allows_persistent_acceptance=True,
+        now=datetime(2030, 1, 1, 0, 0, 30, tzinfo=timezone.utc),
+        **context,
+    )
+    rejected = store.install_policy_acceptance(
+        str(acceptance["acceptance_id"]),
+        deployment_authority_id="deployment:production",
+        deployment_authority_fingerprint="deployment-authority-fingerprint",
+        installer=lambda _packet: {
+            "accepted": True,
+            "policy_fingerprint": "policy-forged",
+            "deployment_artifact_hash": "sha256:artifact",
+        },
+        reason="bad callback result",
+        now=datetime(2030, 1, 1, 0, 0, 45, tzinfo=timezone.utc),
+        **context,
+    )
+    assert rejected["status"] == "REJECTED"
+    assert rejected["handler_status"] == "POLICY_FINGERPRINT_MISMATCH"
+
+    with pytest.raises(PermissionError, match="context is stale"):
+        store.install_policy_acceptance(
+            str(acceptance["acceptance_id"]),
+            deployment_authority_id="deployment:production",
+            deployment_authority_fingerprint="deployment-authority-fingerprint",
+            installer=lambda _packet: {"accepted": True},
+            reason="stale context",
+            now=datetime(2030, 1, 1, 0, 0, 46, tzinfo=timezone.utc),
+            current_generations=context["current_generations"],
+            current_policy_fingerprints={"payments.charge": "policy-old"},
+            authority_policy_generation=context["authority_policy_generation"],
+            authority_policy_fingerprint=context["authority_policy_fingerprint"],
+        )
+
+
+def test_deployment_installation_audit_is_output_only(tmp_path: Path) -> None:
+    events: list[tuple[str, dict[str, object]]] = []
+    store = SupervisorAdaptiveAggregationStore(
+        tmp_path,
+        audit_event=lambda event_type, **fields: events.append(
+            (str(event_type), dict(fields))
+        ),
+    )
+    transition = _transition(store, now=datetime(2030, 1, 1, tzinfo=timezone.utc))
+    context = {
+        "current_generations": {"payments.charge": "generation-1"},
+        "current_policy_fingerprints": {"payments.charge": "policy-new"},
+        "authority_policy_generation": "5",
+        "authority_policy_fingerprint": "authority-new",
+    }
+    store.acknowledge_transition(
+        {
+            **transition,
+            "worker_id": "worker-a",
+            "applied": True,
+            "observed_level": "POLICY",
+        },
+        peer_pid=101,
+        current_generations=context["current_generations"],
+        policy_fingerprints=context["current_policy_fingerprints"],
+        authority_policy_generation=context["authority_policy_generation"],
+        authority_policy_fingerprint=context["authority_policy_fingerprint"],
+    )
+    acceptance = store.record_policy_transition_acceptance(
+        str(transition["transition_id"]),
+        accepted_by="uid:1001",
+        reason="operator accepted for deployment",
+        policy_allows_persistent_acceptance=True,
+        now=datetime(2030, 1, 1, 0, 0, 30, tzinfo=timezone.utc),
+        **context,
+    )
+    store.install_policy_acceptance(
+        str(acceptance["acceptance_id"]),
+        deployment_authority_id="deployment:production",
+        deployment_authority_fingerprint="deployment-authority-fingerprint",
+        installer=lambda _packet: {
+            "accepted": True,
+            "policy_fingerprint": "policy-new",
+            "deployment_artifact_hash": "sha256:deployment-artifact",
+        },
+        reason="install reviewed policy",
+        now=datetime(2030, 1, 1, 0, 0, 45, tzinfo=timezone.utc),
+        **context,
+    )
+    installation_events = [
+        fields for event_type, fields in events
+        if event_type == "ADAPTIVE_POLICY_INSTALLATION"
+    ]
+    assert [item["outcome"]["state"] for item in installation_events] == [
+        "PENDING",
+        "INSTALLED",
+    ]
+    assert all(
+        item["outcome"]["authority_granted"] is False
+        and item["outcome"]["policy_mutated"] is False
+        for item in installation_events
+    )
+
+
 def test_tampered_policy_ledger_is_not_returned(tmp_path: Path) -> None:
     store = SupervisorAdaptiveAggregationStore(tmp_path)
     transition = _transition(store, now=datetime.now(timezone.utc))
