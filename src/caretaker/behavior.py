@@ -265,6 +265,7 @@ def _collection_request(value: Mapping[str, Any] | None) -> dict[str, Any] | Non
         "authority_policy_fingerprint": 128,
         "deadline": 64,
         "status": 32,
+        "error": 500,
     }
     result: dict[str, Any] = {}
     for key, limit in string_limits.items():

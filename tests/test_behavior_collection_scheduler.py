@@ -10,6 +10,7 @@ from caretaker.behavior import (
     BehaviorCollectionBudgetExceeded,
     BehaviorCollectionQueueFull,
     BehaviorCollectionScheduler,
+    BehaviorSnapshotStore,
     behavior_generation_id,
 )
 from caretaker.guard.engine import GuardEngine
@@ -435,6 +436,8 @@ def test_scheduler_rejects_missing_or_mismatched_requested_generation(
     assert capture["collection_request"]["status"] == "FAILED"
     assert capture["collection_request"]["outcome"] == "FAILED"
     assert "generation mismatch" in capture["collection_request"]["error"]
+    stored = BehaviorSnapshotStore(tmp_path / "snapshots").create(capture)
+    assert "generation mismatch" in stored["snapshot"]["collection_request"]["error"]
     assert scheduler.list_requests()[0]["status"] == "FAILED"
 
 
