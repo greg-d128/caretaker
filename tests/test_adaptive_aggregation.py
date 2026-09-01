@@ -2381,9 +2381,21 @@ def test_queue_adaptive_store_preserves_batch_integrity_and_supervisor_ownership
 
     supervisor_store = SupervisorAdaptiveAggregationStore(tmp_path)
     queued.submit(batch)
-    drained = queued.drain_to(supervisor_store)
+    drained = queued.drain_to(
+        supervisor_store,
+        worker_id="bound-worker",
+        worker_pid=404,
+    )
     assert drained == ({"status": "QUEUED", "batch_id": batch["batch_id"]},)
     assert supervisor_store.status()["pending"] == 1
+    pending = next((tmp_path / "adaptive" / "aggregation" / "pending").glob("*.json"))
+    stored = json.loads(pending.read_text())
+    assert stored["batch"]["worker_id"] == "bound-worker"
+    assert stored["batch"]["worker_pid"] == 404
+
+    queued.submit(batch)
+    with pytest.raises(ValueError, match="authoritative worker_id and worker_pid"):
+        queued.drain_to(supervisor_store)
 
 
 def test_queue_transport_is_selected_only_when_policy_allows_it(tmp_path: Path) -> None:

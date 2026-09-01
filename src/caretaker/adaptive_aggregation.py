@@ -209,16 +209,28 @@ class QueueAdaptiveAggregationStore:
         store: "SupervisorAdaptiveAggregationStore",
         *,
         limit: int = APPLICATION_TRANSPORT_MAX_DRAIN_MESSAGES,
+        worker_id: str | None = None,
+        worker_pid: int | None = None,
     ) -> tuple[dict[str, Any], ...]:
         """Forward a bounded queue slice into the supervisor ledger.
 
         The caller is responsible for invoking this method from the
         supervisor context and for supplying the normal authoritative context
-        during the later reconciliation step.  Queue receipt itself does not
-        merge, promote, or authorize any batch.
+        during the later reconciliation step. ``worker_id`` and ``worker_pid``
+        identify the application-owned queue binding; they replace the
+        untrusted values in each received batch before it reaches the ledger.
+        Queue receipt itself does not merge, promote, or authorize any batch.
         """
         if not hasattr(store, "submit") or not callable(store.submit):
             raise TypeError("queue adaptive aggregation drain requires a store")
+        if worker_id is None or worker_pid is None:
+            raise ValueError(
+                "queue adaptive aggregation drain requires authoritative worker_id and worker_pid"
+            )
+        if not isinstance(worker_id, str) or not worker_id.strip() or len(worker_id) > MAX_BATCH_TEXT:
+            raise ValueError("queue adaptive aggregation drain worker_id is invalid")
+        if isinstance(worker_pid, bool) or not isinstance(worker_pid, int) or worker_pid <= 0:
+            raise ValueError("queue adaptive aggregation drain worker_pid must be positive")
         if not 1 <= int(limit) <= APPLICATION_TRANSPORT_MAX_DRAIN_MESSAGES:
             raise ValueError(
                 "queue adaptive aggregation drain limit must be between 1 and "
@@ -229,7 +241,10 @@ class QueueAdaptiveAggregationStore:
             batch = self.receive()
             if batch is None:
                 break
-            results.append(dict(store.submit(batch)))
+            bound_batch = dict(batch)
+            bound_batch["worker_id"] = worker_id.strip()
+            bound_batch["worker_pid"] = worker_pid
+            results.append(dict(store.submit(normalize_adaptive_observation_batch(bound_batch))))
         return tuple(results)
 
 

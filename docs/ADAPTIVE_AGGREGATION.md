@@ -51,10 +51,12 @@ to the existing policy-controlled backpressure path.
 Queue receipt is separate from supervisor aggregation. The supervisor-side
 application calls `receive()` or bounded `drain_to()` and then submits each
 validated batch to `SupervisorAdaptiveAggregationStore`, followed by the same
-authoritative reconciliation context used by the socket path. Queue contents
-are untrusted evidence: the sender PID is not authentication, queue access
-does not grant worker or Repair authority, and there is no implicit fallback to
-the local ledger when queue delivery fails.
+authoritative reconciliation context used by the socket path. `drain_to()`
+requires the application to bind that queue to an authoritative worker ID and
+PID; it replaces the batch's untrusted worker fields before ledger submission.
+Queue contents are untrusted evidence: the sender PID is not authentication,
+queue access does not grant worker or Repair authority, and there is no
+implicit fallback to the local ledger when queue delivery fails.
 
 `AdaptiveAggregationPolicy.transport` selects `AUTO`, `DIRECT`, `SOCKET`, or
 `QUEUE`. `AUTO` preserves the least-friction behavior (configured supervisor
