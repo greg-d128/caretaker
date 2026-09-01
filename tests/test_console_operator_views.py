@@ -725,6 +725,7 @@ def test_behavior_snapshot_displays_collection_request_provenance(tmp_path):
                             "reason": "Investigate [untrusted] output",
                             "requested_calls": 50,
                             "observed_calls": 2,
+                            "duration_seconds": 0.125,
                             "outcome": "CAPTURED",
                         },
                     },
@@ -737,6 +738,8 @@ def test_behavior_snapshot_displays_collection_request_provenance(tmp_path):
             assert "Collection request provenance" in report
             assert "Investigate [untrusted] output" in report
             assert "uid:1001" in report
+            assert "duration_seconds" in report
+            assert "0.125" in report
 
     asyncio.run(exercise())
 

@@ -3103,6 +3103,7 @@ class CaretakerConsoleApp(App):
                     "requested_generation",
                     "observed_calls",
                     "observed_generation",
+                    "duration_seconds",
                     "authority_policy_generation",
                     "authority_policy_fingerprint",
                     "requested_at",
