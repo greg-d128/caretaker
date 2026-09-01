@@ -21,7 +21,7 @@ Command: make check
 
 Observed result
 ---------------
-- 919 passed;
+- 929 passed;
 - no unexpected test failures;
 - source, test, example, and script compilation succeeded.
 
@@ -36,17 +36,19 @@ The executable regression coverage and roadmap continue to document these
 known limitations. Passing the current suite does not mean these assurance
 properties are complete:
 
-1. operator override of missing validation isolation;
-2. arbitrary pickle-serializable validation request objects;
-3. missing mandatory validation-check completeness;
-4. dynamically constructed prohibited dunder access;
-5. same-UID administrative authorization ambiguity;
-6. validation results not bound to candidate/base/policy transaction identity;
-7. non-finite validation measurements;
-8. missing persisted validation backend/isolation identity;
-9. unused StatePolicy.restore_for_validation assurance setting;
-10. marker-only Multipass network-isolation assertion;
-11. inaccurate ephemeral-workspace capability for persistent VMs.
+1. arbitrary pickle-serializable validation request objects;
+2. dynamically constructed prohibited dunder access;
+3. same-UID administrative authorization ambiguity;
+4. unused StatePolicy.restore_for_validation assurance setting;
+5. marker-only Multipass network-isolation assertion;
+6. inaccurate ephemeral-workspace capability for persistent VMs.
+
+Required validation isolation is now non-overridable. Validation results are
+bound to the candidate, base, target, policy, authority, requested isolation,
+backend identity, and mandatory check set; measurements are finite and backend
+and isolation identity are retained in repair attempts. The signed-wheel gate
+remains separately blocked until release-station artifacts are regenerated for
+the current development version.
 
 These limitations are intentionally outside the accepted pre-version-1 sprint
 boundary unless a deployment requires stronger assurance.

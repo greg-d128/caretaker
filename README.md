@@ -112,7 +112,7 @@ vm = MultipassValidationBackend(
 engine = RepairEngine(validation_backend=vm)
 ```
 
-Caretaker reports when a configured backend cannot meet the required isolation level. Depending on `backend_unavailable_action`, it fails the repair, retains a proposal, or asks for an explicit operator override. In the current implementation, approving that override can activate a candidate that did not receive the requested isolation; approval must not be interpreted as successful validation at that level. See [`docs/ISOLATED_EXECUTION.md`](docs/ISOLATED_EXECUTION.md) for the rootless-container and Multipass provisioning model and for the distinction between candidate validation and whole-subject isolation.
+Caretaker reports when a configured backend cannot meet the required isolation level. Depending on `backend_unavailable_action`, it fails the repair, retains a proposal, or asks for explicit operator review. Required isolation is a hard minimum: operator approval can retain a proposal for later review, but cannot activate a candidate that did not receive validation at the requested tier. See [`docs/ISOLATED_EXECUTION.md`](docs/ISOLATED_EXECUTION.md) for the rootless-container and Multipass provisioning model and for the distinction between candidate validation and whole-subject isolation.
 
 ## Operator console
 

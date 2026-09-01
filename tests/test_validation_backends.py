@@ -97,6 +97,9 @@ def test_backend_unavailable_policy_can_require_explicit_operator_approval() -> 
     assert "validation isolation backend is unavailable" in pending[0].reason.lower()
     # No candidate has been deployed merely because PROCESS was available.
     assert wrapped.__caretaker_target__.slot.load().number == 0
+    with pytest.raises(RuntimeError, match="cannot substitute"):
+        engine.approve_repair(pending[0].episode_id)
+    assert wrapped.__caretaker_target__.slot.load().number == 0
 
 
 def test_registry_selects_lowest_available_backend_meeting_minimum() -> None:
