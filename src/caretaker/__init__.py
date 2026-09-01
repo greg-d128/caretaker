@@ -202,6 +202,7 @@ from .execution import (
     assess_shadow_eligibility,
 )
 from .engine import RepairEngine, RepairResolution, ResolutionKind
+from .operation_context import OperationContext, OperationContextStaleError
 from .integrity import (
     GPGVerifier,
     IntegrityClass,
@@ -648,6 +649,8 @@ __all__ = [
     "PostMortemRecorder",
     "RegisteredCase",
     "RepairEngine",
+    "OperationContext",
+    "OperationContextStaleError",
     "PolicyConfigurationError",
     "RepairLimits",
     "RepairMode",

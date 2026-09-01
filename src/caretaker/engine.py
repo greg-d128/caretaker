@@ -55,6 +55,7 @@ from .domain import (
     ValidationCheckResult,
     utcnow,
 )
+from .operation_context import OperationContext, OperationContextStaleError
 from .logging.handler import get_runtime as get_logging_runtime
 from .logging.models import EvidencePriority, RepairAuthority
 from .observation import ObservationManager
@@ -125,6 +126,7 @@ class PendingRepairApproval:
     authority_policy_fingerprint: str
     reason: str
     validation_isolation_satisfied: bool = True
+    operation_context: OperationContext | None = None
 
 
 
@@ -611,6 +613,13 @@ class RepairEngine:
         if pending.logging_policy_generation != current_generation:
             raise RuntimeError("Repair approval is stale because the effective logging policy changed")
         authority = get_authority_runtime_context().effective
+        if pending.operation_context is not None:
+            pending.operation_context.assert_current(
+                target_id=target.target_id,
+                policy_fingerprint=target.policy.snapshot().fingerprint,
+                authority_policy_generation=authority.generation,
+                authority_policy_fingerprint=authority.fingerprint,
+            )
         if (
             pending.authority_policy_generation != authority.generation
             or pending.authority_policy_fingerprint != authority.fingerprint
@@ -1299,6 +1308,17 @@ class RepairEngine:
             authority_policy_generation=authority_policy_generation,
             authority_policy_fingerprint=authority_policy_fingerprint,
         )
+        operation_context = OperationContext(
+            operation_id=episode.episode_id,
+            target_id=target.target_id,
+            policy_snapshot_id=policy_snapshot.policy_snapshot_id,
+            policy_fingerprint=policy_snapshot.fingerprint,
+            authority_policy_generation=authority_policy_generation,
+            authority_policy_fingerprint=authority_policy_fingerprint,
+            evidence_identity=f"incident:{incident.incident_id}",
+            evidence_fingerprint=incident.fingerprint,
+        )
+        episode = replace(episode, operation_context=operation_context)
         self.store.record_episode(episode)
         set_runtime_context(episode_id=episode.episode_id)
         self.store.append_event(
@@ -1307,6 +1327,7 @@ class RepairEngine:
                 target.target_id,
                 incident_id=incident.incident_id,
                 episode_id=episode.episode_id,
+                details={"operation_context": operation_context.as_dict()},
             )
         )
 
@@ -1377,6 +1398,7 @@ class RepairEngine:
                 episode=episode,
                 incident=incident,
                 policy_snapshot=policy_snapshot,
+                operation_context=operation_context,
                 attempt_number=len(attempt_ids) + 1,
                 validation_state_restore_errors=tuple(
                     self.state_capture.restore_for_validation(
@@ -1442,6 +1464,7 @@ class RepairEngine:
                         episode=episode,
                         incident=incident,
                         policy_snapshot=policy_snapshot,
+                        operation_context=operation_context,
                         attempt_number=len(attempt_ids) + 1,
                         validation_state_restore_errors=tuple(
                             self.state_capture.restore_for_validation(
@@ -1521,6 +1544,7 @@ class RepairEngine:
                         "validation.backend_unavailable_action requires operator approval"
                     ),
                     validation_isolation_satisfied=False,
+                    operation_context=operation_context,
                 )
                 self._pending_approvals[episode.episode_id] = pending
                 selected_attempt = replace(
@@ -1578,10 +1602,14 @@ class RepairEngine:
         current_logging_runtime = get_logging_runtime()
         current_logging_generation = current_logging_runtime.effective.generation if current_logging_runtime is not None else None
         current_authority_policy = get_authority_runtime_context().effective
-        if (
-            current_authority_policy.generation != authority_policy_generation
-            or current_authority_policy.fingerprint != authority_policy_fingerprint
-        ):
+        try:
+            operation_context.assert_current(
+                target_id=target.target_id,
+                policy_fingerprint=target.policy.snapshot().fingerprint,
+                authority_policy_generation=current_authority_policy.generation,
+                authority_policy_fingerprint=current_authority_policy.fingerprint,
+            )
+        except OperationContextStaleError:
             target.slot.abandon_repair(lease)
             selected_attempt = replace(
                 selected_attempt, completed_at=utcnow(), stage=RepairAttemptStage.COMPLETE,
@@ -1633,6 +1661,7 @@ class RepairEngine:
                 authority_policy_generation=authority_policy_generation,
                 authority_policy_fingerprint=authority_policy_fingerprint,
                 reason=f"Repair authority is {target.policy.authority.name}",
+                operation_context=operation_context,
             )
             self._pending_approvals[episode.episode_id] = pending
             selected_attempt = replace(
@@ -2131,6 +2160,7 @@ class RepairEngine:
         episode: RepairEpisode,
         incident: Incident,
         policy_snapshot: Any,
+        operation_context: OperationContext,
         attempt_number: int,
         validation_state_restore_errors: tuple[str, ...] = (),
     ) -> tuple[EvaluatedCandidate, RepairAttempt]:
@@ -2151,6 +2181,7 @@ class RepairEngine:
             outcome=RepairAttemptOutcome.PENDING,
             authority_policy_generation=incident.authority_policy_generation,
             authority_policy_fingerprint=incident.authority_policy_fingerprint,
+            operation_context=operation_context,
         )
         self.store.record_attempt(attempt)
         self._attempt_cache[attempt.attempt_id] = attempt

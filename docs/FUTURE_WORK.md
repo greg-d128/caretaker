@@ -2167,15 +2167,26 @@ second control protocol or a general asynchronous framework.
 
 #### 8. Introduce a small immutable operation context
 
-At repair and rollout admission, create an immutable context containing
-operation ID, target identity, effective policy snapshot/fingerprint, authority
-generation/fingerprint, and evidence identity. Policy/authority resolution owns
-construction; orchestrators consume it and revalidate only at declared
-boundaries. This removes repeated ad hoc runtime reads without merging policy
-dataclasses or making the context a service locator.
+**Status: Implemented in development tree for repair and rollout admission.**
 
-Test policy changes during an operation, stale authority, approval, rollout, and
-audit-context equality before using the context to drive persistence changes.
+`OperationContext` is now a frozen value object carried by repair episodes and
+attempts and by newly admitted rollout records. It records operation and
+target identities, policy snapshot/fingerprint, authority generation/
+fingerprint, and evidence identity. Repair approval and activation fail closed
+when the live target, policy, or authority no longer matches the admitted
+context. Rollout transition hashes and audit events include the same context.
+
+Existing rollout records without this field remain readable as legacy records;
+new rollout callers may provide the policy snapshot ID and authority generation
+when those values are available. The context is not a service locator and does
+not grant authority.
+
+The implementation creates the context at admission and keeps construction
+outside the orchestration steps that consume it. It revalidates only at the
+declared approval, activation, and rollout boundaries, without merging policy
+dataclasses or making the context a service locator. Regression tests cover
+immutability, policy/authority staleness, approval, rollout propagation, and
+audit-context equality before persistence changes.
 
 #### 9. Split consumer interfaces without multiplying physical stores
 

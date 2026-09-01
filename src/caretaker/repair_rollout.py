@@ -23,6 +23,7 @@ from uuid import UUID, uuid4
 from .contracts import Comparator
 from .domain import RepairEvent, SideEffectClass
 from .execution import EffectObservation, FunctionExecutionContract
+from .operation_context import OperationContext
 from .shadow import (
     MirroredExecutionResult,
     ShadowExecutionAdapter,
@@ -422,6 +423,7 @@ class RepairRolloutRecord:
     transition_count: int = 0
     paused: bool = False
     routing_policy: RolloutRoutingPolicy | None = None
+    operation_context: OperationContext | None = None
 
     @property
     def authority_expired(self) -> bool:
@@ -771,6 +773,8 @@ class RepairRolloutLedger:
         base_source_hash: str | None,
         policy_fingerprint: str,
         authority_fingerprint: str,
+        authority_generation: int = 0,
+        policy_snapshot_id: UUID | None = None,
         proposed_by: str,
         authority_type: RepairRolloutAuthority = RepairRolloutAuthority.ADVISORY,
         expires_at: datetime | None = None,
@@ -789,8 +793,19 @@ class RepairRolloutLedger:
             # non-authoritative until a permitted actor advances it.
             pass
         now = self._clock()
+        rollout_id = uuid4()
+        operation_context = OperationContext(
+            operation_id=rollout_id,
+            target_id=target_id,
+            policy_snapshot_id=policy_snapshot_id,
+            policy_fingerprint=policy_fingerprint,
+            authority_policy_generation=authority_generation,
+            authority_policy_fingerprint=authority_fingerprint,
+            evidence_identity=f"incident:{incident_id}:candidate:{candidate_id}",
+            evidence_fingerprint=validation_evidence_hash or candidate_source_hash,
+        )
         record = RepairRolloutRecord(
-            rollout_id=uuid4(),
+            rollout_id=rollout_id,
             target_id=target_id,
             incident_id=incident_id,
             candidate_id=candidate_id,
@@ -806,6 +821,7 @@ class RepairRolloutLedger:
             expires_at=expires_at,
             validation_evidence_hash=validation_evidence_hash,
             routing_policy=self.policy.routing,
+            operation_context=operation_context,
         )
         self._records[record.rollout_id] = record
         self._persist_record(record)
@@ -1353,6 +1369,14 @@ class RepairRolloutLedger:
             raise RepairRolloutError("rollout policy fingerprint is stale")
         if record.authority_fingerprint != authority_fingerprint:
             raise RepairRolloutError("rollout authority fingerprint is stale")
+        context = record.operation_context
+        if context is not None:
+            if context.operation_id != record.rollout_id or context.target_id != record.target_id:
+                raise RepairRolloutError("rollout operation context identity is inconsistent")
+            if context.policy_fingerprint != record.policy_fingerprint:
+                raise RepairRolloutError("rollout operation context policy is inconsistent")
+            if context.authority_policy_fingerprint != record.authority_fingerprint:
+                raise RepairRolloutError("rollout operation context authority is inconsistent")
 
     @staticmethod
     def _require_actor(authority_type: RepairRolloutAuthority, authority_id: str) -> None:
@@ -1982,6 +2006,14 @@ class RepairRolloutCoordinator:
             raise RepairRolloutError("rollout coordinator policy fingerprint is stale")
         if record.authority_fingerprint != self.authority_fingerprint:
             raise RepairRolloutError("rollout coordinator authority fingerprint is stale")
+        context = record.operation_context
+        if context is not None:
+            if context.operation_id != record.rollout_id or context.target_id != record.target_id:
+                raise RepairRolloutError("rollout operation context identity is inconsistent")
+            if context.policy_fingerprint != record.policy_fingerprint:
+                raise RepairRolloutError("rollout operation context policy is inconsistent")
+            if context.authority_policy_fingerprint != record.authority_fingerprint:
+                raise RepairRolloutError("rollout operation context authority is inconsistent")
 
     def _acknowledgements_for(
         self, rollout_id: UUID
@@ -2148,6 +2180,11 @@ class RepairRolloutCoordinator:
             "incident_id": str(incident_id) if incident_id else None,
             "policy_fingerprint": record.policy_fingerprint,
             "authority_fingerprint": record.authority_fingerprint,
+            "operation_context": (
+                record.operation_context.as_dict()
+                if record.operation_context is not None
+                else None
+            ),
             "reason": reason,
             "details": _json_safe(details) if details is not None else None,
             "created_at": self._clock().isoformat(),
@@ -2161,6 +2198,14 @@ class RepairRolloutCoordinator:
             context=content,
         )
         transition_hash = _digest({**content, "content_hash": content_hash, "signature": signature})
+        transition_details = _json_safe(details) if details is not None else {}
+        if not isinstance(transition_details, dict):
+            transition_details = {"value": transition_details}
+        transition_details["operation_context"] = (
+            record.operation_context.as_dict()
+            if record.operation_context is not None
+            else None
+        )
         transition = RepairRolloutTransition(
             transition_id=uuid4(),
             rollout_id=record.rollout_id,
@@ -2180,7 +2225,7 @@ class RepairRolloutCoordinator:
             signature=signature,
             signature_status=signature_status,
             created_at=self._clock(),
-            details=_json_safe(details) if details is not None else None,
+            details=transition_details,
         )
         updated = replace(
             record,
@@ -2204,6 +2249,11 @@ class RepairRolloutCoordinator:
                     "authority_id": authority_id,
                     "policy_fingerprint": record.policy_fingerprint,
                     "authority_fingerprint": record.authority_fingerprint,
+                    "operation_context": (
+                        record.operation_context.as_dict()
+                        if record.operation_context is not None
+                        else None
+                    ),
                     "content_hash": content_hash,
                     "transition_hash": transition_hash,
                     "signature_status": signature_status,
@@ -3713,6 +3763,7 @@ def _coerce_record(raw: Any) -> RepairRolloutRecord:
     routing_policy = raw.get("routing_policy")
     if routing_policy is not None:
         routing_policy = _coerce_routing_policy(routing_policy)
+    operation_context = _coerce_operation_context(raw.get("operation_context"))
     return RepairRolloutRecord(
         rollout_id=UUID(str(raw["rollout_id"])),
         target_id=str(raw["target_id"]),
@@ -3744,6 +3795,36 @@ def _coerce_record(raw: Any) -> RepairRolloutRecord:
         transition_count=int(raw.get("transition_count") or 0),
         paused=paused,
         routing_policy=routing_policy,
+        operation_context=operation_context,
+    )
+
+
+def _coerce_operation_context(raw: Any) -> OperationContext | None:
+    """Read the optional context added after the original rollout schema."""
+
+    if raw is None:
+        return None
+    if isinstance(raw, OperationContext):
+        return raw
+    if not isinstance(raw, Mapping):
+        raise RepairRolloutError("rollout operation context must be an object")
+    return OperationContext(
+        operation_id=UUID(str(raw["operation_id"])),
+        target_id=str(raw["target_id"]),
+        policy_snapshot_id=(
+            UUID(str(raw["policy_snapshot_id"]))
+            if raw.get("policy_snapshot_id")
+            else None
+        ),
+        policy_fingerprint=str(raw["policy_fingerprint"]),
+        authority_policy_generation=int(raw["authority_policy_generation"]),
+        authority_policy_fingerprint=str(raw["authority_policy_fingerprint"]),
+        evidence_identity=str(raw["evidence_identity"]),
+        evidence_fingerprint=(
+            str(raw["evidence_fingerprint"])
+            if raw.get("evidence_fingerprint") is not None
+            else None
+        ),
     )
 
 

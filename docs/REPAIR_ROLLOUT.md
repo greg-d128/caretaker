@@ -27,6 +27,17 @@ authority fingerprint prevents further transitions. An expired authority may
 not advance a rollout, but an expired rollout can still be retired or revoked
 for safety.
 
+## Admission context
+
+Each newly admitted rollout record carries a frozen `OperationContext`. It binds
+the rollout ID, target, policy fingerprint (and optional policy snapshot ID),
+authority generation/fingerprint, and the incident/candidate evidence
+identity. The context is retained across lifecycle transitions and included in
+the transition hash and audit event, so a transition can be checked against
+the exact admission context rather than reconstructed from mutable runtime
+state. Legacy records written before this field was introduced remain readable
+without a context and continue to use their existing fingerprint checks.
+
 ## Field repairs and permanent deployment
 
 An operator may release a validated candidate as:

@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any, Mapping
 from uuid import UUID, uuid4
 
+from .operation_context import OperationContext
+
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -429,6 +431,7 @@ class RepairEpisode:
     summary: str | None = None
     authority_policy_generation: int = 0
     authority_policy_fingerprint: str = "unconfigured"
+    operation_context: OperationContext | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -628,6 +631,7 @@ class RepairAttempt:
     validation_backend_name: str | None = None
     validation_isolation_level: ValidationIsolationLevel | None = None
     validation_backend_details: Mapping[str, Any] = field(default_factory=dict)
+    operation_context: OperationContext | None = None
 
 
 @dataclass(frozen=True, slots=True)
