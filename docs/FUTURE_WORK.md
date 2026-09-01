@@ -1974,7 +1974,9 @@ Each integration requires an explicit source-of-truth, freshness model, offline/
 
 ## Deep architectural review follow-up — 2026-09-01
 
-**Status: Proposed implementation backlog; not implemented.**
+**Status: Application-scoped implementation substantially complete; remaining
+work is limited to the explicitly noted compatibility, archive/compaction,
+and release-assurance follow-ups.**
 
 The deep architectural review of Caretaker `2df0fce` found a coherent but
 additively evolved Application Caretaker. This section is the implementation
@@ -1990,6 +1992,8 @@ keep each stage working and testable before starting the next one.
 ### Priority 1: close correctness and authority defects
 
 #### 1. Make terminal worker states monotonic
+
+**Status: Implemented in development tree.**
 
 **Location:** `src/caretaker/logging/supervisor.py`,
 `WorkerRegistry.heartbeat()` (currently around lines 730–791),
@@ -2020,6 +2024,8 @@ machine framework.
 
 #### 2. Establish active IPC endpoint ownership
 
+**Status: Implemented in development tree.**
+
 **Location:** `src/caretaker/logging/ipc.py`,
 `SocketLogServer.start()` (around lines 345–355) and
 `ControlSocketServer.start()` (around lines 541–552).
@@ -2042,6 +2048,8 @@ development endpoints; do not silently delete a live endpoint. Do not create a
 general service registry.
 
 #### 3. Give consequential baseline acceptance one authority owner
+
+**Status: Implemented in development tree.**
 
 **Locations:** `src/caretaker/guard/analytics.py` (`BaselineManager.accept()`),
 `src/caretaker/guard/engine.py`, `src/caretaker/logging/baselines.py`
@@ -2066,6 +2074,9 @@ acceptance remains usable and auditable. Preserve operator agency and the
 distinction between behavior and logging evidence.
 
 #### 4. Reconcile required-isolation semantics and release evidence
+
+**Status: Implemented in development tree; signed-publication verification
+remains a release-station gate.**
 
 **Locations:** `README.md` around the validation policy description,
 `docs/ISOLATED_EXECUTION.md`, `docs/FUTURE_WORK.md`, `VERIFICATION.txt`,
@@ -2098,6 +2109,8 @@ current-version check.
 
 #### 5. Add a narrow atomic lifecycle commit
 
+**Status: Implemented in development tree for rollout milestones.**
+
 **Locations:** `src/caretaker/store.py` (`RepairStore` and
 `SQLiteRepairStore`), `src/caretaker/repair_rollout.py`, and
 `src/caretaker/repair_recovery.py`.
@@ -2121,6 +2134,9 @@ commit/idempotency tests, SQLite/InMemory equivalence tests, and recovery tests.
 Do not add a universal transaction-everything framework.
 
 #### 6. Define durable schema, migration, and retention contracts
+
+**Status: Contract implemented in development tree; family-specific migration
+and archive/compaction operations remain future work.**
 
 **Locations:** store schema metadata, domain records, capsule/evidence/
 integrity loaders, `repair_recovery.py`, and logging/attachment retention.
