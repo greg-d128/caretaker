@@ -63,3 +63,10 @@ boundary, not an unmigrated leaf consumer.
 Archive/compaction work must be an inspectable, resumable operation with a
 dry-run projection, preservation exceptions, and reference validation. No
 universal migration or deletion framework is implied by this contract.
+
+`SQLiteRepairStore.retention_dry_run()` now provides the bounded read-only
+projection for the Repair store. It reports ordinary records eligible for a
+caller-supplied cutoff separately from incident-linked, signed, and protected
+families, and reports when its result was truncated. It never deletes or
+rewrites records. Family-owned archive/compaction and resumable deletion remain
+future work.

@@ -49,6 +49,15 @@ from .repair_rollout import (
 
 
 REPAIR_STORE_SCHEMA_VERSION = 9
+REPAIR_RETENTION_PLAN_SCHEMA_VERSION = 1
+
+_RETENTION_PROTECTED_TABLES = frozenset({
+    "incidents",
+    "internal_incidents",
+    "integrity_verifications",
+    "integrity_incidents",
+    "events",
+})
 
 
 class RepairStore(Protocol):
@@ -1183,6 +1192,108 @@ class SQLiteRepairStore:
     def all_worker_evidence_joins(self) -> tuple[Mapping[str, Any], ...]:
         return tuple(self.query_records("worker_evidence_joins", limit=10000))
 
+    def retention_dry_run(
+        self,
+        *,
+        older_than: datetime,
+        families: Sequence[str] | None = None,
+        maximum_records: int = 1000,
+    ) -> Mapping[str, Any]:
+        """Return bounded retention candidates without changing the store.
+
+        Incident-linked, signed, and audit families are returned as explicit
+        preservation exceptions. This method is intentionally a planner only;
+        callers must apply any archive or deletion policy through a separate,
+        family-owned operation.
+        """
+
+        if older_than.tzinfo is None or older_than.utcoffset() is None:
+            raise ValueError("older_than must be timezone-aware")
+        if (
+            isinstance(maximum_records, bool)
+            or not isinstance(maximum_records, int)
+            or maximum_records <= 0
+        ):
+            raise ValueError("maximum_records must be a positive integer")
+        selected = tuple(families) if families is not None else tuple(self._TABLES)
+        unknown = [table for table in selected if table not in self._TABLES]
+        if unknown:
+            raise ValueError(f"Unknown Caretaker store table: {unknown[0]}")
+
+        candidates: list[dict[str, Any]] = []
+        preserved: list[dict[str, Any]] = []
+        examined = 0
+        truncated = False
+        remaining = maximum_records
+        with self._lock, closing(self._connect()) as connection:
+            for table in selected:
+                if remaining <= 0:
+                    truncated = True
+                    break
+                page_limit = remaining
+                rows = connection.execute(
+                    f"SELECT record_id, target_id, created_at, payload FROM {table} "
+                    "ORDER BY created_at ASC LIMIT ?",
+                    (page_limit + 1,),
+                ).fetchall()
+                page_truncated = len(rows) > page_limit
+                for row in rows[:page_limit]:
+                    examined += 1
+                    remaining -= 1
+                    try:
+                        created_at = datetime.fromisoformat(row[2])
+                    except (TypeError, ValueError):
+                        preserved.append({
+                            "family": table,
+                            "record_id": row[0],
+                            "reason": "invalid_created_at",
+                        })
+                        continue
+                    if created_at.tzinfo is None:
+                        preserved.append({
+                            "family": table,
+                            "record_id": row[0],
+                            "reason": "naive_created_at",
+                        })
+                        continue
+                    if created_at >= older_than:
+                        continue
+                    try:
+                        payload = json.loads(row[3])
+                    except (TypeError, ValueError):
+                        payload = None
+                    reason = _retention_preservation_reason(table, payload)
+                    item = {
+                        "family": table,
+                        "record_id": row[0],
+                        "target_id": row[1],
+                        "created_at": row[2],
+                    }
+                    if reason is not None:
+                        item["reason"] = reason
+                        preserved.append(item)
+                    else:
+                        candidates.append(item)
+                    if remaining <= 0:
+                        truncated = True
+                        break
+                if page_truncated:
+                    # A full page may hide additional records; the caller
+                    # receives an explicit bounded-result marker.
+                    truncated = True
+                    break
+        return {
+            "schema_version": REPAIR_RETENTION_PLAN_SCHEMA_VERSION,
+            "store_schema_version": REPAIR_STORE_SCHEMA_VERSION,
+            "older_than": older_than.isoformat(),
+            "families": list(selected),
+            "maximum_records": maximum_records,
+            "examined_records": examined,
+            "truncated": truncated,
+            "candidate_records": candidates,
+            "preserved_records": preserved,
+        }
+
     def query_records(
         self,
         table: str,
@@ -1218,6 +1329,32 @@ def _record_time(record: object) -> datetime:
         if isinstance(value, datetime):
             return value
     return datetime.now().astimezone()
+
+
+def _retention_preservation_reason(table: str, payload: Any) -> str | None:
+    if table in _RETENTION_PROTECTED_TABLES:
+        return "protected_artifact_family"
+    if payload is None:
+        return "invalid_payload"
+    if _payload_contains_key(payload, {"incident_id", "incident_ids"}):
+        return "incident_linked_evidence"
+    if _payload_contains_key(
+        payload,
+        {"signature", "artifact_signature", "signatures", "signature_state"},
+    ):
+        return "signed_evidence"
+    return None
+
+
+def _payload_contains_key(value: Any, keys: set[str]) -> bool:
+    if isinstance(value, Mapping):
+        return any(
+            str(key).lower() in keys or _payload_contains_key(item, keys)
+            for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return any(_payload_contains_key(item, keys) for item in value)
+    return False
 
 
 def _jsonable(value: Any) -> Any:

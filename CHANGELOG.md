@@ -19,6 +19,8 @@
   constraints snapshot without pinning library consumers.
 - Persist bounded control-plane job summaries and cooperative progress across
   restarts without replaying unfinished application work.
+- Add a read-only, bounded Repair-store retention plan that identifies ordinary
+  candidates and preserves incident-linked, signed, and audit evidence.
 
 ## 0.6.1
 
