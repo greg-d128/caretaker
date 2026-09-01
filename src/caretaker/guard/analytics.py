@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 import os
-from typing import Iterable
+from typing import Any, Iterable, Mapping
 from uuid import UUID, uuid4
 
 from ..evidence.models import (
@@ -798,6 +798,9 @@ class StaticCandidateBehaviorAnalyzer(ast.NodeVisitor):
         baseline: BehaviorProfileSummary | None,
         allow_new_capabilities: bool,
         candidate_id: UUID | None = None,
+        behavior_capture: Mapping[str, Any] | None = None,
+        behavior_capture_complete: bool = False,
+        resource_budgets: Mapping[str, int] | None = None,
     ) -> BehavioralCandidateScore:
         try:
             tree = ast.parse(source)
@@ -831,17 +834,115 @@ class StaticCandidateBehaviorAnalyzer(ast.NodeVisitor):
             prohibited.add("dynamic-code")
         if not allow_new_capabilities:
             prohibited.update(new)
-        reasons = tuple(f"Candidate introduces {capability} capability" for capability in sorted(prohibited))
+        reasons = [
+            f"Candidate introduces {capability} capability"
+            for capability in sorted(prohibited)
+        ]
+        resource_status, resource_counts, resource_violations = _assess_resource_budgets(
+            baseline=baseline,
+            candidate_capabilities=analyzer.capabilities,
+            behavior_capture=behavior_capture,
+            behavior_capture_complete=behavior_capture_complete,
+            resource_budgets=resource_budgets or {},
+        )
+        reasons.extend(resource_violations)
         return BehavioralCandidateScore(
             candidate_id=candidate_id,
             baseline_compatibility=max(0.0, 100.0 - 25.0 * len(new)),
             new_capability_risk=min(100.0, 30.0 * len(new) + 40.0 * ("dynamic-code" in analyzer.capabilities)),
             prohibited_operation_count=len(prohibited),
             unexplained_deviation_count=len(new),
-            eligible=not prohibited,
-            rejection_reasons=reasons,
+            eligible=not prohibited and not resource_violations,
+            rejection_reasons=tuple(reasons),
             detected_capabilities=tuple(sorted(analyzer.capabilities)),
+            resource_budget_status=resource_status,
+            resource_budget_counts=resource_counts,
+            resource_budget_violations=resource_violations,
         )
+
+
+def _assess_resource_budgets(
+    *,
+    baseline: BehaviorProfileSummary | None,
+    candidate_capabilities: set[str],
+    behavior_capture: Mapping[str, Any] | None,
+    behavior_capture_complete: bool,
+    resource_budgets: Mapping[str, int],
+) -> tuple[str, Mapping[str, int], tuple[str, ...]]:
+    """Assess observed candidate resources against explicit Guard budgets.
+
+    Static source analysis can identify broad capability use but cannot know
+    which concrete destination, filesystem root, or subprocess a candidate
+    will use.  Concrete counts therefore come only from an application/
+    Guard-supplied behavior capture.  An incomplete capture is never treated
+    as proof that a configured budget was respected.
+    """
+
+    configured = {
+        str(name): max(0, int(value))
+        for name, value in resource_budgets.items()
+        if value is not None
+    }
+    if not configured:
+        return "NOT_CONFIGURED", {}, ()
+    if behavior_capture is None:
+        return "NOT_ASSESSED", {}, ()
+
+    source: Any = behavior_capture.get("profile", behavior_capture)
+    if not isinstance(source, Mapping):
+        return (
+            "INCOMPLETE",
+            {},
+            ("candidate resource evidence is not a valid profile mapping",),
+        )
+
+    resource_fields = {
+        "maximum_new_network_destinations": ("network", "network_destinations"),
+        "maximum_new_filesystem_roots": ("filesystem", "filesystem_roots"),
+        "maximum_new_subprocesses": ("subprocess", "subprocesses"),
+    }
+
+    def values(profile: Any, field_name: str) -> set[str]:
+        if isinstance(profile, Mapping):
+            raw = profile.get(field_name, ()) or ()
+        else:
+            raw = getattr(profile, field_name, ()) or ()
+        if isinstance(raw, (str, bytes)):
+            raw = (raw,)
+        if not isinstance(raw, (list, tuple, set, frozenset)):
+            return set()
+        return {str(item).strip() for item in raw if str(item).strip()}
+
+    counts: dict[str, int] = {}
+    violations: list[str] = []
+    baseline_profile: Any = baseline
+    for policy_name, (capability, field_name) in resource_fields.items():
+        if policy_name not in configured:
+            continue
+        observed = values(source, field_name)
+        if baseline is None:
+            expected = set()
+        else:
+            expected = values(baseline_profile, field_name)
+        new_values = observed - expected
+        count = len(new_values)
+        counts[policy_name] = count
+        if not behavior_capture_complete and (
+            capability in candidate_capabilities or observed
+        ):
+            violations.append(
+                f"candidate {capability} resource evidence is incomplete; "
+                f"{policy_name} cannot be verified"
+            )
+            continue
+        if count > configured[policy_name]:
+            violations.append(
+                f"candidate introduces {count} new {field_name.replace('_', ' ')} "
+                f"(maximum {configured[policy_name]})"
+            )
+    if violations:
+        return "REJECTED", counts, tuple(violations)
+    return "ASSESSED", counts, ()
 
 
 def evidence_hash(payload: object) -> str:

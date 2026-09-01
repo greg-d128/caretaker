@@ -93,6 +93,15 @@ The result is rollout evidence, not authorization. A rollout policy must still
 authorize the execution strategy, preserve validation and authority gates, and
 record the decision.
 
+Candidate Guard evaluation can also receive an explicit candidate behavior
+capture. When configured, `maximum_new_network_destinations`,
+`maximum_new_filesystem_roots`, and `maximum_new_subprocesses` count distinct
+resources observed outside the current baseline. The capture must be marked
+complete for a limit to be satisfied when the candidate uses that category;
+incomplete evidence is rejected as unverified. No resource activity inferred
+from an incomplete capture is treated as proof of absence, and a missing
+capture is reported as `NOT_ASSESSED` rather than silently becoming zero.
+
 When rollout execution is connected to `ObservationManager`, authoritative
 candidate successes and failures retain the rollout ID and routing decision
 hash on their `ObservationRecord`. This links acceptance and rollback evidence

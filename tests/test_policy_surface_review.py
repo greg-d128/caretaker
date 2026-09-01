@@ -9,6 +9,7 @@ from caretaker.guard.policy import (
     GuardPolicy,
     GuardPolicyConfigurationError,
     BehaviorSnapshotPolicy,
+    CandidateGuardPolicy,
     PeriodicInspectionPolicy,
     RetentionPolicy as GuardRetentionPolicy,
     validate_guard_policy,
@@ -39,6 +40,19 @@ def test_default_public_policies_are_executable_not_reserved_promises(tmp_path):
     )
     validate_system_policy(SystemCollectionPolicy())
     validate_lightweight_policy(LightweightPolicy())
+
+
+def test_candidate_guard_resource_budgets_are_executable_policy() -> None:
+    validate_policy(
+        replace(
+            RepairPolicy(),
+            candidate_guard=CandidateGuardPolicy(
+                maximum_new_network_destinations=1,
+                maximum_new_filesystem_roots=2,
+                maximum_new_subprocesses=3,
+            ),
+        )
+    )
 
 
 def test_reserved_repair_promises_fail_explicitly():

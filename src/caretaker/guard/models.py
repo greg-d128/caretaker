@@ -234,6 +234,9 @@ class BehavioralCandidateScore:
     eligible: bool
     rejection_reasons: tuple[str, ...] = ()
     detected_capabilities: tuple[str, ...] = ()
+    resource_budget_status: str = "NOT_ASSESSED"
+    resource_budget_counts: Mapping[str, int] = field(default_factory=dict)
+    resource_budget_violations: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

@@ -1427,6 +1427,8 @@ class GuardEngine(GuardFacade):
         *,
         candidate_id: UUID | None = None,
         policy: CandidateGuardPolicy | None = None,
+        behavior_capture: Mapping[str, Any] | None = None,
+        behavior_capture_complete: bool = False,
     ) -> BehavioralCandidateScore:
         binding = self._targets.get(target_id)
         candidate_policy = policy or CandidateGuardPolicy()
@@ -1443,6 +1445,13 @@ class GuardEngine(GuardFacade):
             baseline=baseline,
             allow_new_capabilities=candidate_policy.allow_new_capabilities,
             candidate_id=candidate_id,
+            behavior_capture=behavior_capture,
+            behavior_capture_complete=behavior_capture_complete,
+            resource_budgets={
+                "maximum_new_network_destinations": candidate_policy.maximum_new_network_destinations,
+                "maximum_new_filesystem_roots": candidate_policy.maximum_new_filesystem_roots,
+                "maximum_new_subprocesses": candidate_policy.maximum_new_subprocesses,
+            },
         )
 
     def candidate_deviated(self, candidate_id: UUID) -> bool:

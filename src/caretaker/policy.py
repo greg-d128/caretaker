@@ -457,22 +457,14 @@ def validate_policy(policy: RepairPolicy) -> None:
         policy.guard.monitor_during_probation,
     )):
         errors.append("guard.enabled requires at least one Guard behavior or integration option")
-    if policy.candidate_guard.maximum_new_network_destinations < 0:
-        errors.append("candidate_guard.maximum_new_network_destinations cannot be negative")
-    if policy.candidate_guard.maximum_new_filesystem_roots < 0:
-        errors.append("candidate_guard.maximum_new_filesystem_roots cannot be negative")
-    if policy.candidate_guard.maximum_new_subprocesses < 0:
-        errors.append("candidate_guard.maximum_new_subprocesses cannot be negative")
-    if any((
-        policy.candidate_guard.maximum_new_network_destinations,
-        policy.candidate_guard.maximum_new_filesystem_roots,
-        policy.candidate_guard.maximum_new_subprocesses,
-    )):
-        errors.append(
-            "candidate_guard maximum_new_* resource-count limits are reserved until "
-            "candidate resource extraction can identify concrete destinations/roots/subprocesses; "
-            "use allow_new_capabilities for the currently supported coarse capability gate"
-        )
+    for name in (
+        "maximum_new_network_destinations",
+        "maximum_new_filesystem_roots",
+        "maximum_new_subprocesses",
+    ):
+        value = getattr(policy.candidate_guard, name)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            errors.append(f"candidate_guard.{name} must be a non-negative integer")
     if errors:
         raise PolicyConfigurationError("Invalid Caretaker policy:\n- " + "\n- ".join(errors))
 

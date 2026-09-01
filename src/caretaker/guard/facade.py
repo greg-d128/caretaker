@@ -81,6 +81,8 @@ class GuardFacade(Protocol):
         *,
         candidate_id: UUID | None = None,
         policy: CandidateGuardPolicy | None = None,
+        behavior_capture: Mapping[str, Any] | None = None,
+        behavior_capture_complete: bool = False,
     ) -> BehavioralCandidateScore: ...
 
     def candidate_deviated(self, candidate_id: UUID) -> bool: ...

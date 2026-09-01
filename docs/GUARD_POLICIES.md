@@ -172,7 +172,14 @@ CandidateGuardPolicy(
 )
 ```
 
-A candidate may be functionally correct but behaviorally ineligible.
+The numeric limits are enforced when an application supplies a bounded Guard
+behavior capture for the candidate. Counts are the distinct observed resources
+not present in the current baseline. An incomplete capture cannot satisfy a
+configured limit when the candidate uses that resource category; it is reported
+as a rejected, unverified candidate rather than being treated as zero activity.
+Without a capture, the score reports the resource budget as `NOT_ASSESSED` and
+the existing coarse capability gate remains in effect. A candidate may be
+functionally correct but behaviorally ineligible.
 
 
 ## Repair-target Guard binding

@@ -56,7 +56,6 @@ print(policy_surface_review_status())
 - incident-window oscillation detection and automatic regression replay before failed-version reactivation;
 - Guard environment-read/general function-call collectors;
 - time-based durable Guard retention and periodic behavior-comparison scheduling;
-- numeric candidate new-resource budgets;
 - multi-open-segment logging and multi-worker compression;
 - segment-class-aware incident/baseline retention;
 - automatic logging-baseline orchestration and advanced metrics-provider

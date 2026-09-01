@@ -34,10 +34,12 @@ from caretaker.evidence import (
 from caretaker.guard.models import (
     AssessmentSeverity,
     BehaviorAssessment,
+    BehaviorProfileSummary,
     GuardDeviationAction,
     ModuleRoutePolicy,
     ModuleVariant,
 )
+from caretaker.guard.analytics import StaticCandidateBehaviorAnalyzer
 from caretaker.guard.policy import (
     AggregationPolicy,
     BaselinePolicy,
@@ -349,6 +351,105 @@ def test_candidate_guard_allow_new_capabilities_is_honored() -> None:
     )
     assert denied.eligible is False
     assert allowed.eligible is True
+
+
+def test_candidate_guard_enforces_observed_resource_budgets() -> None:
+    guard = GuardEngine(policy=_guard_policy())
+    target_id = "tests.guard_targets:failing"
+    guard.register_target(target_id, failing, _repair_policy().guard)
+    source = "def failing(value):\n    import socket\n    return value\n"
+    policy = CandidateGuardPolicy(
+        allow_new_capabilities=True,
+        maximum_new_network_destinations=1,
+    )
+
+    within_budget = guard.evaluate_candidate(
+        target_id,
+        source,
+        policy=policy,
+        behavior_capture={
+            "profile": {"network_destinations": ["api.example:443"]}
+        },
+        behavior_capture_complete=True,
+    )
+    over_budget = guard.evaluate_candidate(
+        target_id,
+        source,
+        policy=policy,
+        behavior_capture={
+            "profile": {
+                "network_destinations": [
+                    "api.example:443",
+                    "telemetry.example:443",
+                ]
+            }
+        },
+        behavior_capture_complete=True,
+    )
+
+    assert within_budget.eligible is True
+    assert within_budget.resource_budget_status == "ASSESSED"
+    assert within_budget.resource_budget_counts["maximum_new_network_destinations"] == 1
+    assert over_budget.eligible is False
+    assert over_budget.resource_budget_status == "REJECTED"
+    assert over_budget.resource_budget_counts["maximum_new_network_destinations"] == 2
+    assert over_budget.resource_budget_violations == (
+        "candidate introduces 2 new network destinations (maximum 1)",
+    )
+
+
+def test_candidate_guard_does_not_treat_incomplete_resource_capture_as_safe() -> None:
+    guard = GuardEngine(policy=_guard_policy())
+    target_id = "tests.guard_targets:failing"
+    guard.register_target(target_id, failing, _repair_policy().guard)
+    score = guard.evaluate_candidate(
+        target_id,
+        "def failing(value):\n    import socket\n    return value\n",
+        policy=CandidateGuardPolicy(
+            allow_new_capabilities=True,
+            maximum_new_network_destinations=1,
+        ),
+        behavior_capture={"profile": {"network_destinations": ["api.example:443"]}},
+        behavior_capture_complete=False,
+    )
+
+    assert score.eligible is False
+    assert score.resource_budget_status == "REJECTED"
+    assert "incomplete" in score.resource_budget_violations[0]
+
+
+def test_candidate_guard_counts_only_resources_new_to_the_baseline() -> None:
+    baseline = BehaviorProfileSummary(
+        subject=identify_function(failing),
+        window_count=1,
+        call_count=10,
+        event_count=1,
+        event_kind_counts={},
+        network_destinations=("api.example:443",),
+        filesystem_roots=(),
+        subprocesses=(),
+        imports=(),
+        dynamic_code_operations=(),
+    )
+    score = StaticCandidateBehaviorAnalyzer.evaluate(
+        "def failing(value):\n    import socket\n    return value\n",
+        baseline=baseline,
+        allow_new_capabilities=True,
+        behavior_capture={
+            "profile": {
+                "network_destinations": [
+                    "api.example:443",
+                    "telemetry.example:443",
+                ]
+            }
+        },
+        behavior_capture_complete=True,
+        resource_budgets={"maximum_new_network_destinations": 1},
+    )
+
+    assert score.eligible is True
+    assert score.resource_budget_status == "ASSESSED"
+    assert score.resource_budget_counts["maximum_new_network_destinations"] == 1
 
 
 def test_repair_context_character_budget_applies_to_complete_llm_request() -> None:
