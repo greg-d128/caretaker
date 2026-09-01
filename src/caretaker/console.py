@@ -2147,6 +2147,15 @@ class CaretakerConsoleApp(App):
         reasons = comparison.get("change_reasons") or ()
         if not isinstance(reasons, (list, tuple)):
             reasons = (str(reasons),)
+        duration_distribution = comparison.get("duration_distribution")
+        duration_summary = None
+        if isinstance(duration_distribution, dict):
+            duration_summary = {
+                "state": str(duration_distribution.get("state") or "unknown").upper(),
+                "reason": str(duration_distribution.get("reason") or "not available")[:128],
+                "mean_sigma": duration_distribution.get("mean_sigma"),
+                "spread_ratio": duration_distribution.get("spread_ratio"),
+            }
         return {
             "comparison_id": str(comparison.get("comparison_id") or "-")[:128],
             "state": str(comparison.get("state") or "unknown").upper(),
@@ -2154,6 +2163,7 @@ class CaretakerConsoleApp(App):
             "baseline_calls": comparison.get("baseline_calls", "?"),
             "observed_calls": comparison.get("observed_calls", "?"),
             "change_reasons": [str(reason)[:128] for reason in reasons[:8]],
+            "duration_distribution": duration_summary,
         }
 
     def _apply_guard_filter(self) -> None:
@@ -2693,6 +2703,18 @@ class CaretakerConsoleApp(App):
                     f"  change_reasons={', '.join(str(reason) for reason in reasons)}"
                     if reasons else "  change_reasons=none"
                 )
+                duration_distribution = comparison.get("duration_distribution") or {}
+                if isinstance(duration_distribution, dict):
+                    output.write(
+                        "  duration_distribution="
+                        f"{str(duration_distribution.get('state') or 'unavailable').upper()} "
+                        f"({duration_distribution.get('reason') or 'not available'})"
+                    )
+                    if duration_distribution.get("mean_sigma") is not None:
+                        output.write(
+                            f"  duration_mean_sigma={duration_distribution.get('mean_sigma')} "
+                            f"spread_ratio={duration_distribution.get('spread_ratio')}"
+                        )
             deviations = record.get("deviations") or ()
             if deviations:
                 output.write("\n[b]Why this target needs attention[/b]")
@@ -3581,6 +3603,23 @@ class CaretakerConsoleApp(App):
                     f" {key}: {self._behavior_delta(change)}\n"
                     f"   Reference {self._behavior_bar(before, maximum, width=14)} {before:.6g}\n"
                     f"   Selected  {self._behavior_bar(after, maximum, width=14)} {after:.6g}"
+                )
+        duration_distribution = comparison.get("duration_distribution") or {}
+        if isinstance(duration_distribution, dict):
+            output.write(
+                "\n[b]Variance-aware duration signal[/b] "
+                f"state={duration_distribution.get('state') or 'unavailable'} "
+                f"reason={duration_distribution.get('reason') or 'not available'}"
+            )
+            if duration_distribution.get("mean_sigma") is not None:
+                output.write(
+                    f"  mean_sigma={duration_distribution.get('mean_sigma')} "
+                    f"spread_ratio={duration_distribution.get('spread_ratio')}"
+                )
+            if duration_distribution.get("evidence_only"):
+                output.write(
+                    "  [yellow]This is bounded review evidence; it does not "
+                    "accept a baseline or grant authority.[/yellow]"
                 )
         kind_changes = comparison.get("event_kind_changes") or ()
         if kind_changes:

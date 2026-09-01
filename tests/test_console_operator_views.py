@@ -816,6 +816,13 @@ def test_guard_console_summarizes_periodic_behavior_comparison(tmp_path):
                         "baseline_calls": 20,
                         "observed_calls": 27,
                         "change_reasons": ["new-resource-capability", "additional-failures"],
+                        "duration_distribution": {
+                            "state": "shift-signal",
+                            "reason": "three-sigma-distribution-signal",
+                            "mean_sigma": 4.5,
+                            "spread_ratio": 1.2,
+                            "evidence_only": True,
+                        },
                     },
                 }],
                 "decisions": [],
@@ -832,6 +839,8 @@ def test_guard_console_summarizes_periodic_behavior_comparison(tmp_path):
             assert "observed_calls=27" in rendered
             assert "new-resource-capability" in rendered
             assert "additional-failures" in rendered
+            assert "duration_distribution=SHIFT-SIGNAL" in rendered
+            assert "duration_mean_sigma=4.5" in rendered
 
     asyncio.run(exercise())
 
