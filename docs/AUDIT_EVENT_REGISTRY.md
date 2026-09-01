@@ -109,8 +109,8 @@ Supervisor-mediated behavior captures likewise produce a bounded
 `BEHAVIOR_COLLECTION_OUTCOME` record after the application returns its
 collection projection. The supervisor derives the operator identity from the
 authenticated console request and records only request metadata, generation
-identifiers, counts, duration, and outcome; snapshot contents remain in the
-behavior evidence store. A failed, cancelled, deferred, or unavailable
+identifiers, snapshot references, counts, duration, and outcome; snapshot
+contents remain in the behavior evidence store. A failed, cancelled, deferred, or unavailable
 collection is recorded as evidence and does not change policy or authority.
 Console clients likewise register a UUID-scoped invocation start and end; the
 supervisor binds the session to the console's Unix peer PID and records the OS

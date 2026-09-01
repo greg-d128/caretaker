@@ -159,6 +159,27 @@ def test_behavior_collection_audit_is_bounded_and_authority_free():
     assert call["outcome"]["state"] == "CAPTURED"
     assert call["outcome"]["authority_granted"] is False
 
+    _emit_behavior_collection_audit(
+        runtime,
+        request={"scope": "function", "subject": "demo.target"},
+        capture={
+            "collection_request": {
+                "scope": "function",
+                "subject": "demo.target",
+                "outcome": "FAILED",
+                "snapshot_id": str(uuid4()),
+            }
+        },
+        actor_id="application-supervisor",
+        actor_type="supervisor",
+    )
+    automatic_call = audit.calls[-1]
+    assert automatic_call["actor"] == {
+        "type": "supervisor",
+        "id": "application-supervisor",
+    }
+    assert automatic_call["details"]["snapshot_id"]
+
 
 def test_remote_audit_stream_only_allows_validation_decisions(monkeypatch):
     calls = []

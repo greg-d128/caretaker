@@ -261,6 +261,7 @@ def _emit_behavior_collection_audit(
     capture: Mapping[str, Any] | None = None,
     result: Mapping[str, Any] | None = None,
     actor_id: str,
+    actor_type: str = "operator",
     error: BaseException | str | None = None,
 ) -> None:
     """Record one supervisor-mediated behavior collection outcome.
@@ -312,6 +313,7 @@ def _emit_behavior_collection_audit(
         "observed_calls": bounded_nonnegative_int(collection.get("observed_calls")),
         "requested_generation": bounded_text(collection.get("requested_generation"), 128),
         "observed_generation": bounded_text(collection.get("observed_generation"), 128),
+        "snapshot_id": bounded_text(collection.get("snapshot_id"), 128),
         "duration_seconds": None,
         "authority_granted": False,
     }
@@ -334,7 +336,7 @@ def _emit_behavior_collection_audit(
     effective = getattr(runtime, "effective", None)
     emit(
         "BEHAVIOR_COLLECTION_OUTCOME",
-        actor={"type": "operator", "id": str(actor_id)[:128]},
+        actor={"type": str(actor_type)[:32], "id": str(actor_id)[:128]},
         scope={
             "scope": scope[:32],
             "subject": subject[:500],
@@ -3643,6 +3645,36 @@ def main(argv: list[str] | None = None) -> int:
                                     "authority_policy_generation": authority.effective.generation,
                                     "authority_policy_fingerprint": authority.effective.fingerprint,
                                 },
+                            )
+                        for outcome in cycle.get("outcomes", ()):
+                            target_id = str(outcome.get("target_id") or "").strip()
+                            if not target_id:
+                                continue
+                            generation_id = str(outcome.get("generation_id") or "").strip()
+                            outcome_state = str(outcome.get("outcome") or "FAILED").strip().upper()
+                            _emit_behavior_collection_audit(
+                                runtime,
+                                request={
+                                    "scope": "function",
+                                    "subject": target_id,
+                                    "requested_by": "caretaker:auto",
+                                    "reason": "automatic coverage backlog promotion",
+                                    "requested_generation": generation_id,
+                                },
+                                capture={
+                                    "collection_request": {
+                                        "scope": "function",
+                                        "subject": target_id,
+                                        "requested_by": "caretaker:auto",
+                                        "reason": "automatic coverage backlog promotion",
+                                        "requested_generation": generation_id,
+                                        "observed_generation": generation_id,
+                                        "outcome": outcome_state,
+                                        "snapshot_id": outcome.get("snapshot_id"),
+                                    }
+                                },
+                                actor_id="application-supervisor",
+                                actor_type="supervisor",
                             )
                 except OSError:
                     pass
