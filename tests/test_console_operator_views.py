@@ -63,6 +63,12 @@ def test_overview_displays_release_integrity_separately_from_policy(tmp_path):
                         "flush_batches": 3,
                         "flush_seconds_total": 0.125,
                     },
+                    "caretaker_metrics": {
+                        "provider": "process",
+                        "enabled": True,
+                        "sample_count": 7,
+                        "skipped_count": 2,
+                    },
                 }
 
             app._request = request  # type: ignore[method-assign]
@@ -74,6 +80,7 @@ def test_overview_displays_release_integrity_separately_from_policy(tmp_path):
             assert "Release integrity TRUSTED" in status
             assert "Release root externally anchored: yes" in details
             assert "Caretaker logging path: queue 2/8192, dropped 1, flushes 3 (0.125s wall clock)" in details
+            assert "Caretaker metrics: process provider, enabled=True, published 7, skipped 2" in details
 
     asyncio.run(exercise())
 

@@ -36,9 +36,13 @@ samples through the same bounded, output-only stream contract used for
 Caretaker overhead metrics. It never escalates privileges and an absent source
 is not evidence that no activity occurred.
 
-Automatic policy-driven metrics correlation remains reserved: enabling
-`logging.metrics.enabled` is still rejected until sampling, retention,
-redaction, and system-cycle correlation semantics are reviewed.
+The optional `logging.metrics` binding now provides an explicit, bounded
+process-provider adapter. It requires the output-only monitoring stream,
+enforces a policy-controlled sampling interval and sample count, and can add
+bounded target, call, incident, Guard-window, baseline, and process
+identifiers to provider samples. It remains process-scoped and non-privileged;
+host-wide, cgroup-aware, and privileged performance collection remain future
+work.
 
 
 ## Process command lines

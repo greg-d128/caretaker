@@ -1212,6 +1212,7 @@ def main(argv: list[str] | None = None) -> int:
                     "workers": [asdict(item) for item in supervisor.workers.all()] if supervisor else [],
                     "runtime": application_runtime,
                     "caretaker_overhead": runtime.overhead_status(),
+                    "caretaker_metrics": runtime.metrics_status(),
             }
         if command == "adaptive-aggregation-status":
             policy_contexts: list[dict[str, Any]] = []

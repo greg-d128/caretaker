@@ -1535,9 +1535,9 @@ Until this exists, restart is a rollback to deployed application code, not conti
 **Status: Implemented in development tree for the policy-disabled-by-default,
 bounded output-only monitoring stream and its JSON Lines, Datadog, Splunk HEC,
 and New Relic serialization dialects, plus an optional non-privileged
-process-scoped metrics provider and bounded publication bridge; automatic
-policy-driven metrics correlation and advanced system collection remain future
-work.**
+process-scoped metrics provider, bounded publication bridge, and explicit
+policy-controlled correlation adapter; advanced system collection remains
+future work.**
 
 The existing bounded Caretaker logging-overhead snapshot can now be published
 to the optional monitoring stream. The stream is telemetry only and cannot be
@@ -1546,14 +1546,17 @@ read as a command, policy, approval, or authority channel. See
 
 `ProcessMetricsProvider` supplies bounded CPU, memory, thread, and optional I/O
 samples for one process without privilege escalation. Consumers can publish
-them with `MonitoringStreamWriter.emit_samples()`; the provider is not
-automatically enabled by policy.
+them with `MonitoringStreamWriter.emit_samples()`. The `logging.metrics`
+binding can now enable the built-in provider, enforce sampling and output
+bounds, and attach policy-selected target, call, incident, Guard-window,
+baseline, and process identifiers. Metrics remain output-only evidence and
+cannot affect policy or authority.
 
-- Integrate the advanced lightweight system-metrics provider through `MetricsProvider`.
 - Add specialized parsers for collected `/proc` and `/sys` bodies.
 - Add process-scoped performance tracing that does not require privilege escalation.
 - Add cgroup-aware application process selection.
-- Correlate system cycles with Guard windows, calls, incidents, and baseline units of work.
+- Correlate provider snapshots with system cycles and richer Guard windows,
+  calls, incidents, and baseline units of work.
 
 ## Other baselines and analysis work
 

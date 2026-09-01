@@ -1501,6 +1501,17 @@ class CaretakerConsoleApp(App):
             )
         else:
             overhead_line = "Caretaker logging path: unavailable"
+        metrics_status = status.get("caretaker_metrics")
+        if isinstance(metrics_status, dict):
+            metrics_line = (
+                "Caretaker metrics: "
+                f"{metrics_status.get('provider', 'unknown')} provider, "
+                f"enabled={bool(metrics_status.get('enabled'))}, "
+                f"published {int(metrics_status.get('sample_count') or 0)}, "
+                f"skipped {int(metrics_status.get('skipped_count') or 0)}"
+            )
+        else:
+            metrics_line = "Caretaker metrics: unavailable"
         worker_authorization_line = self._worker_authorization_summary(workers)
         assurance = authority_summary.get("overall_assurance", "UNCONFIGURED")
         runtime_policy_match = authority_summary.get("runtime_matches_supervisor")
@@ -1525,6 +1536,7 @@ class CaretakerConsoleApp(App):
             f"Degraded capabilities: {', '.join(degraded) if degraded else 'none'}",
             worker_authorization_line,
             overhead_line,
+            metrics_line,
             f"Release integrity: {release_integrity_status}",
             "Release root externally anchored: "
             + ("yes" if release_integrity.get("root_anchored") is True else "no / not checked"),

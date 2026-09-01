@@ -50,6 +50,8 @@ from .masking import MaskFunction, MaskingResult, apply_mask, mask_card_number
 from .metrics import (
     MetricSample,
     MetricsContext,
+    MetricsCollector,
+    MetricsCorrelation,
     MetricsProvider,
     MonitoringDialect,
     MonitoringStreamError,

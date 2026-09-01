@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -12,6 +12,8 @@ from caretaker import (
     MonitoringStreamWriter,
     OperatorLoggingPolicy,
 )
+from caretaker.logging.metrics import MetricsCorrelation
+from caretaker.logging.policy import MetricsBinding
 from caretaker.logging.handler import LoggingRuntime
 from caretaker.logging.policy import load_operator_policy
 
@@ -115,6 +117,35 @@ def test_logging_runtime_emits_overhead_to_enabled_monitoring_stream(tmp_path) -
     assert status["accepted_records"] >= 1
     lines = (tmp_path / "caretaker_monitoring.log").read_text().splitlines()
     assert any("caretaker.logging.accepted_records" in line for line in lines)
+
+
+def test_logging_runtime_exposes_policy_controlled_process_metrics(tmp_path) -> None:
+    runtime = LoggingRuntime(
+        OperatorLoggingPolicy(
+            directory=str(tmp_path),
+            monitoring=MonitoringStreamPolicy(enabled=True),
+            metrics=MetricsBinding(enabled=True),
+        ),
+        supervised=True,
+    )
+    try:
+        now = datetime.now(timezone.utc)
+        records = runtime.collect_metrics(
+            now - timedelta(seconds=2),
+            now + timedelta(seconds=2),
+            correlation=MetricsCorrelation(target_id="payments:checkout"),
+        )
+        status = runtime.metrics_status()
+    finally:
+        runtime.close()
+
+    assert records
+    assert status["enabled"] is True
+    assert status["provider"] == "process"
+    assert any(
+        json.loads(line)["metric"].startswith("caretaker.process.")
+        for line in (tmp_path / "caretaker_monitoring.log").read_text().splitlines()
+    )
 
 
 def test_monitoring_policy_loads_from_toml(tmp_path) -> None:

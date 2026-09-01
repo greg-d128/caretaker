@@ -184,7 +184,6 @@ def test_reserved_setting_catalog_covers_known_deferred_controls():
         "guard.collectors.function_calls",
         "guard.retention.raw_event_seconds",
         "logging.baseline.enabled",
-        "logging.metrics.enabled",
         "system.selector.include_same_cgroup",
     }
     assert expected <= set(RESERVED_SETTINGS)

@@ -23,9 +23,9 @@ from .logging import policy as logging_policy
 from .system import policy as system_policy
 
 
-POLICY_SEMANTICS_REVIEW_GENERATION = 25
+POLICY_SEMANTICS_REVIEW_GENERATION = 26
 # Updated only after the policy truthfulness suite reviews every changed field.
-REVIEWED_POLICY_SURFACE_HASH = "5e547117273e3998bfc7e512375f1829e10426234c22a5dc57b6d52c9ea831f4"
+REVIEWED_POLICY_SURFACE_HASH = "889d2345395d39a3b218304c72cbbde687c40a92b1d04e20b9183442ae5fd2f4"
 
 
 RESERVED_SETTINGS: dict[str, str] = {
@@ -49,7 +49,6 @@ RESERVED_SETTINGS: dict[str, str] = {
     "logging.retention.preserve_incident_segments": "segment-class-aware retention is not implemented",
     "logging.retention.preserve_baseline_segments": "segment-class-aware retention is not implemented",
     "logging.baseline.enabled": "automatic logging-baseline generation is not implemented; Guard behavior snapshots are used instead",
-    "logging.metrics.enabled": "metrics-provider adapters are not implemented",
     "system.selector.include_same_cgroup": "cgroup process discovery is future work",
     "system.unavailable_source_action.DEGRADE_HIGHER_MODE": "system-collector-driven mode degradation is not implemented",
     "system.unavailable_source_action.REFUSE_MODE": "system-collector-driven mode refusal is not implemented",

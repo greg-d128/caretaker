@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Mapping, Protocol
+from typing import Any, Callable, Mapping, Protocol
 from uuid import UUID
 
 
@@ -81,6 +81,24 @@ class MetricSample:
 class MetricsContext:
     application_id: str
     process_id: int
+
+
+@dataclass(frozen=True, slots=True)
+class MetricsCorrelation:
+    """Optional evidence identifiers attached to one metrics snapshot.
+
+    These are identifiers only.  The collector never reads their referenced
+    records and never treats a metric as policy, approval, or authority input.
+    Keeping the correlation contract here lets Guard, incident, and baseline
+    producers use the same bounded monitoring dimensions without coupling the
+    metrics provider to those subsystems.
+    """
+
+    target_id: str | None = None
+    call_id: str | None = None
+    incident_id: UUID | str | None = None
+    guard_window_id: UUID | str | None = None
+    baseline_id: UUID | str | None = None
 
 
 class MetricsProvider(Protocol):
@@ -269,6 +287,182 @@ class ProcessMetricsProvider:
                     return None
                 return value if value >= 0 else None
         return None
+
+
+class MetricsCollector:
+    """Policy-controlled adapter from a provider to the monitoring stream.
+
+    Collection is explicit and bounded: callers request a snapshot, the
+    configured cadence suppresses duplicate requests, and only the configured
+    number of provider samples is published.  The default policy remains
+    disabled, and the built-in provider is process-scoped and non-privileged.
+    """
+
+    def __init__(
+        self,
+        binding: Any,
+        *,
+        writer: "MonitoringStreamWriter",
+        context: MetricsContext,
+        provider: MetricsProvider | None = None,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        if not isinstance(context, MetricsContext):
+            raise TypeError("metrics context must be a MetricsContext")
+        self.binding = binding
+        self.writer = writer
+        self.context = context
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._provider = provider or self._build_provider(binding)
+        self._started = False
+        self._last_sample_at: datetime | None = None
+        self._sample_count = 0
+        self._skipped_count = 0
+        self._truncated_count = 0
+
+    @staticmethod
+    def _build_provider(binding: Any) -> MetricsProvider:
+        if not bool(getattr(binding, "enabled", False)):
+            return NullMetricsProvider()
+        name = str(getattr(binding, "provider_name", None) or "process").strip().lower()
+        if name == "process":
+            return ProcessMetricsProvider()
+        raise ValueError(f"unsupported metrics provider: {name}")
+
+    @property
+    def provider(self) -> MetricsProvider:
+        return self._provider
+
+    def start(self) -> None:
+        if self._started:
+            return
+        if bool(getattr(self.binding, "enabled", False)):
+            self._provider.start(self.context)
+        self._started = True
+
+    def stop(self) -> None:
+        if not self._started:
+            return
+        self._provider.stop()
+        self._started = False
+
+    def update_binding(self, binding: Any) -> None:
+        """Apply a validated policy update without retaining stale authority."""
+        old_name = str(getattr(self.binding, "provider_name", None) or "process").strip().lower()
+        new_name = str(getattr(binding, "provider_name", None) or "process").strip().lower()
+        old_enabled = bool(getattr(self.binding, "enabled", False))
+        new_enabled = bool(getattr(binding, "enabled", False))
+        if old_enabled != new_enabled or old_name != new_name:
+            self.stop()
+            self.binding = binding
+            self._provider = self._build_provider(binding)
+            self._last_sample_at = None
+            self.start()
+            return
+        self.binding = binding
+        if new_enabled and not self._started:
+            self.start()
+        elif not new_enabled and self._started:
+            self.stop()
+
+    def collect(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        correlation: MetricsCorrelation | None = None,
+        force: bool = False,
+    ) -> tuple[dict[str, Any], ...]:
+        """Collect and publish one bounded metrics snapshot.
+
+        ``force`` is intended for explicit incident or operator capture.  It
+        still observes the provider and record bounds, but bypasses cadence
+        suppression and is not an authority-changing operation.
+        """
+        if not isinstance(correlation, (MetricsCorrelation, type(None))):
+            raise TypeError("metrics correlation must be a MetricsCorrelation")
+        _validate_metric_window(start, end)
+        if not bool(getattr(self.binding, "enabled", False)) or not self.writer.enabled:
+            return ()
+        if not self._started:
+            self.start()
+        now = self._clock()
+        if now.tzinfo is None:
+            raise ValueError("metrics collector clock must include timezone")
+        now = now.astimezone(timezone.utc)
+        interval = float(getattr(self.binding, "sample_interval_seconds", 5.0))
+        if (
+            not force
+            and self._last_sample_at is not None
+            and (now - self._last_sample_at).total_seconds() < interval
+        ):
+            self._skipped_count += 1
+            return ()
+        samples = self._provider.query(start, end)
+        self._last_sample_at = now
+        maximum = int(getattr(self.binding, "maximum_samples_per_snapshot", 64))
+        if len(samples) > maximum:
+            self._truncated_count += len(samples) - maximum
+            samples = samples[:maximum]
+        correlated = tuple(
+            self._correlate(sample, correlation or MetricsCorrelation())
+            for sample in samples
+        )
+        records = self.writer.emit_samples(correlated)
+        self._sample_count += len(records)
+        return records
+
+    def status(self) -> dict[str, Any]:
+        """Return bounded operational evidence without provider contents."""
+        return {
+            "schema_version": 1,
+            "enabled": bool(getattr(self.binding, "enabled", False)),
+            "provider": self._provider.provider_name,
+            "started": self._started,
+            "sample_count": self._sample_count,
+            "skipped_count": self._skipped_count,
+            "truncated_count": self._truncated_count,
+            "last_sample_at": self._last_sample_at.isoformat() if self._last_sample_at else None,
+        }
+
+    def _correlate(self, sample: MetricSample, correlation: MetricsCorrelation) -> MetricSample:
+        dimensions = dict(sample.dimensions)
+        if not bool(getattr(self.binding, "correlate_by_process", True)):
+            dimensions.pop("process_id", None)
+        fields = (
+            ("target_id", correlation.target_id, "correlate_by_target"),
+            ("call_id", correlation.call_id, "correlate_by_call"),
+            ("incident_id", correlation.incident_id, "correlate_by_incident"),
+            ("guard_window_id", correlation.guard_window_id, "correlate_by_guard_window"),
+            ("baseline_id", correlation.baseline_id, "correlate_by_baseline"),
+        )
+        for name, value, setting in fields:
+            if value is not None and bool(getattr(self.binding, setting, True)):
+                dimensions[name] = _bounded_correlation_id(value, name)
+        return MetricSample(
+            name=sample.name,
+            timestamp=sample.timestamp,
+            value=sample.value,
+            unit=sample.unit,
+            dimensions=tuple(sorted(dimensions.items())),
+        )
+
+
+def _validate_metric_window(start: datetime, end: datetime) -> None:
+    for value, label in ((start, "start"), (end, "end")):
+        if not isinstance(value, datetime) or value.tzinfo is None:
+            raise ValueError(f"metrics query {label} must include timezone")
+    if start > end:
+        raise ValueError("metrics query start must not be after end")
+
+
+def _bounded_correlation_id(value: UUID | str, name: str) -> str:
+    if not isinstance(value, (UUID, str)):
+        raise MonitoringStreamError(f"metrics {name} correlation must be a string or UUID")
+    text = str(value).strip()
+    if not text or len(text) > 128 or any(ord(char) < 0x20 for char in text):
+        raise MonitoringStreamError(f"metrics {name} correlation is empty or invalid")
+    return text
 
 
 class MonitoringStreamWriter:

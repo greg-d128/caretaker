@@ -16,6 +16,18 @@ enabled = true
 file_name = "caretaker_monitoring.log"
 dialect = "json_lines"
 maximum_record_bytes = 4096
+
+[logging.metrics]
+enabled = true
+provider_name = "process"
+sample_interval_seconds = 5.0
+maximum_samples_per_snapshot = 64
+correlate_by_process = true
+correlate_by_call = false
+correlate_by_target = true
+correlate_by_incident = true
+correlate_by_guard_window = true
+correlate_by_baseline = true
 ```
 
 The file name must remain below `logging.directory`. Configuration is
@@ -70,6 +82,45 @@ and utilization metrics. Error text is intentionally excluded. The same
 snapshot remains available through the existing read-only console/control
 status response.
 
+## Policy-controlled process collection and correlation
+
+`logging.metrics` is disabled by default. When enabled, the built-in
+`provider_name = "process"` adapter collects an explicitly requested,
+non-privileged snapshot of the Caretaker process and publishes it through the
+monitoring stream. It does not spawn a collector, grant authority, or read
+metrics back as commands. Enabling metrics requires the monitoring stream to
+also be enabled.
+
+`sample_interval_seconds` suppresses repeated requests inside the configured
+interval, unless the caller explicitly requests an incident/operator capture
+with `force=True`. `maximum_samples_per_snapshot` bounds provider output;
+truncation is exposed in the read-only adapter status.
+
+Callers may attach bounded identifiers for a target, call, incident, Guard
+window, and accepted baseline. Each correlation dimension is independently
+policy-controlled. Correlation adds identifiers only; it does not load or
+modify the referenced evidence and cannot satisfy a policy or authority gate.
+
+For example:
+
+```python
+from caretaker.logging import MetricsCorrelation
+
+runtime.collect_metrics(
+    window_start,
+    window_end,
+    correlation=MetricsCorrelation(
+        target_id="payments:checkout",
+        incident_id=incident_id,
+        guard_window_id=guard_window_id,
+        baseline_id=baseline_id,
+    ),
+)
+```
+
+The runtime exposes `metrics_status()` as bounded operational evidence. An
+unknown provider name is rejected rather than silently falling back.
+
 ## Process metrics
 
 Applications may opt in to `ProcessMetricsProvider` for a bounded snapshot of
@@ -85,5 +136,6 @@ provider.stop()
 
 Unavailable process sources are omitted rather than reported as zero. The
 provider does not automatically enable monitoring, change policy, or create a
-control path. Automatic sampling cadence, retention, redaction, and policy
-correlation remain subject to a future policy review.
+control path. The policy-controlled adapter above is the explicit runtime
+integration; host-wide, cgroup-aware, and privileged performance collection
+remain outside this contract.

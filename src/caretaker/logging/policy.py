@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import math
 import os
 import stat
 import tomllib
@@ -150,8 +151,14 @@ class LoggingBaselinePolicy:
 class MetricsBinding:
     enabled: bool = False
     provider_name: str | None = None
+    sample_interval_seconds: float = 5.0
+    maximum_samples_per_snapshot: int = 64
     correlate_by_process: bool = True
     correlate_by_call: bool = False
+    correlate_by_target: bool = True
+    correlate_by_incident: bool = True
+    correlate_by_guard_window: bool = True
+    correlate_by_baseline: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -422,8 +429,36 @@ def validate_operator_logging_policy(policy: OperatorLoggingPolicy) -> None:
         errors.append("interrogation.llm_enabled requires interrogation.enabled=True")
     if policy.baseline.enabled:
         errors.append("logging.baseline automatic baseline policy is reserved; Guard behavior snapshots are the implemented baseline mechanism")
-    if policy.metrics.enabled:
-        errors.append("logging.metrics provider correlation is reserved; no metrics provider adapter is implemented")
+    if policy.metrics.enabled and not policy.monitoring.enabled:
+        errors.append("logging.metrics.enabled requires logging.monitoring.enabled=True")
+    if policy.metrics.provider_name is not None:
+        provider_name = str(policy.metrics.provider_name).strip().lower()
+        if provider_name != "process":
+            errors.append("logging.metrics.provider_name must be 'process' when configured")
+    if (
+        isinstance(policy.metrics.sample_interval_seconds, bool)
+        or not isinstance(policy.metrics.sample_interval_seconds, (int, float))
+        or not math.isfinite(float(policy.metrics.sample_interval_seconds))
+        or policy.metrics.sample_interval_seconds <= 0
+    ):
+        errors.append("logging.metrics.sample_interval_seconds must be greater than zero")
+    if (
+        isinstance(policy.metrics.maximum_samples_per_snapshot, bool)
+        or not isinstance(policy.metrics.maximum_samples_per_snapshot, int)
+        or not 1 <= policy.metrics.maximum_samples_per_snapshot <= 4096
+    ):
+        errors.append("logging.metrics.maximum_samples_per_snapshot must be between 1 and 4096")
+    for name in (
+        "enabled",
+        "correlate_by_process",
+        "correlate_by_call",
+        "correlate_by_target",
+        "correlate_by_incident",
+        "correlate_by_guard_window",
+        "correlate_by_baseline",
+    ):
+        if not isinstance(getattr(policy.metrics, name), bool):
+            errors.append(f"logging.metrics.{name} must be a boolean")
     if not isinstance(policy.monitoring, MonitoringStreamPolicy):
         errors.append("logging.monitoring must be a MonitoringStreamPolicy")
     else:

@@ -31,7 +31,7 @@ from .policy import (
     OperatorPolicyWatcher,
 )
 from .segments import SegmentWriter
-from .metrics import MonitoringStreamWriter
+from .metrics import MetricsCollector, MetricsContext, MetricsCorrelation, MonitoringStreamWriter
 
 
 class LogSink(Protocol):
@@ -113,6 +113,15 @@ class LoggingRuntime:
             run_id=self.run_id,
             process_start_id=self.process_start_id,
         )
+        self.metrics = MetricsCollector(
+            policy.metrics,
+            writer=self.monitoring,
+            context=MetricsContext(
+                application_id=policy.application_id,
+                process_id=os.getpid(),
+            ),
+        )
+        self.metrics.start()
         self.sink = BufferedSegmentSink(self.writer, policy)
         self._sequence = 0
         self._lock = threading.RLock()
@@ -146,6 +155,7 @@ class LoggingRuntime:
             self.audit.update_policy(active.audit, redaction_policy=active.redaction)
         )
         warnings_out.extend(self.monitoring.update_policy(active.monitoring))
+        self.metrics.update_binding(active.metrics)
         self.attachments.update_policy(active.attachments)
         return tuple(warnings_out)
 
@@ -502,6 +512,26 @@ class LoggingRuntime:
         self.monitoring.emit_overhead(status)
         return status
 
+    def collect_metrics(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        correlation: MetricsCorrelation | None = None,
+        force: bool = False,
+    ) -> tuple[dict[str, Any], ...]:
+        """Collect an explicitly requested, policy-bounded metrics snapshot."""
+        return self.metrics.collect(
+            start,
+            end,
+            correlation=correlation,
+            force=force,
+        )
+
+    def metrics_status(self) -> dict[str, Any]:
+        """Return read-only metrics adapter status for operators."""
+        return self.metrics.status()
+
     def close(self) -> None:
         if self._closed:
             return
@@ -525,6 +555,7 @@ class LoggingRuntime:
         )
         self.sink.close(attachment_manifest_hash=attachment_manifest_hash)
         self.audit.close()
+        self.metrics.stop()
         self.monitoring.close()
         self._closed = True
 
