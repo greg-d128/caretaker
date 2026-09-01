@@ -408,6 +408,36 @@ def test_scheduler_execute_persists_bounded_provenance(tmp_path: Path) -> None:
     assert scheduler.status()["pending"] == 0
 
 
+@pytest.mark.parametrize("capture_generation", ["generation-other", None])
+def test_scheduler_rejects_missing_or_mismatched_requested_generation(
+    tmp_path: Path, capture_generation: str | None
+) -> None:
+    scheduler = BehaviorCollectionScheduler(tmp_path, maximum_calls=20)
+    capture, request = scheduler.execute(
+        scope="function",
+        subject="example.target",
+        requested_calls=2,
+        requested_by="uid:1001",
+        reason="generation verification",
+        requested_generation="generation-requested",
+        operation=lambda: {
+            **({"generation_id": capture_generation} if capture_generation is not None else {}),
+            "profile": {"call_count": 2},
+        },
+    )
+
+    assert request["status"] == "FAILED"
+    assert request["outcome"] == "FAILED"
+    if capture_generation is None:
+        assert "observed_generation" not in request
+    else:
+        assert request["observed_generation"] == capture_generation
+    assert capture["collection_request"]["status"] == "FAILED"
+    assert capture["collection_request"]["outcome"] == "FAILED"
+    assert "generation mismatch" in capture["collection_request"]["error"]
+    assert scheduler.list_requests()[0]["status"] == "FAILED"
+
+
 def test_guard_uses_policy_limits_and_authority_bound_scheduler(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("CARETAKER_DATA_DIR", str(tmp_path))
     guard = GuardEngine(
@@ -426,6 +456,7 @@ def test_guard_uses_policy_limits_and_authority_bound_scheduler(tmp_path: Path, 
         calls=4,
         requested_by="uid:1001",
         reason="operator investigation",
+        requested_generation="generation-1",
         operation=lambda: {"generation_id": "generation-1", "profile": {"call_count": 4}},
     )
 
@@ -447,6 +478,13 @@ def test_operator_function_capture_uses_scheduler_provenance(tmp_path: Path, mon
         GuardBinding(enabled=True),
         periodic=False,
     )
+    identity = guard._targets["example.sample"].identity
+    requested_generation = behavior_generation_id(
+        subject_key="function:example.sample",
+        code_hash=identity.source_hash or identity.bytecode_hash,
+        monitoring_fingerprint=guard.monitoring_fingerprint("example.sample"),
+        statistics_schema_version=1,
+    )
     registry = OperatorRuntimeRegistry()
     registry.register_guard_engine(guard)
 
@@ -457,6 +495,7 @@ def test_operator_function_capture_uses_scheduler_provenance(tmp_path: Path, mon
             "subject": "example.sample",
             "calls": 3,
             "reason": "operator verification",
+            "requested_generation": requested_generation,
         },
         (1234, 1001, 1001),
     )
@@ -465,6 +504,8 @@ def test_operator_function_capture_uses_scheduler_provenance(tmp_path: Path, mon
     request = result["capture"]["collection_request"]
     assert request["requested_by"] == "uid:1001"
     assert request["reason"] == "operator verification"
+    assert request["requested_generation"] == requested_generation
+    assert request["observed_generation"] == requested_generation
     assert request["status"] == "CAPTURED"
 
 

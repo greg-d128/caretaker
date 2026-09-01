@@ -977,11 +977,43 @@ class GuardEngine(GuardFacade):
         operation: Callable[[], Mapping[str, Any]],
         priority: int = 0,
         deadline: str | None = None,
+        requested_generation: str | None = None,
     ) -> dict[str, Any]:
         """Run an operator collection through the policy-governed scheduler."""
+        def operation_with_generation() -> dict[str, Any]:
+            capture = dict(operation())
+            if not str(capture.get("generation_id") or "").strip():
+                subject_key = str(capture.get("subject_key") or f"{scope}:{subject}")
+                code_hash = str(capture.get("code_hash") or "") or None
+                monitoring_fingerprint = (
+                    str(capture.get("monitoring_fingerprint") or "") or None
+                )
+                try:
+                    statistics_schema_version = int(
+                        capture.get("statistics_schema_version") or 1
+                    )
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        "behavior capture has an invalid statistics schema version"
+                    ) from exc
+                capture["generation_id"] = behavior_generation_id(
+                    subject_key=subject_key,
+                    code_hash=code_hash,
+                    monitoring_fingerprint=monitoring_fingerprint,
+                    statistics_schema_version=statistics_schema_version,
+                )
+            return capture
+
         scheduler = self.behavior_collection_scheduler
         if scheduler is None:
-            return dict(operation())
+            capture = operation_with_generation()
+            if requested_generation is not None and str(capture.get("generation_id") or "") != str(
+                requested_generation
+            ).strip():
+                raise ValueError(
+                    "behavior collection generation does not match requested generation"
+                )
+            return capture
         capture, _request = scheduler.execute(
             scope=scope,
             subject=subject,
@@ -990,11 +1022,12 @@ class GuardEngine(GuardFacade):
             reason=reason,
             priority=priority,
             deadline=deadline,
+            requested_generation=requested_generation,
             authority_policy_generation=str(
                 get_authority_runtime_context().effective.generation
             ),
             authority_policy_fingerprint=get_authority_runtime_context().effective.fingerprint,
-            operation=operation,
+            operation=operation_with_generation,
         )
         return capture
 

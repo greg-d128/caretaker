@@ -655,9 +655,12 @@ generation in the returned operation record and persists that provenance with
 the adaptive state for restart inspection. Automatic cycles also persist a
 captured/deferred/failed outcome when backlog coverage is reconciled. Promotion is an
 evidence-collection request, not acceptance of the resulting behavior as a
-trusted Guard baseline. Generation-aware promotion requests, requested
-evidence targets or durations, and durable eventual outcomes remain part of
-the broader coverage orchestration work.
+trusted Guard baseline. Generation-aware collection requests now fail closed
+when the resulting capture has a missing or different generation; the failed
+capture remains bounded evidence with its mismatch reason. The same generation
+binding is used by live behavior comparison. Requested evidence targets or
+durations and durable eventual outcomes remain part of the broader coverage
+orchestration work.
 
 Behavior collection must have an application-wide resource budget. A scheduler
 should limit active high-cost collection using measured overhead as well as a

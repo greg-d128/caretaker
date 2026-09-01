@@ -2039,13 +2039,34 @@ class BehaviorCollectionScheduler:
             capture = dict(operation())
             profile = capture.get("profile")
             observed_calls = int(profile.get("call_count") or 0) if isinstance(profile, Mapping) else 0
-            completed = self.complete(
-                claimed["request_id"],
-                outcome="CAPTURED",
-                observed_calls=observed_calls,
-                observed_generation=str(capture.get("generation_id") or "") or None,
-                duration_seconds=max(0.0, time.monotonic() - started),
+            observed_generation = self._text(
+                capture.get("generation_id"), name="observed_generation", limit=128
             )
+            requested_generation = self._text(
+                claimed.get("requested_generation"), name="requested_generation", limit=128
+            )
+            duration_seconds = max(0.0, time.monotonic() - started)
+            if requested_generation is not None and observed_generation != requested_generation:
+                completed = self.complete(
+                    claimed["request_id"],
+                    outcome="FAILED",
+                    observed_calls=observed_calls,
+                    observed_generation=observed_generation,
+                    error=(
+                        "behavior collection generation mismatch: "
+                        f"requested {requested_generation!r}, observed "
+                        f"{observed_generation!r}"
+                    ),
+                    duration_seconds=duration_seconds,
+                )
+            else:
+                completed = self.complete(
+                    claimed["request_id"],
+                    outcome="CAPTURED",
+                    observed_calls=observed_calls,
+                    observed_generation=observed_generation,
+                    duration_seconds=duration_seconds,
+                )
             capture["collection_request"] = {
                 key: value
                 for key, value in completed.items()
@@ -2069,6 +2090,7 @@ class BehaviorCollectionScheduler:
                     "attempt",
                     "authority_policy_generation",
                     "authority_policy_fingerprint",
+                    "error",
                 }
             }
             return capture, completed

@@ -472,6 +472,7 @@ class OperatorRuntimeRegistry:
             reason = str(request.get("reason") or "operator-requested behavior capture").strip()
             priority = int(request.get("priority", 100))
             deadline = request.get("deadline")
+            requested_generation = request.get("requested_generation")
             if not subject:
                 raise ValueError("behavior-capture requires subject")
             if scope == "function":
@@ -487,6 +488,7 @@ class OperatorRuntimeRegistry:
                             reason=reason,
                             priority=priority,
                             deadline=deadline,
+                            requested_generation=requested_generation,
                             operation=lambda: guard.behavior_capture(subject, calls=calls),
                         )
                     ),
@@ -511,6 +513,7 @@ class OperatorRuntimeRegistry:
                     reason=reason,
                     priority=priority,
                     deadline=deadline,
+                    requested_generation=requested_generation,
                     operation=operation,
                 )
                 if scheduler_guard is not None

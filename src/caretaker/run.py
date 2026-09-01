@@ -2561,6 +2561,7 @@ def main(argv: list[str] | None = None) -> int:
                     "reason": reason,
                     "priority": int(request.get("priority", 100)),
                     "deadline": request.get("deadline"),
+                    "requested_generation": request.get("requested_generation"),
                 },
             )
             if response.get("ok") is False:
@@ -2694,6 +2695,7 @@ def main(argv: list[str] | None = None) -> int:
                     "scope": scope,
                     "subject": subject,
                     "calls": int(request.get("calls", 50)),
+                    "requested_generation": snapshot.get("generation_id"),
                 },
             )
             if response.get("ok") is False:
