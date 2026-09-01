@@ -363,6 +363,17 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
             "authority_granted": False,
         },
     ),
+    "GUARD_BASELINE_ACCEPTED": _event_definition(
+        description="An operator-authorized Guard behavior baseline became the runtime reference.",
+        minimum_priority=EvidencePriority.CRITICAL,
+        required_fields=("actor.id", "scope.target_id", "outcome.state"),
+        example={
+            "target_id": "demo.target",
+            "state": "ACCEPTED",
+            "authority_granted": False,
+            "reason": "operator review completed",
+        },
+    ),
     "VALIDATION_DECISION": _event_definition(
         description="A validation result or gate decision was recorded.",
         minimum_priority=EvidencePriority.IMPORTANT,

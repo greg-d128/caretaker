@@ -45,6 +45,7 @@ _LAZY = {
     "RuntimeInspector": ("introspection", "RuntimeInspector"),
     "AssessmentSeverity": ("models", "AssessmentSeverity"),
     "BaselineState": ("models", "BaselineState"),
+    "BaselineAcceptanceRecord": ("models", "BaselineAcceptanceRecord"),
     "BehaviorAssessment": ("models", "BehaviorAssessment"),
     "BehaviorBaseline": ("models", "BehaviorBaseline"),
     "BehaviorDeviation": ("models", "BehaviorDeviation"),

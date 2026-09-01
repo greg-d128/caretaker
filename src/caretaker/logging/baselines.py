@@ -108,10 +108,20 @@ class BaselineStore:
         return path
 
     def accept(self, baseline: ApplicationLoggingBaseline | UUID | str) -> ApplicationLoggingBaseline:
+        """Mark an offline logging baseline as reviewed, never runtime-authoritative.
+
+        Historical logging evidence is intentionally separate from Guard's
+        runtime baseline authority operation.  Use the authenticated Guard
+        control path for a baseline that may influence runtime decisions.
+        """
         current = self.load(baseline) if isinstance(baseline, (UUID, str)) else baseline
-        accepted = replace(current, state=BaselineState.ACCEPTED, accepted_at=datetime.now(timezone.utc))
-        self.save(accepted)
-        return accepted
+        reviewed = replace(
+            current,
+            state=BaselineState.OPERATOR_REVIEWED,
+            accepted_at=datetime.now(timezone.utc),
+        )
+        self.save(reviewed)
+        return reviewed
 
 
 class BaselineComparator:

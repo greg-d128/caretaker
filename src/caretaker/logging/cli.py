@@ -71,7 +71,10 @@ def main(argv: list[str] | None = None) -> int:
     baseline_generate.add_argument("--workload-label")
     baseline_generate.add_argument("--period-start")
     baseline_generate.add_argument("--period-end")
-    baseline_generate.add_argument("--accept", action="store_true")
+    baseline_generate.add_argument(
+        "--accept", action="store_true",
+        help="mark historical logging evidence operator-reviewed (offline; not runtime-authoritative)",
+    )
     baseline_list = baseline_sub.add_parser("list")
     baseline_list.add_argument("--store", required=True)
     baseline_list.add_argument("--state", choices=tuple(item.name.lower() for item in BaselineState))

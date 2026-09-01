@@ -234,7 +234,14 @@ than only supervisor/logging state. Exposed information includes:
 - accepted baselines and configured Repair policies;
 - optional Guard LLM assessments when an advisory provider is configured.
 
-Approval/rejection and baseline acceptance remain typed declarative operations.
+Approval/rejection and runtime Guard baseline acceptance remain typed
+declarative operations. A runtime baseline acceptance records a separate
+authority record with the authenticated actor, target/scope, reason, effective
+policy fingerprint, authority generation/fingerprint, and timestamp. It is
+also emitted as a critical `GUARD_BASELINE_ACCEPTED` audit event. Historical
+logging baselines generated or accepted by `caretaker-logging baseline` remain
+offline evidence: `--accept` marks them `OPERATOR_REVIEWED` and cannot change
+Guard runtime state.
 The runtime socket does not accept arbitrary Python, shell commands, or source
 text from the operator console.
 

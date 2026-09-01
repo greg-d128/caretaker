@@ -89,5 +89,5 @@ def test_baseline_store_round_trip_and_accept(tmp_path):
     loaded = store.load(baseline.baseline_id)
     assert loaded.content_hash == baseline.content_hash
     accepted = store.accept(baseline.baseline_id)
-    assert accepted.state is BaselineState.ACCEPTED
-    assert store.list(state=BaselineState.ACCEPTED)[0].baseline_id == baseline.baseline_id
+    assert accepted.state is BaselineState.OPERATOR_REVIEWED
+    assert store.list(state=BaselineState.OPERATOR_REVIEWED)[0].baseline_id == baseline.baseline_id

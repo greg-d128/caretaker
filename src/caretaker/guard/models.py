@@ -50,6 +50,30 @@ class BaselineState(Enum):
     REJECTED = auto()
 
 
+@dataclass(frozen=True, slots=True)
+class BaselineAcceptanceRecord:
+    """Durable authority evidence for a runtime-affecting baseline acceptance.
+
+    A baseline is evidence; this record is the separate authority decision that
+    makes it eligible to influence Guard runtime decisions.  Keeping the two
+    records separate prevents an offline logging baseline from becoming a
+    runtime baseline merely because it was written to disk.
+    """
+
+    acceptance_id: UUID
+    baseline_id: UUID
+    target_id: str
+    scope: str
+    actor_type: str
+    actor_id: str
+    reason: str
+    policy_generation: int
+    policy_fingerprint: str
+    authority_generation: int
+    authority_fingerprint: str
+    accepted_at: datetime = field(default_factory=utcnow)
+
+
 class DeviationCategory(Enum):
     NEW_NETWORK_DESTINATION = auto()
     NEW_FILESYSTEM_ROOT = auto()

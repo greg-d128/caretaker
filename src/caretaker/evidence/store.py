@@ -23,6 +23,7 @@ class EvidenceStore(Protocol):
     def record_behavior_window(self, record: BehaviorWindow) -> None: ...
     def record_inspection(self, record: RuntimeInspection) -> None: ...
     def record_guard_baseline(self, record: object) -> None: ...
+    def record_baseline_acceptance(self, record: object) -> None: ...
     def record_guard_deviation(self, record: object) -> None: ...
     def record_guard_assessment(self, record: object) -> None: ...
     def record_guard_decision(self, record: object) -> None: ...
@@ -48,6 +49,7 @@ class InMemoryEvidenceStore:
         self.windows: dict[UUID, BehaviorWindow] = {}
         self.inspections: dict[UUID, RuntimeInspection] = {}
         self.guard_baselines: dict[UUID, object] = {}
+        self.baseline_acceptances: dict[UUID, object] = {}
         self.guard_deviations: dict[UUID, object] = {}
         self.guard_assessments: dict[UUID, object] = {}
         self.guard_decisions: dict[UUID, object] = {}
@@ -85,6 +87,10 @@ class InMemoryEvidenceStore:
     def record_guard_baseline(self, record: object) -> None:
         with self._lock:
             self.guard_baselines[getattr(record, "baseline_id")] = record
+
+    def record_baseline_acceptance(self, record: object) -> None:
+        with self._lock:
+            self.baseline_acceptances[getattr(record, "acceptance_id")] = record
 
     def record_guard_deviation(self, record: object) -> None:
         with self._lock:
@@ -234,6 +240,24 @@ class SQLiteEvidenceStore:
                 );
                 CREATE INDEX IF NOT EXISTS guard_baseline_subject_idx
                     ON guard_baselines(module_name, qualified_name, created_at);
+
+                CREATE TABLE IF NOT EXISTS baseline_acceptances (
+                    acceptance_id TEXT PRIMARY KEY,
+                    baseline_id TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    actor_type TEXT NOT NULL,
+                    actor_id TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    policy_generation INTEGER NOT NULL,
+                    policy_fingerprint TEXT NOT NULL,
+                    authority_generation INTEGER NOT NULL,
+                    authority_fingerprint TEXT NOT NULL,
+                    accepted_at TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS baseline_acceptance_target_time_idx
+                    ON baseline_acceptances(target_id, accepted_at);
 
                 CREATE TABLE IF NOT EXISTS guard_deviations (
                     deviation_id TEXT PRIMARY KEY,
@@ -403,6 +427,35 @@ class SQLiteEvidenceStore:
                     str(getattr(record, "baseline_id")), subject.module_name, subject.qualified_name,
                     getattr(record, "state").name, getattr(record, "created_at").isoformat(),
                     getattr(record, "accepted_at").isoformat() if getattr(record, "accepted_at") else None,
+                    payload,
+                ),
+            )
+            connection.commit()
+
+    def record_baseline_acceptance(self, record: object) -> None:
+        payload = json.dumps(_jsonable(record), sort_keys=True, separators=(",", ":"))
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO baseline_acceptances(
+                    acceptance_id, baseline_id, target_id, scope, actor_type,
+                    actor_id, reason, policy_generation, policy_fingerprint,
+                    authority_generation, authority_fingerprint, accepted_at, payload
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(getattr(record, "acceptance_id")),
+                    str(getattr(record, "baseline_id")),
+                    str(getattr(record, "target_id")),
+                    str(getattr(record, "scope")),
+                    str(getattr(record, "actor_type")),
+                    str(getattr(record, "actor_id")),
+                    str(getattr(record, "reason")),
+                    int(getattr(record, "policy_generation")),
+                    str(getattr(record, "policy_fingerprint")),
+                    int(getattr(record, "authority_generation")),
+                    str(getattr(record, "authority_fingerprint")),
+                    getattr(record, "accepted_at").isoformat(),
                     payload,
                 ),
             )

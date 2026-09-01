@@ -340,7 +340,14 @@ caretaker-logging baseline generate \
   --accept
 ```
 
-Multiple accepted baselines may coexist. Comparisons separate:
+The logging baseline command operates on historical logging evidence only.
+`--accept` marks that evidence `OPERATOR_REVIEWED`; it is explicitly offline
+and cannot become a Guard runtime reference. Runtime baseline acceptance is a
+separate authenticated Guard control operation, which records the actor,
+reason, effective policy and authority fingerprints in the evidence store and
+the Caretaker audit stream.
+
+Multiple operator-reviewed historical baselines may coexist. Comparisons separate:
 
 - absolute growth;
 - relative growth;

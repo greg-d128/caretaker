@@ -14,6 +14,44 @@ from uuid import UUID, uuid4
 from .authority import AuthorityPolicyError, get_authority_runtime_context
 from .control_plane import SignalSeverity
 from .evidence.identity import identify_module
+from .logging.models import EvidencePriority
+
+
+def _emit_baseline_acceptance_audit(acceptance: Any) -> None:
+    """Emit the authoritative baseline decision to the Caretaker audit stream."""
+    from .logging.handler import get_runtime
+
+    runtime = get_runtime()
+    audit = getattr(runtime, "audit", None) if runtime is not None else None
+    emit = getattr(audit, "emit", None)
+    if not callable(emit):
+        return
+    emit(
+        "GUARD_BASELINE_ACCEPTED",
+        actor={
+            "type": str(acceptance.actor_type),
+            "id": str(acceptance.actor_id),
+        },
+        scope={
+            "target_id": str(acceptance.target_id),
+            "scope": str(acceptance.scope),
+            "acceptance_id": str(acceptance.acceptance_id),
+            "baseline_id": str(acceptance.baseline_id),
+        },
+        policy={
+            "generation": int(acceptance.policy_generation),
+            "fingerprint": str(acceptance.policy_fingerprint),
+            "authority_generation": int(acceptance.authority_generation),
+            "authority_fingerprint": str(acceptance.authority_fingerprint),
+        },
+        outcome={
+            "state": "ACCEPTED",
+            "authority_granted": False,
+        },
+        details={"reason": str(acceptance.reason)},
+        priority=EvidencePriority.CRITICAL,
+        occurred_at=acceptance.accepted_at,
+    )
 
 
 def _jsonable(value: Any) -> Any:
@@ -753,7 +791,28 @@ class OperatorRuntimeRegistry:
                     "inspections": _jsonable(guard.recent_target_inspections(target_id, limit=limit)),
                 }
             if command == "guard-baseline-accept":
-                return {"ok": True, "target": target_id, "baseline": _jsonable(guard.accept_baseline(target_id))}
+                requested_by = str(
+                    request.get("requested_by") or f"uid:{credentials[1]}"
+                ).strip()
+                reason = str(
+                    request.get("reason") or "operator-requested Guard baseline acceptance"
+                ).strip()
+                baseline = guard.accept_baseline(
+                    target_id,
+                    actor_type="operator",
+                    actor_id=requested_by,
+                    reason=reason,
+                )
+                acceptance = guard.baseline_acceptance(target_id)
+                if acceptance is None:  # defensive: the authority operation must be auditable
+                    raise RuntimeError("Guard baseline acceptance was not recorded")
+                _emit_baseline_acceptance_audit(acceptance)
+                return {
+                    "ok": True,
+                    "target": target_id,
+                    "baseline": _jsonable(baseline),
+                    "acceptance": _jsonable(acceptance),
+                }
             if guard.provider is None or not guard.policy.llm_review.enabled:
                 return {
                     "ok": True,

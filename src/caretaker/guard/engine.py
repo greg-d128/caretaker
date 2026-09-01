@@ -69,6 +69,7 @@ from .hooks import GuardHookManager
 from .introspection import PeriodicInspector, RuntimeInspector
 from .models import (
     AssessmentSeverity,
+    BaselineAcceptanceRecord,
     BaselineState,
     BehaviorAssessment,
     BehaviorBaseline,
@@ -173,6 +174,7 @@ class GuardEngine(GuardFacade):
             else None
         )
         self._sealed_baseline_ids: set[UUID] = set()
+        self._baseline_acceptances: dict[str, BaselineAcceptanceRecord] = {}
         self.detector = DeviationDetector(self.policy.deviations)
         self.inspector = RuntimeInspector(self.store)
         self.periodic = PeriodicInspector(self.inspector, on_inspection=self._on_inspection)
@@ -759,7 +761,30 @@ class GuardEngine(GuardFacade):
             self._process_window(window, target_id=target_id)
         return window
 
-    def accept_baseline(self, target_id: str) -> BehaviorBaseline:
+    def accept_baseline(
+        self,
+        target_id: str,
+        *,
+        actor_type: str = "application",
+        actor_id: str = "application-local",
+        reason: str = "direct Guard API request",
+    ) -> BehaviorBaseline:
+        """Accept a runtime baseline through Guard's single authority path.
+
+        ``BaselineManager`` remains an in-memory analytics primitive.  This
+        method is the consequential operation: it persists the accepted
+        baseline and a separate authority record containing the actor,
+        effective policy, and authority generation.
+        """
+        actor_type = str(actor_type).strip()
+        actor_id = str(actor_id).strip()
+        reason = str(reason).strip()
+        if not actor_type or len(actor_type) > 64:
+            raise ValueError("baseline acceptance actor_type must be 1-64 characters")
+        if not actor_id or len(actor_id) > 256:
+            raise ValueError("baseline acceptance actor_id must be 1-256 characters")
+        if not reason or len(reason) > 500:
+            raise ValueError("baseline acceptance reason must be 1-500 characters")
         binding = self._targets[target_id]
         active_capture = (
             self.behavior_statistics.current_capture(target_id)
@@ -781,8 +806,37 @@ class GuardEngine(GuardFacade):
             baseline = self.baselines.accept(binding.identity)
         baseline = self._enrich_accepted_baseline_statistics(target_id, baseline)
         self.store.record_guard_baseline(baseline)
+        authority = get_authority_runtime_context().effective
+        policy_payload = json.dumps(
+            asdict(self.policy),
+            sort_keys=True,
+            separators=(",", ":"),
+            default=lambda value: value.name if isinstance(value, Enum) else str(value),
+        ).encode("utf-8")
+        acceptance = BaselineAcceptanceRecord(
+            acceptance_id=uuid4(),
+            baseline_id=baseline.baseline_id,
+            target_id=target_id,
+            scope="function",
+            actor_type=actor_type,
+            actor_id=actor_id,
+            reason=reason,
+            policy_generation=authority.generation,
+            policy_fingerprint=hashlib.sha256(policy_payload).hexdigest(),
+            authority_generation=authority.generation,
+            authority_fingerprint=authority.fingerprint,
+            accepted_at=baseline.accepted_at or utcnow(),
+        )
+        self.store.record_baseline_acceptance(acceptance)
+        with self._lock:
+            self._baseline_acceptances[target_id] = acceptance
         self._queue_accepted_baseline_snapshot(target_id, baseline)
         return baseline
+
+    def baseline_acceptance(self, target_id: str) -> BaselineAcceptanceRecord | None:
+        """Return the latest authority record for a target, if one exists."""
+        with self._lock:
+            return self._baseline_acceptances.get(target_id)
 
     def seal_behavior_snapshot(self, target_id: str, *, reason: str) -> object | None:
         """Queue the current statistical behavior generation at a lifecycle boundary."""
