@@ -1188,6 +1188,38 @@ class CaretakerApplicationSupervisor:
             },
         )
 
+    def _audit_recovery_decision(self, decision: Mapping[str, Any]) -> None:
+        """Emit one critical audit record for a coordinated recovery decision."""
+        policy_action = decision.get("policy_action")
+        policy_action = policy_action if isinstance(policy_action, Mapping) else {}
+        execution = decision.get("action_execution")
+        execution = execution if isinstance(execution, Mapping) else {}
+        reconciliation = decision.get("reconciliation")
+        reconciliation = reconciliation if isinstance(reconciliation, Mapping) else {}
+        self._audit_event(
+            "RECOVERY_DECISION",
+            actor={"type": "supervisor", "id": str(self.supervisor_health.worker_id)},
+            scope={
+                "reconciliation_scope": str(decision.get("scope") or ""),
+                "target_id": decision.get("target_id"),
+                "recovery_record_id": decision.get("recovery_record_id"),
+            },
+            outcome={
+                "state": str(execution.get("status") or "UNKNOWN"),
+                "action": policy_action.get("selected_action"),
+                "authority_granted": False,
+            },
+            details={
+                "policy_action_status": policy_action.get("status"),
+                "critical_evidence_conflict": bool(
+                    decision.get("critical_evidence_conflict")
+                ),
+                "reconciliation_status": reconciliation.get("status"),
+                "reconciliation_conflict": bool(reconciliation.get("conflict")),
+                "handler_status": execution.get("status"),
+            },
+        )
+
     @staticmethod
     def _bounded_diagnostic_value(value: Any, *, depth: int = 0) -> Any:
         """Keep worker-supplied diagnostic context finite and JSON-shaped."""
@@ -1886,6 +1918,7 @@ class CaretakerApplicationSupervisor:
                     "authority_granted": False,
                     "reason": "worker failure recovery checkpoint is unavailable",
                 }
+                self._audit_recovery_decision(decision)
                 decisions.append(decision)
                 continue
             pending_record = create_worker_failure_recovery_record(
@@ -1924,6 +1957,7 @@ class CaretakerApplicationSupervisor:
                     "status": "PENDING",
                     "authority_granted": False,
                 })
+                self._audit_recovery_decision(decision)
                 decisions.append(decision)
                 continue
             try:
@@ -1934,6 +1968,7 @@ class CaretakerApplicationSupervisor:
                     "authority_granted": False,
                     "error": f"{type(exc).__name__}: {exc}"[:256],
                 }
+                self._audit_recovery_decision(decision)
                 decisions.append(decision)
                 continue
             execution = dispatch_recovery_action(
@@ -1956,6 +1991,7 @@ class CaretakerApplicationSupervisor:
                     else "CHECKPOINT_FAILED_AFTER_DISPATCH",
                     "checkpoint_error": f"{type(exc).__name__}: {exc}"[:256],
                 }
+            self._audit_recovery_decision(decision)
             decisions.append(decision)
         return {
             **result,

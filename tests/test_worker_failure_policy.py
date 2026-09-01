@@ -170,6 +170,16 @@ def test_worker_failure_cohort_captures_all_postmortems_before_one_policy_action
     assert decision["reconciliation"]["comparison"]["status"] == "COMBINED"
     assert decision["action_execution"]["status"] == "FALLBACK_ONLY"
     assert decision["authority_granted"] is False
+    recovery_events = [
+        item for item in runtime.audit.events if item["event_type"] == "RECOVERY_DECISION"
+    ]
+    assert len(recovery_events) == 1
+    assert recovery_events[0]["scope"]["reconciliation_scope"] == "transaction:txn-1"
+    assert recovery_events[0]["outcome"] == {
+        "state": "FALLBACK_ONLY",
+        "action": "CONTINUE_DEGRADED",
+        "authority_granted": False,
+    }
 
 
 def test_critical_worker_cohort_cannot_weaken_policy_postmortem_requirement() -> None:

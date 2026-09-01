@@ -1532,6 +1532,10 @@ is written before dispatch and finalized afterward; repeated reconciliation
 does not rerun a completed handler, and a pending checkpoint is surfaced for
 deliberate handling. Deployment-specific durable incident,
 replacement, and shutdown lifecycle integration remains future work.
+Each coordinated recovery decision now also emits the registered critical
+`RECOVERY_DECISION` audit event with its bounded scope, selected policy action,
+reconciliation state, handler status, and checkpoint identity. The audit event
+is evidence only and does not execute or authorize the selected action.
 
 The supervisor also exposes `handle_worker_failure_cohort()` for one
 continuous transaction. The caller supplies all affected failed or
