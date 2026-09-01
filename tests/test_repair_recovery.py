@@ -647,6 +647,39 @@ def test_deployed_code_rollback_dispatch_requires_explicit_application_gate() ->
     assert executed["handler_result"]["deployed_code_hash"] == "deployed-hash"
 
 
+def test_degraded_continuation_dispatch_requires_explicit_application_gate() -> None:
+    decision = {
+        "target_id": "app:charge",
+        "policy_action": {
+            "requested_action": "CONTINUE_DEGRADED",
+            "selected_action": "CONTINUE_DEGRADED",
+            "policy_enabled": True,
+        },
+    }
+
+    rejected = dispatch_recovery_action(
+        decision,
+        handlers={
+            "CONTINUE_DEGRADED": lambda _decision: {"accepted": True},
+        },
+    )
+    assert rejected["status"] == "REJECTED_BY_HANDLER"
+    assert rejected["required_gates"] == ["degraded_continuation"]
+
+    executed = dispatch_recovery_action(
+        decision,
+        handlers={
+            "CONTINUE_DEGRADED": lambda _decision: {
+                "accepted": True,
+                "degraded_continuation": True,
+                "boundary": "application-callback",
+            },
+        },
+    )
+    assert executed["status"] == "EXECUTED"
+    assert executed["authority_granted"] is False
+
+
 def test_replacement_dispatch_requires_verified_packet_and_acceptance_state() -> None:
     decision = {
         "policy_action": {

@@ -2079,15 +2079,12 @@ def dispatch_recovery_action(
             "authority_granted": False,
             "reason": "recovery action is inconsistent with its policy decision",
         }
-    if selected == RecoveryAction.CONTINUE_DEGRADED.name:
-        return {
-            "status": "FALLBACK_ONLY",
-            "action": selected,
-            "authority_granted": False,
-    }
     handler = (handlers or {}).get(selected)
     if handler is None:
-        if selected == RecoveryAction.ROLLBACK_TO_DEPLOYED_CODE.name:
+        if selected in {
+            RecoveryAction.CONTINUE_DEGRADED.name,
+            RecoveryAction.ROLLBACK_TO_DEPLOYED_CODE.name,
+        }:
             return {
                 "status": "FALLBACK_ONLY",
                 "action": selected,
@@ -2115,6 +2112,7 @@ def dispatch_recovery_action(
             "handler_result": dict(result) if isinstance(result, Mapping) else None,
         }
     required_gates: dict[str, str] = {
+        RecoveryAction.CONTINUE_DEGRADED.name: "degraded_continuation",
         RecoveryAction.GENERATE_INCIDENT.name: "incident_id",
         RecoveryAction.STOP_APPLICATION.name: "shutdown_requested",
         RecoveryAction.ROLLBACK_TO_DEPLOYED_CODE.name: "rollback_applied",

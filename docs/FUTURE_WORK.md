@@ -1445,7 +1445,10 @@ records the deployed-code transition as executed without granting authority,
 and preserves `FALLBACK_ONLY` when no callback is supplied. The application
 owns the concrete slot/process transition and should include the deployed code
 identity in the bounded handler result when available. `CONTINUE_DEGRADED`
-remains evidence-only because it has no concrete Caretaker action to dispatch.
+also accepts an optional application-owned callback, which must acknowledge
+`degraded_continuation: true`; without it the result remains `FALLBACK_ONLY`.
+The callback confirms the application's degraded-mode decision and does not
+grant Caretaker authority or claim an external-effect guarantee.
 
 The supervisor can now consume coordinated worker-failure evidence and select
 the ordinary or critical-evidence recovery action per scope. Dispatch still

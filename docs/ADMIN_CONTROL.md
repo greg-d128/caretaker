@@ -501,6 +501,10 @@ For `ROLLBACK_TO_DEPLOYED_CODE`, a callback must return both
 `accepted: true` and `rollback_applied: true`; this is an explicit application
 acknowledgement that the deployed runtime is active, not a Caretaker authority
 grant. Without that callback, the durable result remains `FALLBACK_ONLY`.
+For `CONTINUE_DEGRADED`, an optional callback must return both
+`accepted: true` and `degraded_continuation: true`; otherwise the action also
+remains `FALLBACK_ONLY`. This records the application's degraded-mode
+acknowledgement without turning it into a Caretaker authority grant.
 For the direct worker-failure path, `build_authorized_restart_callback()`
 provides the same packet-verified handoff in the callback shape accepted by
 `handle_worker_failure()`. An already-authorized worker cannot be counted as
