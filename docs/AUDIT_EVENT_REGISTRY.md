@@ -112,6 +112,9 @@ authenticated console request and records only request metadata, generation
 identifiers, snapshot references, counts, duration, and outcome; snapshot
 contents remain in the behavior evidence store. A failed, cancelled, deferred, or unavailable
 collection is recorded as evidence and does not change policy or authority.
+In an unsupervised local runtime, the operator registry uses the same bounded
+projection with a `caretaker` actor; it never attempts to use the supervised
+control-socket path.
 Console clients likewise register a UUID-scoped invocation start and end; the
 supervisor binds the session to the console's Unix peer PID and records the OS
 UID/GID. When the signing extra is available, the console keeps a fresh

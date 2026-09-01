@@ -1522,7 +1522,9 @@ Until this exists, restart is a rollback to deployed application code, not conti
   Supervisor-mediated behavior captures now emit bounded
   `BEHAVIOR_COLLECTION_OUTCOME` records for captured, failed, cancelled,
   deferred, and unavailable requests; these records contain collection
-  metadata only and cannot modify policy or authority.
+  metadata only and cannot modify policy or authority. Unsupervised local
+  operator captures use the same projection with a local Caretaker actor,
+  while supervised children remain prohibited from writing their own event.
   Supervised application validation decisions cross an output-only, PID-bound,
   allow-listed control-socket submission path; worker identity is derived by the
   supervisor and the submitted policy context remains evidence. Remaining work

@@ -1,9 +1,20 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from caretaker import GuardBinding, RepairAuthority, RepairEngine, RepairMode, RepairPolicy
 from caretaker.guard import GuardEngine
 from caretaker.operator import OperatorRuntimeRegistry
 from caretaker.registry import build_target
+
+
+class _Audit:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def emit(self, event_type, **fields):
+        self.calls.append({"event_type": event_type, **fields})
+        return {"event_id": "event-1", "stream_sequence": 1}
 
 
 def test_operator_registry_exposes_repair_and_guard_targets():
@@ -33,6 +44,74 @@ def test_operator_registry_exposes_repair_and_guard_targets():
     assert registry.targets()[0]["target_id"] == "test.operator.sample"
     assert registry.targets()[0]["slot_role"] == "TARGET_IMPLEMENTATION"
     assert registry.targets()[0]["observation_level"] is None
+
+
+def test_unsupervised_behavior_capture_emits_local_audit_evidence(monkeypatch):
+    audit = _Audit()
+    monkeypatch.setattr(
+        "caretaker.logging.handler.get_runtime",
+        lambda: SimpleNamespace(
+            supervised=False,
+            audit=audit,
+            effective=SimpleNamespace(fingerprint="sha256:policy", generation=3),
+        ),
+    )
+    registry = OperatorRuntimeRegistry()
+    guard = GuardEngine()
+
+    def sample(value):
+        return value
+
+    guard.register_target("test.local.capture", sample, GuardBinding(enabled=True), periodic=False)
+    registry.register_guard_engine(guard)
+
+    response = registry.handle_request(
+        {
+            "command": "behavior-capture",
+            "scope": "function",
+            "subject": "test.local.capture",
+            "calls": 3,
+            "reason": "local audit coverage",
+        },
+        (1234, 1001, 1001),
+    )
+
+    assert response["ok"] is True
+    assert len(audit.calls) == 1
+    assert audit.calls[0]["event_type"] == "BEHAVIOR_COLLECTION_OUTCOME"
+    assert audit.calls[0]["actor"] == {
+        "type": "caretaker",
+        "id": "uid:1001",
+    }
+    assert audit.calls[0]["outcome"]["authority_granted"] is False
+
+
+def test_supervised_behavior_capture_does_not_emit_local_audit(monkeypatch):
+    audit = _Audit()
+    monkeypatch.setattr(
+        "caretaker.logging.handler.get_runtime",
+        lambda: SimpleNamespace(supervised=True, audit=audit),
+    )
+    registry = OperatorRuntimeRegistry()
+    guard = GuardEngine()
+
+    def sample(value):
+        return value
+
+    guard.register_target("test.supervised.capture", sample, GuardBinding(enabled=True), periodic=False)
+    registry.register_guard_engine(guard)
+    response = registry.handle_request(
+        {
+            "command": "behavior-capture",
+            "scope": "function",
+            "subject": "test.supervised.capture",
+            "calls": 1,
+        },
+        (1234, 1001, 1001),
+    )
+
+    assert response["ok"] is True
+    assert audit.calls == []
 
 
 def test_operator_runtime_reports_validation_activity():

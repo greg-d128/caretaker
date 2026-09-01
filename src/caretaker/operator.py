@@ -49,6 +49,31 @@ def _bounded_message(exception: BaseException, limit: int = 2048) -> str:
     return message if len(message) <= limit else message[: limit - 3] + "..."
 
 
+def _emit_unsupervised_behavior_collection_audit(
+    *,
+    request: dict[str, Any],
+    capture: Any,
+    actor_id: str,
+) -> None:
+    """Audit a local collection while leaving supervised ownership unchanged."""
+    from .logging.handler import get_runtime
+
+    runtime = get_runtime()
+    if runtime is None or getattr(runtime, "supervised", False):
+        # A supervised child must not write or submit this event. Its parent
+        # supervisor emits the authoritative record after receiving the result.
+        return
+    from .run import _emit_behavior_collection_audit
+
+    _emit_behavior_collection_audit(
+        runtime,
+        request=request,
+        capture=capture if isinstance(capture, dict) else None,
+        actor_id=actor_id,
+        actor_type="caretaker",
+    )
+
+
 def control_failure_response(
     request: dict[str, Any],
     credentials: tuple[int, int, int],
@@ -477,21 +502,27 @@ class OperatorRuntimeRegistry:
                 raise ValueError("behavior-capture requires subject")
             if scope == "function":
                 guard = self._guard_engine_for_target(subject)
+                capture = _jsonable(
+                    guard.schedule_behavior_collection(
+                        scope=scope,
+                        subject=subject,
+                        calls=calls,
+                        requested_by=requested_by,
+                        reason=reason,
+                        priority=priority,
+                        deadline=deadline,
+                        requested_generation=requested_generation,
+                        operation=lambda: guard.behavior_capture(subject, calls=calls),
+                    )
+                )
+                _emit_unsupervised_behavior_collection_audit(
+                    request=request,
+                    capture=capture,
+                    actor_id=requested_by,
+                )
                 return {
                     "ok": True,
-                    "capture": _jsonable(
-                        guard.schedule_behavior_collection(
-                            scope=scope,
-                            subject=subject,
-                            calls=calls,
-                            requested_by=requested_by,
-                            reason=reason,
-                            priority=priority,
-                            deadline=deadline,
-                            requested_generation=requested_generation,
-                            operation=lambda: guard.behavior_capture(subject, calls=calls),
-                        )
-                    ),
+                    "capture": capture,
                 }
             if scope != "module":
                 raise ValueError("behavior-capture scope must be function or module")
@@ -519,7 +550,13 @@ class OperatorRuntimeRegistry:
                 if scheduler_guard is not None
                 else operation()
             )
-            return {"ok": True, "capture": _jsonable(capture)}
+            capture = _jsonable(capture)
+            _emit_unsupervised_behavior_collection_audit(
+                request=request,
+                capture=capture,
+                actor_id=requested_by,
+            )
+            return {"ok": True, "capture": capture}
 
         if command == "behavior-collection-status":
             collections = []
@@ -537,6 +574,34 @@ class OperatorRuntimeRegistry:
 
         if command == "behavior-collection-auto-cycle":
             cycles = [guard.automatic_behavior_collection_cycle() for guard in self.guard_engines()]
+            for cycle in cycles:
+                for outcome in cycle.get("outcomes", ()):
+                    target_id = str(outcome.get("target_id") or "").strip()
+                    if not target_id:
+                        continue
+                    generation_id = str(outcome.get("generation_id") or "").strip()
+                    _emit_unsupervised_behavior_collection_audit(
+                        request={
+                            "scope": "function",
+                            "subject": target_id,
+                            "requested_by": "caretaker:auto",
+                            "reason": "automatic coverage backlog promotion",
+                            "requested_generation": generation_id,
+                        },
+                        capture={
+                            "collection_request": {
+                                "scope": "function",
+                                "subject": target_id,
+                                "requested_by": "caretaker:auto",
+                                "reason": "automatic coverage backlog promotion",
+                                "requested_generation": generation_id,
+                                "observed_generation": generation_id,
+                                "outcome": outcome.get("outcome"),
+                                "snapshot_id": outcome.get("snapshot_id"),
+                            }
+                        },
+                        actor_id="caretaker:auto",
+                    )
             return {"ok": True, "cycles": [_jsonable(item) for item in cycles]}
 
         if command == "behavior-collection-cancel":
