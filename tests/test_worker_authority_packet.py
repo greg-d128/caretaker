@@ -945,6 +945,77 @@ def test_application_worker_lifecycle_builds_expiry_recovery_callback() -> None:
     assert len(store.all_worker_failures()) == 1
 
 
+def test_application_worker_lifecycle_builds_explicit_recovery_handlers() -> None:
+    supervisor = supervisor_module.CaretakerApplicationSupervisor(object())
+    lifecycle = ApplicationWorkerLifecycle(
+        supervisor,
+        spawn_worker=lambda _request: {"started": True, "pid": 9876},
+    )
+    calls: list[str] = []
+    handlers = lifecycle.build_recovery_handlers(
+        create_incident=lambda _decision: calls.append("incident") or {
+            "accepted": True,
+            "incident_id": "incident-1",
+        },
+        rollback_to_deployed_code=lambda _decision: calls.append("rollback") or {
+            "accepted": True,
+            "rollback_applied": True,
+        },
+        continue_degraded=lambda _decision: calls.append("degraded") or {
+            "accepted": True,
+            "degraded_continuation": True,
+        },
+        stop_application=lambda _decision: calls.append("shutdown") or {
+            "accepted": True,
+            "shutdown_requested": True,
+        },
+    )
+
+    assert set(handlers) == {
+        "GENERATE_INCIDENT",
+        "ROLLBACK_TO_DEPLOYED_CODE",
+        "CONTINUE_DEGRADED",
+        "STOP_APPLICATION",
+    }
+    assert "REPLACE_WORKER" not in handlers
+
+    def decision(action: str) -> dict[str, object]:
+        return {
+            "policy_action": {
+                "requested_action": action,
+                "selected_action": action,
+                "policy_enabled": True,
+            }
+        }
+
+    assert supervisor_module.dispatch_recovery_action(
+        decision("GENERATE_INCIDENT"), handlers=handlers
+    )["status"] == "EXECUTED"
+    assert supervisor_module.dispatch_recovery_action(
+        decision("ROLLBACK_TO_DEPLOYED_CODE"), handlers=handlers
+    )["status"] == "EXECUTED"
+    assert supervisor_module.dispatch_recovery_action(
+        decision("CONTINUE_DEGRADED"), handlers=handlers
+    )["status"] == "EXECUTED"
+    assert supervisor_module.dispatch_recovery_action(
+        decision("STOP_APPLICATION"), handlers=handlers
+    )["status"] == "EXECUTED"
+    assert calls == ["incident", "rollback", "degraded", "shutdown"]
+
+
+def test_application_worker_lifecycle_does_not_implicitly_enable_shutdown() -> None:
+    supervisor = supervisor_module.CaretakerApplicationSupervisor(object())
+    lifecycle = ApplicationWorkerLifecycle(
+        supervisor,
+        spawn_worker=lambda _request: {"started": True, "pid": 9876},
+    )
+
+    assert lifecycle.build_recovery_handlers() == {}
+    assert "STOP_APPLICATION" in lifecycle.build_recovery_handlers(
+        use_supervisor_shutdown=True
+    )
+
+
 def test_supervisor_control_cycle_retains_callback_failure_as_bounded_evidence() -> None:
     supervisor = supervisor_module.CaretakerApplicationSupervisor(object())
     result = supervisor.run_control_cycle(

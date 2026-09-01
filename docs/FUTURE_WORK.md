@@ -954,6 +954,11 @@ this integration for a fixed or application-resolved scope and forwards the
 explicit recovery policy, post-mortem collector, and action handlers through
 the same fail-closed gates. A deployment still owns packet issuance, process
 creation, and the concrete replacement, incident, or shutdown effect.
+The lifecycle adapter also provides `build_recovery_handlers()` to assemble
+only explicitly supplied application action callbacks, including a previously
+packet-gated replacement handler; supervisor-owned application shutdown is
+opt-in. The factory is wiring only and does not grant authority or create
+processes.
 
 Recovery action dispatch now has application-owned adapters for incident
 creation and application shutdown. Both effects remain outside Caretaker's

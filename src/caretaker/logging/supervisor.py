@@ -3533,6 +3533,55 @@ class ApplicationWorkerLifecycle:
             acceptance_policy=acceptance_policy,
         )
 
+    def build_recovery_handlers(
+        self,
+        *,
+        create_incident: Callable[[Mapping[str, Any]], Any] | None = None,
+        replace_worker: Callable[[Mapping[str, Any]], Any] | None = None,
+        rollback_to_deployed_code: Callable[[Mapping[str, Any]], Any] | None = None,
+        continue_degraded: Callable[[Mapping[str, Any]], Any] | None = None,
+        stop_application: Callable[[Mapping[str, Any]], Any] | None = None,
+        use_supervisor_shutdown: bool = False,
+    ) -> dict[str, Callable[[Mapping[str, Any]], Any]]:
+        """Assemble explicitly configured application recovery handlers.
+
+        This is a wiring convenience for ``reconcile_worker_failures`` and
+        ``handle_worker_failure_cohort``.  Every supplied callback remains
+        application-owned and must return the acknowledgement required by the
+        recovery dispatcher.  In particular, ``replace_worker`` should be the
+        result of ``build_replacement_handler()`` so packet and acceptance
+        gates are preserved; this method never creates a packet or process.
+
+        A shutdown handler is omitted unless the application supplies one or
+        explicitly opts into the supervisor's application-boundary shutdown
+        adapter.  Unconfigured policy actions therefore remain visible as
+        unconfigured instead of acquiring an implicit side effect.
+        """
+        callbacks = {
+            "GENERATE_INCIDENT": create_incident,
+            "REPLACE_WORKER": replace_worker,
+            "ROLLBACK_TO_DEPLOYED_CODE": rollback_to_deployed_code,
+            "CONTINUE_DEGRADED": continue_degraded,
+        }
+        handlers: dict[str, Callable[[Mapping[str, Any]], Any]] = {}
+        if create_incident is not None:
+            handlers["GENERATE_INCIDENT"] = self.supervisor.build_incident_action_handler(
+                create_incident
+            )
+        for action, callback in callbacks.items():
+            if action == "GENERATE_INCIDENT" or callback is None:
+                continue
+            if not callable(callback):
+                raise TypeError(f"{action} recovery handler must be callable")
+            handlers[action] = callback
+        if stop_application is not None:
+            handlers["STOP_APPLICATION"] = self.supervisor.build_shutdown_action_handler(
+                stop_application
+            )
+        elif use_supervisor_shutdown:
+            handlers["STOP_APPLICATION"] = self.supervisor.build_shutdown_action_handler()
+        return handlers
+
     def build_expiry_recovery_callback(
         self,
         *,

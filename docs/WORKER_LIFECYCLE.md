@@ -50,6 +50,13 @@ The resulting callback can be passed directly as `on_expired_workers` to
 still issue a current immutable authority packet and pass packet-bound
 admission; starting a process alone is never treated as a replacement.
 
+`ApplicationWorkerLifecycle.build_recovery_handlers()` assembles the explicit
+application callbacks for incident creation, deployed-code rollback, degraded
+continuation, shutdown, and an already-built replacement handler. It includes
+only callbacks supplied by the application; supervisor shutdown is opt-in.
+The supervisor still validates each acknowledgement before recording an action
+as executed, and this factory never creates a process or grants authority.
+
 ## Authority packet transport
 
 `serialize_recovery_authority_packet()` provides a bounded canonical JSON
