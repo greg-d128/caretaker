@@ -16,7 +16,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Protocol
+from typing import Any, Callable, Iterable, Mapping, Protocol
 from uuid import UUID
 
 from .capsule import IncidentCapsulePolicy, bounded_safe_data, canonical_json_bytes, content_hash
@@ -267,6 +267,7 @@ def execute_historical_capsule_replays(
     entrypoint: str,
     source: str,
     limit: int = 50,
+    cancel_check: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Replay bounded incident-linked fixtures independently.
 
@@ -278,6 +279,8 @@ def execute_historical_capsule_replays(
     bounded_limit = max(1, min(int(limit), 200))
     results: list[dict[str, Any]] = []
     for summary in list(fixture_summaries)[:bounded_limit]:
+        if cancel_check is not None:
+            cancel_check()
         fixture_id = str(summary.get("fixture_id") or "")
         base: dict[str, Any] = {
             "fixture_id": fixture_id,

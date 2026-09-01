@@ -46,6 +46,7 @@ from .ipc import (
     SocketLogClient,
     SocketLogServer,
     control_request,
+    wait_for_job,
     cleanup_stale_endpoint,
     list_adaptive_transition_requests,
     acknowledge_adaptive_transition,

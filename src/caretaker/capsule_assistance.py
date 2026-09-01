@@ -19,6 +19,7 @@ from .capsule import (
     content_hash,
 )
 from .provider_security import validate_provider_endpoint
+from .llm import LLMRequestGate, LLMUsageLimitError, LLMUsagePolicy
 
 
 class IncidentCapsuleAssistant:
@@ -34,6 +35,8 @@ class IncidentCapsuleAssistant:
         endpoint: str = "http://127.0.0.1:11434/api/generate",
         timeout_seconds: float = 120.0,
         policy: IncidentCapsulePolicy | None = None,
+        usage_policy: LLMUsagePolicy | None = None,
+        usage_gate: LLMRequestGate | None = None,
     ) -> None:
         if not str(model).strip():
             raise ValueError("Incident Capsule assistance requires a model")
@@ -45,6 +48,7 @@ class IncidentCapsuleAssistant:
             maximum_collection_items=64,
             maximum_depth=6,
         )
+        self._usage_gate = usage_gate or LLMRequestGate(usage_policy)
 
     def assist(
         self,
@@ -65,7 +69,8 @@ class IncidentCapsuleAssistant:
             timeline=timeline_values,
             artifacts=artifact_values,
         )
-        response_text = self._chat(self._prompt(context))
+        with self._usage_gate.request():
+            response_text = self._chat(self._prompt(context))
         try:
             parsed = json.loads(response_text)
         except json.JSONDecodeError as exc:
@@ -177,15 +182,22 @@ def assist_capsules(
     model: str,
     endpoint: str = "http://127.0.0.1:11434/api/generate",
     timeline_provider: Callable[[UUID], Iterable[Mapping[str, Any]]] | None = None,
+    usage_policy: LLMUsagePolicy | None = None,
+    usage_gate: LLMRequestGate | None = None,
+    cancel_check: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Assess each selected historical capsule independently without persistence."""
 
     assistant = IncidentCapsuleAssistant(
         model=model,
         endpoint=endpoint,
+        usage_policy=usage_policy,
+        usage_gate=usage_gate,
     )
     results: list[dict[str, Any]] = []
     for summary in summaries:
+        if cancel_check is not None:
+            cancel_check()
         capsule_id = str(summary.get("capsule_id") or "")
         base = {
             "capsule_id": capsule_id,
@@ -216,7 +228,17 @@ def assist_capsules(
                 timeline=timeline or (),
                 artifacts=artifacts,
             )
+            if cancel_check is not None:
+                cancel_check()
             results.append({**base, "status": "COMPLETED", **result})
+        except LLMUsageLimitError as exc:
+            results.append({
+                **base,
+                "status": "THROTTLED",
+                "error": str(exc),
+                "advisory_only": True,
+                "capsule_mutated": False,
+            })
         except Exception as exc:
             results.append({
                 **base,

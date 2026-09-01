@@ -23,6 +23,8 @@ from .authority import (
 )
 from .capsule import IncidentCapsuleStore
 from .capsule_assistance import assist_capsules
+from .control_plane import RuntimeJob, RuntimeJobRegistry, RuntimeJobState
+from .llm import LLMRequestGate
 from .adaptive_aggregation import (
     SupervisorAdaptiveAggregationStore,
     compare_adaptive_populations,
@@ -1719,6 +1721,31 @@ def main(argv: list[str] | None = None) -> int:
     }
     adaptive_incident_by_batch = _restore_adaptive_incident_index(capsule_store)
 
+    def emit_job_transition(job: RuntimeJob) -> None:
+        runtime.event(
+            logger_name="caretaker.control",
+            severity=30 if job.state in {
+                RuntimeJobState.FAILED,
+                RuntimeJobState.EXPIRED,
+                RuntimeJobState.INTERRUPTED,
+            } else 20,
+            channel=LogChannel.AUDIT,
+            message="Long-running control-plane job transitioned",
+            fields={
+                "job_id": str(job.job_id),
+                "command": job.command,
+                "client_id": job.client_id,
+                "state": job.state.value,
+                "error": job.error,
+            },
+        )
+
+    runtime_jobs = RuntimeJobRegistry(
+        interaction_policy=runtime.active_policy.control_plane,
+        on_transition=emit_job_transition,
+    )
+    runtime_llm_gate = LLMRequestGate(runtime.active_policy.llm_usage)
+
     def deployment_fingerprint() -> str | None:
         layer = next(
             (
@@ -1988,6 +2015,12 @@ def main(argv: list[str] | None = None) -> int:
 
     def control_handler(request, credentials):
         command = request.get("command")
+        if command == "job-status":
+            job = runtime_jobs.status(str(request.get("job_id") or ""))
+            return {"ok": True, "job": job.public_dict()}
+        if command == "job-cancel":
+            job = runtime_jobs.cancel(str(request.get("job_id") or ""))
+            return {"ok": True, "job": job.public_dict(include_result=False)}
         if command == "console-invocation-identity":
             return _handle_console_identity_request(console_identity_store, request)
         if command in {"console-invocation-start", "console-invocation-end"}:
@@ -3290,48 +3323,62 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("incident-capsule-replay requires entrypoint")
             if not isinstance(source, str) or not source:
                 raise ValueError("incident-capsule-replay requires source text")
-            try:
-                result = execute_capsule_replay(
-                    replay_coordinator,
-                    capsule_store,
-                    capsule_id=raw_capsule_id,
-                    fixture_id=fixture_id,
-                    entrypoint=entrypoint,
-                    source=source,
-                )
-            except Exception as exc:
+            def operation(job_context):
+                try:
+                    job_context.checkpoint()
+                    result = execute_capsule_replay(
+                        replay_coordinator,
+                        capsule_store,
+                        capsule_id=raw_capsule_id,
+                        fixture_id=fixture_id,
+                        entrypoint=entrypoint,
+                        source=source,
+                    )
+                except Exception as exc:
+                    _emit_incident_replay_audit(
+                        runtime,
+                        replay_scope="selected",
+                        actor_id=f"uid:{credentials[1]}",
+                        request=request,
+                        error=exc,
+                    )
+                    raise
                 _emit_incident_replay_audit(
                     runtime,
                     replay_scope="selected",
                     actor_id=f"uid:{credentials[1]}",
                     request=request,
-                    error=exc,
+                    result=result,
                 )
-                raise
-            _emit_incident_replay_audit(
-                runtime,
-                replay_scope="selected",
-                actor_id=f"uid:{credentials[1]}",
-                request=request,
-                result=result,
+                runtime.event(
+                    logger_name="caretaker.capsule",
+                    severity=20,
+                    channel=LogChannel.AUDIT,
+                    message="Incident Capsule fixture replay completed",
+                    fields={
+                        "capsule_id": result["capsule_id"],
+                        "incident_id": result["incident_id"],
+                        "fixture_id": result["fixture_id"],
+                        "outcome": result["outcome"],
+                        "backend_name": result["backend_name"],
+                        "isolation_level": result["isolation_level"],
+                        "capsule_modified": False,
+                    },
+                    origin="caretaker",
+                )
+                return {"ok": True, **result}
+
+            job = runtime_jobs.submit(
+                "incident-capsule-replay",
+                client_id=f"uid:{credentials[1]}",
+                operation=operation,
             )
-            runtime.event(
-                logger_name="caretaker.capsule",
-                severity=20,
-                channel=LogChannel.AUDIT,
-                message="Incident Capsule fixture replay completed",
-                fields={
-                    "capsule_id": result["capsule_id"],
-                    "incident_id": result["incident_id"],
-                    "fixture_id": result["fixture_id"],
-                    "outcome": result["outcome"],
-                    "backend_name": result["backend_name"],
-                    "isolation_level": result["isolation_level"],
-                    "capsule_modified": False,
-                },
-                origin="caretaker",
-            )
-            return {"ok": True, **result}
+            return {
+                "ok": True,
+                "accepted": True,
+                "non_interactive": True,
+                "job": job.public_dict(include_result=False),
+            }
         if command == "incident-capsule-replay-batch":
             if replay_coordinator is None or regression_fixture_store is None:
                 raise PermissionError(
@@ -3365,46 +3412,61 @@ def main(argv: list[str] | None = None) -> int:
                     summary for summary in summaries
                     if str(summary.get("source_incident_id") or "") == str(incident_id)
                 )
-            try:
-                result = execute_historical_capsule_replays(
-                    replay_coordinator,
-                    capsule_store,
-                    summaries,
-                    entrypoint=entrypoint,
-                    source=source,
-                    limit=limit,
-                )
-            except Exception as exc:
+            def operation(job_context):
+                try:
+                    result = execute_historical_capsule_replays(
+                        replay_coordinator,
+                        capsule_store,
+                        summaries,
+                        entrypoint=entrypoint,
+                        source=source,
+                        limit=limit,
+                        cancel_check=job_context.checkpoint,
+                    )
+                except Exception as exc:
+                    _emit_incident_replay_audit(
+                        runtime,
+                        replay_scope=scope,
+                        actor_id=f"uid:{credentials[1]}",
+                        request=request,
+                        error=exc,
+                    )
+                    raise
                 _emit_incident_replay_audit(
                     runtime,
                     replay_scope=scope,
                     actor_id=f"uid:{credentials[1]}",
                     request=request,
-                    error=exc,
+                    result=result,
                 )
-                raise
-            _emit_incident_replay_audit(
-                runtime,
-                replay_scope=scope,
-                actor_id=f"uid:{credentials[1]}",
-                request=request,
-                result=result,
+                runtime.event(
+                    logger_name="caretaker.capsule",
+                    severity=20,
+                    channel=LogChannel.AUDIT,
+                    message="Historical Incident Capsule fixture replay batch completed",
+                    fields={
+                        "scope": scope,
+                        "fixture_count": result["fixture_count"],
+                        "completed_count": result["completed_count"],
+                        "dispatched_count": result["dispatched_count"],
+                        "capsule_modified": False,
+                    },
+                    origin="caretaker",
+                )
+                return {"ok": True, "scope": scope, "non_interactive": True, **result}
+
+            job = runtime_jobs.submit(
+                "incident-capsule-replay-batch",
+                client_id=f"uid:{credentials[1]}",
+                operation=operation,
             )
-            runtime.event(
-                logger_name="caretaker.capsule",
-                severity=20,
-                channel=LogChannel.AUDIT,
-                message="Historical Incident Capsule fixture replay batch completed",
-                fields={
-                    "scope": scope,
-                    "fixture_count": result["fixture_count"],
-                    "completed_count": result["completed_count"],
-                    "dispatched_count": result["dispatched_count"],
-                    "capsule_modified": False,
-                },
-                origin="caretaker",
-            )
-            return {"ok": True, "scope": scope, "non_interactive": True, **result}
+            return {
+                "ok": True,
+                "accepted": True,
+                "scope": scope,
+                "non_interactive": True,
+                "job": job.public_dict(include_result=False),
+            }
         if command == "incident-capsule-artifact":
             raw_artifact_id = str(request.get("artifact_id") or "").strip()
             if not raw_artifact_id:
@@ -3455,25 +3517,37 @@ def main(argv: list[str] | None = None) -> int:
                 summaries = capsule_store.list_summaries(limit=limit)
             else:
                 raise ValueError("incident-capsule-assist scope must be selected, incident, or all")
-            result = assist_capsules(
-                capsule_store,
-                summaries,
-                query=query,
-                model=model,
-                endpoint=str(
-                    request.get("endpoint")
-                    or "http://127.0.0.1:11434/api/generate"
-                ),
-                timeline_provider=lambda incident_id: capsule_timeline(
-                    incident_id,
-                    limit=200,
-                ),
+            def operation(job_context):
+                result = assist_capsules(
+                    capsule_store,
+                    summaries,
+                    query=query,
+                    model=model,
+                    endpoint=str(
+                        request.get("endpoint")
+                        or "http://127.0.0.1:11434/api/generate"
+                    ),
+                    usage_policy=runtime.active_policy.llm_usage,
+                    usage_gate=runtime_llm_gate,
+                    timeline_provider=lambda incident_id: capsule_timeline(
+                        incident_id,
+                        limit=200,
+                    ),
+                    cancel_check=job_context.checkpoint,
+                )
+                return {"ok": True, "scope": scope, "non_interactive": True, **result}
+
+            job = runtime_jobs.submit(
+                "incident-capsule-assist",
+                client_id=f"uid:{credentials[1]}",
+                operation=operation,
             )
             return {
                 "ok": True,
+                "accepted": True,
                 "scope": scope,
                 "non_interactive": True,
-                **result,
+                "job": job.public_dict(include_result=False),
             }
         if command == "incident-communication-draft":
             profile_id = str(request.get("audience_profile_id") or "").strip()
@@ -3522,6 +3596,8 @@ def main(argv: list[str] | None = None) -> int:
                         policy=runtime.active_policy.communications,
                         model=raw_tailor_model,
                         endpoint=raw_tailor_endpoint,
+                        usage_policy=runtime.active_policy.llm_usage,
+                        usage_gate=runtime_llm_gate,
                     ),
                 }
             draft = result.get("draft") or {}
@@ -3987,7 +4063,11 @@ def main(argv: list[str] | None = None) -> int:
             model = str(request.get("model") or "").strip()
             if not model:
                 raise ValueError("behavior-assess-history requires an Ollama model")
-            analyst = OllamaBehaviorSnapshotAnalyst(model)
+            analyst = OllamaBehaviorSnapshotAnalyst(
+                model,
+                usage_policy=runtime.active_policy.llm_usage,
+                usage_gate=runtime_llm_gate,
+            )
             return {
                 "ok": True,
                 "assessment": analyst.assess_history(
@@ -4006,7 +4086,11 @@ def main(argv: list[str] | None = None) -> int:
             model = str(request.get("model") or "").strip()
             if not model:
                 raise ValueError("behavior-assess requires an Ollama model")
-            analyst = OllamaBehaviorSnapshotAnalyst(model)
+            analyst = OllamaBehaviorSnapshotAnalyst(
+                model,
+                usage_policy=runtime.active_policy.llm_usage,
+                usage_gate=runtime_llm_gate,
+            )
             return {
                 "ok": True,
                 "assessment": analyst.assess(
@@ -4088,6 +4172,8 @@ def main(argv: list[str] | None = None) -> int:
                 provider = OllamaRootCauseProvider(
                     model=model,
                     endpoint=str(request.get("endpoint") or "http://127.0.0.1:11434/api/generate"),
+                    usage_policy=runtime.active_policy.llm_usage,
+                    usage_gate=runtime_llm_gate,
                 )
                 assessment = provider.assess(bundle)
             else:
@@ -4743,6 +4829,7 @@ def main(argv: list[str] | None = None) -> int:
         control.stop()
         server.stop()
         supervisor.watchdog.stop()
+        runtime_jobs.close()
         runtime.close()
 
 

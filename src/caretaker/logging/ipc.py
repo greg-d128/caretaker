@@ -12,6 +12,7 @@ import socket
 import struct
 import threading
 import time
+import time
 import select
 import secrets
 import errno
@@ -844,6 +845,41 @@ def control_request(path: str | Path, request: dict[str, Any], *, timeout: float
         return json.loads(response)
     finally:
         connection.close()
+
+
+def wait_for_job(
+    path: str | Path,
+    job_id: str,
+    *,
+    timeout: float = 360.0,
+    poll_interval: float = 0.25,
+) -> dict[str, Any]:
+    """Poll a bounded long-running control-plane job until it is terminal."""
+    if timeout <= 0 or poll_interval <= 0:
+        raise ValueError("job wait timeout and poll interval must be greater than zero")
+    deadline = time.monotonic() + timeout
+    terminal = {
+        "SUCCEEDED",
+        "FAILED",
+        "CANCELLED",
+        "EXPIRED",
+        "INTERRUPTED",
+    }
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"timed out waiting for Caretaker job {job_id}")
+        response = control_request(
+            path,
+            {"command": "job-status", "job_id": str(job_id)},
+            timeout=min(5.0, remaining),
+        )
+        if response.get("ok") is False:
+            return response
+        job = response.get("job")
+        if isinstance(job, dict) and str(job.get("state") or "") in terminal:
+            return response
+        time.sleep(min(poll_interval, max(0.0, deadline - time.monotonic())))
 
 
 def submit_worker_acceptance_observation(

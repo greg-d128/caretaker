@@ -25,6 +25,7 @@ from .capsule import (
 )
 from .adaptive import lightweight_dependency
 from .provider_security import validate_provider_endpoint
+from .llm import LLMRequestGate, LLMUsagePolicy
 
 
 COMMUNICATION_SCHEMA_VERSION = 1
@@ -383,6 +384,8 @@ class CommunicationDraftAssistant:
         endpoint: str = "http://127.0.0.1:11434/api/generate",
         timeout_seconds: float = 120.0,
         maximum_text_characters: int,
+        usage_policy: LLMUsagePolicy | None = None,
+        usage_gate: LLMRequestGate | None = None,
     ) -> None:
         if not str(model).strip():
             raise ValueError("communication tailoring requires a model")
@@ -394,10 +397,12 @@ class CommunicationDraftAssistant:
         self.endpoint = validate_provider_endpoint(endpoint, allow_remote_endpoint=False)
         self.timeout_seconds = timeout_seconds
         self.maximum_text_characters = maximum_text_characters
+        self._usage_gate = usage_gate or LLMRequestGate(usage_policy)
 
     def tailor(self, draft: Mapping[str, Any]) -> dict[str, Any]:
         context = self._context(draft)
-        response_text = self._chat(self._prompt(context))
+        with self._usage_gate.request():
+            response_text = self._chat(self._prompt(context))
         if len(response_text.encode("utf-8")) > COMMUNICATION_TAILORING_MAX_RESPONSE_BYTES:
             raise CommunicationPolicyError("communication tailoring response exceeds its size limit")
         try:
@@ -524,6 +529,8 @@ def tailor_communication_draft(
     model: str,
     endpoint: str = "http://127.0.0.1:11434/api/generate",
     timeout_seconds: float = 120.0,
+    usage_policy: LLMUsagePolicy | None = None,
+    usage_gate: LLMRequestGate | None = None,
 ) -> dict[str, Any]:
     """Produce an advisory language suggestion for a verified draft."""
 
@@ -550,6 +557,8 @@ def tailor_communication_draft(
         endpoint=endpoint,
         timeout_seconds=timeout_seconds,
         maximum_text_characters=audience.maximum_text_characters,
+        usage_policy=usage_policy,
+        usage_gate=usage_gate,
     )
     return assistant.tailor(draft)
 

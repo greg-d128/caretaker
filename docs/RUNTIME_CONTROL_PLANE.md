@@ -74,6 +74,31 @@ persist consequential decisions through their existing evidence or audit
 stores. Health and authority traffic therefore cannot exhaust memory through
 unbounded control-plane history.
 
+## Long-running jobs
+
+Replay batches and non-interactive Incident Explorer assistance use the same
+authenticated local control socket but are admitted to a bounded process-local
+job registry. A submission returns a `job_id` immediately. Clients poll with
+`{"command":"job-status","job_id":"..."}` and may request cooperative
+cancellation with `{"command":"job-cancel","job_id":"..."}`.
+
+`RuntimeInteractionPolicy` bounds active jobs globally and per client, pending
+jobs globally and per client, retained job records, result bytes, and execution
+duration. Health, authority, and shutdown traffic continue to use the control
+endpoint directly; long jobs do not create a second protocol. Saturated
+admission is rejected explicitly. Results are bounded summaries and are never
+treated as authority or as permission to modify an Incident Capsule. Runtime
+shutdown marks queued and running work `INTERRUPTED`; it does not claim that
+unfinished work succeeded.
+
+The supervised logging policy also exposes `[logging.llm_usage]` with
+`maximum_requests_per_minute = 6` and `maximum_concurrent_requests = 1` by
+default. The request gate rejects excess work instead of accumulating a hidden
+queue. This applies to advisory LLM calls initiated through the supervised
+runtime; feature enablement remains separate. Guard, Repair, and direct library
+provider instances have the same bounded defaults and can share an explicit
+gate when they operate in one process.
+
 ## Custom policy engine
 
 Applications may replace `DefaultRuntimePolicyEngine` with a custom implementation:

@@ -102,6 +102,7 @@ from .capsule import (
     validate_incident_capsule_policy,
 )
 from .capsule_assistance import IncidentCapsuleAssistant, assist_capsules
+from .llm import LLMRequestGate, LLMUsageLimitError, LLMUsagePolicy
 from .communications import (
     CommunicationAudiencePolicy,
     CommunicationPolicyError,
@@ -129,6 +130,12 @@ from .decorators import (
 from .control_plane import (
     ActionLineage,
     DefaultRuntimePolicyEngine,
+    RuntimeJob,
+    RuntimeJobCancelled,
+    RuntimeJobContext,
+    RuntimeJobExpired,
+    RuntimeJobRegistry,
+    RuntimeJobState,
     RuntimeAction,
     RuntimeActionKind,
     RuntimeControlPlane,
@@ -577,6 +584,12 @@ __all__ = [
     "RuntimeControlPlane",
     "RuntimeDecision",
     "RuntimeInteractionPolicy",
+    "RuntimeJob",
+    "RuntimeJobCancelled",
+    "RuntimeJobContext",
+    "RuntimeJobExpired",
+    "RuntimeJobRegistry",
+    "RuntimeJobState",
     "RuntimeInspection",
     "RuntimeInspector",
     "RuntimeSignal",
@@ -599,6 +612,9 @@ __all__ = [
     "IncidentCapsulePolicy",
     "IncidentCapsuleStore",
     "IncidentCapsuleAssistant",
+    "LLMRequestGate",
+    "LLMUsageLimitError",
+    "LLMUsagePolicy",
     "assist_capsules",
     "bounded_safe_data",
     "validate_incident_capsule_policy",

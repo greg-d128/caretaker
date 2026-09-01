@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, Sequence
 
 from .provider_security import validate_provider_endpoint
+from .llm import LLMRequestGate, LLMUsagePolicy
 
 from .domain import CandidateGeneratorKind
 
@@ -120,6 +121,8 @@ class OllamaRepairProvider:
         timeout_seconds: float = 300.0,
         keep_alive: str | int = "30m",
         allow_remote_endpoint: bool = False,
+        usage_policy: LLMUsagePolicy | None = None,
+        usage_gate: LLMRequestGate | None = None,
     ) -> None:
         self.model_name = model
         self.base_url = validate_provider_endpoint(
@@ -127,10 +130,12 @@ class OllamaRepairProvider:
         )
         self.timeout_seconds = timeout_seconds
         self.keep_alive = keep_alive
+        self._usage_gate = usage_gate or LLMRequestGate(usage_policy)
 
     def generate(self, request: RepairRequest) -> CandidateBatch:
         prompt = _repair_prompt(request)
-        payload = self._chat(prompt)
+        with self._usage_gate.request():
+            payload = self._chat(prompt)
         candidates = _parse_candidate_response(payload["message"]["content"])
         return CandidateBatch(
             provider_name=self.name,
@@ -151,7 +156,8 @@ class OllamaRepairProvider:
         candidates: Sequence[tuple[CandidateProposal, dict[str, Any]]],
     ) -> CandidateBatch:
         prompt = _synthesis_prompt(request, candidates)
-        payload = self._chat(prompt)
+        with self._usage_gate.request():
+            payload = self._chat(prompt)
         proposals = _parse_candidate_response(payload["message"]["content"])
         return CandidateBatch(
             provider_name=self.name,

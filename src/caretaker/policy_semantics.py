@@ -17,15 +17,17 @@ from typing import Any
 
 from . import adaptive as adaptive_policy
 from . import communications as communication_policy
+from . import control_plane as control_plane_policy
+from . import llm as llm_policy
 from . import policy as repair_policy
 from .guard import policy as guard_policy
 from .logging import policy as logging_policy
 from .system import policy as system_policy
 
 
-POLICY_SEMANTICS_REVIEW_GENERATION = 31
+POLICY_SEMANTICS_REVIEW_GENERATION = 33
 # Updated only after the policy truthfulness suite reviews every changed field.
-REVIEWED_POLICY_SURFACE_HASH = "86106ba5f08ea76adeb51c6ed4516266e514d1cf15a420d847ec92ed5f39cefb"
+REVIEWED_POLICY_SURFACE_HASH = "fdb6c08c133218f574718b1f0336876d9fd2fd692dd9364ae0097322d2ef3e68"
 
 
 RESERVED_SETTINGS: dict[str, str] = {
@@ -88,6 +90,8 @@ def policy_surface_schema() -> tuple[str, ...]:
         ("guard", guard_policy, False),
         ("logging", logging_policy, False),
         ("logging.communications", communication_policy, False),
+        ("logging.control_plane", control_plane_policy, True),
+        ("logging.llm_usage", llm_policy, True),
         ("system", system_policy, False),
         ("lightweight", adaptive_policy, True),
     )

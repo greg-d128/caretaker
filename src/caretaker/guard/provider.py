@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from ..provider_security import validate_provider_endpoint
+from ..llm import LLMRequestGate, LLMUsagePolicy
 from .models import (
     AssessmentSeverity,
     BehaviorAssessment,
@@ -52,6 +53,8 @@ class OllamaBehaviorAssessmentProvider:
         timeout_seconds: float = 300.0,
         keep_alive: str | int = "30m",
         allow_remote_endpoint: bool = False,
+        usage_policy: LLMUsagePolicy | None = None,
+        usage_gate: LLMRequestGate | None = None,
     ) -> None:
         self.model_name = model
         self.base_url = validate_provider_endpoint(
@@ -59,10 +62,12 @@ class OllamaBehaviorAssessmentProvider:
         )
         self.timeout_seconds = timeout_seconds
         self.keep_alive = keep_alive
+        self._usage_gate = usage_gate or LLMRequestGate(usage_policy)
 
     def assess(self, request: BehaviorAssessmentRequest) -> BehaviorAssessment:
         prompt = _assessment_prompt(request)
-        payload = self._chat(prompt)
+        with self._usage_gate.request():
+            payload = self._chat(prompt)
         content = payload["message"]["content"]
         parsed = json.loads(content)
         severity_name = str(parsed.get("severity", "MEDIUM")).upper()

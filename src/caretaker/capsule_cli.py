@@ -11,7 +11,7 @@ from uuid import UUID
 from .capsule import IncidentCapsuleStore
 from .capsule_assistance import assist_capsules
 from .console import discover_control_socket
-from .logging.ipc import control_request
+from .logging.ipc import control_request, wait_for_job
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -60,6 +60,21 @@ def main(argv: list[str] | None = None) -> int:
         if args.capsule_id:
             request["capsule_id"] = args.capsule_id
         result = control_request(socket_path, request, timeout=360.0)
+        if result.get("accepted") and isinstance(result.get("job"), dict):
+            completed = wait_for_job(
+                socket_path,
+                str(result["job"]["job_id"]),
+                timeout=3600.0,
+            )
+            job = completed.get("job")
+            if isinstance(job, dict) and isinstance(job.get("result"), dict):
+                result = {
+                    **job["result"],
+                    "job_id": job.get("job_id"),
+                    "job_state": job.get("state"),
+                }
+            else:
+                result = completed
     else:
         capsule_directory = data_directory / "incident-capsules"
         if not capsule_directory.is_dir():

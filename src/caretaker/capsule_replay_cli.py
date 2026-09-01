@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from .console import discover_control_socket
-from .logging.ipc import control_request
+from .logging.ipc import control_request, wait_for_job
 from .replay import ReplayResultStore
 
 
@@ -99,6 +99,21 @@ def main(argv: list[str] | None = None) -> int:
         if args.target_id:
             request["target_id"] = args.target_id
     result = control_request(socket_path, request, timeout=360.0)
+    if result.get("accepted") and isinstance(result.get("job"), dict):
+        completed = wait_for_job(
+            socket_path,
+            str(result["job"]["job_id"]),
+            timeout=3600.0,
+        )
+        job = completed.get("job")
+        if isinstance(job, dict) and isinstance(job.get("result"), dict):
+            result = {
+                **job["result"],
+                "job_id": job.get("job_id"),
+                "job_state": job.get("state"),
+            }
+        else:
+            result = completed
     if args.persist_result:
         try:
             persisted = ReplayResultStore(data_directory).record(result)

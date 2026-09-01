@@ -23,6 +23,7 @@ from ..control_plane import (
     SignalDomain,
     SignalSeverity,
 )
+from ..llm import LLMRequestGate
 from ..evidence.identity import identify_function
 from ..evidence.models import (
     BehaviorEvent,
@@ -141,6 +142,7 @@ class GuardEngine(GuardFacade):
         )
         self.control_plane = control_plane or RuntimeControlPlane()
         self.provider = provider
+        self._llm_gate = LLMRequestGate(self.policy.llm_review.usage)
         self.run_id = run_id or uuid4()
         self.work_registry = work_registry
         self.aggregator = BehaviorAggregator(self.store, self.policy.aggregation)
@@ -1617,12 +1619,13 @@ class GuardEngine(GuardFacade):
         bundle = replace(bundle, deviations=bundle.deviations[:maximum])
         if max(item.significance_score for item in bundle.deviations) < self.policy.llm_review.minimum_significance:
             return None
-        assessment = self.provider.assess(
-            BehaviorAssessmentRequest(
-                evidence=bundle,
-                policy_summary=self._policy_summary(),
+        with self._llm_gate.request():
+            assessment = self.provider.assess(
+                BehaviorAssessmentRequest(
+                    evidence=bundle,
+                    policy_summary=self._policy_summary(),
+                )
             )
-        )
         with self._lock:
             self._assessments[assessment.assessment_id] = assessment
             self._assessments.move_to_end(assessment.assessment_id)

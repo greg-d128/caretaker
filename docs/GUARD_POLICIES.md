@@ -125,7 +125,7 @@ work.
 
 ## LLM review
 
-`LLMReviewPolicy` enables bounded advisory assessment after deterministic extraction. It should define thresholds for when review is useful and limits on evidence volume.
+`LLMReviewPolicy` enables bounded advisory assessment after deterministic extraction. It defines thresholds for when review is useful and limits on evidence volume. Its `usage` policy defaults to six requests per minute and one concurrent request. Excess requests are rejected explicitly; they are not queued from a Guard hook. A rejected advisory request cannot change Guard, Repair, policy, authority, or Incident Capsule state.
 
 ## Actions
 

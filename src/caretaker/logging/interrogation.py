@@ -12,6 +12,7 @@ from typing import Any, Mapping, Protocol
 from uuid import UUID, uuid4
 
 from ..provider_security import validate_provider_endpoint
+from ..llm import LLMRequestGate, LLMUsagePolicy
 from .models import LogEnvelope, RootCauseAssessment, RootCauseConfidence, RootCauseHypothesis
 
 
@@ -128,12 +129,13 @@ class OllamaRootCauseProvider:
     provider_name = "ollama"
     prompt_version = "caretaker-logging-root-cause-v1"
 
-    def __init__(self, *, model: str, endpoint: str = "http://127.0.0.1:11434/api/generate", timeout_seconds: float = 120.0, allow_remote_endpoint: bool = False) -> None:
+    def __init__(self, *, model: str, endpoint: str = "http://127.0.0.1:11434/api/generate", timeout_seconds: float = 120.0, allow_remote_endpoint: bool = False, usage_policy: LLMUsagePolicy | None = None, usage_gate: LLMRequestGate | None = None) -> None:
         self.model_name = model
         self.endpoint = validate_provider_endpoint(
             endpoint, allow_remote_endpoint=allow_remote_endpoint
         )
         self.timeout_seconds = timeout_seconds
+        self._usage_gate = usage_gate or LLMRequestGate(usage_policy)
 
     @lightweight_dependency(target_id="caretaker.dependency.ollama.logging")
     def assess(self, bundle: LoggingEvidenceBundle) -> RootCauseAssessment:
@@ -157,8 +159,9 @@ class OllamaRootCauseProvider:
             data=json.dumps({"model": self.model_name, "prompt": prompt, "stream": False, "format": "json"}).encode(),
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-            outer = json.loads(response.read())
+        with self._usage_gate.request():
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                outer = json.loads(response.read())
         data = json.loads(outer["response"])
         hypothesis = RootCauseHypothesis(
             statement=str(data.get("primary_hypothesis", "No primary hypothesis")),

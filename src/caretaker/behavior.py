@@ -21,6 +21,7 @@ from typing import Any, Callable, Iterable, Mapping
 from uuid import UUID, uuid4
 
 from .domain import ValueSnapshot
+from .llm import LLMRequestGate, LLMUsagePolicy
 from .provider_security import validate_provider_endpoint
 from .logging.models import RuntimeRecordIntegrityMode, RuntimeSignedArtifact
 from .logging.signing import (
@@ -3597,12 +3598,15 @@ class OllamaBehaviorSnapshotAnalyst:
         endpoint: str = "http://127.0.0.1:11434/api/generate",
         timeout_seconds: float = 180.0,
         allow_remote_endpoint: bool = False,
+        usage_policy: LLMUsagePolicy | None = None,
+        usage_gate: LLMRequestGate | None = None,
     ) -> None:
         self.model = model
         self.endpoint = validate_provider_endpoint(
             endpoint, allow_remote_endpoint=allow_remote_endpoint
         )
         self.timeout_seconds = timeout_seconds
+        self._usage_gate = usage_gate or LLMRequestGate(usage_policy)
 
     def assess(self, comparison: Mapping[str, Any], *, objective: str | None = None) -> dict[str, Any]:
         return self._assess_evidence(
@@ -3663,8 +3667,9 @@ class OllamaBehaviorSnapshotAnalyst:
             headers={"Content-Type": "application/json"},
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-                outer = json.loads(response.read())
+            with self._usage_gate.request():
+                with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                    outer = json.loads(response.read())
         except urllib.error.URLError as exc:
             raise RuntimeError(f"Ollama behavior snapshot assessment failed: {exc}") from exc
         parsed = json.loads(outer["response"])

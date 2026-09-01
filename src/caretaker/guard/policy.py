@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 
 from .models import GuardDeviationAction, GuardMode, InspectionLevel
 from ..logging.models import RequiredCapabilityFailureAction
+from ..llm import LLMUsagePolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +133,7 @@ class LLMReviewPolicy:
     maximum_deviations: int = 20
     maximum_representative_events: int = 20
     advisory_only: bool = True
+    usage: LLMUsagePolicy = field(default_factory=LLMUsagePolicy)
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,6 +272,13 @@ def validate_guard_policy(policy: GuardPolicy) -> None:
         )
     if policy.retention.maximum_raw_events <= 0:
         errors.append("retention.maximum_raw_events must be greater than zero")
+    try:
+        LLMUsagePolicy(
+            maximum_requests_per_minute=policy.llm_review.usage.maximum_requests_per_minute,
+            maximum_concurrent_requests=policy.llm_review.usage.maximum_concurrent_requests,
+        )
+    except ValueError as exc:
+        errors.append(f"llm_review.usage: {exc}")
     snapshots = policy.snapshots
     if snapshots.statistics_target <= 0:
         errors.append("snapshots.statistics_target must be greater than zero")

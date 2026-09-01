@@ -21,6 +21,8 @@ from ..communications import (
     validate_incident_communication_policy,
 )
 from ..domain import ValidationIsolationLevel
+from ..llm import LLMUsagePolicy
+from ..control_plane import RuntimeInteractionPolicy
 from .models import (
     AnchorFailureAction,
     AttachmentOverloadAction,
@@ -327,6 +329,11 @@ class OperatorLoggingPolicy:
     attachments: AttachmentPolicy = field(default_factory=AttachmentPolicy)
     capsules: IncidentCapsulePolicy = field(default_factory=IncidentCapsulePolicy)
     communications: IncidentCommunicationPolicy = field(default_factory=IncidentCommunicationPolicy)
+    control_plane: RuntimeInteractionPolicy = field(default_factory=RuntimeInteractionPolicy)
+    # Shared process-local budget for advisory language-model calls initiated
+    # through the supervised runtime. Feature-specific enablement remains
+    # separate; this only limits usage once a feature is enabled.
+    llm_usage: LLMUsagePolicy = field(default_factory=LLMUsagePolicy)
     regression: RegressionFixturePolicy = field(default_factory=RegressionFixturePolicy)
     signing: RuntimeSigningPolicy = field(default_factory=RuntimeSigningPolicy)
     audit: AuditStreamPolicy = field(default_factory=AuditStreamPolicy)
@@ -448,6 +455,10 @@ def validate_operator_logging_policy(policy: OperatorLoggingPolicy) -> None:
         errors.append("interrogation.maximum_representative_records cannot exceed maximum_records")
     if policy.interrogation.llm_enabled and not policy.interrogation.enabled:
         errors.append("interrogation.llm_enabled requires interrogation.enabled=True")
+    if not isinstance(policy.llm_usage, LLMUsagePolicy):
+        errors.append("logging.llm_usage must be an LLMUsagePolicy")
+    if not isinstance(policy.control_plane, RuntimeInteractionPolicy):
+        errors.append("logging.control_plane must be a RuntimeInteractionPolicy")
     if policy.baseline.enabled:
         errors.append("logging.baseline automatic baseline policy is reserved; Guard behavior snapshots are the implemented baseline mechanism")
     if policy.metrics.enabled and not policy.monitoring.enabled:
@@ -724,6 +735,8 @@ def load_operator_policy(path: str | Path) -> tuple[OperatorLoggingPolicy, Loggi
     attachment_data = dict(log.get("attachments", {}))
     capsule_data = dict(log.get("capsules", {}))
     communication_data = dict(log.get("communications", {}))
+    control_plane_data = dict(log.get("control_plane", {}))
+    llm_usage_data = dict(log.get("llm_usage", {}))
     regression_data = dict(log.get("regression", {}))
     if "replay_minimum_isolation" in regression_data:
         regression_data["replay_minimum_isolation"] = _enum(
@@ -807,6 +820,8 @@ def load_operator_policy(path: str | Path) -> tuple[OperatorLoggingPolicy, Loggi
             **communication_data,
             **({"audiences": _communication_audiences(audience_data)} if audience_data is not None else {}),
         ),
+        control_plane=RuntimeInteractionPolicy(**control_plane_data),
+        llm_usage=LLMUsagePolicy(**llm_usage_data),
         regression=RegressionFixturePolicy(**regression_data),
         signing=RuntimeSigningPolicy(**{
             **signing_data,

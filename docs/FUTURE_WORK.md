@@ -2140,6 +2140,12 @@ Use small family-local migrations rather than a universal migration framework.
 
 #### 7. Bound the control plane and classify long-running commands
 
+**Status: Implemented in development tree for bounded control-plane history,
+authenticated job submission/status/cancellation, per-client and global job
+capacity, bounded results and deadlines, cooperative interruption, and
+policy-controlled LLM rate/concurrency limits. Durable restart-visible job
+records and richer progress reporting remain future work.**
+
 **Locations:** `src/caretaker/control_plane.py` (`RuntimeControlPlane`),
 `src/caretaker/logging/ipc.py`, and command handlers in `run.py`/`operator.py`.
 
