@@ -15,6 +15,7 @@ import inspect
 import importlib
 import importlib.machinery
 import json
+import math
 import os
 import re
 import secrets
@@ -56,6 +57,7 @@ _AGGREGATION_SCOPE_CONTEXT: contextvars.ContextVar[
 ] = contextvars.ContextVar("caretaker_aggregation_scope", default=None)
 _STATE_CHECKPOINT_CALLS = 100
 _STATE_CHECKPOINT_SECONDS = 30.0
+_MAX_RESOLVED_SCOPE_STATES = 128
 _ADAPTIVE_WORKER_ID = f"{os.getpid()}-{uuid4().hex}"
 
 
@@ -533,6 +535,10 @@ class _AdaptiveController:
         self._authority_fingerprint: str | None = None
         self._stale_persisted_state = False
         self._aggregation_batcher: AdaptiveObservationBatcher | None = None
+        self._scope_exception_events: dict[str, deque[float]] = {}
+        self._scope_timing_events: dict[str, deque[float]] = {}
+        self._known_scopes: dict[str, None] = {}
+        self._scope_policy_cache: dict[str, LightweightPolicy] = {}
         self.policy = self._effective_policy()
         validate_lightweight_policy(self.policy)
         self._policy_fingerprint = _policy_hash(self.policy)
@@ -581,6 +587,16 @@ class _AdaptiveController:
                 aggregation_scope_token = self._set_aggregation_scope_context(
                     args, kwargs
                 )
+                resolved_scope = self._current_resolved_scope()
+                threshold_policy = self._effective_scope_policy(resolved_scope)
+                if threshold_policy is None and resolved_scope is not None:
+                    # An unsupported or malformed scoped authority overlay must
+                    # not become a population-specific decision by fallback.
+                    # Evidence batching may continue, but local escalation for
+                    # that population is disabled until its policy is valid.
+                    threshold_policy = None
+                elif threshold_policy is None:
+                    threshold_policy = self.policy
                 level = self.state.level
                 stage = self.state.stage
                 sample_behavior = self._advance_sampling_counter(level)
@@ -588,7 +604,10 @@ class _AdaptiveController:
                     self.state.behavior_observation_calls += 1
                     self._record_aggregation(behavior_observation_calls=1)
 
-            timing_enabled = self.policy.soft_timing.enabled
+            timing_enabled = (
+                threshold_policy is not None
+                and threshold_policy.soft_timing.enabled
+            )
             started = time.perf_counter() if timing_enabled else None
             failed = False
             transitioned_during_call = False
@@ -614,12 +633,22 @@ class _AdaptiveController:
                 return result
             except BaseException as exc:
                 failed = True
-                transitioned_during_call = self._observe_exception(exc, observed_level=level)
+                transitioned_during_call = self._observe_exception(
+                    exc,
+                    observed_level=level,
+                    policy=threshold_policy,
+                    aggregation_scope=resolved_scope,
+                )
                 raise
             finally:
                 elapsed = (time.perf_counter() - started) if started is not None else 0.0
                 timing_breach, timing_transition = (
-                    self._observe_timing(elapsed, observed_level=level)
+                    self._observe_timing(
+                        elapsed,
+                        observed_level=level,
+                        policy=threshold_policy,
+                        aggregation_scope=resolved_scope,
+                    )
                     if timing_enabled
                     else (False, False)
                 )
@@ -909,6 +938,8 @@ class _AdaptiveController:
         exception: BaseException,
         *,
         observed_level: InstrumentationLevel,
+        policy: LightweightPolicy | None,
+        aggregation_scope: str | None,
     ) -> bool:
         now = time.time()
         transitioned = False
@@ -922,14 +953,23 @@ class _AdaptiveController:
                 })
                 if observed_level is InstrumentationLevel.BEHAVIOR:
                     self._record_problem_reproduction("exception")
-            policy = self.policy.exception
-            if policy.enabled:
-                self._append_window(self._exception_events, now, policy.window_seconds)
+            exception_policy = policy.exception if policy is not None else None
+            events = self._exception_events
+            if aggregation_scope is not None:
+                scoped_events = self._scope_event_queue(
+                    self._scope_exception_events,
+                    aggregation_scope,
+                )
+                if scoped_events is None:
+                    return False
+                events = scoped_events
+            if exception_policy is not None and exception_policy.enabled:
+                self._append_window(events, now, exception_policy.window_seconds)
                 self._persist_event_state()
-                if len(self._exception_events) >= policy.occurrences:
+                if len(events) >= exception_policy.occurrences:
                     transitioned = self._request_signal_escalation(
-                        policy.promote_to,
-                        f"{policy.occurrences} exceptions within {policy.window_seconds:g}s",
+                        exception_policy.promote_to,
+                        f"{exception_policy.occurrences} exceptions within {exception_policy.window_seconds:g}s",
                     )
         return transitioned
 
@@ -938,9 +978,11 @@ class _AdaptiveController:
         elapsed: float,
         *,
         observed_level: InstrumentationLevel,
+        policy: LightweightPolicy | None,
+        aggregation_scope: str | None,
     ) -> tuple[bool, bool]:
-        policy = self.policy.soft_timing
-        if not policy.enabled or elapsed <= policy.seconds:
+        timing_policy = policy.soft_timing if policy is not None else None
+        if timing_policy is None or not timing_policy.enabled or elapsed <= timing_policy.seconds:
             return False, False
         now = time.time()
         transitioned = False
@@ -955,16 +997,25 @@ class _AdaptiveController:
                     "timestamp": utcnow_iso(),
                     "kind": "soft-timing-breach",
                     "elapsed_seconds": elapsed,
-                    "threshold_seconds": policy.seconds,
+                    "threshold_seconds": timing_policy.seconds,
                 })
                 if observed_level is InstrumentationLevel.BEHAVIOR:
                     self._record_problem_reproduction("soft-timing-breach")
-            self._append_window(self._timing_events, now, policy.window_seconds)
+            events = self._timing_events
+            if aggregation_scope is not None:
+                scoped_events = self._scope_event_queue(
+                    self._scope_timing_events,
+                    aggregation_scope,
+                )
+                if scoped_events is None:
+                    return True, False
+                events = scoped_events
+            self._append_window(events, now, timing_policy.window_seconds)
             self._persist_event_state()
-            if len(self._timing_events) >= policy.occurrences:
+            if len(events) >= timing_policy.occurrences:
                 transitioned = self._request_signal_escalation(
-                    policy.promote_to,
-                    f"{policy.occurrences} soft timing breaches > {policy.seconds:g}s within {policy.window_seconds:g}s",
+                    timing_policy.promote_to,
+                    f"{timing_policy.occurrences} soft timing breaches > {timing_policy.seconds:g}s within {timing_policy.window_seconds:g}s",
                 )
         return True, transitioned
 
@@ -1194,6 +1245,8 @@ class _AdaptiveController:
             self.state.repair_requested = False
         self._exception_events.clear()
         self._timing_events.clear()
+        self._scope_exception_events.clear()
+        self._scope_timing_events.clear()
         self._persist()
         self._publish_state()
         return True
@@ -1376,6 +1429,10 @@ class _AdaptiveController:
         self.code_hash = _function_hash(self.function)
         self._exception_events.clear()
         self._timing_events.clear()
+        self._scope_exception_events.clear()
+        self._scope_timing_events.clear()
+        self._known_scopes.clear()
+        self._scope_policy_cache.clear()
         self._managed_wrapper = None
         self._behavior_registered = False
         self._behavior_lease_remaining = 0
@@ -1438,6 +1495,9 @@ class _AdaptiveController:
         # candidate lifecycle and discard the adaptive trigger/evidence episode.
         self._exception_events.clear()
         self._timing_events.clear()
+        self._scope_exception_events.clear()
+        self._scope_timing_events.clear()
+        self._scope_policy_cache.clear()
         self._behavior_lease_remaining = 0
         self._dirty_state_calls = 0
         preserve_candidate = bool(
@@ -1492,10 +1552,9 @@ class _AdaptiveController:
         # A fixed scope is part of the controller's effective identity.  Apply
         # a second, exact-target lookup so a supervisor runtime lease can
         # change thresholds for that population without changing the target's
-        # other populations.  Resolver-driven scopes are deliberately left on
-        # the base target: the controller has one policy/state object and must
-        # not pretend that a per-call resolver has population-specific policy
-        # state until that model exists.
+        # other populations. Resolver-driven scopes retain this base policy
+        # here; their bounded exception and soft-timing overlays are resolved
+        # per call without replacing the controller-wide policy/state object.
         fixed_scope = policy.aggregation.aggregation_scope
         if fixed_scope and self.aggregation_scope_resolver is None:
             policy = context.apply(
@@ -1506,6 +1565,83 @@ class _AdaptiveController:
         self._authority_fingerprint = context.effective.fingerprint
         return policy
 
+    def _effective_scope_policy(
+        self, aggregation_scope: str | None
+    ) -> LightweightPolicy | None:
+        """Resolve one resolver population without widening shared controller state.
+
+        Resolver populations may vary on every call, so their policy is derived
+        from the exact extended target identity and is never installed as the
+        controller-wide policy.  Only exception and soft-timing thresholds are
+        currently population-local; changes to sampling, aggregation, Repair,
+        or lifecycle settings are rejected until those states are independent.
+        """
+        if self.aggregation_scope_resolver is None or aggregation_scope is None:
+            return self.policy
+        scope = str(aggregation_scope).strip()
+        if not scope:
+            return self.policy
+        if scope not in self._known_scopes:
+            if len(self._known_scopes) >= _MAX_RESOLVED_SCOPE_STATES:
+                return None
+            self._known_scopes[scope] = None
+        cached = self._scope_policy_cache.get(scope)
+        if cached is not None:
+            return cached
+        try:
+            candidate = _authority_context().apply(
+                self.policy,
+                prefix="lightweight",
+                target_id=extended_aggregation_target_id(self.target_id, scope),
+            )
+            if (
+                candidate.aggregation.aggregation_scope
+                != self.policy.aggregation.aggregation_scope
+            ):
+                return None
+            for name in (
+                "sampling",
+                "demotion",
+                "repair_evidence",
+                "aggregation",
+                "initial_level",
+                "behavior_executions",
+                "persist_state",
+            ):
+                if getattr(candidate, name) != getattr(self.policy, name):
+                    return None
+            validate_lightweight_policy(candidate)
+        except Exception:
+            return None
+        if len(self._scope_policy_cache) >= _MAX_RESOLVED_SCOPE_STATES:
+            return None
+        self._scope_policy_cache[scope] = candidate
+        return candidate
+
+    def _current_resolved_scope(self) -> str | None:
+        if self.aggregation_scope_resolver is None:
+            return None
+        context = _AGGREGATION_SCOPE_CONTEXT.get()
+        if context is None or not context[1]:
+            return None
+        return context[0]
+
+    def _scope_event_queue(
+        self,
+        queues: dict[str, deque[float]],
+        scope: str | None,
+    ) -> deque[float] | None:
+        if self.aggregation_scope_resolver is None or scope is None:
+            return None
+        queue = queues.get(scope)
+        if queue is not None:
+            return queue
+        if len(queues) >= _MAX_RESOLVED_SCOPE_STATES:
+            return None
+        queue = deque()
+        queues[scope] = queue
+        return queue
+
     def _aggregation_root(self) -> Path:
         if self._state_directory is None:
             return Path(os.environ.get("CARETAKER_DATA_DIR", "./caretaker-data"))
@@ -1514,11 +1650,25 @@ class _AdaptiveController:
     def _aggregation_context(
         self,
         aggregation_scope: str | None | object = _AGGREGATION_SCOPE_UNSET,
+        *,
+        policy: LightweightPolicy | None = None,
     ) -> dict[str, str | None]:
         scope = (
             self.policy.aggregation.aggregation_scope
             if aggregation_scope is _AGGREGATION_SCOPE_UNSET
             else aggregation_scope
+        )
+        context_policy = policy or self.policy
+        if (
+            policy is None
+            and self.aggregation_scope_resolver is not None
+            and isinstance(scope, str)
+        ):
+            context_policy = self._effective_scope_policy(scope) or self.policy
+        policy_fingerprint = (
+            _policy_hash(context_policy)
+            if context_policy is not self.policy
+            else self._policy_fingerprint
         )
         return {
             "target_id": self.target_id,
@@ -1527,8 +1677,8 @@ class _AdaptiveController:
             # change causes a new hash and therefore a new supervisor aggregate.
             "generation_id": self.code_hash,
             "code_hash": self.code_hash,
-            "monitoring_fingerprint": _monitoring_policy_hash(self.policy),
-            "policy_fingerprint": self._policy_fingerprint,
+            "monitoring_fingerprint": _monitoring_policy_hash(context_policy),
+            "policy_fingerprint": policy_fingerprint,
             "authority_policy_generation": str(_authority_context().effective.generation),
             "authority_policy_fingerprint": self._authority_fingerprint or "",
         }
@@ -1554,6 +1704,10 @@ class _AdaptiveController:
                 raise ValueError("aggregation scope resolver must return a string or None")
             scope = raw_scope.strip() if raw_scope is not None else None
             extended_aggregation_target_id(self.target_id, scope)
+            if scope is not None and scope not in self._known_scopes:
+                if len(self._known_scopes) >= _MAX_RESOLVED_SCOPE_STATES:
+                    raise ValueError("resolved aggregation scope limit has been reached")
+                self._known_scopes[scope] = None
         except Exception as exc:
             self._diagnostic(
                 {
@@ -1611,6 +1765,33 @@ class _AdaptiveController:
             )
             self._rebind_aggregation_batcher()
 
+    @staticmethod
+    def _promotion_policy_for(policy: LightweightPolicy) -> dict[str, Any]:
+        return {
+            "exception": {
+                "enabled": policy.exception.enabled,
+                "occurrences": policy.exception.occurrences,
+                "window_seconds": policy.exception.window_seconds,
+                "promote_to": policy.exception.promote_to.name,
+            },
+            "soft_timing": {
+                "enabled": policy.soft_timing.enabled,
+                "occurrences": policy.soft_timing.occurrences,
+                "window_seconds": policy.soft_timing.window_seconds,
+                "promote_to": policy.soft_timing.promote_to.name,
+            },
+            "repair_evidence": {
+                "enabled": policy.repair_evidence.enabled,
+                "minimum_behavior_samples": policy.repair_evidence.minimum_behavior_samples,
+                "minimum_observation_calls": policy.repair_evidence.minimum_observation_calls,
+                "minimum_duration_seconds": policy.repair_evidence.minimum_duration_seconds,
+                "require_problem_reproduction": policy.repair_evidence.require_problem_reproduction,
+            },
+            "transition_timeout_seconds": policy.aggregation.transition_timeout_seconds,
+            "backpressure_action": policy.aggregation.backpressure_action.name,
+            "allow_persistent_acceptance": policy.aggregation.allow_persistent_acceptance,
+        }
+
     def aggregation_status(self) -> dict[str, Any]:
         aggregation_scope_mode = (
             "RESOLVER"
@@ -1621,30 +1802,25 @@ class _AdaptiveController:
                 else "APPLICATION"
             )
         )
-        promotion_policy = {
-            "exception": {
-                "enabled": self.policy.exception.enabled,
-                "occurrences": self.policy.exception.occurrences,
-                "window_seconds": self.policy.exception.window_seconds,
-                "promote_to": self.policy.exception.promote_to.name,
-            },
-            "soft_timing": {
-                "enabled": self.policy.soft_timing.enabled,
-                "occurrences": self.policy.soft_timing.occurrences,
-                "window_seconds": self.policy.soft_timing.window_seconds,
-                "promote_to": self.policy.soft_timing.promote_to.name,
-            },
-            "repair_evidence": {
-                "enabled": self.policy.repair_evidence.enabled,
-                "minimum_behavior_samples": self.policy.repair_evidence.minimum_behavior_samples,
-                "minimum_observation_calls": self.policy.repair_evidence.minimum_observation_calls,
-                "minimum_duration_seconds": self.policy.repair_evidence.minimum_duration_seconds,
-                "require_problem_reproduction": self.policy.repair_evidence.require_problem_reproduction,
-            },
-            "transition_timeout_seconds": self.policy.aggregation.transition_timeout_seconds,
-            "backpressure_action": self.policy.aggregation.backpressure_action.name,
-            "allow_persistent_acceptance": self.policy.aggregation.allow_persistent_acceptance,
-        }
+        promotion_policy = self._promotion_policy_for(self.policy)
+        scope_contexts: list[dict[str, Any]] = []
+        if self.aggregation_scope_resolver is not None:
+            for scope in sorted(self._known_scopes):
+                scope_policy = self._effective_scope_policy(scope)
+                if scope_policy is None:
+                    continue
+                context = self._aggregation_context(scope, policy=scope_policy)
+                context.update(
+                    {
+                        "aggregation_target_id": extended_aggregation_target_id(
+                            self.target_id,
+                            scope,
+                        ),
+                        "aggregation_scope_mode": "RESOLVER",
+                        "promotion_policy": self._promotion_policy_for(scope_policy),
+                    }
+                )
+                scope_contexts.append(context)
         batcher = self._aggregation_batcher
         if batcher is None:
             return {
@@ -1660,6 +1836,7 @@ class _AdaptiveController:
                 ),
                 "authority_policy_fingerprint": self._authority_fingerprint,
                 "promotion_policy": promotion_policy,
+                "scope_contexts": scope_contexts,
                 "transition_timeout_seconds": self.policy.aggregation.transition_timeout_seconds,
                 "backpressure_action": self.policy.aggregation.backpressure_action.name,
                 "allow_persistent_acceptance": self.policy.aggregation.allow_persistent_acceptance,
@@ -1675,6 +1852,7 @@ class _AdaptiveController:
             **batcher.context,
             "aggregation_scope_mode": aggregation_scope_mode,
             "promotion_policy": promotion_policy,
+            "scope_contexts": scope_contexts,
         }
 
     def _record_aggregation(self, **increments: int) -> None:
@@ -1733,6 +1911,41 @@ class _AdaptiveController:
                 float(item) for item in data.get("timing_events", ())
                 if float(item) >= now - timing_window
             )
+            raw_scopes = data.get("resolved_scopes", ())
+            if isinstance(raw_scopes, (list, tuple)):
+                for raw_scope in raw_scopes[:_MAX_RESOLVED_SCOPE_STATES]:
+                    scope = str(raw_scope).strip()
+                    if scope and len(scope) <= 256:
+                        self._known_scopes[scope] = None
+            for field_name, queues, window_seconds in (
+                (
+                    "scope_exception_events",
+                    self._scope_exception_events,
+                    exception_window,
+                ),
+                (
+                    "scope_timing_events",
+                    self._scope_timing_events,
+                    timing_window,
+                ),
+            ):
+                raw_queues = data.get(field_name, {})
+                if not isinstance(raw_queues, Mapping):
+                    continue
+                for raw_scope, raw_events in list(raw_queues.items())[:_MAX_RESOLVED_SCOPE_STATES]:
+                    scope = str(raw_scope).strip()
+                    if not scope or len(scope) > 256 or not isinstance(raw_events, (list, tuple)):
+                        continue
+                    events = deque()
+                    for raw_event in raw_events[-_MAX_RESOLVED_SCOPE_STATES:]:
+                        try:
+                            event = float(raw_event)
+                        except (TypeError, ValueError):
+                            continue
+                        if math.isfinite(event) and event >= now - window_seconds:
+                            events.append(event)
+                    if events:
+                        queues[scope] = events
             return AdaptiveInstrumentationState(
                 target_id=self.target_id,
                 code_hash=self.code_hash,
@@ -1813,6 +2026,15 @@ class _AdaptiveController:
         payload["authority_fingerprint"] = self._authority_fingerprint
         payload["exception_events"] = list(self._exception_events)
         payload["timing_events"] = list(self._timing_events)
+        payload["scope_exception_events"] = {
+            scope: list(events)
+            for scope, events in sorted(self._scope_exception_events.items())
+        }
+        payload["scope_timing_events"] = {
+            scope: list(events)
+            for scope, events in sorted(self._scope_timing_events.items())
+        }
+        payload["resolved_scopes"] = list(sorted(self._known_scopes))[:_MAX_RESOLVED_SCOPE_STATES]
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
         fd, temporary = tempfile.mkstemp(prefix=".adaptive-", dir=str(self._state_path.parent))
         try:

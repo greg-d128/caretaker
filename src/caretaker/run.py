@@ -1367,9 +1367,9 @@ def _adaptive_threshold_policy_settings(
     """Translate validated changes into target-scoped authority settings.
 
     A fixed, policy-declared population can be addressed by its exact extended
-    target identity. Resolver-driven populations still cannot be activated:
-    the current controller does not maintain independent policy/state for each
-    population returned by a per-call resolver.
+    target identity. Resolver-driven populations currently support only
+    exception and soft-timing overlays; shared Repair and lifecycle state is
+    not treated as population-specific authority.
     """
     target = str(target_id).strip()
     if not target:
@@ -1380,13 +1380,30 @@ def _adaptive_threshold_policy_settings(
         raise ValueError(
             "adaptive threshold application requires a known aggregation scope mode"
         )
-    if scope and resolution != "FIXED":
+    if scope and resolution not in {"FIXED", "RESOLVER"}:
         raise ValueError(
             "scope-specific adaptive threshold application requires a fixed "
-            "policy-declared scope; resolver-driven activation is not implemented"
+            "or resolver-backed scope"
         )
     if not isinstance(changes, Mapping) or not changes:
         raise ValueError("adaptive threshold application requires threshold changes")
+    if scope and resolution == "RESOLVER":
+        resolver_supported = {
+            "exception.occurrences",
+            "exception.window_seconds",
+            "soft_timing.occurrences",
+            "soft_timing.window_seconds",
+        }
+        unsupported = sorted(
+            str(name).strip()
+            for name in changes
+            if str(name).strip() not in resolver_supported
+        )
+        if unsupported:
+            raise ValueError(
+                "resolver-driven scoped activation supports only exception and "
+                f"soft-timing thresholds; unsupported fields: {', '.join(unsupported)}"
+            )
     setting_target = (
         extended_aggregation_target_id(target, scope) if scope else target
     )
@@ -1831,7 +1848,22 @@ def main(argv: list[str] | None = None) -> int:
         scope_resolutions: dict[str, str] = {}
         promotion_policy_values: dict[str, object] = {}
         ambiguous_targets: set[str] = set()
-        for item in contexts:
+        expanded_contexts: list[dict[str, Any]] = []
+        for raw_item in contexts:
+            if not isinstance(raw_item, dict):
+                continue
+            expanded_contexts.append(raw_item)
+            nested = raw_item.get("scope_contexts")
+            if not isinstance(nested, list):
+                continue
+            for nested_item in nested:
+                if not isinstance(nested_item, dict):
+                    continue
+                expanded = dict(raw_item)
+                expanded.update(nested_item)
+                expanded.pop("scope_contexts", None)
+                expanded_contexts.append(expanded)
+        for item in expanded_contexts:
             if not isinstance(item, dict) or not item.get("enabled"):
                 continue
             target = str(item.get("target_id") or "").strip()

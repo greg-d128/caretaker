@@ -240,11 +240,15 @@ stale or expired proposal cannot be reviewed.
 Population-scoped threshold proposals use the exact extended target identity
 when the population is a fixed scope declared by the effective policy. This
 keeps a runtime lease limited to that population instead of affecting every
-population for the base target. Resolver-driven scopes remain reviewable
-evidence and fail closed at activation: the current controller has one policy
-and state object rather than independent policy/state for every population a
-per-call resolver may return. Dynamic population membership and its staged
-policy semantics remain future work.
+population for the base target. Resolver-driven scopes also use exact extended
+target identities and maintain bounded, persisted exception and soft-timing
+threshold windows independently for each observed population. Their effective
+scope policy is never installed as the controller-wide policy. Changes to
+sampling, aggregation, Repair evidence, or lifecycle settings remain reviewable
+evidence and fail closed because those states are still target-wide. Scope
+membership is application-supplied and bounded; automatic discovery, changing
+membership policy, and staged per-population Repair semantics remain future
+work.
 Before acceptance, an authenticated operator can use
 `adaptive-threshold-rollback` with an explicit confirmation and reason. This
 releases the transition's target-scoped runtime lease when present and writes a

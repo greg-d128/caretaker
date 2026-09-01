@@ -855,13 +855,15 @@ The remaining implementation must explicitly define and enforce whether each
 threshold is process-local, application-wide, or workload/population scoped. It
 now preserves an optional, explicitly declared aggregation scope as an
 extended target identity and supports fixed-scope threshold overlays through
-that identity. An application-owned per-call scope resolver remains
-evidence-only for threshold activation because independent policy/state for
-each resolver population is not yet implemented. The roadmap still needs
-policy and operator semantics for automatic discovery or changing workload/
-population membership, dynamic threshold administration, cross-host transport,
-process lifecycle orchestration, and additional resource-aware distribution reconciliation without
-double-counting the existing single-process lifecycle. The initial
+that identity. An application-owned per-call scope resolver now supports
+bounded exact-target overlays for exception and soft-timing thresholds, with
+independent persisted event windows and read-only operator/supervisor context
+projections. Sampling, aggregation, Repair-evidence, and lifecycle changes
+remain fail closed because their state is still target-wide. The roadmap still
+needs policy and operator semantics for automatic discovery or changing
+workload/population membership, dynamic threshold administration, cross-host
+transport, process lifecycle orchestration, and additional resource-aware
+distribution reconciliation without double-counting the existing single-process lifecycle. The initial
 repair-evidence gate is proposal-only and is implemented in the current slice.
 Retained archived batches can now be revalidated against a later policy
 fingerprint through a bounded deployment-supplied validator; the resulting

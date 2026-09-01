@@ -89,10 +89,23 @@ def test_fixed_scoped_threshold_activation_targets_only_that_population():
     )
 
 
-def test_resolver_scoped_threshold_activation_remains_fail_closed():
-    with pytest.raises(ValueError, match="resolver-driven activation"):
+def test_resolver_scoped_exception_threshold_targets_that_population():
+    settings = _adaptive_threshold_policy_settings(
+        {"exception.occurrences": 2},
+        target_id="example.target",
+        aggregation_scope="cluster:blue",
+        scope_resolution="RESOLVER",
+    )
+    assert len(settings) == 1
+    assert settings[0].target == extended_aggregation_target_id(
+        "example.target", "cluster:blue"
+    )
+
+
+def test_resolver_scoped_repair_evidence_threshold_remains_fail_closed():
+    with pytest.raises(ValueError, match="only exception and soft-timing thresholds"):
         _adaptive_threshold_policy_settings(
-            {"exception.occurrences": 2},
+            {"repair_evidence.minimum_behavior_samples": 2},
             target_id="example.target",
             aggregation_scope="cluster:blue",
             scope_resolution="RESOLVER",
@@ -1979,6 +1992,79 @@ def test_application_scope_resolver_keeps_population_batches_separate(tmp_path: 
         ("aggregation.scoped", "cluster:blue"),
         ("aggregation.scoped", "cluster:red"),
     }
+
+
+def test_application_scope_resolver_keeps_threshold_windows_separate_and_persistent(
+    tmp_path: Path,
+):
+    policy = LightweightPolicy(
+        exception=ExceptionPromotionPolicy(
+            enabled=True,
+            occurrences=2,
+            window_seconds=3600,
+            promote_to=InstrumentationLevel.BEHAVIOR,
+        ),
+        sampling=BehaviorSamplingPolicy(
+            enabled=True,
+            lightweight_every_calls=0,
+            behavior_every_calls=1,
+            randomize_initial_offset=False,
+        ),
+        demotion=InstrumentationDemotionPolicy(enabled=False),
+    )
+
+    @lightweight(
+        policy=policy,
+        target_id="aggregation.scoped-thresholds",
+        state_directory=tmp_path / "adaptive",
+        aggregation_scope_resolver=lambda args, kwargs: f"cluster:{args[0]}",
+    )
+    def observed(cluster: str) -> None:
+        raise RuntimeError(cluster)
+
+    for cluster in ("blue", "red"):
+        with pytest.raises(RuntimeError, match=cluster):
+            observed(cluster)
+
+    controller = observed.__caretaker_adaptive__
+    assert controller.state.level is InstrumentationLevel.LIGHTWEIGHT
+    assert len(controller._scope_exception_events["cluster:blue"]) == 1
+    assert len(controller._scope_exception_events["cluster:red"]) == 1
+
+    assert controller._state_path is not None
+    persisted = json.loads(controller._state_path.read_text(encoding="utf-8"))
+    assert set(persisted["resolved_scopes"]) == {"cluster:blue", "cluster:red"}
+    assert set(persisted["scope_exception_events"]) == {
+        "cluster:blue",
+        "cluster:red",
+    }
+    assert {
+        (
+            item["aggregation_scope"],
+            item["aggregation_scope_mode"],
+            item["aggregation_target_id"],
+        )
+        for item in controller.aggregation_status()["scope_contexts"]
+    } == {
+        (
+            "cluster:blue",
+            "RESOLVER",
+            extended_aggregation_target_id(
+                "aggregation.scoped-thresholds", "cluster:blue"
+            ),
+        ),
+        (
+            "cluster:red",
+            "RESOLVER",
+            extended_aggregation_target_id(
+                "aggregation.scoped-thresholds", "cluster:red"
+            ),
+        ),
+    }
+
+    with pytest.raises(RuntimeError, match="blue"):
+        observed("blue")
+    assert controller.state.level is InstrumentationLevel.BEHAVIOR
 
 
 def test_application_scope_resolver_failure_suppresses_only_scope_evidence(
