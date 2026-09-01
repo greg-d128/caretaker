@@ -567,6 +567,7 @@ def test_audit_registry_is_complete_and_exposes_redaction_contract() -> None:
         "WORKER_REPLACEMENT_REQUESTED",
             "WORKER_REPLACED", "SUPERVISOR_STATE_CHANGED", "INCIDENT_CAPTURED",
             "INCIDENT_REPLAY_OUTCOME",
+            "INCIDENT_COMMUNICATION_DRAFTED", "INCIDENT_COMMUNICATION_REVIEWED",
             "ADAPTIVE_AGGREGATION_RECONCILED",
             "BEHAVIOR_COLLECTION_OUTCOME",
             "WORKER_COMPARISON_ASSIGNMENT", "WORKER_COMPARISON_RESULT",
@@ -643,6 +644,66 @@ def test_adaptive_policy_transition_audit_projection_is_critical_and_non_authori
     assert rows[0]["outcome"]["state"] == "PENDING"
     assert rows[0]["outcome"]["authority_granted"] is False
     assert rows[0]["policy"]["fields_affected"] == ["exception.occurrences"]
+
+
+def test_communication_audit_projection_records_draft_and_review_without_delivery(
+    tmp_path: Path,
+) -> None:
+    from caretaker.run import _emit_communication_audit
+
+    writer = _writer(tmp_path)
+    runtime = SimpleNamespace(audit=writer)
+    _emit_communication_audit(
+        runtime,
+        event_type="INCIDENT_COMMUNICATION_DRAFTED",
+        result={
+            "draft": {
+                "draft_id": "draft-1",
+                "communication_id": "draft-1",
+                "source_incident_id": "incident-1",
+                "source_capsule_id": "capsule-1",
+                "source_capsule_revision": 2,
+                "audience_profile_id": "operators-v1",
+            },
+            "recording": {"status": "RECORDED"},
+            "capsule_mutated": True,
+            "integrity": {"content_sha256": "sha256:draft"},
+        },
+        actor_id="communication-drafter",
+    )
+    _emit_communication_audit(
+        runtime,
+        event_type="INCIDENT_COMMUNICATION_REVIEWED",
+        result={
+            "review": {
+                "communication_id": "review-1",
+                "status": "approved",
+                "metadata": {
+                    "review_of_draft_id": "draft-1",
+                    "review_decision": "approved",
+                    "review_reason": "Operator verified the facts",
+                },
+                "audience_profile_id": "operators-v1",
+            },
+            "status": "RECORDED",
+            "capsule_mutated": True,
+        },
+        actor_id="uid:1001",
+    )
+    writer.close()
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "caretaker_audit.log").read_text().splitlines()
+    ]
+    assert [row["event_type"] for row in rows if row["event_type"].startswith("INCIDENT_COMMUNICATION_")] == [
+        "INCIDENT_COMMUNICATION_DRAFTED",
+        "INCIDENT_COMMUNICATION_REVIEWED",
+    ]
+    reviewed = rows[-1]
+    assert reviewed["scope"]["communication_id"] == "review-1"
+    assert reviewed["outcome"]["state"] == "APPROVED"
+    assert reviewed["outcome"]["delivery_authorized"] is False
 
 
 def test_audit_policy_sampling_records_loss_before_next_retained_event(tmp_path: Path) -> None:

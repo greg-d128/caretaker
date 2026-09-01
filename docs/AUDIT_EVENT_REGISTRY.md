@@ -88,6 +88,8 @@ All event types share these redaction rules:
 | `SUPERVISOR_STATE_CHANGED` | `CRITICAL` | — | `{"state": "CONTROL_PLANE_LOST", "reason": "heartbeat_timeout"}` |
 | `INCIDENT_CAPTURED` | `IMPORTANT` | — | `{"incident_id": "incident-uuid", "capture_level": "STANDARD"}` |
 | `INCIDENT_REPLAY_OUTCOME` | `IMPORTANT` | `scope.replay_scope`, `outcome.state` | `{"scope": "all", "state": "PARTIAL", "fixture_count": 4, "completed_count": 3, "capsule_modified": false, "authority_granted": false}` |
+| `INCIDENT_COMMUNICATION_DRAFTED` | `IMPORTANT` | `scope.communication_id`, `outcome.state` | `{"communication_id": "communication-uuid", "state": "GENERATED", "delivery_authorized": false}` |
+| `INCIDENT_COMMUNICATION_REVIEWED` | `CRITICAL` | `scope.communication_id`, `outcome.state` | `{"communication_id": "communication-uuid", "state": "APPROVED", "delivery_authorized": false}` |
 | `ADAPTIVE_AGGREGATION_RECONCILED` | `IMPORTANT` | `scope.aggregation_scope`, `outcome.state` | `{"scope": "application", "state": "RECONCILED", "merged": 3, "rejected": 0, "authority_granted": false}` |
 | `BEHAVIOR_COLLECTION_OUTCOME` | `IMPORTANT` | `scope.scope`, `scope.subject`, `outcome.state` | `{"scope": "function", "subject": "demo.target", "state": "CAPTURED", "observed_calls": 50, "authority_granted": false}` |
 | `VALIDATION_DECISION` | `IMPORTANT` | — | `{"state": "ELIGIBLE", "validation_id": "validation-uuid"}` |

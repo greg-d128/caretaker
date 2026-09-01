@@ -247,6 +247,26 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
             "authority_granted": False,
         },
     ),
+    "INCIDENT_COMMUNICATION_DRAFTED": _event_definition(
+        description="A bounded Incident communication draft was generated.",
+        minimum_priority=EvidencePriority.IMPORTANT,
+        required_fields=("scope.communication_id", "outcome.state"),
+        example={
+            "communication_id": "communication-uuid",
+            "state": "GENERATED",
+            "delivery_authorized": False,
+        },
+    ),
+    "INCIDENT_COMMUNICATION_REVIEWED": _event_definition(
+        description="An operator recorded a review decision for an Incident communication draft.",
+        minimum_priority=EvidencePriority.CRITICAL,
+        required_fields=("scope.communication_id", "outcome.state"),
+        example={
+            "communication_id": "communication-uuid",
+            "state": "APPROVED",
+            "delivery_authorized": False,
+        },
+    ),
     "ADAPTIVE_AGGREGATION_RECONCILED": _event_definition(
         description="The supervisor reconciled a bounded batch of adaptive worker evidence.",
         minimum_priority=EvidencePriority.IMPORTANT,

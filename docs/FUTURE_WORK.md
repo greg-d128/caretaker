@@ -77,8 +77,9 @@ a scenario must never run it or authorize an action.
 Supervised runs can now create immutable, content-hashed, data-only Incident
 Capsule revisions under the run data directory. The logging policy controls
 capture level and resource limits. Capsules retain policy/authority references,
-bounded incident state, side-artifact references, and a communication-history
-list reserved for future communication records. The console can save its
+bounded incident state, side-artifact references, and bounded communication
+history records for locally generated drafts and operator review decisions.
+The console can save its
 current incident-focused view as a redacted `operator-view` side artifact.
 
 The initial Explorer provides read-only capsule, revision, integrity,
@@ -87,7 +88,7 @@ isolated replay for an incident-linked bounded JSON fixture through the
 supervisor, including bounded non-interactive replay across incident-linked
 historical fixtures; replay results remain separate evidence and cannot modify
 the capsule. Full policy-specific capture of every application state source,
-communication approval, and delivery remain future work. Capsule viewing remains read-only
+external communication approval, and delivery remain future work. Capsule viewing remains read-only
 evidence inspection;
 operator artifacts cannot authorize Repair, satisfy validation, modify policy,
 close incidents, or expand Caretaker authority. See
@@ -1522,6 +1523,9 @@ Until this exists, restart is a rollback to deployed application code, not conti
   also emit `INCIDENT_REPLAY_OUTCOME` records, including rejected and failed
   requests, with bounded scope and counts; replay output remains separate
   evidence and the event cannot modify a capsule or grant authority.
+  Communication draft generation and operator review now emit bounded
+  `INCIDENT_COMMUNICATION_DRAFTED` and `INCIDENT_COMMUNICATION_REVIEWED`
+  records; both remain delivery-disabled and evidence-only.
   Meaningful supervisor adaptive-aggregation reconciliations now emit
   `ADAPTIVE_AGGREGATION_RECONCILED` records with bounded merge, rejection,
   conflict, pending, and promotion counts; these records are evidence only.

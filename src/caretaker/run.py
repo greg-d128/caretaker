@@ -192,6 +192,92 @@ def _emit_adaptive_policy_transition_audit(
     )
 
 
+def _emit_communication_audit(
+    runtime: Any,
+    *,
+    event_type: str,
+    result: Mapping[str, Any],
+    actor_id: str,
+) -> None:
+    """Record communication lifecycle evidence without authorizing delivery."""
+    audit = getattr(runtime, "audit", None)
+    emit = getattr(audit, "emit", None)
+    if not callable(emit):
+        return
+    draft = result.get("draft") if isinstance(result.get("draft"), Mapping) else {}
+    review = result.get("review") if isinstance(result.get("review"), Mapping) else {}
+    review_metadata = review.get("metadata") if isinstance(review.get("metadata"), Mapping) else {}
+    communication_id = str(
+        review.get("communication_id")
+        or draft.get("communication_id")
+        or draft.get("draft_id")
+        or result.get("draft_id")
+        or ""
+    ).strip()
+    if not communication_id:
+        return
+    is_review = event_type == "INCIDENT_COMMUNICATION_REVIEWED"
+    state = (
+        str(review_metadata.get("review_decision") or review.get("status") or "REVIEWED")
+        if is_review
+        else "RECORDED"
+        if str((result.get("recording") or {}).get("status") or "")
+        in {"RECORDED", "ALREADY_RECORDED"}
+        else "GENERATED"
+    )
+    source_incident_id = str(
+        draft.get("source_incident_id")
+        or result.get("source_incident_id")
+        or ""
+    ).strip()
+    scope = {
+        "communication_id": communication_id[:128],
+        "draft_id": str(draft.get("draft_id") or "")[:128] or None,
+        "incident_id": source_incident_id[:128] or None,
+        "capsule_id": str(draft.get("source_capsule_id") or "")[:128] or None,
+    }
+    details = {
+        "audience_profile_id": str(
+            draft.get("audience_profile_id")
+            or review.get("audience_profile_id")
+            or ""
+        )[:128]
+        or None,
+        "recording_status": str(
+            (result.get("recording") or {}).get("status")
+            or result.get("status")
+            or ""
+        )[:64]
+        or None,
+        "capsule_revision": draft.get("source_capsule_revision")
+        or result.get("capsule_revision"),
+        "content_sha256": str(
+            (result.get("integrity") or {}).get("content_sha256")
+            or review.get("content_sha256")
+            or ""
+        )[:128]
+        or None,
+        "review_reason": str(review_metadata.get("review_reason") or "")[:500] or None,
+        "delivery_authorized": False,
+    }
+    emit(
+        event_type,
+        actor={"type": "operator" if is_review else "caretaker", "id": str(actor_id)[:128]},
+        scope=scope,
+        outcome={
+            "state": state.upper()[:64],
+            "delivery_authorized": False,
+            "capsule_mutated": bool(result.get("capsule_mutated", False)),
+        },
+        details=details,
+        priority=(
+            EvidencePriority.CRITICAL
+            if is_review
+            else EvidencePriority.IMPORTANT
+        ),
+    )
+
+
 def _emit_incident_replay_audit(
     runtime: Any,
     *,
@@ -2780,6 +2866,12 @@ def main(argv: list[str] | None = None) -> int:
                     "delivery_authorized": False,
                 },
             )
+            _emit_communication_audit(
+                runtime,
+                event_type="INCIDENT_COMMUNICATION_DRAFTED",
+                result=result,
+                actor_id="communication-drafter",
+            )
             return {
                 "ok": True,
                 "reviewable": True,
@@ -2831,6 +2923,12 @@ def main(argv: list[str] | None = None) -> int:
                     "recording_status": result.get("status"),
                     "delivery_authorized": False,
                 },
+            )
+            _emit_communication_audit(
+                runtime,
+                event_type="INCIDENT_COMMUNICATION_REVIEWED",
+                result=result,
+                actor_id=f"uid:{credentials[1]}",
             )
             return {
                 "ok": True,
