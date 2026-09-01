@@ -385,8 +385,6 @@ def validate_guard_policy(policy: GuardPolicy) -> None:
             errors.append(f"{prefix}.periodic.verify_source_hash=False is unsupported; identity inspection always verifies source identity")
         if not periodic.verify_runtime_fingerprints:
             errors.append(f"{prefix}.periodic.verify_runtime_fingerprints=False is unsupported; runtime fingerprints are always verified")
-        if periodic.compare_behavior:
-            errors.append(f"{prefix}.periodic.compare_behavior=True is reserved; periodic integrity inspection does not independently compare behavior")
         if not periodic.escalate_on_change:
             errors.append(f"{prefix}.periodic.escalate_on_change=False is unsupported; detected integrity changes remain signal-producing")
 

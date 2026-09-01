@@ -23,7 +23,7 @@ from .logging import policy as logging_policy
 from .system import policy as system_policy
 
 
-POLICY_SEMANTICS_REVIEW_GENERATION = 28
+POLICY_SEMANTICS_REVIEW_GENERATION = 29
 # Updated only after the policy truthfulness suite reviews every changed field.
 REVIEWED_POLICY_SURFACE_HASH = "7dbc0cc0a7a672a29b7c1b2df99f0b872d30943832d26a7a219326620524daf7"
 
@@ -40,7 +40,6 @@ RESERVED_SETTINGS: dict[str, str] = {
     "guard.retention.aggregate_seconds": "durable aggregate retention is not implemented",
     "guard.targets[].function_patterns": "periodic inspection currently operates at module scope",
     "guard.targets[].periodic.execution_window": "execution-window periodic scheduling is not implemented",
-    "guard.targets[].periodic.compare_behavior": "periodic integrity inspection does not independently compare behavior",
     "logging.rotation.maximum_open_segments": "the writer currently owns exactly one open segment",
     "logging.compression.compression_workers": "compression is single-worker",
     "logging.retention.preserve_incident_segments": "segment-class-aware retention is not implemented",

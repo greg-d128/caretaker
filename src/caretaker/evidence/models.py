@@ -239,6 +239,10 @@ class RuntimeInspection:
     behavior_window_id: UUID | None
     differences_from_load: tuple[InspectionDifference, ...]
     differences_from_previous: tuple[InspectionDifference, ...]
+    # A bounded, evidence-only comparison against an accepted behavior
+    # baseline.  This is optional so older persisted inspections and callers
+    # that only request integrity inspection remain backward compatible.
+    behavior_comparison: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)

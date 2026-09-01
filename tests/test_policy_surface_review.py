@@ -70,22 +70,11 @@ def test_reserved_repair_promises_fail_explicitly():
         )
 
 
-def test_reserved_guard_retention_and_periodic_behavior_controls_fail_explicitly():
+def test_reserved_guard_retention_still_fails_explicitly():
     policy = GuardPolicy()
     with pytest.raises(GuardPolicyConfigurationError, match="raw-event pruning"):
         validate_guard_policy(replace(policy, retention=GuardRetentionPolicy(raw_event_seconds=60.0)))
 
-    target = policy.targets[0] if policy.targets else None
-    if target is None:
-        from caretaker.guard.policy import GuardTargetPolicy
-        target = GuardTargetPolicy(module_pattern="example")
-    with pytest.raises(GuardPolicyConfigurationError, match="compare_behavior"):
-        validate_guard_policy(
-            replace(
-                policy,
-                targets=(replace(target, periodic=PeriodicInspectionPolicy(compare_behavior=True)),),
-            )
-        )
 
 
 def test_randomized_behavior_snapshot_bounds_are_validated():

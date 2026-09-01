@@ -576,6 +576,22 @@ A periodic checkpoint of the active epoch may be unsigned or locally
 integrity-protected according to policy, but an accepted Guard baseline must
 reference a sealed snapshot that satisfies the required signing policy.
 
+### Periodic behavior comparison
+
+**Status: Implemented in development tree for bounded, same-generation
+comparison during periodic function inspection.**
+
+When enabled by `PeriodicInspectionPolicy.compare_behavior`, Guard compares
+the accepted baseline with current generation-bound statistics. The result is
+stored as inspection evidence and can use the existing policy-selected signal
+path for newly observed resource capabilities, event kinds, repeated return
+novelty, or additional failures. Count growth and timing differences alone do
+not rotate a generation or change the accepted baseline. Incompatible or
+insufficient captures remain explicitly visible and are never treated as
+unchanged. Automatic generation rotation from behavior-only drift, dynamic
+threshold administration, and richer distribution-shift analysis remain future
+work.
+
 ### Randomized behavioral-regime snapshots
 
 **Status: Implemented in development tree for opt-in randomized epoch boundaries and bounded read-only cross-population comparison; regime clustering and automatic population discovery remain future work.**
@@ -1795,6 +1811,6 @@ Before moving an item out of this document, the implementation should include:
 
 The policy-truthfulness pass intentionally leaves a small number of forward-looking settings in public dataclasses so profile/schema evolution does not require re-inventing their names. Their inactive defaults do not imply support, and validators reject values that would rely on the missing behavior. The machine-readable catalog is `caretaker.policy_semantics.RESERVED_SETTINGS`.
 
-Major reserved groups include incident-history Repair context, structural-review scheduling, incident-window oscillation/replay, Guard environment/function-call collectors, durable time-based Guard retention, periodic behavior-comparison scheduling, segment-class-aware log retention, automatic logging-baseline orchestration, metrics-provider adapters, cgroup process discovery, and system-collector-driven Guard/mode degradation.
+Major reserved groups include incident-history Repair context, structural-review scheduling, incident-window oscillation/replay, Guard environment/function-call collectors, durable time-based Guard retention, segment-class-aware log retention, automatic logging-baseline orchestration, metrics-provider adapters, cgroup process discovery, and system-collector-driven Guard/mode degradation.
 
 Before any reserved setting becomes active it must receive runtime semantics, authority/profile review, behavioral tests, migration documentation, and an updated reviewed policy-surface fingerprint.

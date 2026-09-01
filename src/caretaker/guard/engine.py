@@ -47,6 +47,7 @@ from ..behavior import (
     BehaviorSnapshotStore,
     BehaviorStatisticsRepository,
     behavior_generation_id,
+    compare_snapshots,
     monitoring_configuration_fingerprint,
     observed_return_category,
     observed_return_shape,
@@ -1641,16 +1642,255 @@ class GuardEngine(GuardFacade):
         self.store.record_guard_decision(decision)
 
     def _on_inspection(self, inspection: RuntimeInspection) -> None:
-        if inspection.differences_from_load:
-            target_id = next(
-                (
-                    key
-                    for key, binding in self._targets.items()
-                    if binding.identity.logical_name == inspection.subject.logical_name
-                ),
-                None,
-            )
+        target_id = self._inspection_target_id(inspection)
+        behavior_comparison = None
+        if target_id is not None and self._periodic_behavior_enabled(target_id, inspection):
+            behavior_comparison = self._compare_periodic_behavior(target_id, inspection)
+            inspection = replace(inspection, behavior_comparison=behavior_comparison)
+            # RuntimeInspector records before invoking this callback. Replace
+            # that record so SQLite and in-memory consumers see the comparison
+            # as part of the same immutable inspection evidence.
+            self.store.record_inspection(inspection)
+
+        behavior_changed = bool(
+            isinstance(behavior_comparison, Mapping)
+            and behavior_comparison.get("state") == "changed"
+        )
+        if inspection.differences_from_load or behavior_changed:
             self._signal_inspection(inspection, target_id=target_id, candidate_id=None)
+
+    def _inspection_target_id(self, inspection: RuntimeInspection) -> str | None:
+        """Resolve a periodic function inspection to its registered target."""
+        with self._lock:
+            bindings = tuple(self._targets.items())
+        for target_id, binding in bindings:
+            current_identity = binding.identity
+            if binding.function_resolver is not None:
+                try:
+                    current_identity = identify_function(binding.function_resolver())
+                except Exception:
+                    current_identity = binding.identity
+            if current_identity.logical_name == inspection.subject.logical_name:
+                return target_id
+        return None
+
+    @staticmethod
+    def _module_policy_matches(pattern: str, module_name: str) -> bool:
+        return pattern == module_name or (
+            pattern.endswith(".*") and module_name.startswith(pattern[:-1])
+        )
+
+    def _periodic_behavior_enabled(
+        self, target_id: str, inspection: RuntimeInspection
+    ) -> bool:
+        binding = self._targets.get(target_id)
+        if binding is None or inspection.function_state_summary is None:
+            return False
+        return any(
+            target.periodic.enabled
+            and target.periodic.compare_behavior
+            and self._module_policy_matches(
+                target.module_pattern, inspection.subject.module_name
+            )
+            for target in self.policy.targets
+        )
+
+    @staticmethod
+    def _baseline_snapshot(
+        target_id: str,
+        baseline: BehaviorBaseline,
+        *,
+        schema_version: int,
+        monitoring_fingerprint: str,
+    ) -> dict[str, Any]:
+        profile = baseline.profile
+        return {
+            "snapshot_id": f"baseline:{baseline.baseline_id}",
+            "created_at": (
+                baseline.accepted_at or baseline.created_at
+            ).isoformat(),
+            "subject_key": f"function:{target_id}",
+            "generation_id": behavior_generation_id(
+                subject_key=f"function:{target_id}",
+                code_hash=baseline.subject.source_hash or baseline.subject.bytecode_hash,
+                monitoring_fingerprint=monitoring_fingerprint,
+                statistics_schema_version=schema_version,
+            ),
+            "code_hash": baseline.subject.source_hash or baseline.subject.bytecode_hash,
+            "monitoring_fingerprint": monitoring_fingerprint,
+            "statistics_schema_version": schema_version,
+            "profile": {
+                "window_count": baseline.observations,
+                "call_count": profile.call_count,
+                "event_count": profile.event_count,
+                "event_kind_counts": dict(profile.event_kind_counts),
+                "network_destinations": list(profile.network_destinations),
+                "filesystem_roots": list(profile.filesystem_roots),
+                "subprocesses": list(profile.subprocesses),
+                "imports": list(profile.imports),
+                "dynamic_code_operations": list(profile.dynamic_code_operations),
+                "resource_counts": dict(profile.resource_counts),
+                "resource_coverage_complete": True,
+                "success_count": profile.success_count,
+                "failure_count": profile.failure_count,
+                "return_categories": dict(profile.return_category_counts),
+                "return_shapes": dict(profile.return_shape_counts),
+                "return_category_coverage_complete": True,
+                "return_shape_coverage_complete": True,
+                "return_observations_available": profile.return_observations_available,
+                "statistics": dict(profile.statistics),
+                "sampling_provenance": dict(profile.sampling_provenance),
+            },
+        }
+
+    def _compare_periodic_behavior(
+        self, target_id: str, inspection: RuntimeInspection
+    ) -> dict[str, Any]:
+        """Compare current same-generation statistics with accepted evidence.
+
+        This method intentionally produces evidence only. It never accepts a
+        baseline, rotates a generation, changes policy, or grants authority.
+        """
+        unavailable = {
+            "state": "unavailable",
+            "evidence_only": True,
+            "authority_granted": False,
+            "generation_rotated": False,
+            "target_id": target_id,
+        }
+        if self.behavior_statistics is None:
+            return {**unavailable, "reason": "behavior-statistics-unavailable"}
+
+        binding = self._targets.get(target_id)
+        if binding is None:
+            return {**unavailable, "reason": "target-not-registered"}
+        baseline = self.baselines.get(binding.identity)
+        if baseline is None or baseline.state is not BaselineState.ACCEPTED:
+            return {**unavailable, "reason": "no-accepted-baseline"}
+        capture = self.behavior_statistics.current_capture(target_id)
+        if capture is None:
+            return {**unavailable, "reason": "current-behavior-capture-unavailable"}
+
+        profile = dict(capture.get("profile") or {})
+        observed_calls = max(0, int(profile.get("call_count") or 0))
+        observed_code_hash = capture.get("code_hash")
+        observed_monitoring = capture.get("monitoring_fingerprint")
+        expected_code_hash = binding.identity.source_hash or binding.identity.bytecode_hash
+        expected_monitoring = self.monitoring_fingerprint(target_id)
+        schema_version = max(1, int(capture.get("statistics_schema_version") or 1))
+        expected_generation = behavior_generation_id(
+            subject_key=f"function:{target_id}",
+            code_hash=expected_code_hash,
+            monitoring_fingerprint=expected_monitoring,
+            statistics_schema_version=schema_version,
+        )
+        context = {
+            "target_id": target_id,
+            "baseline_id": str(baseline.baseline_id),
+            "generation_id": str(capture.get("generation_id") or ""),
+            "code_hash": observed_code_hash,
+            "monitoring_fingerprint": observed_monitoring,
+            "observed_calls": observed_calls,
+        }
+        if (
+            str(capture.get("subject_key") or "") != f"function:{target_id}"
+            or observed_code_hash != expected_code_hash
+            or observed_monitoring != expected_monitoring
+            or str(capture.get("generation_id") or "") != expected_generation
+        ):
+            return {
+                **unavailable,
+                "state": "incomparable",
+                "reason": "current-capture-context-mismatch",
+                **context,
+                "expected_generation_id": expected_generation,
+                "expected_code_hash": expected_code_hash,
+                "expected_monitoring_fingerprint": expected_monitoring,
+            }
+        if observed_calls <= 0:
+            return {
+                **unavailable,
+                "state": "insufficient-evidence",
+                "reason": "no-observed-calls",
+                **context,
+            }
+        baseline_calls = max(0, int(baseline.profile.call_count or 0))
+        if observed_calls <= baseline_calls:
+            return {
+                **unavailable,
+                "state": "insufficient-evidence",
+                "reason": "no-calls-observed-after-baseline",
+                **context,
+                "baseline_calls": baseline_calls,
+            }
+
+        baseline_snapshot = self._baseline_snapshot(
+            target_id,
+            baseline,
+            schema_version=schema_version,
+            monitoring_fingerprint=expected_monitoring,
+        )
+        # Active captures use the generation start as ``created_at``. For this
+        # transient comparison operand, the last observed update is the
+        # freshness boundary; the persisted capture itself is not rewritten.
+        current_snapshot = dict(capture)
+        current_snapshot["snapshot_id"] = (
+            f"active:{target_id}:{capture.get('last_sample_sequence') or observed_calls}"
+        )[:256]
+        current_snapshot["created_at"] = str(
+            capture.get("observation_ended_at") or capture.get("created_at") or ""
+        )
+        comparison = compare_snapshots(baseline_snapshot, current_snapshot)
+        semantic_changes = [
+            item
+            for item in comparison.get("semantic_changes") or ()
+            if item.get("change") == "started"
+        ][:64]
+        new_event_kinds = [
+            item
+            for item in comparison.get("event_kind_changes") or ()
+            if int(item.get("before") or 0) == 0 and int(item.get("after") or 0) > 0
+        ][:64]
+        return_novelty = dict(comparison.get("return_novelty") or {})
+        failure_change = dict((comparison.get("outcomes") or {}).get("failure") or {})
+        reasons: list[str] = []
+        if semantic_changes:
+            reasons.append("new-resource-capability")
+        if new_event_kinds:
+            reasons.append("new-event-kind")
+        if return_novelty.get("state") == "new-observations":
+            reasons.append("new-return-observation")
+        if int(failure_change.get("absolute") or 0) > 0:
+            reasons.append("additional-failures")
+        return {
+            "comparison_id": comparison.get("comparison_id"),
+            "state": "changed" if reasons else "unchanged",
+            "evidence_only": True,
+            "authority_granted": False,
+            "generation_rotated": False,
+            "target_id": target_id,
+            "baseline_id": str(baseline.baseline_id),
+            "generation_id": str(capture.get("generation_id")),
+            "code_hash": observed_code_hash,
+            "monitoring_fingerprint": observed_monitoring,
+            "baseline_calls": baseline_calls,
+            "observed_calls": observed_calls,
+            "observed_at": current_snapshot["created_at"],
+            "change_reasons": reasons,
+            "new_resource_capabilities": semantic_changes,
+            "new_event_kinds": new_event_kinds,
+            "return_novelty": {
+                "state": return_novelty.get("state"),
+                "reason": return_novelty.get("reason"),
+                "new_categories": list(return_novelty.get("new_categories") or ())[:64],
+                "new_shapes": list(return_novelty.get("new_shapes") or ())[:64],
+            },
+            "failure_change": {
+                "before": int(failure_change.get("before") or 0),
+                "after": int(failure_change.get("after") or 0),
+                "absolute": int(failure_change.get("absolute") or 0),
+            },
+        }
 
     def _signal_inspection(
         self,

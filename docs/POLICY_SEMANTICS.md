@@ -55,7 +55,7 @@ print(policy_surface_review_status())
 - Repair incident-history retrieval and automatic structural-review scheduling;
 - incident-window oscillation detection and automatic regression replay before failed-version reactivation;
 - Guard environment-read/general function-call collectors;
-- time-based durable Guard retention and periodic behavior-comparison scheduling;
+- time-based durable Guard retention;
 - multi-open-segment logging and multi-worker compression;
 - segment-class-aware incident/baseline retention;
 - automatic logging-baseline orchestration and advanced metrics-provider
@@ -63,6 +63,14 @@ print(policy_surface_review_status())
 - cgroup process discovery and system-collector-driven Guard/mode degradation.
 
 Defaults for these features are intentionally inactive/unset. Their presence in a dataclass is not a promise of availability.
+
+`GuardTargetPolicy.periodic.compare_behavior` is now an executable opt-in. It
+compares current same-generation statistics with an accepted baseline during
+periodic function inspection and emits only bounded evidence and, when a
+change is found, the normal policy-governed Guard signal. It does not accept a
+baseline, rotate a generation, change policy, or grant authority. Missing,
+stale, or incompatible evidence is reported explicitly rather than classified
+as unchanged.
 
 ## Repair context privacy and size
 

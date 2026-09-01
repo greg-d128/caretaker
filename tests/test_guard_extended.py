@@ -47,6 +47,8 @@ from caretaker.guard.policy import (
     DeviationPolicy,
     GuardActionPolicy,
     LLMReviewPolicy,
+    GuardTargetPolicy,
+    PeriodicInspectionPolicy,
 )
 from caretaker.provider import CandidateBatch, RepairRequest
 from caretaker.policy import ContextPolicy
@@ -286,6 +288,68 @@ def test_periodic_inspector_resolves_current_function_slot() -> None:
     inspections = guard.periodic.inspect_now()
     target_inspection = next(item for item in inspections if item.subject.qualified_name == "failing")
     assert target_inspection.function_state_summary.bytecode_hash == identify_function(current.implementation).bytecode_hash
+
+
+def test_periodic_behavior_comparison_records_change_as_evidence(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CARETAKER_DATA_DIR", str(tmp_path))
+    base = _guard_policy()
+    policy = replace(
+        base,
+        aggregation=AggregationPolicy(close_after_events=100, close_after_calls=100, close_after_seconds=999),
+        targets=(
+            GuardTargetPolicy(
+                module_pattern="tests.guard_targets",
+                periodic=PeriodicInspectionPolicy(compare_behavior=True),
+            ),
+        ),
+    )
+    guard = GuardEngine(policy=policy)
+    target_id = "tests.guard_targets:failing"
+    guard.register_target(
+        target_id,
+        failing,
+        replace(_repair_policy().guard, observe_network=True),
+        periodic=False,
+    )
+
+    for _ in range(2):
+        call_id = uuid4()
+        guard.before_call(target_id, failing, call_id, candidate_id=None)
+        guard.after_call(
+            target_id,
+            failing,
+            call_id,
+            candidate_id=None,
+            succeeded=True,
+            elapsed_seconds=0.001,
+            result=1,
+        )
+    guard.close_target_window(target_id)
+    baseline = guard.accept_baseline(target_id)
+
+    guard.record_event(_event(target_id, "new.example:443"))
+    call_id = uuid4()
+    guard.before_call(target_id, failing, call_id, candidate_id=None)
+    guard.after_call(
+        target_id,
+        failing,
+        call_id,
+        candidate_id=None,
+        succeeded=True,
+        elapsed_seconds=0.001,
+        result=1,
+    )
+    inspection = guard.inspector.inspect_function(failing)
+    guard._on_inspection(inspection)
+
+    comparison = guard.store.inspections[inspection.inspection_id].behavior_comparison
+    assert baseline.state.name == "ACCEPTED"
+    assert comparison is not None
+    assert comparison["state"] == "changed"
+    assert comparison["evidence_only"] is True
+    assert comparison["authority_granted"] is False
+    assert "new-resource-capability" in comparison["change_reasons"]
+    assert guard.control_plane.signals[-1].target_id == target_id
 
 
 def test_guard_operational_event_cache_is_bounded(monkeypatch) -> None:

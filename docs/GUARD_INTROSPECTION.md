@@ -53,6 +53,22 @@ This can detect ordinary monkeypatching and runtime replacement of a Python func
 
 Periodic inspection does not re-import modules. It compares current runtime state.
 
+When a target's `PeriodicInspectionPolicy.compare_behavior` setting is enabled,
+the periodic function inspection also compares the current generation-bound
+behavior statistics with the target's accepted Guard baseline. The comparison
+is bounded evidence attached to the inspection and reports `unchanged`,
+`changed`, `insufficient-evidence`, `incomparable`, or `unavailable`. New
+resource capabilities, newly observed event kinds, repeated return novelty,
+and additional failures are reported as change reasons. Cumulative call and
+event counts alone do not constitute a behavior change.
+
+The comparison requires a matching target, code hash, monitoring fingerprint,
+statistics schema, and behavior generation, plus calls observed after baseline
+acceptance. It never accepts or updates a baseline, rotates a generation,
+modifies policy, grants authority, or proves that an unobserved side effect did
+not occur. A `changed` result is routed through the normal policy-selected
+Guard signal path; operators may leave the setting disabled (the default).
+
 ## Event-driven inspection
 
 Immediate inspection may be triggered by:
