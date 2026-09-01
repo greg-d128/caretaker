@@ -108,6 +108,21 @@ def test_worker_authorization_summary_shows_packet_coverage_and_expiry() -> None
     )
 
 
+def test_worker_health_summary_shows_bounded_state_counts_and_queue_depth() -> None:
+    summary = CaretakerConsoleApp._worker_health_summary(
+        [
+            {"state": "HEALTHY", "queue_depth": 2},
+            {"state": "WorkerState.UNAUTHORIZED", "queue_depth": -4},
+            {"state": "FAILED", "queue_depth": "3"},
+        ]
+    )
+
+    assert summary == (
+        "Worker health: 3 total (failed=1, healthy=1, unauthorized=1), "
+        "queued work=5"
+    )
+
+
 def test_target_status_preserves_terminal_slot_states():
     assert CaretakerConsoleApp._target_status(
         {"slot_state": "INITIALLY_VALIDATED"}

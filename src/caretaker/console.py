@@ -1564,6 +1564,7 @@ class CaretakerConsoleApp(App):
             f"Validating functions: {', '.join(validating) if validating else 'none'}",
             f"Validation backends: {', '.join(validation_backends) if validation_backends else 'none'}",
             f"Degraded capabilities: {', '.join(degraded) if degraded else 'none'}",
+            self._worker_health_summary(workers),
             worker_authorization_line,
             overhead_line,
             metrics_line,
@@ -1628,6 +1629,33 @@ class CaretakerConsoleApp(App):
             "Worker authorization packets: "
             f"{with_packet} with packets, {missing_packet} without packets, "
             f"{expired} expired, nearest expiry {nearest.isoformat()}"
+        )
+
+    @staticmethod
+    def _worker_health_summary(workers: Any) -> str:
+        """Render bounded worker health counts without exposing packet contents."""
+        if not isinstance(workers, (list, tuple)):
+            return "Worker health: unavailable"
+        valid_workers = [item for item in workers if isinstance(item, Mapping)]
+        if not valid_workers:
+            return "Worker health: no workers registered"
+        state_counts: dict[str, int] = {}
+        queued_work = 0
+        for worker in valid_workers:
+            state = CaretakerConsoleApp._enum_name(worker.get("state")) or "UNKNOWN"
+            state_counts[state] = state_counts.get(state, 0) + 1
+            try:
+                depth = int(worker.get("queue_depth") or 0)
+            except (TypeError, ValueError):
+                depth = 0
+            queued_work += max(0, depth)
+        state_text = ", ".join(
+            f"{name.lower()}={state_counts[name]}"
+            for name in sorted(state_counts)
+        )
+        return (
+            f"Worker health: {len(valid_workers)} total ({state_text}), "
+            f"queued work={queued_work}"
         )
 
     @classmethod

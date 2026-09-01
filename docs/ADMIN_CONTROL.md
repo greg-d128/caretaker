@@ -99,6 +99,9 @@ grants policy or repair authority by itself.
 The operator overview displays only bounded packet metadata: packet coverage,
 expired-packet count, and the nearest packet expiry. It does not expose packet
 contents or treat visibility as authorization.
+The same overview displays bounded worker health counts and aggregate queue
+depth. These are read-only operational indicators; they do not expose packet
+contents, alter worker state, or authorize a restart.
 
 For enabled adaptive aggregation, the same socket exposes
 `adaptive-transition-list` and `adaptive-transition-ack`. The supervisor creates
