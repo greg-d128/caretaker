@@ -56,6 +56,7 @@ MAX_BATCH_REVALIDATION_RESULT_BYTES = 8 * 1024
 MAX_BATCH_REVALIDATION_IDS = 256
 MAX_TRANSITION_SIGNATURE_BYTES = 16 * 1024
 MAX_POLICY_INSTALLATION_RESULT_BYTES = 4 * 1024
+MAX_BACKPRESSURE_INCIDENT_ID = 256
 _ADAPTIVE_POLICY_ID_NAMESPACE = uuid5(
     NAMESPACE_URL, "https://caretaker.dev/adaptive-policy-id"
 )
@@ -89,6 +90,7 @@ class AdaptiveAggregationBackpressureAction(Enum):
     RETAIN = "RETAIN"
     DROP = "DROP"
     REDUCE = "REDUCE"
+    INCIDENT = "INCIDENT"
 
 
 class RemoteAdaptiveAggregationStore:
@@ -163,6 +165,7 @@ class AdaptiveObservationBatcher:
         backpressure_action: AdaptiveAggregationBackpressureAction = (
             AdaptiveAggregationBackpressureAction.RETAIN
         ),
+        backpressure_incident_callback: Callable[[Mapping[str, Any]], Any] | None = None,
     ) -> None:
         if not 0 < int(flush_after_observations) <= MAX_BATCH_COUNTER:
             raise ValueError(
@@ -174,6 +177,10 @@ class AdaptiveObservationBatcher:
             raise ValueError(
                 "backpressure_action must be an AdaptiveAggregationBackpressureAction"
             )
+        if backpressure_incident_callback is not None and not callable(
+            backpressure_incident_callback
+        ):
+            raise ValueError("backpressure_incident_callback must be callable")
         extended_aggregation_target_id(str(target_id), aggregation_scope)
         self.store = store
         self.worker_id = str(worker_id)
@@ -181,6 +188,7 @@ class AdaptiveObservationBatcher:
         self.flush_after_observations = int(flush_after_observations)
         self.flush_interval_seconds = float(flush_interval_seconds)
         self.backpressure_action = backpressure_action
+        self.backpressure_incident_callback = backpressure_incident_callback
         self._lock = threading.RLock()
         self._sequence = 0
         self._records = 0
@@ -195,6 +203,7 @@ class AdaptiveObservationBatcher:
         self._last_flush_monotonic = time.monotonic()
         self._last_error: str | None = None
         self._dropped_records = 0
+        self._backpressure_incident_id: str | None = None
         self._context = {
             "target_id": str(target_id),
             "aggregation_scope": (
@@ -285,6 +294,11 @@ class AdaptiveObservationBatcher:
                 if result is not None and result.get("status") in {
                     "ERROR",
                     "DEFERRED",
+                    "INCIDENT_RECORDED",
+                    "INCIDENT_ALREADY_RECORDED",
+                    "INCIDENT_UNAVAILABLE",
+                    "INCIDENT_REJECTED",
+                    "INCIDENT_FAILED",
                 }:
                     self._dropped_records += 1
                     return {
@@ -340,6 +354,11 @@ class AdaptiveObservationBatcher:
             if isinstance(result, Mapping) and result.get("status") in {
                 "ERROR",
                 "DEFERRED",
+                "INCIDENT_RECORDED",
+                "INCIDENT_ALREADY_RECORDED",
+                "INCIDENT_UNAVAILABLE",
+                "INCIDENT_REJECTED",
+                "INCIDENT_FAILED",
             }:
                 # RETAIN (and a failed REDUCE retry) must not discard the old
                 # context or pending records merely because a generation or
@@ -375,6 +394,8 @@ class AdaptiveObservationBatcher:
                 "dropped_records": self._dropped_records,
                 "last_error": self._last_error,
                 "backpressure_action": self.backpressure_action.name,
+                "backpressure_incident_recorded": self._backpressure_incident_id is not None,
+                "backpressure_incident_id": self._backpressure_incident_id,
             }
 
     def set_backpressure_action(
@@ -425,6 +446,99 @@ class AdaptiveObservationBatcher:
         self._resource_samples = {}
         self._resource_samples_truncated = {}
         self._last_flush_monotonic = time.monotonic()
+        self._backpressure_incident_id = None
+
+    def _record_backpressure_incident_locked(
+        self,
+        batch: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Notify the application once while retaining the failed evidence.
+
+        The callback receives incident context, never the observation batch. Its
+        return value is evidence that the application accepted responsibility for
+        creating an incident; it is not Caretaker authority and cannot authorize a
+        policy, Repair, or data-loss decision.
+        """
+        if self._backpressure_incident_id is not None:
+            return {
+                "status": "INCIDENT_ALREADY_RECORDED",
+                "accepted": True,
+                "incident_id": self._backpressure_incident_id,
+                "pending_records": self._records,
+                "error": self._last_error,
+            }
+        callback = self.backpressure_incident_callback
+        if callback is None:
+            return {
+                "status": "INCIDENT_UNAVAILABLE",
+                "accepted": False,
+                "reason": "no application-owned incident callback is configured",
+                "pending_records": self._records,
+                "error": self._last_error,
+            }
+        payload = {
+            "event": "adaptive-aggregation-backpressure",
+            "action": AdaptiveAggregationBackpressureAction.INCIDENT.name,
+            "batch_id": str(batch["batch_id"]),
+            "target_id": self._context["target_id"],
+            "aggregation_scope": self._context["aggregation_scope"],
+            "generation_id": self._context["generation_id"],
+            "policy_fingerprint": self._context["policy_fingerprint"],
+            "authority_policy_generation": self._context[
+                "authority_policy_generation"
+            ],
+            "authority_policy_fingerprint": self._context[
+                "authority_policy_fingerprint"
+            ],
+            "pending_records": self._records,
+            "sequence_start": batch["sequence_start"],
+            "sequence_end": batch["sequence_end"],
+            "error": self._last_error,
+        }
+        try:
+            response = callback(payload)
+        except Exception as exc:
+            return {
+                "status": "INCIDENT_FAILED",
+                "accepted": False,
+                "reason": f"{type(exc).__name__}: {exc}"[:256],
+                "pending_records": self._records,
+                "error": self._last_error,
+            }
+        if not isinstance(response, Mapping) or response.get("accepted") is not True:
+            return {
+                "status": "INCIDENT_REJECTED",
+                "accepted": False,
+                "reason": "application-owned incident callback did not accept the incident",
+                "pending_records": self._records,
+                "error": self._last_error,
+            }
+        incident_id = response.get("incident_id")
+        if incident_id is None:
+            return {
+                "status": "INCIDENT_REJECTED",
+                "accepted": False,
+                "reason": "application-owned incident callback returned no incident_id",
+                "pending_records": self._records,
+                "error": self._last_error,
+            }
+        incident_id = str(incident_id).strip()
+        if not incident_id or len(incident_id) > MAX_BACKPRESSURE_INCIDENT_ID:
+            return {
+                "status": "INCIDENT_REJECTED",
+                "accepted": False,
+                "reason": "application-owned incident callback returned an invalid incident_id",
+                "pending_records": self._records,
+                "error": self._last_error,
+            }
+        self._backpressure_incident_id = incident_id
+        return {
+            "status": "INCIDENT_RECORDED",
+            "accepted": True,
+            "incident_id": incident_id,
+            "pending_records": self._records,
+            "error": self._last_error,
+        }
 
     def _flush_locked(self) -> dict[str, Any] | None:
         if self._records <= 0:
@@ -467,6 +581,8 @@ class AdaptiveObservationBatcher:
                     "batch_id": batch["batch_id"],
                     "dropped_detail": True,
                 }
+            if self.backpressure_action is AdaptiveAggregationBackpressureAction.INCIDENT:
+                return self._record_backpressure_incident_locked(batch)
             return {"status": "DEFERRED", "error": self._last_error}
         self._last_error = None
         self._reset_locked()

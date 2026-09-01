@@ -117,6 +117,11 @@ current-generation stale snapshots and recent significant deviations; the
 default remains fair round-robin scheduling.
 
 The aggregation policy also includes `backpressure_action`, which defaults to
-`RETAIN` for least-loss behavior and may be set to `DROP` or `REDUCE`. These
-choices control only bounded worker evidence handling when submission is
-unavailable; they do not change application results, policy, or authority.
+`RETAIN` for least-loss behavior and may be set to `DROP`, `REDUCE`, or
+`INCIDENT`. These choices control only bounded worker evidence handling when
+submission is unavailable; they do not change application results, policy, or
+authority. `INCIDENT` requires an application-owned
+`backpressure_incident_callback` and retains the pending batch after reporting
+the bounded incident context. A callback must explicitly return an accepted
+incident identifier; callback absence, rejection, or failure is reported and
+does not discard the evidence.

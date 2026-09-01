@@ -850,8 +850,10 @@ fingerprint through a bounded deployment-supplied validator; the resulting
 records remain evidence only and do not rewrite aggregates or grant authority.
 Worker submission loss is now policy controlled locally: `RETAIN` is the
 least-loss default, while `DROP` and `REDUCE` are explicit bounded choices;
-incident callbacks, parallel stores, and transport-level throttling remain
-future integrations.
+`INCIDENT` can now call an application-owned bounded incident callback while
+retaining the failed batch. Callback acceptance is explicit and notifications
+are deduplicated for the pending episode. Parallel stores and transport-level
+throttling remain future integrations.
 The supervisor also records delayed, context-bound threshold proposals as
 proposal-only evidence. An authenticated control-plane operation now applies
 an approved, effective proposal through a target-scoped runtime authority

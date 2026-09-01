@@ -514,6 +514,141 @@ def test_adaptive_backpressure_reduce_retries_without_detail_samples() -> None:
     assert batcher.status()["pending_records"] == 0
 
 
+def test_adaptive_backpressure_incident_notifies_once_and_retains_evidence() -> None:
+    store = _BackpressureStore(fail_count=2)
+    notifications: list[dict[str, object]] = []
+
+    def notify(payload):
+        notifications.append(dict(payload))
+        return {"accepted": True, "incident_id": "incident-123"}
+
+    batcher = AdaptiveObservationBatcher(
+        store,
+        worker_id="worker-a",
+        worker_pid=101,
+        target_id="example.target",
+        generation_id="generation-a",
+        code_hash="code-a",
+        monitoring_fingerprint="monitoring-a",
+        policy_fingerprint="policy-a",
+        authority_policy_generation="7",
+        authority_policy_fingerprint="authority-a",
+        flush_after_observations=1,
+        flush_interval_seconds=0,
+        backpressure_action=AdaptiveAggregationBackpressureAction.INCIDENT,
+        backpressure_incident_callback=notify,
+    )
+
+    first = batcher.record(
+        event_kind="timing",
+        duration_seconds=2.5,
+        resource_values={"cpu_seconds": 0.5},
+        timing_breach_count=1,
+    )
+    assert first is not None
+    assert first["status"] == "INCIDENT_RECORDED"
+    assert first["incident_id"] == "incident-123"
+    assert batcher.status()["pending_records"] == 1
+    assert batcher.status()["backpressure_incident_id"] == "incident-123"
+    assert len(notifications) == 1
+    assert notifications[0]["batch_id"]
+    assert notifications[0]["pending_records"] == 1
+    assert "timing_events" not in notifications[0]
+    assert "duration_samples" not in notifications[0]
+    assert "resource_samples" not in notifications[0]
+
+    second = batcher.flush()
+    assert second is not None
+    assert second["status"] == "INCIDENT_ALREADY_RECORDED"
+    assert len(notifications) == 1
+    assert batcher.status()["pending_records"] == 1
+
+    queued = batcher.flush()
+    assert queued is not None
+    assert queued["status"] == "QUEUED"
+    assert batcher.status()["pending_records"] == 0
+    assert batcher.status()["backpressure_incident_id"] is None
+
+
+def test_adaptive_backpressure_incident_without_callback_is_explicit_and_retained() -> None:
+    batcher = _backpressure_batcher(
+        _BackpressureStore(fail_count=1),
+        AdaptiveAggregationBackpressureAction.INCIDENT,
+    )
+
+    result = batcher.record(behavior_samples=1)
+
+    assert result is not None
+    assert result["status"] == "INCIDENT_UNAVAILABLE"
+    assert result["accepted"] is False
+    assert batcher.status()["pending_records"] == 1
+    assert batcher.status()["backpressure_incident_recorded"] is False
+
+
+@pytest.mark.parametrize("callback", [
+    lambda _payload: {"accepted": False},
+    lambda _payload: {"accepted": True},
+    lambda _payload: (_ for _ in ()).throw(RuntimeError("incident sink failed")),
+])
+def test_adaptive_backpressure_incident_callback_failure_retains_evidence(callback) -> None:
+    batcher = AdaptiveObservationBatcher(
+        _BackpressureStore(fail_count=1),
+        worker_id="worker-a",
+        worker_pid=101,
+        target_id="example.target",
+        generation_id="generation-a",
+        code_hash="code-a",
+        monitoring_fingerprint="monitoring-a",
+        policy_fingerprint="policy-a",
+        authority_policy_generation="7",
+        authority_policy_fingerprint="authority-a",
+        flush_after_observations=1,
+        flush_interval_seconds=0,
+        backpressure_action=AdaptiveAggregationBackpressureAction.INCIDENT,
+        backpressure_incident_callback=callback,
+    )
+
+    result = batcher.record(behavior_samples=1)
+
+    assert result is not None
+    assert result["status"] in {"INCIDENT_REJECTED", "INCIDENT_FAILED"}
+    assert result["accepted"] is False
+    assert batcher.status()["pending_records"] == 1
+
+
+def test_lightweight_policy_accepts_adaptive_incident_backpressure_action() -> None:
+    validate_lightweight_policy(
+        LightweightPolicy(
+            aggregation=AdaptiveAggregationPolicy(
+                backpressure_action=AdaptiveAggregationBackpressureAction.INCIDENT
+            )
+        )
+    )
+
+
+def test_lightweight_forwards_adaptive_backpressure_incident_callback(tmp_path: Path) -> None:
+    def notify(_payload):
+        return {"accepted": True, "incident_id": "incident-123"}
+
+    @lightweight(
+        policy=LightweightPolicy(
+            aggregation=AdaptiveAggregationPolicy(
+                enabled=True,
+                backpressure_action=AdaptiveAggregationBackpressureAction.INCIDENT,
+            )
+        ),
+        target_id="example.adaptive.callback",
+        state_directory=tmp_path,
+        backpressure_incident_callback=notify,
+    )
+    def sample() -> str:
+        return "ok"
+
+    batcher = sample.__caretaker_adaptive__._aggregation_batcher
+    assert batcher is not None
+    assert batcher.backpressure_incident_callback is notify
+
+
 def test_lightweight_policy_rejects_unknown_adaptive_backpressure_action() -> None:
     with pytest.raises(ValueError, match="backpressure_action"):
         validate_lightweight_policy(

@@ -427,7 +427,7 @@ def validate_lightweight_policy(policy: LightweightPolicy) -> None:
         AdaptiveAggregationBackpressureAction,
     ):
         errors.append(
-            "aggregation.backpressure_action must be RETAIN, DROP, or REDUCE"
+            "aggregation.backpressure_action must be RETAIN, DROP, REDUCE, or INCIDENT"
         )
     if not isinstance(aggregation.allow_persistent_acceptance, bool):
         errors.append("aggregation.allow_persistent_acceptance must be a boolean")
@@ -453,6 +453,7 @@ class _AdaptiveController:
         state_directory: str | Path | None,
         allow_repair_promotion: bool,
         aggregation_scope_resolver: AggregationScopeResolver | None,
+        backpressure_incident_callback: Callable[[Mapping[str, Any]], Any] | None,
     ) -> None:
         self.function = function
         self.target_id = target_id
@@ -466,6 +467,11 @@ class _AdaptiveController:
         ):
             raise ValueError("aggregation_scope_resolver must be callable")
         self.aggregation_scope_resolver = aggregation_scope_resolver
+        if backpressure_incident_callback is not None and not callable(
+            backpressure_incident_callback
+        ):
+            raise ValueError("backpressure_incident_callback must be callable")
+        self.backpressure_incident_callback = backpressure_incident_callback
         self.code_hash = _function_hash(function)
         self._code_object = getattr(function, "__code__", None)
         self._state_directory = state_directory
@@ -1512,6 +1518,7 @@ class _AdaptiveController:
             flush_after_observations=self.policy.aggregation.flush_after_observations,
             flush_interval_seconds=self.policy.aggregation.flush_interval_seconds,
             backpressure_action=self.policy.aggregation.backpressure_action,
+            backpressure_incident_callback=self.backpressure_incident_callback,
             **context,
         )
 
@@ -1830,6 +1837,7 @@ def lightweight(
     state_directory: str | Path | None = None,
     allow_repair_promotion: bool = True,
     aggregation_scope_resolver: AggregationScopeResolver | None = None,
+    backpressure_incident_callback: Callable[[Mapping[str, Any]], Any] | None = None,
 ) -> Callable[[F], F]: ...
 
 
@@ -1844,6 +1852,7 @@ def lightweight(
     state_directory: str | Path | None = None,
     allow_repair_promotion: bool = True,
     aggregation_scope_resolver: AggregationScopeResolver | None = None,
+    backpressure_incident_callback: Callable[[Mapping[str, Any]], Any] | None = None,
 ) -> F | Callable[[F], F]:
     """Start with low-cost threshold monitoring and promote only when policy requires it."""
 
@@ -1867,6 +1876,7 @@ def lightweight(
             state_directory=state_directory,
             allow_repair_promotion=allow_repair_promotion,
             aggregation_scope_resolver=aggregation_scope_resolver,
+            backpressure_incident_callback=backpressure_incident_callback,
         )
 
         @functools.wraps(original)

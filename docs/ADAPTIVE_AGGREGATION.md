@@ -175,9 +175,18 @@ Worker submission loss and backpressure are policy controlled. The local
 batcher defaults to `RETAIN`, which keeps a failed batch bounded for a later
 flush; `DROP` explicitly discards that failed batch and records the dropped
 count; and `REDUCE` retries once with event timestamps, duration samples, and
-resource samples removed while preserving bounded counters. All three actions
-are evidence handling only and cannot change application results, policy, or
-authority. Incident callbacks, parallel stores, and transport-level throttling
+resource samples removed while preserving bounded counters. `INCIDENT` invokes
+an optional application-owned `backpressure_incident_callback` with bounded
+context and retains the pending batch. The callback payload contains the
+batch identity, target/generation and policy context, sequence bounds, pending
+record count, and bounded error text; it never contains the observation events,
+duration samples, resource samples, or complete batch. The callback must return
+`{"accepted": true, "incident_id": "..."}` before the notification is treated
+as recorded. A notification is deduplicated for the pending batch episode, and
+the batch remains pending until a later submission succeeds. Missing, rejected,
+or failing callbacks produce explicit outcomes and retain the evidence.
+All four actions are evidence handling only and cannot change application
+results, policy, or authority. Parallel stores and transport-level throttling
 remain future integrations.
 
 The supervisor can also persist a delayed `ADAPTIVE_THRESHOLD_PROPOSAL` for a
