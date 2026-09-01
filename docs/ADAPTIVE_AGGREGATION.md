@@ -273,6 +273,15 @@ authority stack or grant authority. Installation outcomes are also emitted as
 critical `ADAPTIVE_POLICY_INSTALLATION` audit events when an audit callback is
 configured.
 
+If the deployment stops after the `PENDING` record is written, the
+deployment can call `reconcile_policy_installation()` after restart. This
+never invokes the installer again. It requires the original deployment
+identity and records an explicit `INSTALLED`, `NOT_INSTALLED`, or `UNKNOWN`
+observation; an installed claim must include the exact accepted policy
+fingerprint and deployment artifact hash. The reconciliation remains
+evidence-only and may be recorded after the short-lived runtime authority has
+expired, because it does not authorize or apply anything.
+
 The supervisor exposes `adaptive-observation-submit`,
 `adaptive-aggregation-status`,
 `adaptive-aggregation-reconcile`, `adaptive-aggregation-ack`,

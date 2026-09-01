@@ -4172,6 +4172,12 @@ class SupervisorAdaptiveAggregationStore:
                         "duplicate": True,
                         "requires_reconciliation": True,
                     }
+                if existing.get("status") == "RECONCILED":
+                    return {
+                        **existing,
+                        "duplicate": True,
+                        "requires_reconciliation": False,
+                    }
 
             installation_id = str(uuid4())
             packet = {
@@ -4319,6 +4325,173 @@ class SupervisorAdaptiveAggregationStore:
             **final,
             "duplicate": False,
             **({"audit_errors": audit_errors} if audit_errors else {}),
+        }
+
+    def reconcile_policy_installation(
+        self,
+        installation_id: str,
+        *,
+        deployment_authority_id: str,
+        deployment_authority_fingerprint: str,
+        observed_state: str,
+        reason: str,
+        observed_policy_fingerprint: str | None = None,
+        deployment_artifact_hash: str | None = None,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Reconcile a pending external installation without replaying it.
+
+        This is an evidence operation for a deployment crash window.  It does
+        not require the runtime lease to remain active and it does not make a
+        deployment report authoritative.  ``INSTALLED`` requires both the
+        exact accepted policy fingerprint and an artifact hash; ``UNKNOWN``
+        must remain visibly unresolved rather than being inferred as success.
+        """
+        try:
+            normalized_id = str(UUID(str(installation_id)))
+        except (TypeError, ValueError) as exc:
+            raise AdaptiveAggregationError(
+                "adaptive policy installation_id must be a UUID"
+            ) from exc
+        actor = _text(
+            deployment_authority_id,
+            name="deployment_authority_id",
+            limit=MAX_BATCH_TEXT,
+        )
+        authority_fingerprint = _text(
+            deployment_authority_fingerprint,
+            name="deployment_authority_fingerprint",
+            limit=MAX_BATCH_TEXT,
+        )
+        reconciliation_reason = _text(
+            reason,
+            name="reason",
+            limit=MAX_TRANSITION_REASON,
+        )
+        assert actor is not None
+        assert authority_fingerprint is not None
+        assert reconciliation_reason is not None
+        normalized_state = str(observed_state).strip().upper()
+        if normalized_state not in {"INSTALLED", "NOT_INSTALLED", "UNKNOWN"}:
+            raise AdaptiveAggregationError(
+                "observed_state must be INSTALLED, NOT_INSTALLED, or UNKNOWN"
+            )
+        observed_policy = None
+        if observed_policy_fingerprint is not None and str(observed_policy_fingerprint).strip():
+            observed_policy = _text(
+                observed_policy_fingerprint,
+                name="observed_policy_fingerprint",
+                limit=MAX_BATCH_TEXT,
+            )
+        artifact_hash = None
+        if deployment_artifact_hash is not None and str(deployment_artifact_hash).strip():
+            artifact_hash = _text(
+                deployment_artifact_hash,
+                name="deployment_artifact_hash",
+                limit=MAX_BATCH_TEXT,
+            )
+
+        records = [
+            self._load_policy_installation_record(path)
+            for path in sorted(self.policy_installation_directory.glob("*.json"))
+            if str(path.name).startswith(f"{normalized_id}-")
+        ]
+        if not records:
+            raise KeyError(f"No adaptive policy installation found for {normalized_id}")
+        pending = next(
+            (item for item in records if item.get("status") == "PENDING"),
+            None,
+        )
+        reconciled = next(
+            (item for item in records if item.get("status") == "RECONCILED"),
+            None,
+        )
+        if reconciled is not None:
+            comparable = {
+                "observed_state": reconciled.get("observed_state"),
+                "reason": reconciled.get("reason"),
+                "observed_policy_fingerprint": reconciled.get(
+                    "observed_policy_fingerprint"
+                ),
+                "deployment_artifact_hash": reconciled.get(
+                    "deployment_artifact_hash"
+                ),
+            }
+            requested = {
+                "observed_state": normalized_state,
+                "reason": reconciliation_reason,
+                "observed_policy_fingerprint": observed_policy,
+                "deployment_artifact_hash": artifact_hash,
+            }
+            if comparable != requested:
+                raise AdaptiveAggregationError(
+                    "conflicting adaptive policy installation reconciliation"
+                )
+            audit_error = self._emit_policy_installation_audit(
+                reconciled,
+                duplicate=True,
+            )
+            result = {
+                **reconciled,
+                "duplicate": True,
+                "requires_reconciliation": False,
+            }
+            if audit_error is not None:
+                result["audit_errors"] = [audit_error]
+            return result
+        if pending is None:
+            raise PermissionError(
+                "adaptive policy installation has no pending record to reconcile"
+            )
+        if pending.get("deployment_authority_id") != actor:
+            raise PermissionError("deployment installation authority identity does not match")
+        if pending.get("deployment_authority_fingerprint") != authority_fingerprint:
+            raise PermissionError(
+                "deployment installation authority fingerprint does not match"
+            )
+        expected_policy = str(pending.get("policy_fingerprint") or "")
+        if normalized_state == "INSTALLED":
+            if observed_policy != expected_policy:
+                raise AdaptiveAggregationError(
+                    "installed reconciliation policy fingerprint does not match acceptance"
+                )
+            if artifact_hash is None:
+                raise AdaptiveAggregationError(
+                    "installed reconciliation requires a deployment artifact hash"
+                )
+        else:
+            if observed_policy is not None or artifact_hash is not None:
+                raise AdaptiveAggregationError(
+                    "non-installed reconciliation cannot claim policy or artifact state"
+                )
+        observed_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        final = {
+            **pending,
+            "status": "RECONCILED",
+            "handler_status": "RECONCILED_BY_DEPLOYMENT",
+            "observed_state": normalized_state,
+            "observed_policy_fingerprint": observed_policy,
+            "deployment_artifact_hash": artifact_hash,
+            "reconciled_by": actor,
+            "reason": reconciliation_reason,
+            "recorded_at": observed_at.isoformat(),
+            "external_install_observed": normalized_state == "INSTALLED",
+            "policy_mutated": False,
+            "authority_granted": False,
+        }
+        _immutable_write(
+            self._policy_installation_path(normalized_id, "RECONCILED"),
+            {
+                "schema_version": ADAPTIVE_POLICY_INSTALLATION_SCHEMA_VERSION,
+                "record": final,
+                "record_sha256": _content_hash(final),
+            },
+        )
+        audit_error = self._emit_policy_installation_audit(final)
+        return {
+            **final,
+            "duplicate": False,
+            **({"audit_errors": [audit_error]} if audit_error else {}),
         }
 
     def list_policy_installations(

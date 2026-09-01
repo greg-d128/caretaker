@@ -870,10 +870,11 @@ after restart. A deployment-owned installation callback now consumes that
 handoff only with current target/generation/policy/authority context and must
 acknowledge the exact policy fingerprint plus a deployment artifact hash.
 Installation records are immutable and idempotent for completed handoffs;
-`PENDING`, `INSTALLED`, `REJECTED`, and `FAILED` outcomes remain evidence and
+`PENDING`, `INSTALLED`, `RECONCILED`, `REJECTED`, and `FAILED` outcomes remain evidence and
 are never replayed automatically after restart. Remaining work is deployment-
-specific worker/process orchestration and deliberate reconciliation of a
-pending external installation. The current slice also records immutable
+specific worker/process orchestration; a deployment can now deliberately
+reconcile a pending external installation without replaying its callback.
+The current slice also records immutable
 `PENDING`, `APPLIED`, `FAILED`, and `ROLLED_BACK`
 lineage records with policy IDs/fingerprints, scope, effective/recorded times,
 authority metadata, and worker acknowledgement counts. These records are

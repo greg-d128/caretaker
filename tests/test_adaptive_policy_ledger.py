@@ -510,6 +510,96 @@ def test_deployment_installation_audit_is_output_only(tmp_path: Path) -> None:
     )
 
 
+def test_pending_deployment_installation_can_be_reconciled_without_replay(
+    tmp_path: Path,
+) -> None:
+    store = SupervisorAdaptiveAggregationStore(tmp_path)
+    transition = _transition(store, now=datetime(2030, 1, 1, tzinfo=timezone.utc))
+    context = {
+        "current_generations": {"payments.charge": "generation-1"},
+        "current_policy_fingerprints": {"payments.charge": "policy-new"},
+        "authority_policy_generation": "5",
+        "authority_policy_fingerprint": "authority-new",
+    }
+    store.acknowledge_transition(
+        {
+            **transition,
+            "worker_id": "worker-a",
+            "applied": True,
+            "observed_level": "POLICY",
+        },
+        peer_pid=101,
+        current_generations=context["current_generations"],
+        policy_fingerprints=context["current_policy_fingerprints"],
+        authority_policy_generation=context["authority_policy_generation"],
+        authority_policy_fingerprint=context["authority_policy_fingerprint"],
+    )
+    acceptance = store.record_policy_transition_acceptance(
+        str(transition["transition_id"]),
+        accepted_by="uid:1001",
+        reason="operator accepted for deployment",
+        policy_allows_persistent_acceptance=True,
+        now=datetime(2030, 1, 1, 0, 0, 30, tzinfo=timezone.utc),
+        **context,
+    )
+
+    def interrupted_installer(_packet: dict[str, object]) -> None:
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        store.install_policy_acceptance(
+            str(acceptance["acceptance_id"]),
+            deployment_authority_id="deployment:production",
+            deployment_authority_fingerprint="deployment-authority-fingerprint",
+            installer=interrupted_installer,
+            reason="deployment process stopped during install",
+            now=datetime(2030, 1, 1, 0, 0, 45, tzinfo=timezone.utc),
+            **context,
+        )
+    pending = store.list_policy_installations(
+        acceptance_id=str(acceptance["acceptance_id"])
+    )
+    assert len(pending) == 1
+    installation_id = str(pending[0]["installation_id"])
+
+    reconciled = store.reconcile_policy_installation(
+        installation_id,
+        deployment_authority_id="deployment:production",
+        deployment_authority_fingerprint="deployment-authority-fingerprint",
+        observed_state="INSTALLED",
+        observed_policy_fingerprint="policy-new",
+        deployment_artifact_hash="sha256:deployment-artifact",
+        reason="deployment verified the artifact after restart",
+        now=datetime(2030, 1, 3, tzinfo=timezone.utc),
+    )
+    assert reconciled["status"] == "RECONCILED"
+    assert reconciled["observed_state"] == "INSTALLED"
+    assert reconciled["external_install_observed"] is True
+    assert reconciled["authority_granted"] is False
+
+    duplicate = store.reconcile_policy_installation(
+        installation_id,
+        deployment_authority_id="deployment:production",
+        deployment_authority_fingerprint="deployment-authority-fingerprint",
+        observed_state="INSTALLED",
+        observed_policy_fingerprint="policy-new",
+        deployment_artifact_hash="sha256:deployment-artifact",
+        reason="deployment verified the artifact after restart",
+        now=datetime(2030, 1, 3, 0, 0, 1, tzinfo=timezone.utc),
+    )
+    assert duplicate["duplicate"] is True
+
+    with pytest.raises(AdaptiveAggregationError, match="conflicting"):
+        store.reconcile_policy_installation(
+            installation_id,
+            deployment_authority_id="deployment:production",
+            deployment_authority_fingerprint="deployment-authority-fingerprint",
+            observed_state="UNKNOWN",
+            reason="conflicting retry",
+            now=datetime(2030, 1, 3, 0, 0, 2, tzinfo=timezone.utc),
+        )
+
+
 def test_tampered_policy_ledger_is_not_returned(tmp_path: Path) -> None:
     store = SupervisorAdaptiveAggregationStore(tmp_path)
     transition = _transition(store, now=datetime.now(timezone.utc))
