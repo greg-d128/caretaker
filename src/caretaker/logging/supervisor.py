@@ -3582,6 +3582,50 @@ class ApplicationWorkerLifecycle:
             handlers["STOP_APPLICATION"] = self.supervisor.build_shutdown_action_handler()
         return handlers
 
+    def build_failure_recovery_callback(
+        self,
+        *,
+        scope: str | Callable[[tuple[WorkerHealth, ...]], str],
+        recovery_policy: RepairRecoveryPolicy,
+        recovery_handlers: Mapping[str, Callable[[Mapping[str, Any]], Any]] | None = None,
+        diagnostic_debug: bool | None = None,
+        critical_evidence: bool = False,
+        collect_postmortem: Callable[[WorkerHealth, Mapping[str, Any]], Any] | None = None,
+        require_complete_postmortem: bool = False,
+        minimum_sample_count: int = 30,
+        z_threshold: float = 3.0,
+    ) -> Callable[[tuple[WorkerHealth, ...]], dict[str, Any]]:
+        """Build a cohort callback for ordinary worker-failure recovery.
+
+        The embedding application supplies the workers that belong to one
+        continuous transaction.  The callback only delegates to the
+        supervisor's evidence, reconciliation, and policy-action gates; it
+        does not infer a scope from target identity or create replacement
+        authority.
+        """
+        if not isinstance(recovery_policy, RepairRecoveryPolicy):
+            raise TypeError("failure recovery callback requires a RepairRecoveryPolicy")
+        if not isinstance(scope, str) and not callable(scope):
+            raise TypeError("failure recovery scope must be a string or callable")
+
+        def callback(workers: tuple[WorkerHealth, ...]) -> dict[str, Any]:
+            supplied = tuple(workers)
+            resolved_scope = scope(supplied) if callable(scope) else scope
+            return self.supervisor.handle_worker_failure_cohort(
+                supplied,
+                scope=resolved_scope,
+                recovery_policy=recovery_policy,
+                recovery_handlers=recovery_handlers,
+                diagnostic_debug=diagnostic_debug,
+                critical_evidence=critical_evidence,
+                collect_postmortem=collect_postmortem,
+                require_complete_postmortem=require_complete_postmortem,
+                minimum_sample_count=minimum_sample_count,
+                z_threshold=z_threshold,
+            )
+
+        return callback
+
     def build_expiry_recovery_callback(
         self,
         *,

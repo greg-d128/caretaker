@@ -1016,6 +1016,44 @@ def test_application_worker_lifecycle_does_not_implicitly_enable_shutdown() -> N
     )
 
 
+def test_application_worker_lifecycle_builds_failed_cohort_recovery_callback() -> None:
+    store = InMemoryRepairStore()
+    supervisor = supervisor_module.CaretakerApplicationSupervisor(
+        object(), failure_store=store
+    )
+    worker = supervisor.workers.register(
+        WorkerKind.REPAIR_ANALYZER,
+        4321,
+    )
+    supervisor.workers.mark_failed(worker.worker_id, error_fingerprint="worker-crash")
+    lifecycle = ApplicationWorkerLifecycle(
+        supervisor,
+        spawn_worker=lambda _request: {"started": True, "pid": 9876},
+    )
+    callback = lifecycle.build_failure_recovery_callback(
+        scope=lambda workers: f"transaction:failure-{workers[0].worker_id}",
+        recovery_policy=RepairRecoveryPolicy(
+            worker_failure_action=RecoveryAction.CONTINUE_DEGRADED,
+        ),
+        recovery_handlers={
+            "CONTINUE_DEGRADED": lambda _decision: {
+                "accepted": True,
+                "degraded_continuation": True,
+            },
+        },
+    )
+
+    result = callback((supervisor.workers.get(worker.worker_id),))
+
+    assert result["ok"] is True
+    assert result["worker_ids"] == [str(worker.worker_id)]
+    assert result["reconciliation"]["recovery_decisions"][0][
+        "action_execution"
+    ]["status"] == "EXECUTED"
+    assert len(store.all_worker_failures()) == 1
+    assert len(store.all_worker_failure_recoveries()) == 1
+
+
 def test_supervisor_control_cycle_retains_callback_failure_as_bounded_evidence() -> None:
     supervisor = supervisor_module.CaretakerApplicationSupervisor(object())
     result = supervisor.run_control_cycle(

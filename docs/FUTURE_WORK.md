@@ -958,7 +958,10 @@ The lifecycle adapter also provides `build_recovery_handlers()` to assemble
 only explicitly supplied application action callbacks, including a previously
 packet-gated replacement handler; supervisor-owned application shutdown is
 opt-in. The factory is wiring only and does not grant authority or create
-processes.
+processes. `build_failure_recovery_callback()` now supplies the matching
+continuous-cohort boundary for ordinary failed or unauthorized workers, so
+deployments can use the same explicit policy/action gates before expiry
+recovery or other lifecycle handling.
 
 Recovery action dispatch now has application-owned adapters for incident
 creation and application shutdown. Both effects remain outside Caretaker's

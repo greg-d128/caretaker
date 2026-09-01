@@ -57,6 +57,12 @@ only callbacks supplied by the application; supervisor shutdown is opt-in.
 The supervisor still validates each acknowledgement before recording an action
 as executed, and this factory never creates a process or grants authority.
 
+`ApplicationWorkerLifecycle.build_failure_recovery_callback()` provides the
+same explicit boundary for a cohort of ordinary failed or unauthorized
+workers. The application supplies the continuous-transaction scope (fixed or
+resolved from the cohort), and the callback persists and reconciles all
+members before selecting one policy action per target.
+
 ## Authority packet transport
 
 `serialize_recovery_authority_packet()` provides a bounded canonical JSON
