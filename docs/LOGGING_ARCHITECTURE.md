@@ -67,6 +67,12 @@ state and checks to that registry.
 package. Its logging import is a compatibility re-export; process creation and
 cleanup remain callbacks owned by the embedding application.
 
+The bounded supervisor control-cycle implementation is likewise owned by the
+application package. The legacy supervisor method delegates to it, and
+`ApplicationRuntimeSupervisor.run_control_cycle()` exposes the runtime seam
+directly; expiry and cycle callbacks remain application-owned and cannot grant
+authority.
+
 ## Channels
 
 - `APPLICATION`

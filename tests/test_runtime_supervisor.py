@@ -64,3 +64,11 @@ def test_runtime_worker_lifecycle_is_owned_outside_logging() -> None:
 
     assert ApplicationWorkerLifecycle.__module__ == "caretaker.runtime_supervision"
     assert LoggingWorkerLifecycle is ApplicationWorkerLifecycle
+
+
+def test_application_runtime_supervisor_exposes_control_cycle_owner() -> None:
+    supervisor = ApplicationRuntimeSupervisor(_Runtime())
+    result = supervisor.run_control_cycle()
+
+    assert result["ok"] is True
+    assert result["authority_granted"] is False

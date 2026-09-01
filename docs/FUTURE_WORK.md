@@ -2224,7 +2224,10 @@ compatibility wrapper remains in logging. Control and shutdown internals still
 remain to be extracted. No host-level or infrastructure-level authority is
 added. `ApplicationWorkerLifecycle` is also application-runtime code, with a
 logging compatibility re-export; process creation and cleanup remain
-application-owned callbacks.
+application-owned callbacks. The bounded control-cycle implementation now
+lives in the application package and is exposed directly by
+`ApplicationRuntimeSupervisor`; control and shutdown internals beyond that
+cycle remain to be extracted.
 
 `logging/supervisor.py` and `logging/__init__.py` currently include application
 supervision, worker health/authority, adaptive coordination, and recovery

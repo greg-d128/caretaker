@@ -8,6 +8,8 @@ move here incrementally without changing the logging API.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,7 @@ from .runtime_supervision import (
     Watchdog,
     WorkRegistry,
     WorkerRegistry,
+    run_supervisor_control_cycle,
 )
 
 
@@ -62,6 +65,21 @@ class ApplicationRuntimeSupervisor:
 
     def stop(self) -> None:
         self._implementation.stop()
+
+    def run_control_cycle(
+        self,
+        *,
+        supervisor_time: datetime | None = None,
+        on_expired_workers: Callable[[tuple[Any, ...], datetime], Any] | None = None,
+        on_cycle: Callable[[datetime], Any] | None = None,
+    ) -> dict[str, Any]:
+        """Run the application-owned control cycle through the runtime seam."""
+        return run_supervisor_control_cycle(
+            self._implementation,
+            supervisor_time=supervisor_time,
+            on_expired_workers=on_expired_workers,
+            on_cycle=on_cycle,
+        )
 
     def __getattr__(self, name: str) -> Any:
         # Compatibility for the existing run/control code while ownership is
