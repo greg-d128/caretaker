@@ -868,7 +868,9 @@ request, creates a minimal observation-only Incident Capsule, and records
 the important `INCIDENT_CAPTURED` event; disabled capsule capture and
 unsupervised runs retain
 the least-friction unavailable behavior. This does not replace
-deployment-specific incident lifecycle integration.
+deployment-specific incident lifecycle integration. The supervisor rebuilds
+the bounded idempotency index from verified capsules after restart; malformed
+or unreadable capsules are excluded rather than trusted.
 The supervisor also records delayed, context-bound threshold proposals as
 proposal-only evidence. An authenticated control-plane operation now applies
 an approved, effective proposal through a target-scoped runtime authority

@@ -163,6 +163,16 @@ directory. Observation IDs are idempotent, conflicting reuse is rejected, and
 checkpoint hashes are verified before progress is restored. The store does not
 reactivate a worker or authorize a process after restart.
 
+The supervised application may submit a policy-requested adaptive backpressure
+incident with `adaptive-backpressure-incident`. This is an output-only,
+application-PID-bound request containing only bounded batch context. The
+supervisor creates a minimal Incident Capsule and records `INCIDENT_CAPTURED`
+before acknowledging the incident ID. Duplicate submissions for the same
+batch and matching target, generation, and policy fingerprint are idempotent;
+the bounded index is restored from verified capsules after supervisor restart,
+and context reuse is rejected. The command cannot submit observation contents,
+change policy, grant authority, or replace the ordinary incident policy.
+
 The `incident-communication-draft` command creates a bounded, policy-governed
 draft for one verified capsule. The console exposes the same operation as
 **Create review draft**, and `caretaker-incident-draft` can write a new

@@ -1146,6 +1146,59 @@ def _handle_adaptive_backpressure_audit_submission(
     }
 
 
+def _restore_adaptive_incident_index(
+    capsule_store: IncidentCapsuleStore,
+    *,
+    limit: int = 1024,
+) -> dict[str, dict[str, str]]:
+    """Rebuild bounded adaptive-incident idempotency from verified capsules."""
+    restored: dict[str, dict[str, str]] = {}
+    for summary in capsule_store.list_summaries(limit=limit):
+        if summary.get("integrity_status") != "VERIFIED":
+            continue
+        capsule_id = summary.get("capsule_id")
+        if not isinstance(capsule_id, str) or not capsule_id:
+            continue
+        try:
+            envelope = capsule_store.load(capsule_id)
+        except Exception:
+            # An invalid or unreadable capsule is evidence, not an authority
+            # source. It must not be used to suppress a new capture.
+            continue
+        capsule = envelope.get("capsule")
+        if not isinstance(capsule, Mapping):
+            continue
+        state = capsule.get("incident_state")
+        context = state.get("backpressure") if isinstance(state, Mapping) else None
+        if not isinstance(state, Mapping) or state.get("trigger") != (
+            "adaptive_aggregation_backpressure"
+        ) or not isinstance(context, Mapping):
+            continue
+        required = ("batch_id", "target_id", "generation_id", "policy_fingerprint")
+        if any(
+            not isinstance(context.get(field), str) or not context[field]
+            for field in required
+        ):
+            continue
+        incident_id = capsule.get("incident_id")
+        if not isinstance(incident_id, str) or not incident_id:
+            continue
+        batch_id = context["batch_id"]
+        if batch_id in restored:
+            # Summaries are newest first; retain the first verified record.
+            continue
+        restored[batch_id] = {
+            "incident_id": incident_id,
+            "capsule_id": capsule_id,
+            "target_id": context["target_id"],
+            "generation_id": context["generation_id"],
+            "policy_fingerprint": context["policy_fingerprint"],
+        }
+        if len(restored) >= 1024:
+            break
+    return restored
+
+
 def _handle_adaptive_backpressure_incident_submission(
     runtime: Any,
     capsule_store: IncidentCapsuleStore,
@@ -1582,7 +1635,7 @@ def main(argv: list[str] | None = None) -> int:
     authority_lease_holder = {
         str(lease.lease_id): lease for lease in authority.effective.runtime_leases
     }
-    adaptive_incident_by_batch: dict[str, dict[str, str]] = {}
+    adaptive_incident_by_batch = _restore_adaptive_incident_index(capsule_store)
 
     def deployment_fingerprint() -> str | None:
         layer = next(

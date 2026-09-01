@@ -210,6 +210,10 @@ capsule remains observation-only and grants no authority. If Incident Capsule
 capture is disabled by policy, or the run is unsupervised or has no configured
 supervisor socket, no implicit incident capture is enabled and the existing
 explicit-callback/unavailable behavior remains in effect.
+The supervisor rebuilds a bounded batch-to-incident index from verified
+adaptive Incident Capsules during startup, so a retried submission remains
+idempotent across supervisor restarts. Invalid or unreadable capsules are
+never used as a trust or suppression source.
 
 The supervisor can also persist a delayed `ADAPTIVE_THRESHOLD_PROPOSAL` for a
 bounded set of threshold fields. The proposal records the requested changes,

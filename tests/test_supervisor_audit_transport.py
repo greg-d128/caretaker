@@ -19,6 +19,7 @@ from caretaker.run import (
     _emit_behavior_collection_audit,
     _handle_adaptive_backpressure_audit_submission,
     _handle_adaptive_backpressure_incident_submission,
+    _restore_adaptive_incident_index,
     _handle_validation_audit_submission,
 )
 
@@ -315,6 +316,41 @@ def test_supervisor_rejects_backpressure_incident_context_reuse():
             (4321, 1000, 1000),
             SimpleNamespace(pid=4321, poll=lambda: None),
         )
+
+
+def test_adaptive_incident_deduplication_is_restored_from_verified_capsule(
+    tmp_path,
+):
+    audit = _Audit()
+    runtime = _runtime(audit)
+    capsule_store = IncidentCapsuleStore(tmp_path)
+    request = {
+        "context": {
+            "event": "adaptive-aggregation-backpressure",
+            "action": "INCIDENT",
+            "batch_id": "batch-restart",
+            "target_id": "demo.target",
+            "generation_id": "generation-1",
+            "policy_fingerprint": "sha256:worker-policy",
+            "pending_records": 1,
+            "sequence_start": 1,
+            "sequence_end": 1,
+        }
+    }
+    peer = SimpleNamespace(pid=4321, poll=lambda: None)
+    first = _handle_adaptive_backpressure_incident_submission(
+        runtime, capsule_store, {}, request, (4321, 1000, 1000), peer
+    )
+
+    restored = _restore_adaptive_incident_index(capsule_store)
+    second = _handle_adaptive_backpressure_incident_submission(
+        runtime, capsule_store, restored, request, (4321, 1000, 1000), peer
+    )
+
+    assert second["idempotent"] is True
+    assert second["incident_id"] == first["incident_id"]
+    assert len(capsule_store.list_summaries()) == 1
+    assert [call["event_type"] for call in audit.calls] == ["INCIDENT_CAPTURED"]
 
 
 def test_behavior_collection_audit_is_bounded_and_authority_free():
