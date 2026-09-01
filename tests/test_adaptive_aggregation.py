@@ -18,6 +18,7 @@ from caretaker.adaptive_aggregation import (
 )
 from caretaker.run import (
     _emit_adaptive_aggregation_audit,
+    _adaptive_threshold_policy_settings,
     _handle_adaptive_observation_submission,
 )
 from caretaker.adaptive import (
@@ -73,6 +74,22 @@ def _context():
         "authority_policy_generation": "7",
         "authority_policy_fingerprint": "authority-a",
     }
+
+
+def test_scoped_threshold_activation_fails_closed_until_scope_policy_resolution_exists():
+    with pytest.raises(ValueError, match="scope-specific adaptive threshold application"):
+        _adaptive_threshold_policy_settings(
+            {"exception.occurrences": 2},
+            target_id="example.target",
+            aggregation_scope="cluster:blue",
+        )
+
+    settings = _adaptive_threshold_policy_settings(
+        {"exception.occurrences": 2},
+        target_id="example.target",
+    )
+    assert len(settings) == 1
+    assert settings[0].target == "example.target"
 
 
 def _population_aggregate(

@@ -857,7 +857,8 @@ now preserves an optional, explicitly declared aggregation scope as an
 extended target identity and supports an application-owned per-call scope
 resolver; it still needs policy and operator semantics for automatic discovery
 or changing workload/population membership. It must move dynamic
-threshold administration, cross-host transport, process lifecycle orchestration,
+threshold administration, including scope-aware policy resolution for
+population-specific proposals, cross-host transport, process lifecycle orchestration,
 and additional resource-aware distribution reconciliation without
 double-counting the existing single-process lifecycle. The initial
 repair-evidence gate is proposal-only and is implemented in the current slice.

@@ -1358,12 +1358,24 @@ def _handle_adaptive_backpressure_incident_submission(
 
 
 def _adaptive_threshold_policy_settings(
-    changes: Mapping[str, Any], *, target_id: str
+    changes: Mapping[str, Any], *, target_id: str, aggregation_scope: str | None = None
 ) -> tuple[PolicySetting, ...]:
-    """Translate validated proposal fields into target-scoped authority settings."""
+    """Translate validated changes into target-scoped authority settings.
+
+    Population-scoped policy resolution is not implemented by the current
+    adaptive controller. Keep scoped proposals as reviewable evidence, but
+    refuse activation rather than applying them to every population for the
+    same target.
+    """
     target = str(target_id).strip()
     if not target:
         raise ValueError("adaptive threshold application requires a target id")
+    scope = str(aggregation_scope).strip() if aggregation_scope is not None else ""
+    if scope:
+        raise ValueError(
+            "scope-specific adaptive threshold application is not implemented; "
+            "the proposal remains reviewable evidence"
+        )
     if not isinstance(changes, Mapping) or not changes:
         raise ValueError("adaptive threshold application requires threshold changes")
     settings: list[PolicySetting] = []
@@ -2521,6 +2533,7 @@ def main(argv: list[str] | None = None) -> int:
             settings = _adaptive_threshold_policy_settings(
                 proposal.get("changes") or {},
                 target_id=str(proposal["target_id"]),
+                aggregation_scope=proposal.get("aggregation_scope"),
             )
             lease = authority.acquire_runtime_lease(
                 settings=settings,
