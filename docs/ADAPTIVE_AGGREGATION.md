@@ -81,6 +81,24 @@ batch ID, batch hash, result (`ACCEPTED`, `DUPLICATE`, or `REJECTED`), and
 aggregate key/rejection reason where applicable. This is delivery provenance
 only: an acknowledgement cannot authorize a transition or change policy.
 
+## Historical batch revalidation
+
+`SupervisorAdaptiveAggregationStore.revalidate_archived_batches()` provides an
+evidence-only path for reviewing accepted historical batches against a later
+policy fingerprint. A deployment may supply a bounded validator that receives
+the normalized archived batch and the requested fingerprint and returns a
+JSON-shaped `valid` result with optional checks. Because a fingerprint alone
+does not contain policy semantics, omitting the validator reports
+`REVALIDATION_REQUIRED` when the archived and requested fingerprints differ;
+matching fingerprints receive the limited `MATCHED_POLICY` identity result.
+
+Each result is written as an immutable, content-addressed revalidation record
+and repeated requests are idempotent. The archived batch, aggregate state, and
+policy/authority stack are never rewritten. A successful `VALIDATED` result is
+review evidence only: it cannot authorize a policy transition, promote a
+repair, or alter worker authority. Validator provisioning and interpretation
+remain deployment-owned.
+
 When an adaptive wrapper runs inside a supervised application worker, it may
 submit its bounded batch through the supervisor's output-only control socket
 using `adaptive-observation-submit`. The supervisor re-normalizes the batch,

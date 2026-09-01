@@ -845,6 +845,9 @@ threshold administration, cross-host transport, process lifecycle orchestration,
 and additional resource-aware distribution reconciliation without
 double-counting the existing single-process lifecycle. The initial
 repair-evidence gate is proposal-only and is implemented in the current slice.
+Retained archived batches can now be revalidated against a later policy
+fingerprint through a bounded deployment-supplied validator; the resulting
+records remain evidence only and do not rewrite aggregates or grant authority.
 Worker submission loss is now policy controlled locally: `RETAIN` is the
 least-loss default, while `DROP` and `REDUCE` are explicit bounded choices;
 incident callbacks, parallel stores, and transport-level throttling remain

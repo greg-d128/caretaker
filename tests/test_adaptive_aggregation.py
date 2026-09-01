@@ -1091,6 +1091,69 @@ def test_supervisor_aggregation_is_idempotent_for_resubmitted_batch(tmp_path: Pa
     assert store.list_aggregates()[0]["total_batches"] == 1
 
 
+def test_archived_batch_revalidation_is_durable_and_does_not_modify_aggregate(
+    tmp_path: Path,
+) -> None:
+    store = SupervisorAdaptiveAggregationStore(tmp_path)
+    batch = _batch(batch_id="00000000-0000-0000-0000-000000000013")
+    store.submit(batch)
+    assert store.reconcile(**_context())["merged"] == 1
+    archive_path = next(store.archive_directory.glob("*.json"))
+    original_archive = archive_path.read_bytes()
+    original_aggregate = store.list_aggregates()[0]
+
+    def validate_against_new_policy(
+        archived: dict[str, object], requested_policy: str
+    ) -> dict[str, object]:
+        return {
+            "valid": archived["policy_fingerprint"] == "policy-a"
+            and requested_policy == "policy-b",
+            "reason": "historical policy transition was reviewed",
+            "checks": {"source_policy": archived["policy_fingerprint"]},
+        }
+
+    result = store.revalidate_archived_batches(
+        policy_fingerprint="policy-b",
+        validator=validate_against_new_policy,
+        validator_id="operator-review-v1",
+    )
+    assert result["status"] == "COMPLETED"
+    assert result["checked_count"] == 1
+    report = result["reports"][0]
+    assert report["status"] == "VALIDATED"
+    assert report["source_policy_fingerprint"] == "policy-a"
+    assert report["requested_policy_fingerprint"] == "policy-b"
+    assert report["authority_granted"] is False
+    assert report["aggregate_modified"] is False
+    assert archive_path.read_bytes() == original_archive
+    assert store.list_aggregates()[0] == original_aggregate
+    assert store.status()["revalidations"] == 1
+
+    repeated = store.revalidate_archived_batches(
+        policy_fingerprint="policy-b",
+        validator=validate_against_new_policy,
+        validator_id="operator-review-v1",
+    )
+    assert repeated["reports"][0]["duplicate"] is True
+    assert len(store.list_batch_revalidations()) == 1
+
+
+def test_archived_batch_revalidation_without_validator_marks_different_policy_unchecked(
+    tmp_path: Path,
+) -> None:
+    store = SupervisorAdaptiveAggregationStore(tmp_path)
+    batch = _batch(batch_id="00000000-0000-0000-0000-000000000014")
+    store.submit(batch)
+    store.reconcile(**_context())
+
+    result = store.revalidate_archived_batches(policy_fingerprint="policy-b")
+
+    assert result["reports"][0]["status"] == "REVALIDATION_REQUIRED"
+    assert result["reports"][0]["validator_id"] == "identity-only"
+    assert result["authority_granted"] is False
+    assert result["aggregate_modified"] is False
+
+
 def test_supervisor_creates_context_bound_promotion_and_tracks_worker_acknowledgements(
     tmp_path: Path,
 ):

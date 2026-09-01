@@ -15,7 +15,7 @@ import math
 import os
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
@@ -26,6 +26,7 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 ADAPTIVE_AGGREGATION_SCHEMA_VERSION = 1
 ADAPTIVE_POLICY_LEDGER_SCHEMA_VERSION = 1
 ADAPTIVE_POLICY_ACCEPTANCE_SCHEMA_VERSION = 1
+ADAPTIVE_BATCH_REVALIDATION_SCHEMA_VERSION = 1
 MAX_BATCH_TEXT = 256
 MAX_AGGREGATION_SCOPE_TEXT = 256
 MAX_BATCH_EVENTS = 256
@@ -50,6 +51,8 @@ MAX_RESOURCE_SAMPLES = MAX_BATCH_EVENTS
 MAX_THRESHOLD_CHANGES = 16
 MAX_THRESHOLD_DELAY_SECONDS = 86_400.0
 MAX_THRESHOLD_PROPOSAL_TTL_SECONDS = 86_400.0
+MAX_BATCH_REVALIDATION_RESULT_BYTES = 8 * 1024
+MAX_BATCH_REVALIDATION_IDS = 256
 MAX_TRANSITION_SIGNATURE_BYTES = 16 * 1024
 _ADAPTIVE_POLICY_ID_NAMESPACE = uuid5(
     NAMESPACE_URL, "https://caretaker.dev/adaptive-policy-id"
@@ -1815,6 +1818,7 @@ class SupervisorAdaptiveAggregationStore:
         self.policy_ledger_directory = self.root / "adaptive" / "policy-ledger"
         self.policy_acceptance_directory = self.root / "adaptive" / "policy-acceptance"
         self.conflict_directory = self.root / "adaptive" / "aggregation" / "conflicts"
+        self.revalidation_directory = self.root / "adaptive" / "aggregation" / "revalidations"
         for directory in (
             self.pending_directory,
             self.archive_directory,
@@ -1828,6 +1832,7 @@ class SupervisorAdaptiveAggregationStore:
             self.policy_ledger_directory,
             self.policy_acceptance_directory,
             self.conflict_directory,
+            self.revalidation_directory,
         ):
             directory.mkdir(parents=True, exist_ok=True, mode=0o700)
             try:
@@ -1903,6 +1908,224 @@ class SupervisorAdaptiveAggregationStore:
         if str(path.stem) != str(batch["batch_id"]):
             raise AdaptiveAggregationError("batch ID does not match its filename")
         return batch
+
+    def _revalidation_path(self, revalidation_id: str) -> Path:
+        return self.revalidation_directory / f"{revalidation_id}.json"
+
+    def _load_revalidation_record(self, path: Path) -> dict[str, Any]:
+        try:
+            envelope = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise AdaptiveAggregationError("adaptive batch revalidation is unreadable") from exc
+        if not isinstance(envelope, Mapping):
+            raise AdaptiveAggregationError("adaptive batch revalidation must be an object")
+        if int(envelope.get("schema_version") or 0) != ADAPTIVE_BATCH_REVALIDATION_SCHEMA_VERSION:
+            raise AdaptiveAggregationError("unsupported adaptive batch revalidation schema")
+        record = envelope.get("record")
+        if not isinstance(record, Mapping):
+            raise AdaptiveAggregationError("adaptive batch revalidation record is missing")
+        try:
+            revalidation_id = str(UUID(str(record.get("revalidation_id"))))
+        except (TypeError, ValueError) as exc:
+            raise AdaptiveAggregationError("adaptive batch revalidation ID is invalid") from exc
+        if revalidation_id != path.stem:
+            raise AdaptiveAggregationError("adaptive batch revalidation ID does not match its filename")
+        if str(envelope.get("record_sha256") or "") != _content_hash(record):
+            raise AdaptiveAggregationError("adaptive batch revalidation hash is invalid")
+        return dict(record)
+
+    @staticmethod
+    def _revalidation_text(value: Any, *, name: str) -> str:
+        result = str(value or "").strip()
+        if not result or len(result) > MAX_BATCH_TEXT:
+            raise AdaptiveAggregationError(
+                f"adaptive batch revalidation {name} is invalid"
+            )
+        return result
+
+    @staticmethod
+    def _revalidation_result(value: Any) -> dict[str, Any]:
+        if not isinstance(value, Mapping) or not isinstance(value.get("valid"), bool):
+            raise AdaptiveAggregationError(
+                "adaptive batch revalidation validator must return a mapping with boolean valid"
+            )
+        result = dict(value)
+        try:
+            encoded = json.dumps(
+                result,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise AdaptiveAggregationError(
+                "adaptive batch revalidation result is not JSON data"
+            ) from exc
+        if len(encoded) > MAX_BATCH_REVALIDATION_RESULT_BYTES:
+            raise AdaptiveAggregationError("adaptive batch revalidation result is too large")
+        return result
+
+    def revalidate_archived_batches(
+        self,
+        *,
+        policy_fingerprint: str,
+        validator: Callable[[Mapping[str, Any], str], Mapping[str, Any]] | None = None,
+        validator_id: str | None = None,
+        batch_ids: Sequence[str] | None = None,
+        maximum_batches: int = 100,
+    ) -> dict[str, Any]:
+        """Record evidence from rechecking archived batches under a policy hash.
+
+        The optional validator is application/deployment supplied because a
+        fingerprint alone cannot describe the policy semantics needed to
+        re-evaluate a historical batch. This method never edits archived
+        batches or aggregate state, grants authority, or promotes a repair.
+        """
+        if isinstance(maximum_batches, bool) or not isinstance(maximum_batches, int):
+            raise AdaptiveAggregationError("maximum_batches must be an integer")
+        if maximum_batches <= 0:
+            raise AdaptiveAggregationError("maximum_batches must be greater than zero")
+        requested_policy = self._revalidation_text(
+            policy_fingerprint,
+            name="policy_fingerprint",
+        )
+        if validator is not None and not callable(validator):
+            raise AdaptiveAggregationError("adaptive batch revalidation validator must be callable")
+        resolved_validator_id = self._revalidation_text(
+            validator_id or ("application-validator" if validator is not None else "identity-only"),
+            name="validator_id",
+        )
+        selected_ids: set[str] | None = None
+        if batch_ids is not None:
+            if isinstance(batch_ids, (str, bytes, bytearray)):
+                raise AdaptiveAggregationError("batch_ids must be a sequence of UUIDs")
+            if len(batch_ids) > MAX_BATCH_REVALIDATION_IDS:
+                raise AdaptiveAggregationError(
+                    f"batch_ids cannot contain more than {MAX_BATCH_REVALIDATION_IDS} values"
+                )
+            selected_ids = set()
+            for value in batch_ids:
+                try:
+                    selected_ids.add(str(UUID(str(value))))
+                except (TypeError, ValueError) as exc:
+                    raise AdaptiveAggregationError("batch_ids must contain UUIDs") from exc
+        paths = sorted(self.archive_directory.glob("*.json"))
+        if selected_ids is not None:
+            paths = [path for path in paths if path.stem in selected_ids]
+        paths = paths[:maximum_batches]
+        reports: list[dict[str, Any]] = []
+        for path in paths:
+            try:
+                batch = self._load_batch(path)
+                batch_id = str(batch["batch_id"])
+                batch_hash = _content_hash(batch)
+                source_policy = str(batch["policy_fingerprint"])
+            except Exception as exc:
+                batch = None
+                batch_id = path.stem[:MAX_BATCH_TEXT]
+                batch_hash = None
+                source_policy = None
+                validation_status = "INVALID_SOURCE"
+                validation_reason = f"{type(exc).__name__}: {exc}"[:256]
+                validator_result: Mapping[str, Any] = {"valid": False, "reason": validation_reason}
+            else:
+                if validator is None:
+                    if source_policy == requested_policy:
+                        validation_status = "MATCHED_POLICY"
+                        validation_reason = "archived batch already carries the requested policy fingerprint"
+                        validator_result = {"valid": True, "mode": "identity-only"}
+                    else:
+                        validation_status = "REVALIDATION_REQUIRED"
+                        validation_reason = "a deployment validator is required to assess a different policy fingerprint"
+                        validator_result = {"valid": False, "mode": "identity-only"}
+                else:
+                    try:
+                        validator_result = self._revalidation_result(
+                            validator(dict(batch), requested_policy)
+                        )
+                        validation_status = (
+                            "VALIDATED" if validator_result["valid"] else "REJECTED"
+                        )
+                        validation_reason = str(
+                            validator_result.get("reason") or validation_status
+                        )[:256]
+                    except Exception as exc:
+                        validation_status = "VALIDATION_FAILED"
+                        validation_reason = f"{type(exc).__name__}: {exc}"[:256]
+                        validator_result = {"valid": False, "reason": validation_reason}
+            identity = "\0".join(
+                (
+                    batch_hash or batch_id,
+                    requested_policy,
+                    resolved_validator_id,
+                )
+            )
+            revalidation_id = str(
+                uuid5(
+                    NAMESPACE_URL,
+                    "caretaker:adaptive-batch-revalidation:" + hashlib.sha256(
+                        identity.encode("utf-8")
+                    ).hexdigest(),
+                )
+            )
+            path_out = self._revalidation_path(revalidation_id)
+            if path_out.exists():
+                record = self._load_revalidation_record(path_out)
+                reports.append({**record, "duplicate": True})
+                continue
+            record = {
+                "revalidation_id": revalidation_id,
+                "batch_id": batch_id,
+                "batch_sha256": batch_hash,
+                "source_policy_fingerprint": source_policy,
+                "requested_policy_fingerprint": requested_policy,
+                "validator_id": resolved_validator_id,
+                "status": validation_status,
+                "reason": validation_reason,
+                "validator_result": dict(validator_result),
+                "checked_at": _utcnow_iso(),
+                "authority_granted": False,
+                "aggregate_modified": False,
+            }
+            _immutable_write(
+                path_out,
+                {
+                    "schema_version": ADAPTIVE_BATCH_REVALIDATION_SCHEMA_VERSION,
+                    "record": record,
+                    "record_sha256": _content_hash(record),
+                },
+            )
+            reports.append({**record, "duplicate": False})
+        return {
+            "schema_version": ADAPTIVE_BATCH_REVALIDATION_SCHEMA_VERSION,
+            "status": "COMPLETED",
+            "requested_policy_fingerprint": requested_policy,
+            "validator_id": resolved_validator_id,
+            "checked_count": len(reports),
+            "truncated": len(paths) >= maximum_batches
+            and len(paths) < len(
+                [path for path in self.archive_directory.glob("*.json") if selected_ids is None or path.stem in selected_ids]
+            ),
+            "reports": reports,
+            "authority_granted": False,
+            "aggregate_modified": False,
+        }
+
+    def list_batch_revalidations(self, *, limit: int = 100) -> tuple[dict[str, Any], ...]:
+        """List durable batch revalidation evidence, newest first."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise AdaptiveAggregationError("revalidation limit must be a positive integer")
+        records: list[dict[str, Any]] = []
+        for path in sorted(self.revalidation_directory.glob("*.json"), reverse=True):
+            try:
+                records.append(self._load_revalidation_record(path))
+            except AdaptiveAggregationError:
+                continue
+            if len(records) >= min(limit, 500):
+                break
+        records.sort(key=lambda item: str(item.get("checked_at") or ""), reverse=True)
+        return tuple(records)
 
     def _state_path(self, key: str) -> Path:
         return self.state_directory / f"{key}.json"
@@ -4024,6 +4247,9 @@ class SupervisorAdaptiveAggregationStore:
             ),
             "policy_acceptance_records": sum(
                 1 for _ in self.policy_acceptance_directory.glob("*.json")
+            ),
+            "revalidations": sum(
+                1 for _ in self.revalidation_directory.glob("*.json")
             ),
             "conflict_reports": sum(1 for _ in self.conflict_directory.glob("*.json")),
         }
