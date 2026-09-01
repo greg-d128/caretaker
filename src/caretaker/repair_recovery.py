@@ -35,6 +35,7 @@ COMPARISON_WORKER_MAX_EVIDENCE_REF_CHARS = 256
 COMPARISON_WORKER_MAX_KIND_CHARS = 64
 COMPARISON_WORKER_MAX_BASELINE_SIGNATURES = 128
 COMPARISON_WORKER_MAX_METRICS = 64
+COMPARISON_WORKER_MAX_RECONCILIATION_REPORTS = 128
 _WORKER_POSTMORTEM_REQUIRED_EVIDENCE = (
     "milestone",
     "partial_queue",
@@ -339,6 +340,35 @@ class ComparisonWorkerComparisonReport:
     schema_version: int = 1
 
 
+@dataclass(frozen=True, slots=True)
+class ComparisonWorkerReconciliationReport:
+    """Read-only consolidation of independently produced comparisons.
+
+    This report summarizes reports without merging their already-aggregated
+    metrics. Independent reports may share the same baseline, so averaging
+    their metrics here would double-count evidence. Context validation is
+    therefore required before the reports are classified as agreement or
+    conflict.
+    """
+
+    reconciliation_id: UUID
+    scope: str
+    assignment_ids: tuple[str, ...]
+    report_ids: tuple[str, ...]
+    result_ids: tuple[str, ...]
+    status: str
+    report_count: int
+    unique_report_count: int
+    conflict_report_count: int
+    incomplete_report_count: int
+    metric_names: tuple[str, ...]
+    outliers: tuple[Mapping[str, Any], ...]
+    reasons: tuple[str, ...]
+    reconciled_at: datetime
+    content_sha256: str
+    schema_version: int = 1
+
+
 def _comparison_assignment_payload(
     assignment: ComparisonWorkerAssignment | Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -411,6 +441,399 @@ def _comparison_report_payload(
         "compared_at": report.compared_at.isoformat(),
         "schema_version": report.schema_version,
     }
+
+
+def _comparison_report_value(
+    report: ComparisonWorkerComparisonReport | Mapping[str, Any],
+    name: str,
+    default: Any = None,
+) -> Any:
+    if isinstance(report, Mapping):
+        return report.get(name, default)
+    return getattr(report, name, default)
+
+
+def _comparison_report_payload_from_value(
+    report: ComparisonWorkerComparisonReport | Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "comparison_id": str(_comparison_report_value(report, "comparison_id", "")),
+        "assignment_id": str(_comparison_report_value(report, "assignment_id", "")),
+        "result_id": str(_comparison_report_value(report, "result_id", "")),
+        "scope": str(_comparison_report_value(report, "scope", "")),
+        "status": str(_comparison_report_value(report, "status", "")),
+        "baseline_count": int(_comparison_report_value(report, "baseline_count", 0) or 0),
+        "source_ids": list(_comparison_report_value(report, "source_ids", ()) or ()),
+        "minimum_sample_count": int(
+            _comparison_report_value(report, "minimum_sample_count", 0) or 0
+        ),
+        "z_threshold": float(_comparison_report_value(report, "z_threshold", 0.0) or 0.0),
+        "metrics": _comparison_report_value(report, "metrics", {}),
+        "outliers": list(_comparison_report_value(report, "outliers", ()) or ()),
+        "reasons": list(_comparison_report_value(report, "reasons", ()) or ()),
+        "compared_at": (
+            _comparison_report_value(report, "compared_at").isoformat()
+            if isinstance(_comparison_report_value(report, "compared_at"), datetime)
+            else str(_comparison_report_value(report, "compared_at", ""))
+        ),
+        "schema_version": int(_comparison_report_value(report, "schema_version", 1)),
+    }
+
+
+def _comparison_reconciliation_content_payload(
+    report: ComparisonWorkerReconciliationReport,
+) -> dict[str, Any]:
+    return {
+        "reconciliation_id": str(report.reconciliation_id),
+        "scope": report.scope,
+        "assignment_ids": list(report.assignment_ids),
+        "report_ids": list(report.report_ids),
+        "result_ids": list(report.result_ids),
+        "status": report.status,
+        "report_count": report.report_count,
+        "unique_report_count": report.unique_report_count,
+        "conflict_report_count": report.conflict_report_count,
+        "incomplete_report_count": report.incomplete_report_count,
+        "metric_names": list(report.metric_names),
+        "outliers": list(report.outliers),
+        "reasons": list(report.reasons),
+        "reconciled_at": report.reconciled_at.isoformat(),
+        "schema_version": report.schema_version,
+    }
+
+
+def verify_comparison_worker_reconciliation_report(
+    report: ComparisonWorkerReconciliationReport | Mapping[str, Any],
+) -> dict[str, Any]:
+    """Verify one consolidated comparison report as evidence only."""
+    failures: list[str] = []
+    reconciliation_id = str(
+        _comparison_report_value(report, "reconciliation_id", "")
+    )
+    stored_hash = str(_comparison_report_value(report, "content_sha256", ""))
+    try:
+        UUID(reconciliation_id)
+    except (ValueError, AttributeError):
+        failures.append("RECONCILIATION_ID_INVALID")
+    if not stored_hash or len(stored_hash) != 64:
+        failures.append("RECONCILIATION_CONTENT_HASH_MISSING")
+    try:
+        value = lambda name, default=None: _comparison_report_value(
+            report, name, default
+        )
+        encoded = _comparison_json_bytes(
+            {
+                "reconciliation_id": reconciliation_id,
+                "scope": str(value("scope", "")),
+                "assignment_ids": list(value("assignment_ids", ()) or ()),
+                "report_ids": list(value("report_ids", ()) or ()),
+                "result_ids": list(value("result_ids", ()) or ()),
+                "status": str(value("status", "")),
+                "report_count": int(value("report_count", 0) or 0),
+                "unique_report_count": int(value("unique_report_count", 0) or 0),
+                "conflict_report_count": int(value("conflict_report_count", 0) or 0),
+                "incomplete_report_count": int(value("incomplete_report_count", 0) or 0),
+                "metric_names": list(value("metric_names", ()) or ()),
+                "outliers": list(value("outliers", ()) or ()),
+                "reasons": list(value("reasons", ()) or ()),
+                "reconciled_at": (
+                    value("reconciled_at").isoformat()
+                    if isinstance(value("reconciled_at"), datetime)
+                    else str(value("reconciled_at", ""))
+                ),
+                "schema_version": int(value("schema_version", 1)),
+            },
+            limit=COMPARISON_WORKER_EVIDENCE_MAX_BYTES,
+            label="comparison reconciliation report",
+        )
+        calculated_hash = hashlib.sha256(encoded).hexdigest()
+    except (TypeError, ValueError):
+        calculated_hash = ""
+        failures.append("RECONCILIATION_CONTENT_INVALID")
+    if stored_hash and calculated_hash and stored_hash != calculated_hash:
+        failures.append("RECONCILIATION_CONTENT_HASH_MISMATCH")
+    return {
+        "valid": not failures,
+        "authority_granted": False,
+        "reconciliation_id": reconciliation_id,
+        "scope": str(_comparison_report_value(report, "scope", "")),
+        "status": str(_comparison_report_value(report, "status", "")),
+        "content_sha256": stored_hash,
+        "failures": tuple(dict.fromkeys(failures)),
+    }
+
+
+def verify_comparison_worker_comparison_report(
+    report: ComparisonWorkerComparisonReport | Mapping[str, Any],
+) -> dict[str, Any]:
+    """Verify one stored comparison report without treating it as authority."""
+    failures: list[str] = []
+    report_id = str(_comparison_report_value(report, "comparison_id", ""))
+    stored_hash = str(_comparison_report_value(report, "content_sha256", ""))
+    if not report_id:
+        failures.append("COMPARISON_ID_MISSING")
+    try:
+        UUID(report_id)
+    except (ValueError, AttributeError):
+        failures.append("COMPARISON_ID_INVALID")
+    if not stored_hash or len(stored_hash) != 64:
+        failures.append("COMPARISON_CONTENT_HASH_MISSING")
+    try:
+        encoded = _comparison_json_bytes(
+            _comparison_report_payload_from_value(report),
+            limit=COMPARISON_WORKER_EVIDENCE_MAX_BYTES,
+            label="comparison report",
+        )
+        calculated_hash = hashlib.sha256(encoded).hexdigest()
+    except (TypeError, ValueError):
+        calculated_hash = ""
+        failures.append("COMPARISON_CONTENT_INVALID")
+    if stored_hash and calculated_hash and stored_hash != calculated_hash:
+        failures.append("COMPARISON_CONTENT_HASH_MISMATCH")
+    return {
+        "valid": not failures,
+        "authority_granted": False,
+        "comparison_id": report_id,
+        "assignment_id": str(_comparison_report_value(report, "assignment_id", "")),
+        "result_id": str(_comparison_report_value(report, "result_id", "")),
+        "scope": str(_comparison_report_value(report, "scope", "")),
+        "status": str(_comparison_report_value(report, "status", "")),
+        "content_sha256": stored_hash,
+        "failures": tuple(dict.fromkeys(failures)),
+    }
+
+
+def reconcile_comparison_worker_reports(
+    reports: Sequence[ComparisonWorkerComparisonReport | Mapping[str, Any]],
+    *,
+    assignment_contexts: Sequence[ComparisonWorkerAssignment | Mapping[str, Any]] = (),
+    reconciled_at: datetime | None = None,
+) -> ComparisonWorkerReconciliationReport:
+    """Consolidate independent comparison reports without double-counting.
+
+    Reports from distinct assignments may only be combined when their supplied
+    assignment contexts agree on target, generation, code, policy, authority,
+    worker kind, and scope. A missing context is incomplete evidence rather
+    than an implicit match. The resulting report is evidence only.
+    """
+    if isinstance(reports, (str, bytes)) or not isinstance(reports, Sequence):
+        raise TypeError("comparison reports must be a sequence")
+    if len(reports) > COMPARISON_WORKER_MAX_RECONCILIATION_REPORTS:
+        raise ValueError(
+            "comparison reports cannot contain more than "
+            f"{COMPARISON_WORKER_MAX_RECONCILIATION_REPORTS} items"
+        )
+    if isinstance(assignment_contexts, (str, bytes)) or not isinstance(
+        assignment_contexts, Sequence
+    ):
+        raise TypeError("assignment_contexts must be a sequence")
+
+    reasons: list[str] = []
+    valid_reports: list[ComparisonWorkerComparisonReport | Mapping[str, Any]] = []
+    report_hashes: dict[str, str] = {}
+    for index, report in enumerate(reports):
+        if not isinstance(report, (ComparisonWorkerComparisonReport, Mapping)):
+            reasons.append(f"report-{index}: report is not a mapping")
+            continue
+        verification = verify_comparison_worker_comparison_report(report)
+        report_id = verification["comparison_id"]
+        report_hash = verification["content_sha256"]
+        if not verification["valid"]:
+            reasons.extend(
+                f"report-{index}: {failure}" for failure in verification["failures"]
+            )
+            continue
+        previous_hash = report_hashes.get(report_id)
+        if previous_hash is not None:
+            if previous_hash != report_hash:
+                reasons.append(f"report-{index}: duplicate ID has divergent content")
+            continue
+        report_hashes[report_id] = report_hash
+        valid_reports.append(report)
+
+    def context_value(context: ComparisonWorkerAssignment | Mapping[str, Any], name: str) -> Any:
+        if isinstance(context, Mapping):
+            return context.get(name)
+        return getattr(context, name, None)
+
+    context_by_assignment: dict[str, ComparisonWorkerAssignment | Mapping[str, Any]] = {}
+    for index, context in enumerate(assignment_contexts):
+        if not isinstance(context, (ComparisonWorkerAssignment, Mapping)):
+            reasons.append(f"assignment-{index}: context is not a mapping")
+            continue
+        assignment_id = str(context_value(context, "assignment_id") or "")
+        if not assignment_id:
+            reasons.append(f"assignment-{index}: assignment ID is missing")
+            continue
+        if assignment_id in context_by_assignment:
+            reasons.append(f"assignment-{index}: duplicate assignment context")
+            continue
+        context_by_assignment[assignment_id] = context
+
+    report_ids = tuple(
+        str(_comparison_report_value(report, "comparison_id", ""))
+        for report in valid_reports
+    )
+    result_ids = tuple(
+        str(_comparison_report_value(report, "result_id", ""))
+        for report in valid_reports
+    )
+    assignment_ids = tuple(
+        dict.fromkeys(
+            str(_comparison_report_value(report, "assignment_id", ""))
+            for report in valid_reports
+        )
+    )
+    scopes = {
+        str(_comparison_report_value(report, "scope", "")) for report in valid_reports
+    }
+    scope = next(iter(scopes), "")
+    not_comparable = False
+    if len(scopes) > 1:
+        reasons.append("comparison reports have different reconciliation scopes")
+        not_comparable = True
+
+    comparable_context: tuple[Any, ...] | None = None
+    for assignment_id in assignment_ids:
+        context = context_by_assignment.get(assignment_id)
+        if context is None:
+            if len(assignment_ids) > 1:
+                reasons.append(
+                    f"assignment {assignment_id}: context is required for multi-assignment reconciliation"
+                )
+            continue
+        context_scope = str(context_value(context, "scope") or "")
+        if context_scope != scope:
+            reasons.append(f"assignment {assignment_id}: scope does not match report")
+            not_comparable = True
+        context_identity = tuple(
+            str(context_value(context, name) or "")
+            for name in (
+                "target_id",
+                "generation_id",
+                "code_hash",
+                "policy_fingerprint",
+                "authority_policy_generation",
+                "authority_policy_fingerprint",
+                "worker_kind",
+                "scope",
+            )
+        )
+        if comparable_context is None:
+            comparable_context = context_identity
+        elif context_identity != comparable_context:
+            reasons.append(
+                f"assignment {assignment_id}: target or authority context differs"
+            )
+            not_comparable = True
+
+    statuses = {
+        str(_comparison_report_value(report, "status", "")).upper()
+        for report in valid_reports
+    }
+    conflict_reports = sum(
+        1 for report in valid_reports
+        if str(_comparison_report_value(report, "status", "")).upper() == "CONFLICT"
+    )
+    incomplete_reports = sum(
+        1
+        for report in valid_reports
+        if str(_comparison_report_value(report, "status", "")).upper()
+        in {"INCOMPLETE_EVIDENCE", "NOT_COMPARABLE"}
+    )
+    metric_names = tuple(
+        sorted(
+            {
+                str(metric)
+                for report in valid_reports
+                for metric in (
+                    _comparison_report_value(report, "metrics", {}) or {}
+                )
+                if isinstance(_comparison_report_value(report, "metrics", {}), Mapping)
+            }
+        )
+    )
+    outliers: list[Mapping[str, Any]] = []
+    for report in valid_reports:
+        report_id = str(_comparison_report_value(report, "comparison_id", ""))
+        report_outliers = _comparison_report_value(report, "outliers", ()) or ()
+        if isinstance(report_outliers, Sequence) and not isinstance(report_outliers, (str, bytes)):
+            outliers.extend(
+                {"comparison_id": report_id, **item}
+                for item in report_outliers
+                if isinstance(item, Mapping)
+            )
+    outliers = outliers[:COMPARISON_WORKER_MAX_BASELINE_SIGNATURES]
+
+    if not valid_reports:
+        status = "INCOMPLETE_EVIDENCE"
+        reasons.append("no valid comparison reports were supplied")
+    elif len(valid_reports) < 2:
+        status = "INCOMPLETE_EVIDENCE"
+        reasons.append("at least two valid comparison reports are required")
+    elif len(assignment_ids) < 2:
+        status = "INCOMPLETE_EVIDENCE"
+        reasons.append("comparison reports must come from at least two assignments")
+    elif not_comparable:
+        status = "NOT_COMPARABLE"
+    elif reasons:
+        status = "INCOMPLETE_EVIDENCE"
+    elif conflict_reports or "CONFLICT" in statuses:
+        status = "CONFLICT"
+    elif incomplete_reports or statuses - {"COMBINED"}:
+        status = "INCOMPLETE_EVIDENCE"
+        reasons.append("all reports must be COMBINED for agreement")
+    else:
+        status = "AGREEMENT"
+
+    reconciliation_time = reconciled_at or utcnow()
+    payload = {
+        "scope": scope[:WORKER_FAILURE_SCOPE_MAX_CHARS],
+        "assignment_ids": list(assignment_ids),
+        "report_ids": list(report_ids),
+        "result_ids": list(result_ids),
+        "status": status,
+        "report_count": len(reports),
+        "unique_report_count": len(valid_reports),
+        "conflict_report_count": conflict_reports,
+        "incomplete_report_count": incomplete_reports,
+        "metric_names": list(metric_names),
+        "outliers": outliers,
+        "reasons": list(dict.fromkeys(reason[:256] for reason in reasons))[:32],
+        "reconciled_at": reconciliation_time.isoformat(),
+    }
+    encoded = _comparison_json_bytes(
+        payload,
+        limit=COMPARISON_WORKER_EVIDENCE_MAX_BYTES,
+        label="comparison reconciliation report",
+    )
+    reconciliation_id = uuid5(
+        NAMESPACE_URL,
+        "caretaker:comparison-worker-reconciliation:" + hashlib.sha256(encoded).hexdigest(),
+    )
+    report = ComparisonWorkerReconciliationReport(
+        reconciliation_id=reconciliation_id,
+        scope=payload["scope"],
+        assignment_ids=tuple(payload["assignment_ids"]),
+        report_ids=tuple(payload["report_ids"]),
+        result_ids=tuple(payload["result_ids"]),
+        status=status,
+        report_count=payload["report_count"],
+        unique_report_count=payload["unique_report_count"],
+        conflict_report_count=conflict_reports,
+        incomplete_report_count=incomplete_reports,
+        metric_names=tuple(metric_names),
+        outliers=tuple(outliers),
+        reasons=tuple(payload["reasons"]),
+        reconciled_at=reconciliation_time,
+        content_sha256="",
+    )
+    report_encoded = _comparison_json_bytes(
+        _comparison_reconciliation_content_payload(report),
+        limit=COMPARISON_WORKER_EVIDENCE_MAX_BYTES,
+        label="comparison reconciliation report",
+    )
+    return replace(report, content_sha256=hashlib.sha256(report_encoded).hexdigest())
 
 
 def _comparison_json_bytes(payload: Mapping[str, Any], *, limit: int, label: str) -> bytes:
@@ -2132,6 +2555,32 @@ def worker_failure_recovery_status(
             "content_sha256": bounded(_field(record, "content_sha256", ""), 64),
         }
 
+    def comparison_reconciliation_summary(record: Any) -> dict[str, Any]:
+        outliers = _field(record, "outliers", ()) or ()
+        return {
+            "reconciliation_id": bounded(
+                _field(record, "reconciliation_id", ""), 64
+            ),
+            "scope": bounded(_field(record, "scope", "")),
+            "status": bounded(_field(record, "status", ""), 32),
+            "report_count": int(_field(record, "report_count", 0) or 0),
+            "unique_report_count": int(
+                _field(record, "unique_report_count", 0) or 0
+            ),
+            "conflict_report_count": int(
+                _field(record, "conflict_report_count", 0) or 0
+            ),
+            "incomplete_report_count": int(
+                _field(record, "incomplete_report_count", 0) or 0
+            ),
+            "assignment_count": len(_field(record, "assignment_ids", ()) or ()),
+            "result_count": len(_field(record, "result_ids", ()) or ()),
+            "metric_count": len(_field(record, "metric_names", ()) or ()),
+            "outlier_count": len(outliers) if isinstance(outliers, Sequence) else 0,
+            "reconciled_at": timestamp(_field(record, "reconciled_at")),
+            "content_sha256": bounded(_field(record, "content_sha256", ""), 64),
+        }
+
     failures = tuple(store.all_worker_failures())
     recoveries = tuple(store.all_worker_failure_recoveries())
     conflicts = tuple(store.all_worker_postmortem_conflicts())
@@ -2141,6 +2590,14 @@ def worker_failure_recovery_status(
     results = tuple(result_reader()) if callable(result_reader) else ()
     comparison_reader = getattr(store, "all_comparison_worker_comparisons", None)
     comparisons = tuple(comparison_reader()) if callable(comparison_reader) else ()
+    reconciliation_reader = getattr(
+        store, "all_comparison_worker_reconciliations", None
+    )
+    reconciliations = (
+        tuple(reconciliation_reader())
+        if callable(reconciliation_reader)
+        else ()
+    )
     return {
         "schema_version": WORKER_POSTMORTEM_SCHEMA_VERSION,
         "read_only": True,
@@ -2155,6 +2612,7 @@ def worker_failure_recovery_status(
         "comparison_assignment_count": len(assignments),
         "comparison_result_count": len(results),
         "comparison_report_count": len(comparisons),
+        "comparison_reconciliation_count": len(reconciliations),
         "comparison_assignments": [
             comparison_assignment_summary(item) for item in assignments[-limit:]
         ],
@@ -2163,6 +2621,10 @@ def worker_failure_recovery_status(
         ],
         "comparison_reports": [
             comparison_report_summary(item) for item in comparisons[-limit:]
+        ],
+        "comparison_reconciliations": [
+            comparison_reconciliation_summary(item)
+            for item in reconciliations[-limit:]
         ],
     }
 

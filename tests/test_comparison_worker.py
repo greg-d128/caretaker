@@ -7,6 +7,7 @@ import pytest
 
 from caretaker import (
     ComparisonWorkerComparisonReport,
+    ComparisonWorkerReconciliationReport,
     ComparisonWorkerResult,
     InMemoryRepairStore,
     SQLiteRepairStore,
@@ -16,6 +17,8 @@ from caretaker import (
     create_recovery_authority_packet,
     worker_failure_recovery_status,
     compare_comparison_worker_result,
+    reconcile_comparison_worker_reports,
+    verify_comparison_worker_reconciliation_report,
     verify_comparison_worker_assignment,
     verify_comparison_worker_result,
 )
@@ -372,3 +375,186 @@ def test_supervisor_persists_comparison_report_and_status_is_bounded() -> None:
     assert status["comparison_reports"][0]["status"] == "COMBINED"
     assert status["comparison_reports"][0]["outlier_count"] == 0
     assert runtime.audit.events[-1]["event_type"] == "WORKER_COMPARISON_RECONCILED"
+
+
+def test_supervisor_persists_comparison_report_reconciliation() -> None:
+    now = datetime.now(timezone.utc)
+    packet, first_assignment = _assignment(now)
+    second_assignment = create_comparison_worker_assignment(
+        packet,
+        scope=first_assignment.scope,
+        evidence_refs=first_assignment.evidence_refs,
+        supervisor_time=now,
+        policy=RepairRecoveryPolicy(),
+    )
+    reports = []
+    for assignment, worker_id in (
+        (first_assignment, "worker-a"),
+        (second_assignment, "worker-b"),
+    ):
+        result = create_comparison_worker_result(
+            assignment,
+            worker_id=worker_id,
+            evidence={
+                "behavior_signature": {
+                    "sample_count": 30,
+                    "metrics": {
+                        "duration_ms": {"mean": 10.0, "standard_deviation": 1.0}
+                    },
+                }
+            },
+            observed_at=now,
+        )
+        reports.append(
+            compare_comparison_worker_result(
+                result,
+                assignment=assignment,
+                baseline_signatures=(_signature(10.0, source_id="baseline"),),
+                compared_at=now,
+            )
+        )
+
+    runtime = _Runtime()
+    store = InMemoryRepairStore()
+    supervisor = CaretakerApplicationSupervisor(runtime, failure_store=store)
+    reconciled = supervisor.reconcile_comparison_worker_reports(
+        tuple(reports),
+        assignment_contexts=(first_assignment, second_assignment),
+        reconciled_at=now,
+        store=store,
+    )
+
+    assert reconciled.status == "AGREEMENT"
+    assert len(store.all_comparison_worker_reconciliations()) == 1
+    status = worker_failure_recovery_status(store)
+    assert status["comparison_reconciliation_count"] == 1
+    assert status["comparison_reconciliations"][0]["status"] == "AGREEMENT"
+    assert status["authority_granted"] is False
+    assert runtime.audit.events[-1]["event_type"] == "WORKER_COMPARISON_RECONCILED"
+
+
+def test_comparison_reports_reconcile_only_with_matching_independent_contexts(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    packet, first_assignment = _assignment(now)
+    second_assignment = create_comparison_worker_assignment(
+        packet,
+        scope=first_assignment.scope,
+        evidence_refs=first_assignment.evidence_refs,
+        supervisor_time=now,
+        policy=RepairRecoveryPolicy(),
+    )
+    first_result = create_comparison_worker_result(
+        first_assignment,
+        worker_id="worker-a",
+        evidence={
+            "behavior_signature": {
+                "sample_count": 30,
+                "metrics": {"duration_ms": {"mean": 10.0, "standard_deviation": 1.0}},
+            }
+        },
+        observed_at=now,
+    )
+    second_result = create_comparison_worker_result(
+        second_assignment,
+        worker_id="worker-b",
+        evidence={
+            "behavior_signature": {
+                "sample_count": 30,
+                "metrics": {"duration_ms": {"mean": 10.1, "standard_deviation": 1.0}},
+            }
+        },
+        observed_at=now,
+    )
+    first_report = compare_comparison_worker_result(
+        first_result,
+        assignment=first_assignment,
+        baseline_signatures=(_signature(10.0, source_id="baseline-a"),),
+        compared_at=now,
+    )
+    second_report = compare_comparison_worker_result(
+        second_result,
+        assignment=second_assignment,
+        baseline_signatures=(_signature(10.0, source_id="baseline-b"),),
+        compared_at=now,
+    )
+
+    reconciled = reconcile_comparison_worker_reports(
+        (first_report, second_report),
+        assignment_contexts=(first_assignment, second_assignment),
+        reconciled_at=now,
+    )
+
+    assert isinstance(reconciled, ComparisonWorkerReconciliationReport)
+    assert reconciled.status == "AGREEMENT"
+    assert reconciled.report_count == 2
+    assert reconciled.unique_report_count == 2
+    assert reconciled.assignment_ids == (
+        str(first_assignment.assignment_id),
+        str(second_assignment.assignment_id),
+    )
+    assert reconciled.metric_names == ("duration_ms",)
+    assert reconciled.outliers == ()
+    assert verify_comparison_worker_reconciliation_report(reconciled)["valid"] is True
+    for store in (
+        InMemoryRepairStore(),
+        SQLiteRepairStore(tmp_path / "comparison-reconciliation.sqlite"),
+    ):
+        store.record_comparison_worker_reconciliation(reconciled)
+        stored = store.all_comparison_worker_reconciliations()[0]
+        assert verify_comparison_worker_reconciliation_report(stored)["valid"] is True
+
+
+def test_comparison_report_reconciliation_preserves_conflict_and_missing_context() -> None:
+    now = datetime.now(timezone.utc)
+    packet, first_assignment = _assignment(now)
+    second_assignment = create_comparison_worker_assignment(
+        packet,
+        scope=first_assignment.scope,
+        evidence_refs=first_assignment.evidence_refs,
+        supervisor_time=now,
+        policy=RepairRecoveryPolicy(),
+    )
+
+    def report_for(assignment, worker_id: str, baseline_mean: float):
+        result = create_comparison_worker_result(
+            assignment,
+            worker_id=worker_id,
+            evidence={
+                "behavior_signature": {
+                    "sample_count": 30,
+                    "metrics": {
+                        "duration_ms": {
+                            "mean": 10.0,
+                            "standard_deviation": 1.0,
+                        }
+                    },
+                }
+            },
+            observed_at=now,
+        )
+        return compare_comparison_worker_result(
+            result,
+            assignment=assignment,
+            baseline_signatures=(_signature(baseline_mean, source_id=worker_id),),
+            compared_at=now,
+        )
+
+    conflict = reconcile_comparison_worker_reports(
+        (
+            report_for(first_assignment, "worker-a", 100.0),
+            report_for(second_assignment, "worker-b", 10.0),
+        ),
+        assignment_contexts=(first_assignment, second_assignment),
+        reconciled_at=now,
+    )
+    assert conflict.status == "CONFLICT"
+    assert conflict.conflict_report_count == 1
+
+    incomplete = reconcile_comparison_worker_reports(
+        (report_for(first_assignment, "worker-a", 10.0), report_for(second_assignment, "worker-b", 10.0)),
+        reconciled_at=now,
+    )
+    assert incomplete.status == "INCOMPLETE_EVIDENCE"
+    assert any("context is required" in reason for reason in incomplete.reasons)

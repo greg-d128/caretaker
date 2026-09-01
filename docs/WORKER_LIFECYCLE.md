@@ -51,7 +51,17 @@ the configured three-standard-deviation threshold is retained as an outlier
 conflict. Missing, malformed, or insufficient signatures produce
 `INCOMPLETE_EVIDENCE` and are never counted as agreement.
 
-The assignment/result/comparison contract is the current application-scoped
-protocol slice. Combining multiple comparison reports with worker post-mortems,
-cross-process transport, fleet coordination, and deployment-specific process
-orchestration remain separate policy- and deployment-owned work.
+The supervisor can also reconcile multiple independently produced comparison
+reports. It requires at least two distinct assignments and matching assignment
+contexts for target, generation, code, policy, authority, worker kind, and
+scope. It retains report and result references, conflict/outlier evidence, and
+incomplete coverage without averaging already-aggregated metrics; shared
+baselines must never be double-counted. The resulting
+`ComparisonWorkerReconciliationReport` is durable, hash-verifiable, visible in
+the read-only status projection, and cannot select recovery or grant authority.
+
+The assignment/result/comparison/reconciliation contract is the current
+application-scoped protocol slice. Combining comparison reports with worker
+post-mortems, cross-process transport, fleet coordination, and
+deployment-specific process orchestration remain separate policy- and
+deployment-owned work.

@@ -16,6 +16,7 @@ from .acceptance import WorkerAcceptanceStore
 from ..repair_recovery import (
     ComparisonWorkerAssignment,
     ComparisonWorkerComparisonReport,
+    ComparisonWorkerReconciliationReport,
     ComparisonWorkerResult,
     RecoveryAuthorityPacket,
     RepairRecoveryPolicy,
@@ -25,6 +26,7 @@ from ..repair_recovery import (
     create_worker_failure_recovery_record,
     create_comparison_worker_assignment,
     compare_comparison_worker_result,
+    reconcile_comparison_worker_reports,
     dispatch_recovery_action,
     evaluate_worker_acceptance,
     reconcile_worker_failure_records,
@@ -1913,6 +1915,51 @@ class CaretakerApplicationSupervisor:
                 "baseline_count": report.baseline_count,
                 "source_count": len(report.source_ids),
                 "outlier_count": len(report.outliers),
+                "persisted": persisted,
+            },
+        )
+        return report
+
+    def reconcile_comparison_worker_reports(
+        self,
+        reports: tuple[ComparisonWorkerComparisonReport | Mapping[str, Any], ...],
+        *,
+        assignment_contexts: tuple[
+            ComparisonWorkerAssignment | Mapping[str, Any], ...
+        ] = (),
+        reconciled_at: datetime | None = None,
+        store: Any | None = None,
+    ) -> ComparisonWorkerReconciliationReport:
+        """Consolidate independent comparison reports as evidence only."""
+
+        report = reconcile_comparison_worker_reports(
+            reports,
+            assignment_contexts=assignment_contexts,
+            reconciled_at=reconciled_at,
+        )
+        target_store = store if store is not None else self.failure_store
+        persisted = False
+        if target_store is not None:
+            recorder = getattr(
+                target_store, "record_comparison_worker_reconciliation", None
+            )
+            if not callable(recorder):
+                raise TypeError(
+                    "comparison reconciliation store does not support reports"
+                )
+            recorder(report)
+            persisted = True
+        self._audit_event(
+            "WORKER_COMPARISON_RECONCILED",
+            actor={"type": "supervisor", "id": str(self.supervisor_health.worker_id)},
+            scope={"reconciliation_scope": report.scope},
+            outcome={"state": report.status, "authority_granted": False},
+            details={
+                "reconciliation_id": str(report.reconciliation_id),
+                "report_count": report.report_count,
+                "unique_report_count": report.unique_report_count,
+                "conflict_report_count": report.conflict_report_count,
+                "incomplete_report_count": report.incomplete_report_count,
                 "persisted": persisted,
             },
         )

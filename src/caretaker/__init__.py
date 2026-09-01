@@ -226,6 +226,7 @@ from .provider import CandidateProposal, OllamaRepairProvider, StaticRepairProvi
 from .repair_recovery import (
     ComparisonWorkerAssignment,
     ComparisonWorkerComparisonReport,
+    ComparisonWorkerReconciliationReport,
     ComparisonWorkerResult,
     RecoveryAction,
     RecoveryAuthorityPacket,
@@ -248,6 +249,9 @@ from .repair_recovery import (
     create_comparison_worker_result,
     create_recovery_lifecycle_mark,
     compare_comparison_worker_result,
+    reconcile_comparison_worker_reports,
+    verify_comparison_worker_comparison_report,
+    verify_comparison_worker_reconciliation_report,
     create_worker_failure_record,
     create_worker_failure_recovery_record,
     create_worker_postmortem_packet,
