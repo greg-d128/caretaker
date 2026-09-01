@@ -3061,18 +3061,23 @@ class CaretakerApplicationSupervisor:
         self,
         *,
         supervisor_time: datetime | None = None,
+        on_expired_workers: Callable[[tuple[WorkerHealth, ...], datetime], Any] | None = None,
         on_cycle: Callable[[datetime], Any] | None = None,
     ) -> dict[str, Any]:
-        """Run one bounded supervisor cycle and an application-owned hook.
+        """Run one bounded supervisor cycle and application-owned hooks.
 
         The supervisor first reconciles authority expiry and refreshes its own
-        heartbeat, then invokes ``on_cycle`` with the authoritative cycle
-        timestamp.  The callback is the embedding application's integration
-        point for work such as draining registered adaptive queues; it does
-        not receive or create authority from this method.  Callback failures
-        are returned as bounded evidence so the embedding application can
-        apply its own policy without silently treating the cycle as successful.
+        heartbeat. If workers became unauthorized, ``on_expired_workers`` is
+        then given their immutable health snapshots and the authoritative cycle
+        timestamp so the embedding application can deliberately replace or
+        otherwise reconcile them. ``on_cycle`` is invoked afterward with the
+        same timestamp. Neither callback receives or creates authority from
+        this method. Callback failures are returned as bounded evidence so the
+        embedding application can apply its own policy without silently
+        treating the cycle as successful.
         """
+        if on_expired_workers is not None and not callable(on_expired_workers):
+            raise TypeError("expired-worker control-cycle callback must be callable")
         if on_cycle is not None and not callable(on_cycle):
             raise TypeError("supervisor control-cycle callback must be callable")
         now = supervisor_time or datetime.now(timezone.utc)
@@ -3083,11 +3088,39 @@ class CaretakerApplicationSupervisor:
             self.supervisor_health.worker_id,
             supervisor_time=now,
         )
+        expiry_callback: dict[str, Any] = {
+            "status": "NOT_NEEDED" if not expired else "NOT_CONFIGURED",
+            "authority_granted": False,
+        }
         result: dict[str, Any] = {
             "ok": True,
             "authority_granted": False,
             "supervisor_time": now.isoformat(),
             "expired_worker_ids": [str(worker.worker_id) for worker in expired],
+            "expired_workers": [
+                {
+                    "worker_id": str(worker.worker_id),
+                    "worker_kind": worker.worker_kind.name,
+                    "process_id": worker.process_id,
+                    "target_id": worker.target_id,
+                    "generation_id": worker.generation_id,
+                    "code_hash": worker.code_hash,
+                    "policy_fingerprint": worker.policy_fingerprint,
+                    "state": worker.state.name,
+                    "authority_packet_id": (
+                        str(worker.authority_packet_id)
+                        if worker.authority_packet_id is not None
+                        else None
+                    ),
+                    "authority_packet_expires_at": (
+                        worker.authority_packet_expires_at.isoformat()
+                        if worker.authority_packet_expires_at is not None
+                        else None
+                    ),
+                }
+                for worker in expired
+            ],
+            "authority_expiry_callback": expiry_callback,
             "cycle_callback": {"status": "NOT_CONFIGURED"},
             "application_alive": (
                 _pid_alive(self.application_pid)
@@ -3095,6 +3128,24 @@ class CaretakerApplicationSupervisor:
                 else None
             ),
         }
+        if on_expired_workers is not None and expired:
+            try:
+                callback_result = on_expired_workers(expired, now)
+            except Exception as exc:
+                result["ok"] = False
+                result["authority_expiry_callback"] = {
+                    "status": "FAILED",
+                    "error": f"{type(exc).__name__}: {exc}"[:256],
+                    "worker_count": len(expired),
+                    "authority_granted": False,
+                }
+            else:
+                result["authority_expiry_callback"] = {
+                    "status": "COMPLETED",
+                    "result": callback_result,
+                    "worker_count": len(expired),
+                    "authority_granted": False,
+                }
         if on_cycle is not None:
             try:
                 callback_result = on_cycle(now)
@@ -3117,11 +3168,15 @@ class CaretakerApplicationSupervisor:
         self,
         *,
         interval_seconds: float = 1.0,
+        on_expired_workers: Callable[[tuple[WorkerHealth, ...], datetime], Any] | None = None,
         on_cycle: Callable[[datetime], Any] | None = None,
     ) -> None:
-        """Monitor the application and invoke an optional cycle callback."""
+        """Monitor the application and invoke optional cycle callbacks."""
         while not self._stop.wait(interval_seconds):
-            cycle = self.run_control_cycle(on_cycle=on_cycle)
+            cycle = self.run_control_cycle(
+                on_expired_workers=on_expired_workers,
+                on_cycle=on_cycle,
+            )
             if cycle["application_alive"] is False:
                 self.stop()
                 return

@@ -23,12 +23,15 @@ callback path.
 
 `CaretakerApplicationSupervisor.run_control_cycle()` exposes the same bounded
 one-shot operation used by `monitor_application()`. After expiry
-reconciliation and the supervisor heartbeat, it invokes an optional
-application-owned callback with the authoritative cycle timestamp. This is the
-integration point for registry-backed adaptive queue draining and other
-application-scoped control work. Callback failures are returned as explicit
-failed-cycle evidence; they do not grant authority, select recovery, or cause
-Caretaker to stop the application automatically.
+reconciliation and the supervisor heartbeat, it can invoke
+`on_expired_workers` with the newly unauthorized worker snapshots and the
+authoritative cycle timestamp. This is the application-owned handoff for
+deliberate replacement or other policy-selected reconciliation. A separate
+`on_cycle` callback receives the timestamp for work such as adaptive queue
+draining. Callback failures are returned as explicit failed-cycle evidence;
+they do not grant authority, select recovery, spawn a process, or cause
+Caretaker to stop the application automatically. A repeated cycle does not
+re-invoke the expiry callback for an already unauthorized worker.
 
 ## Authority packet transport
 

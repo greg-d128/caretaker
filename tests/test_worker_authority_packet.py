@@ -730,6 +730,94 @@ def test_supervisor_control_cycle_invokes_application_hook_with_authoritative_ti
     }
 
 
+def test_supervisor_control_cycle_exposes_expired_workers_to_application_hook() -> None:
+    supervisor = supervisor_module.CaretakerApplicationSupervisor(object())
+    issued_at = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    packet = _packet(supervisor_time=issued_at)
+    worker = supervisor.workers.register_authorized(
+        WorkerKind.REPAIR_ANALYZER,
+        4321,
+        packet,
+        supervisor_time=issued_at,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+    )
+    observed: list[tuple[tuple[object, ...], datetime]] = []
+
+    result = supervisor.run_control_cycle(
+        supervisor_time=packet.expires_at,
+        on_expired_workers=lambda workers, current_time: observed.append(
+            (tuple(workers), current_time)
+        ) or {"replacement_requested": False},
+    )
+
+    assert result["ok"] is True
+    assert result["expired_worker_ids"] == [str(worker.worker_id)]
+    assert result["expired_workers"][0]["worker_id"] == str(worker.worker_id)
+    assert result["expired_workers"][0]["process_id"] == 4321
+    assert result["expired_workers"][0]["state"] == "UNAUTHORIZED"
+    assert result["authority_expiry_callback"] == {
+        "status": "COMPLETED",
+        "result": {"replacement_requested": False},
+        "worker_count": 1,
+        "authority_granted": False,
+    }
+    assert len(observed) == 1
+    assert observed[0][1] == packet.expires_at
+    assert observed[0][0][0].worker_id == worker.worker_id
+    assert observed[0][0][0].state is WorkerState.UNAUTHORIZED
+
+    repeated = supervisor.run_control_cycle(
+        supervisor_time=packet.expires_at,
+        on_expired_workers=lambda *_: pytest.fail("expiry callback must be idempotent"),
+    )
+    assert repeated["expired_worker_ids"] == []
+    assert repeated["authority_expiry_callback"] == {
+        "status": "NOT_NEEDED",
+        "authority_granted": False,
+    }
+
+
+def test_supervisor_control_cycle_retains_expiry_callback_failure() -> None:
+    supervisor = supervisor_module.CaretakerApplicationSupervisor(object())
+    issued_at = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    packet = _packet(supervisor_time=issued_at)
+    supervisor.workers.register_authorized(
+        WorkerKind.REPAIR_ANALYZER,
+        4321,
+        packet,
+        supervisor_time=issued_at,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+    )
+
+    result = supervisor.run_control_cycle(
+        supervisor_time=packet.expires_at,
+        on_expired_workers=lambda *_: (_ for _ in ()).throw(
+            RuntimeError("replacement handoff failed")
+        ),
+    )
+
+    assert result["ok"] is False
+    assert result["authority_expiry_callback"] == {
+        "status": "FAILED",
+        "error": "RuntimeError: replacement handoff failed",
+        "worker_count": 1,
+        "authority_granted": False,
+    }
+    assert result["expired_workers"][0]["state"] == "UNAUTHORIZED"
+
+
 def test_supervisor_control_cycle_retains_callback_failure_as_bounded_evidence() -> None:
     supervisor = supervisor_module.CaretakerApplicationSupervisor(object())
     result = supervisor.run_control_cycle(
