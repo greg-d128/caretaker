@@ -1353,6 +1353,16 @@ policy, or select recovery. The application still owns process creation and
 transport, and combining comparison results into a larger reconciliation or
 fleet-wide orchestration remains future work.
 
+The supervisor can also compare a completed result's bounded
+`behavior_signature` with peer signatures. Matching metric sets and sufficient
+sample counts are combined with weighted distribution statistics; differences
+beyond the configured three-standard-deviation threshold produce a retained
+outlier report. Missing or insufficient signatures are reported as
+`INCOMPLETE_EVIDENCE`, never as agreement. The comparison report is durable,
+read-only evidence and does not select recovery or change policy. Combining
+multiple reports with post-mortems and deployment-wide orchestration remains
+future work.
+
 ### Recovery decisions recorded for the next implementation slice
 
 The following decisions close the current recovery-design questions:

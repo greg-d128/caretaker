@@ -225,6 +225,7 @@ from .postmortem import ExceptionHookManager, PostMortemRecorder
 from .provider import CandidateProposal, OllamaRepairProvider, StaticRepairProvider
 from .repair_recovery import (
     ComparisonWorkerAssignment,
+    ComparisonWorkerComparisonReport,
     ComparisonWorkerResult,
     RecoveryAction,
     RecoveryAuthorityPacket,
@@ -244,6 +245,7 @@ from .repair_recovery import (
     create_recovery_authority_packet,
     create_comparison_worker_assignment,
     create_comparison_worker_result,
+    compare_comparison_worker_result,
     create_worker_failure_record,
     create_worker_failure_recovery_record,
     create_worker_postmortem_packet,
@@ -617,6 +619,7 @@ __all__ = [
     "RecoveryAction",
     "RecoveryAuthorityPacket",
     "ComparisonWorkerAssignment",
+    "ComparisonWorkerComparisonReport",
     "ComparisonWorkerResult",
     "RecoveryPlanStaleError",
     "RepairRecoveryPolicy",
@@ -640,6 +643,7 @@ __all__ = [
     "create_recovery_authority_packet",
     "create_comparison_worker_assignment",
     "create_comparison_worker_result",
+    "compare_comparison_worker_result",
     "validate_authority_expiry",
     "validate_supervisor_time",
     "verify_recovery_authority_packet",

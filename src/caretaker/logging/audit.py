@@ -189,6 +189,16 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
             "authority_granted": False,
         },
     ),
+    "WORKER_COMPARISON_RECONCILED": _event_definition(
+        description="The supervisor recorded a statistical comparison of worker evidence.",
+        minimum_priority=EvidencePriority.CRITICAL,
+        example={
+            "comparison_id": "comparison-uuid",
+            "state": "COMBINED",
+            "outlier_count": 0,
+            "authority_granted": False,
+        },
+    ),
     "SUPERVISOR_STATE_CHANGED": _event_definition(
         description="The application-scoped supervisor state changed.",
         minimum_priority=EvidencePriority.CRITICAL,

@@ -82,6 +82,7 @@ All event types share these redaction rules:
 | `WORKER_REPLACED` | `CRITICAL` | — | `{"failed_worker_id": "worker-old", "replacement_worker_id": "worker-new"}` |
 | `WORKER_COMPARISON_ASSIGNMENT` | `CRITICAL` | — | `{"assignment_id": "assignment-uuid", "authority_packet_id": "packet-uuid", "state": "ISSUED", "authority_granted": false}` |
 | `WORKER_COMPARISON_RESULT` | `CRITICAL` | — | `{"assignment_id": "assignment-uuid", "result_id": "result-uuid", "state": "ACCEPTED", "authority_granted": false}` |
+| `WORKER_COMPARISON_RECONCILED` | `CRITICAL` | — | `{"comparison_id": "comparison-uuid", "state": "COMBINED", "outlier_count": 0, "authority_granted": false}` |
 | `SUPERVISOR_STATE_CHANGED` | `CRITICAL` | — | `{"state": "CONTROL_PLANE_LOST", "reason": "heartbeat_timeout"}` |
 | `INCIDENT_CAPTURED` | `IMPORTANT` | — | `{"incident_id": "incident-uuid", "capture_level": "STANDARD"}` |
 | `VALIDATION_DECISION` | `IMPORTANT` | — | `{"state": "ELIGIBLE", "validation_id": "validation-uuid"}` |

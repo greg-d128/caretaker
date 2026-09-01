@@ -43,7 +43,15 @@ status projection. They cannot:
 - select a recovery action; or
 - replace the source evidence used for reconciliation.
 
-The assignment/result contract is the current application-scoped protocol
-slice. Combining comparison results with worker post-mortems, cross-process
-transport, fleet coordination, and deployment-specific process orchestration
-remain separate policy- and deployment-owned work.
+The supervisor can compare a completed result's `behavior_signature` with a
+bounded set of peer signatures. Each signature must provide the same finite
+metric set and at least the configured sample count. Compatible distributions
+are combined using weighted mean/variance calculations; a difference beyond
+the configured three-standard-deviation threshold is retained as an outlier
+conflict. Missing, malformed, or insufficient signatures produce
+`INCOMPLETE_EVIDENCE` and are never counted as agreement.
+
+The assignment/result/comparison contract is the current application-scoped
+protocol slice. Combining multiple comparison reports with worker post-mortems,
+cross-process transport, fleet coordination, and deployment-specific process
+orchestration remain separate policy- and deployment-owned work.

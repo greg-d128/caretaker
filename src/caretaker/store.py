@@ -29,6 +29,7 @@ from .domain import (
 )
 from .repair_recovery import (
     ComparisonWorkerAssignment,
+    ComparisonWorkerComparisonReport,
     ComparisonWorkerResult,
     RepairRecoveryRecord,
     WorkerFailureRecord,
@@ -83,6 +84,8 @@ class RepairStore(Protocol):
     def all_comparison_worker_assignments(self) -> tuple[Any, ...]: ...
     def record_comparison_worker_result(self, record: ComparisonWorkerResult) -> None: ...
     def all_comparison_worker_results(self) -> tuple[Any, ...]: ...
+    def record_comparison_worker_comparison(self, record: ComparisonWorkerComparisonReport) -> None: ...
+    def all_comparison_worker_comparisons(self) -> tuple[Any, ...]: ...
 
 
 class InMemoryRepairStore:
@@ -99,6 +102,7 @@ class InMemoryRepairStore:
         self.worker_postmortem_conflicts: dict[UUID, WorkerPostmortemConflictReport] = {}
         self.comparison_worker_assignments: dict[UUID, ComparisonWorkerAssignment] = {}
         self.comparison_worker_results: dict[UUID, ComparisonWorkerResult] = {}
+        self.comparison_worker_comparisons: dict[UUID, ComparisonWorkerComparisonReport] = {}
         self.rollouts: dict[UUID, RepairRolloutRecord] = {}
         self.rollout_transitions: dict[UUID, RepairRolloutTransition] = {}
         self.rollout_executions: dict[UUID, RolloutExecutionObservation] = {}
@@ -350,6 +354,28 @@ class InMemoryRepairStore:
                 )
             )
 
+    def record_comparison_worker_comparison(
+        self, record: ComparisonWorkerComparisonReport
+    ) -> None:
+        with self._lock:
+            existing = self.comparison_worker_comparisons.get(record.comparison_id)
+            if existing is not None and existing != record:
+                raise ValueError(
+                    "comparison report ID was already recorded with different evidence"
+                )
+            self.comparison_worker_comparisons[record.comparison_id] = record
+
+    def all_comparison_worker_comparisons(
+        self,
+    ) -> tuple[ComparisonWorkerComparisonReport, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    self.comparison_worker_comparisons.values(),
+                    key=lambda record: record.compared_at,
+                )
+            )
+
 
 class SQLiteRepairStore:
     """Small JSON-backed event store with one logical stream per table."""
@@ -371,6 +397,7 @@ class SQLiteRepairStore:
         "worker_postmortem_conflicts": "report_id",
         "comparison_worker_assignments": "assignment_id",
         "comparison_worker_results": "result_id",
+        "comparison_worker_comparisons": "comparison_id",
         "events": "event_id",
         "observations": "observation_id",
         "internal_incidents": "internal_incident_id",
@@ -397,7 +424,7 @@ class SQLiteRepairStore:
                 "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
             )
             connection.execute(
-                "INSERT OR REPLACE INTO caretaker_store_metadata(key, value) VALUES ('schema_version', '4')"
+                "INSERT OR REPLACE INTO caretaker_store_metadata(key, value) VALUES ('schema_version', '5')"
             )
             for table in self._TABLES:
                 connection.execute(
@@ -646,6 +673,20 @@ class SQLiteRepairStore:
 
     def all_comparison_worker_results(self) -> tuple[Mapping[str, Any], ...]:
         return tuple(self.query_records("comparison_worker_results", limit=10000))
+
+    def record_comparison_worker_comparison(
+        self, record: ComparisonWorkerComparisonReport
+    ) -> None:
+        self._write(
+            "comparison_worker_comparisons",
+            record,
+            target_id=record.scope,
+        )
+
+    def all_comparison_worker_comparisons(self) -> tuple[Mapping[str, Any], ...]:
+        return tuple(
+            self.query_records("comparison_worker_comparisons", limit=10000)
+        )
 
     def query_records(
         self,

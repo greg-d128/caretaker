@@ -32,6 +32,8 @@ COMPARISON_WORKER_EVIDENCE_MAX_BYTES = 256 * 1024
 COMPARISON_WORKER_MAX_EVIDENCE_REFS = 64
 COMPARISON_WORKER_MAX_EVIDENCE_REF_CHARS = 256
 COMPARISON_WORKER_MAX_KIND_CHARS = 64
+COMPARISON_WORKER_MAX_BASELINE_SIGNATURES = 128
+COMPARISON_WORKER_MAX_METRICS = 64
 _WORKER_POSTMORTEM_REQUIRED_EVIDENCE = (
     "milestone",
     "partial_queue",
@@ -315,6 +317,27 @@ class ComparisonWorkerResult:
     schema_version: int = 1
 
 
+@dataclass(frozen=True, slots=True)
+class ComparisonWorkerComparisonReport:
+    """Read-only statistical comparison of one worker result and its peers."""
+
+    comparison_id: UUID
+    assignment_id: UUID
+    result_id: UUID
+    scope: str
+    status: str
+    baseline_count: int
+    source_ids: tuple[str, ...]
+    minimum_sample_count: int
+    z_threshold: float
+    metrics: Mapping[str, Any]
+    outliers: tuple[Mapping[str, Any], ...]
+    reasons: tuple[str, ...]
+    compared_at: datetime
+    content_sha256: str
+    schema_version: int = 1
+
+
 def _comparison_assignment_payload(
     assignment: ComparisonWorkerAssignment | Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -365,6 +388,27 @@ def _comparison_result_payload(
             else str(value("observed_at"))
         ),
         "schema_version": int(value("schema_version", 1)),
+    }
+
+
+def _comparison_report_payload(
+    report: ComparisonWorkerComparisonReport,
+) -> dict[str, Any]:
+    return {
+        "comparison_id": str(report.comparison_id),
+        "assignment_id": str(report.assignment_id),
+        "result_id": str(report.result_id),
+        "scope": report.scope,
+        "status": report.status,
+        "baseline_count": report.baseline_count,
+        "source_ids": list(report.source_ids),
+        "minimum_sample_count": report.minimum_sample_count,
+        "z_threshold": report.z_threshold,
+        "metrics": report.metrics,
+        "outliers": list(report.outliers),
+        "reasons": list(report.reasons),
+        "compared_at": report.compared_at.isoformat(),
+        "schema_version": report.schema_version,
     }
 
 
@@ -677,6 +721,226 @@ def verify_comparison_worker_result(
         "failures": tuple(dict.fromkeys(failures)),
         "authority_granted": False,
     }
+
+
+def compare_comparison_worker_result(
+    result: ComparisonWorkerResult | Mapping[str, Any],
+    *,
+    assignment: ComparisonWorkerAssignment | Mapping[str, Any],
+    baseline_signatures: Sequence[Mapping[str, Any]],
+    minimum_sample_count: int = 30,
+    z_threshold: float = 3.0,
+    compared_at: datetime | None = None,
+) -> ComparisonWorkerComparisonReport:
+    """Compare a worker signature with bounded peer signatures.
+
+    This is an evidence operation only. It never chooses a recovery action or
+    changes policy. A signature is comparable only when every source has the
+    same finite metric set and at least ``minimum_sample_count`` observations.
+    """
+
+    if isinstance(minimum_sample_count, bool) or not isinstance(minimum_sample_count, int):
+        raise TypeError("minimum_sample_count must be an integer")
+    if minimum_sample_count <= 0:
+        raise ValueError("minimum_sample_count must be greater than zero")
+    if isinstance(z_threshold, bool) or not isinstance(z_threshold, (int, float)):
+        raise TypeError("z_threshold must be numeric")
+    if not math.isfinite(float(z_threshold)) or float(z_threshold) <= 0:
+        raise ValueError("z_threshold must be finite and greater than zero")
+    result_check = verify_comparison_worker_result(
+        result,
+        assignment=assignment,
+    )
+    result_id = UUID(str(result_check["result_id"])) if result_check["result_id"] else uuid4()
+    assignment_id = UUID(str(result_check["assignment_id"])) if result_check["assignment_id"] else uuid4()
+    scope = str(
+        assignment.get("scope") if isinstance(assignment, Mapping) else assignment.scope
+    )
+    worker_id = str(result_check["worker_id"])
+    reasons: list[str] = []
+    sources: list[tuple[str, int, Mapping[str, Any]]] = []
+
+    if not result_check["valid"]:
+        reasons.append("comparison worker result failed structural verification")
+    result_evidence = (
+        result.get("evidence", {})
+        if isinstance(result, Mapping)
+        else result.evidence
+    )
+    result_signature = (
+        result_evidence.get("behavior_signature")
+        if isinstance(result_evidence, Mapping)
+        else None
+    )
+    if str(result_check["status"]).upper() != "COMPLETED":
+        reasons.append("comparison worker result is not complete")
+    if not isinstance(result_signature, Mapping):
+        reasons.append("comparison worker result has no behavior_signature")
+    else:
+        sources.append((f"comparison:{worker_id}", 0, result_signature))
+
+    if isinstance(baseline_signatures, (str, bytes)):
+        raise TypeError("baseline_signatures must be a sequence of mappings")
+    if len(baseline_signatures) > COMPARISON_WORKER_MAX_BASELINE_SIGNATURES:
+        raise ValueError(
+            f"baseline_signatures cannot contain more than {COMPARISON_WORKER_MAX_BASELINE_SIGNATURES} items"
+        )
+    for index, baseline in enumerate(baseline_signatures):
+        if not isinstance(baseline, Mapping):
+            reasons.append(f"baseline-{index}: signature source is not a mapping")
+            continue
+        signature = baseline.get("behavior_signature", baseline)
+        if not isinstance(signature, Mapping):
+            reasons.append(f"baseline-{index}: behavior_signature is missing")
+            continue
+        source_id = str(
+            baseline.get("source_id")
+            or baseline.get("worker_id")
+            or f"baseline:{index}"
+        ).strip()
+        sources.append((source_id[:256], index + 1, signature))
+
+    def valid_signature(signature: Mapping[str, Any], source_id: str) -> tuple[int, Mapping[str, Any]] | None:
+        sample_count = signature.get("sample_count")
+        metrics = signature.get("metrics")
+        if isinstance(sample_count, bool) or not isinstance(sample_count, int) or sample_count < minimum_sample_count:
+            reasons.append(f"{source_id}: insufficient sample_count")
+            return None
+        if not isinstance(metrics, Mapping) or not metrics or len(metrics) > COMPARISON_WORKER_MAX_METRICS:
+            reasons.append(f"{source_id}: metrics are missing or exceed the bound")
+            return None
+        for metric_name, metric in metrics.items():
+            if not isinstance(metric_name, str) or not metric_name.strip() or not isinstance(metric, Mapping):
+                reasons.append(f"{source_id}: metric definition is invalid")
+                return None
+            mean = metric.get("mean")
+            standard_deviation = metric.get("standard_deviation")
+            if (
+                isinstance(mean, bool)
+                or not isinstance(mean, (int, float))
+                or not math.isfinite(float(mean))
+                or isinstance(standard_deviation, bool)
+                or not isinstance(standard_deviation, (int, float))
+                or not math.isfinite(float(standard_deviation))
+                or float(standard_deviation) < 0
+            ):
+                reasons.append(f"{source_id}: metric {metric_name!r} is invalid")
+                return None
+        return sample_count, metrics
+
+    valid_sources: list[tuple[str, int, Mapping[str, Any]]] = []
+    for source_id, source_index, signature in sources:
+        valid = valid_signature(signature, source_id)
+        if valid is not None:
+            valid_sources.append((source_id, valid[0], valid[1]))
+    metric_names = (
+        set(valid_sources[0][2])
+        if valid_sources
+        else set()
+    )
+    if valid_sources and any(set(metrics) != metric_names for _, _, metrics in valid_sources[1:]):
+        reasons.append("behavior signatures have different metric sets")
+    comparable = (
+        not reasons
+        and len(valid_sources) >= 2
+        and bool(metric_names)
+        and all(set(metrics) == metric_names for _, _, metrics in valid_sources)
+    )
+    combined_metrics: dict[str, dict[str, float | int]] = {}
+    outliers: list[Mapping[str, Any]] = []
+    if comparable:
+        for metric_name in sorted(metric_names):
+            observations = [
+                (source_id, count, float(metrics[metric_name]["mean"]), float(metrics[metric_name]["standard_deviation"]))
+                for source_id, count, metrics in valid_sources
+            ]
+            total = sum(item[1] for item in observations)
+            combined_mean = sum(count * mean for _, count, mean, _ in observations) / total
+            combined_variance = sum(
+                count * (standard_deviation**2 + (mean - combined_mean) ** 2)
+                for _, count, mean, standard_deviation in observations
+            ) / total
+            combined_metrics[metric_name] = {
+                "sample_count": total,
+                "mean": combined_mean,
+                "standard_deviation": combined_variance**0.5,
+            }
+            for source_id, count, mean, standard_deviation in observations:
+                other_count = total - count
+                if other_count <= 0:
+                    continue
+                other_mean = sum(
+                    other_count_item * other_mean_item
+                    for other_source, other_count_item, other_mean_item, _ in observations
+                    if other_source != source_id
+                ) / other_count
+                other_variance = sum(
+                    other_count_item * (other_std**2 + (other_mean_item - other_mean) ** 2)
+                    for other_source, other_count_item, other_mean_item, other_std in observations
+                    if other_source != source_id
+                ) / other_count
+                standard_error = (
+                    standard_deviation**2 / count + other_variance / other_count
+                ) ** 0.5
+                z_score = abs(mean - other_mean) / max(standard_error, 1e-9)
+                if z_score > float(z_threshold):
+                    outliers.append({
+                        "source_id": source_id,
+                        "metric": metric_name,
+                        "z_score": z_score,
+                        "z_threshold": float(z_threshold),
+                        "sample_count": count,
+                        "comparison_sample_count": other_count,
+                    })
+        status = "CONFLICT" if outliers else "COMBINED"
+    else:
+        status = "INCOMPLETE_EVIDENCE" if reasons else "NOT_COMPARABLE"
+        if not reasons:
+            reasons.append("at least two comparable signatures are required")
+
+    assignment_id = UUID(str(
+        assignment.get("assignment_id") if isinstance(assignment, Mapping) else assignment.assignment_id
+    ))
+    payload = {
+        "assignment_id": str(assignment_id),
+        "result_id": str(result_id),
+        "scope": scope,
+        "status": status,
+        "baseline_count": max(0, len(valid_sources) - 1),
+        "source_ids": [source_id for source_id, _, _ in valid_sources],
+        "minimum_sample_count": minimum_sample_count,
+        "z_threshold": float(z_threshold),
+        "metrics": combined_metrics,
+        "outliers": outliers[:COMPARISON_WORKER_MAX_BASELINE_SIGNATURES],
+        "reasons": list(dict.fromkeys(reason[:256] for reason in reasons))[:32],
+    }
+    encoded = _comparison_json_bytes(payload, limit=COMPARISON_WORKER_EVIDENCE_MAX_BYTES, label="comparison report")
+    comparison_id = uuid5(
+        NAMESPACE_URL,
+        "caretaker:comparison-worker-report:" + hashlib.sha256(encoded).hexdigest(),
+    )
+    report = ComparisonWorkerComparisonReport(
+        comparison_id=comparison_id,
+        assignment_id=assignment_id,
+        result_id=result_id,
+        scope=scope[:WORKER_FAILURE_SCOPE_MAX_CHARS],
+        status=status,
+        baseline_count=payload["baseline_count"],
+        source_ids=tuple(payload["source_ids"]),
+        minimum_sample_count=minimum_sample_count,
+        z_threshold=float(z_threshold),
+        metrics=combined_metrics,
+        outliers=tuple(outliers[:COMPARISON_WORKER_MAX_BASELINE_SIGNATURES]),
+        reasons=tuple(payload["reasons"]),
+        compared_at=compared_at or utcnow(),
+        content_sha256="",
+    )
+    report_encoded = _comparison_json_bytes(
+        _comparison_report_payload(report),
+        limit=COMPARISON_WORKER_EVIDENCE_MAX_BYTES,
+        label="comparison report",
+    )
+    return replace(report, content_sha256=hashlib.sha256(report_encoded).hexdigest())
 
 
 def _packet_payload(packet: RecoveryAuthorityPacket) -> dict[str, Any]:
@@ -1829,6 +2093,21 @@ def worker_failure_recovery_status(
             "content_sha256": bounded(_field(record, "content_sha256", ""), 64),
         }
 
+    def comparison_report_summary(record: Any) -> dict[str, Any]:
+        outliers = _field(record, "outliers", ()) or ()
+        return {
+            "comparison_id": bounded(_field(record, "comparison_id", ""), 64),
+            "assignment_id": bounded(_field(record, "assignment_id", ""), 64),
+            "result_id": bounded(_field(record, "result_id", ""), 64),
+            "scope": bounded(_field(record, "scope", "")),
+            "status": bounded(_field(record, "status", ""), 32),
+            "baseline_count": int(_field(record, "baseline_count", 0) or 0),
+            "source_count": len(_field(record, "source_ids", ()) or ()),
+            "outlier_count": len(outliers) if isinstance(outliers, Sequence) else 0,
+            "compared_at": timestamp(_field(record, "compared_at")),
+            "content_sha256": bounded(_field(record, "content_sha256", ""), 64),
+        }
+
     failures = tuple(store.all_worker_failures())
     recoveries = tuple(store.all_worker_failure_recoveries())
     conflicts = tuple(store.all_worker_postmortem_conflicts())
@@ -1836,6 +2115,8 @@ def worker_failure_recovery_status(
     result_reader = getattr(store, "all_comparison_worker_results", None)
     assignments = tuple(assignment_reader()) if callable(assignment_reader) else ()
     results = tuple(result_reader()) if callable(result_reader) else ()
+    comparison_reader = getattr(store, "all_comparison_worker_comparisons", None)
+    comparisons = tuple(comparison_reader()) if callable(comparison_reader) else ()
     return {
         "schema_version": WORKER_POSTMORTEM_SCHEMA_VERSION,
         "read_only": True,
@@ -1849,11 +2130,15 @@ def worker_failure_recovery_status(
         "conflicts": [conflict_summary(item) for item in conflicts[-limit:]],
         "comparison_assignment_count": len(assignments),
         "comparison_result_count": len(results),
+        "comparison_report_count": len(comparisons),
         "comparison_assignments": [
             comparison_assignment_summary(item) for item in assignments[-limit:]
         ],
         "comparison_results": [
             comparison_result_summary(item) for item in results[-limit:]
+        ],
+        "comparison_reports": [
+            comparison_report_summary(item) for item in comparisons[-limit:]
         ],
     }
 

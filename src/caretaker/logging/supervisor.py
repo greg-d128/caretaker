@@ -15,6 +15,7 @@ from .handler import LoggingRuntime
 from .acceptance import WorkerAcceptanceStore
 from ..repair_recovery import (
     ComparisonWorkerAssignment,
+    ComparisonWorkerComparisonReport,
     ComparisonWorkerResult,
     RecoveryAuthorityPacket,
     RepairRecoveryPolicy,
@@ -23,6 +24,7 @@ from ..repair_recovery import (
     create_worker_failure_record,
     create_worker_failure_recovery_record,
     create_comparison_worker_assignment,
+    compare_comparison_worker_result,
     dispatch_recovery_action,
     evaluate_worker_acceptance,
     reconcile_worker_failure_records,
@@ -1867,6 +1869,54 @@ class CaretakerApplicationSupervisor:
             "status": result_check["status"],
             "persisted": persisted,
         }
+
+    def compare_comparison_worker_result(
+        self,
+        assignment: ComparisonWorkerAssignment | Mapping[str, Any],
+        result: ComparisonWorkerResult | Mapping[str, Any],
+        *,
+        baseline_signatures: tuple[Mapping[str, Any], ...] = (),
+        minimum_sample_count: int = 30,
+        z_threshold: float = 3.0,
+        compared_at: datetime | None = None,
+        store: Any | None = None,
+    ) -> ComparisonWorkerComparisonReport:
+        """Compare independent evidence and persist the read-only report."""
+
+        report = compare_comparison_worker_result(
+            result,
+            assignment=assignment,
+            baseline_signatures=baseline_signatures,
+            minimum_sample_count=minimum_sample_count,
+            z_threshold=z_threshold,
+            compared_at=compared_at,
+        )
+        target_store = store if store is not None else self.failure_store
+        persisted = False
+        if target_store is not None:
+            recorder = getattr(target_store, "record_comparison_worker_comparison", None)
+            if not callable(recorder):
+                raise TypeError("comparison report store does not support reports")
+            recorder(report)
+            persisted = True
+        self._audit_event(
+            "WORKER_COMPARISON_RECONCILED",
+            actor={"type": "supervisor", "id": str(self.supervisor_health.worker_id)},
+            scope={
+                "assignment_id": str(report.assignment_id),
+                "result_id": str(report.result_id),
+                "reconciliation_scope": report.scope,
+            },
+            outcome={"state": report.status, "authority_granted": False},
+            details={
+                "comparison_id": str(report.comparison_id),
+                "baseline_count": report.baseline_count,
+                "source_count": len(report.source_ids),
+                "outlier_count": len(report.outliers),
+                "persisted": persisted,
+            },
+        )
+        return report
 
     @staticmethod
     def build_incident_action_handler(
