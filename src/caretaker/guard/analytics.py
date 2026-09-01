@@ -382,6 +382,67 @@ class BaselineManager:
             self._baselines[key] = accepted
             return accepted
 
+    def accept_statistics(
+        self,
+        subject: CodeIdentity,
+        *,
+        profile: Mapping[str, Any],
+        generation_id: str,
+    ) -> BehaviorBaseline:
+        """Accept an operator-reviewed statistics capture for one generation."""
+        normalized_generation = str(generation_id or "").strip()
+        if not normalized_generation or len(normalized_generation) > 256:
+            raise ValueError("statistics baseline requires a bounded generation_id")
+        if not isinstance(profile, Mapping):
+            raise TypeError("statistics baseline profile must be a mapping")
+        call_count = int(profile.get("call_count") or 0)
+        if call_count <= 0:
+            raise ValueError("statistics baseline requires at least one observed call")
+        key = _subject_key(subject)
+        accepted = BehaviorBaseline(
+            baseline_id=uuid4(),
+            subject=subject,
+            workload_label=self.policy.workload_label,
+            environment_fingerprint=self.policy.environment_fingerprint,
+            created_at=utcnow(),
+            accepted_at=utcnow(),
+            observations=max(1, int(profile.get("window_count") or 1)),
+            profile=BehaviorProfile(
+                event_kind_counts=dict(profile.get("event_kind_counts") or {}),
+                resource_counts=dict(profile.get("resource_counts") or {}),
+                call_count=call_count,
+                event_count=int(profile.get("event_count") or 0),
+                network_destinations=tuple(profile.get("network_destinations") or ()),
+                filesystem_roots=tuple(profile.get("filesystem_roots") or ()),
+                subprocesses=tuple(profile.get("subprocesses") or ()),
+                imports=tuple(profile.get("imports") or ()),
+                dynamic_code_operations=tuple(profile.get("dynamic_code_operations") or ()),
+                success_count=int(profile.get("success_count") or 0),
+                failure_count=int(profile.get("failure_count") or 0),
+                return_category_counts=dict(
+                    profile.get("return_category_counts")
+                    or profile.get("return_categories")
+                    or {}
+                ),
+                return_shape_counts=dict(
+                    profile.get("return_shape_counts")
+                    or profile.get("return_shapes")
+                    or {}
+                ),
+                return_observations_available=bool(
+                    profile.get("return_observations_available", False)
+                ),
+                statistics=dict(profile.get("statistics") or {}),
+                sampling_provenance=dict(profile.get("sampling_provenance") or {}),
+            ),
+            state=BaselineState.ACCEPTED,
+            generation_id=normalized_generation,
+        )
+        with self._lock:
+            self._baselines[key] = accepted
+            self._windows.pop(key, None)
+        return accepted
+
     def restore(self, baseline: BehaviorBaseline) -> BehaviorBaseline:
         """Hydrate a previously accepted immutable baseline without replaying events."""
         if baseline.state is not BaselineState.ACCEPTED:

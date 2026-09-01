@@ -471,6 +471,7 @@ class GuardEngine(GuardFacade):
                 sampling_provenance=dict(profile_value.get("sampling_provenance") or {}),
             ),
             state=BaselineState.ACCEPTED,
+            generation_id=str(record.get("generation_id") or "") or None,
         )
         self.baselines.restore(baseline)
         self._sealed_baseline_ids.add(baseline.baseline_id)
@@ -538,11 +539,15 @@ class GuardEngine(GuardFacade):
             "sampling_provenance": dict(profile.sampling_provenance),
         }
         active_capture = self.behavior_statistics.current_capture(target_id)
+        active_generation_id = None
+        active_behavior_revision = 0
         if (
             active_capture is not None
             and active_capture.get("code_hash") == code_hash
             and active_capture.get("monitoring_fingerprint") == monitoring_fingerprint
         ):
+            active_generation_id = str(active_capture.get("generation_id") or "") or None
+            active_behavior_revision = int(active_capture.get("behavior_revision") or 0)
             active_profile = dict(active_capture.get("profile") or {})
             # Guard remains authoritative for the accepted categorical behavior
             # profile.  The statistical accumulator contributes distribution and
@@ -570,6 +575,8 @@ class GuardEngine(GuardFacade):
             monitoring_configuration=monitoring_configuration,
             profile=baseline_profile,
             baseline_id=baseline.baseline_id,
+            generation_id=active_generation_id or baseline.generation_id,
+            behavior_revision=active_behavior_revision,
         )
         self._sealed_baseline_ids.add(baseline.baseline_id)
 
@@ -754,7 +761,24 @@ class GuardEngine(GuardFacade):
 
     def accept_baseline(self, target_id: str) -> BehaviorBaseline:
         binding = self._targets[target_id]
-        baseline = self.baselines.accept(binding.identity)
+        active_capture = (
+            self.behavior_statistics.current_capture(target_id)
+            if self.behavior_statistics is not None
+            else None
+        )
+        behavior_revision = (
+            int(active_capture.get("behavior_revision") or 0)
+            if active_capture is not None
+            else 0
+        )
+        if behavior_revision > 0 and active_capture is not None:
+            baseline = self.baselines.accept_statistics(
+                binding.identity,
+                profile=dict(active_capture.get("profile") or {}),
+                generation_id=str(active_capture.get("generation_id") or ""),
+            )
+        else:
+            baseline = self.baselines.accept(binding.identity)
         baseline = self._enrich_accepted_baseline_statistics(target_id, baseline)
         self.store.record_guard_baseline(baseline)
         self._queue_accepted_baseline_snapshot(target_id, baseline)
@@ -1747,11 +1771,14 @@ class GuardEngine(GuardFacade):
                 baseline.accepted_at or baseline.created_at
             ).isoformat(),
             "subject_key": f"function:{target_id}",
-            "generation_id": behavior_generation_id(
-                subject_key=f"function:{target_id}",
-                code_hash=baseline.subject.source_hash or baseline.subject.bytecode_hash,
-                monitoring_fingerprint=monitoring_fingerprint,
-                statistics_schema_version=schema_version,
+            "generation_id": (
+                baseline.generation_id
+                or behavior_generation_id(
+                    subject_key=f"function:{target_id}",
+                    code_hash=baseline.subject.source_hash or baseline.subject.bytecode_hash,
+                    monitoring_fingerprint=monitoring_fingerprint,
+                    statistics_schema_version=schema_version,
+                )
             ),
             "code_hash": baseline.subject.source_hash or baseline.subject.bytecode_hash,
             "monitoring_fingerprint": monitoring_fingerprint,
@@ -1849,7 +1876,10 @@ class GuardEngine(GuardFacade):
                 "expected_code_hash": expected_code_hash,
                 "expected_monitoring_fingerprint": expected_monitoring,
             }
-        if behavior_revision > 0:
+        baseline_generation_id = str(getattr(baseline, "generation_id", "") or "")
+        if behavior_revision > 0 and baseline_generation_id != str(
+            capture.get("generation_id") or ""
+        ):
             return {
                 **unavailable,
                 "state": "insufficient-evidence",

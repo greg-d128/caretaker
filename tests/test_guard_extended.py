@@ -445,6 +445,25 @@ def test_periodic_behavior_change_can_start_a_new_generation(tmp_path, monkeypat
     assert next_comparison["reason"] == "behavior-generation-awaiting-baseline"
     assert next_comparison["generation_rotated"] is False
 
+    accepted = guard.accept_baseline(target_id)
+    assert accepted.generation_id == after["generation_id"]
+    final_call_id = uuid4()
+    guard.before_call(target_id, failing, final_call_id, candidate_id=None)
+    guard.after_call(
+        target_id,
+        failing,
+        final_call_id,
+        candidate_id=None,
+        succeeded=True,
+        elapsed_seconds=0.001,
+        result=1,
+    )
+    final_inspection = guard.inspector.inspect_function(failing)
+    guard._on_inspection(final_inspection)
+    final_comparison = guard.store.inspections[final_inspection.inspection_id].behavior_comparison
+    assert final_comparison["state"] == "unchanged"
+    assert final_comparison["generation_id"] == after["generation_id"]
+
 
 def test_guard_operational_event_cache_is_bounded(monkeypatch) -> None:
     import caretaker.guard.engine as guard_engine_module

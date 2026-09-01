@@ -2949,12 +2949,15 @@ class BehaviorStatisticsRepository:
         monitoring_configuration: Mapping[str, Any],
         profile: Mapping[str, Any],
         baseline_id: UUID | str,
+        generation_id: str | None = None,
+        behavior_revision: int = 0,
     ) -> Path:
         monitoring_fp = monitoring_configuration_fingerprint(monitoring_configuration)
-        generation = behavior_generation_id(
+        generation = str(generation_id or "").strip() or behavior_generation_id(
             subject_key=f"function:{target_id}",
             code_hash=code_hash,
             monitoring_fingerprint=monitoring_fp,
+            behavior_revision=behavior_revision,
         )
         capture = {
             "scope": "function",
@@ -2966,6 +2969,7 @@ class BehaviorStatisticsRepository:
             "monitoring_fingerprint": monitoring_fp,
             "statistics_schema_version": STATISTICS_SCHEMA_VERSION,
             "generation_id": generation,
+            "behavior_revision": max(0, int(behavior_revision)),
             "seal_reason": "guard-baseline-accepted",
             "environment_fingerprint": self.environment_fingerprint,
             "workload_label": self.workload_label,

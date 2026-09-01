@@ -149,6 +149,7 @@ class BehaviorBaseline:
     observations: int
     profile: BehaviorProfile
     state: BaselineState
+    generation_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
