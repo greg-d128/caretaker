@@ -390,13 +390,21 @@ def _emit_adaptive_aggregation_audit(
         if isinstance(promotions, Mapping)
         else 0
     )
+    repair_proposal_count = (
+        int(promotions.get("proposals_created") or 0)
+        if isinstance(promotions, Mapping)
+        else 0
+    )
     counts = {
         name: int(result.get(name) or 0)
         for name in ("merged", "duplicates", "rejected", "conflicts", "conflict_reports")
     }
     errors = result.get("errors")
     error_count = len(errors) if isinstance(errors, list) else 0
-    if not any((*counts.values(), promotion_count, error_count, int(result.get("pending") or 0))):
+    if not any(
+        (*counts.values(), promotion_count, repair_proposal_count,
+         error_count, int(result.get("pending") or 0))
+    ):
         return
     audit = getattr(runtime, "audit", None)
     emit = getattr(audit, "emit", None)
@@ -420,11 +428,32 @@ def _emit_adaptive_aggregation_audit(
             **counts,
             "error_count": error_count,
             "promotion_requests_created": promotion_count,
+            "repair_proposals_created": repair_proposal_count,
             "pending": int(result.get("pending") or 0),
             "authority_granted": False,
         },
         priority=EvidencePriority.IMPORTANT,
     )
+    if repair_proposal_count:
+        emit(
+            "ADAPTIVE_REPAIR_PROPOSAL",
+            actor={"type": str(actor_type)[:32], "id": str(actor_id)[:128]},
+            scope={"aggregation_scope": "application"},
+            policy={
+                "fingerprint": getattr(effective, "fingerprint", None),
+                "generation": getattr(effective, "generation", None),
+            },
+            outcome={
+                "state": "PROPOSAL_ONLY",
+                "authority_granted": False,
+            },
+            details={
+                "proposal_count": repair_proposal_count,
+                "promotion_requests_created": promotion_count,
+                "authority_granted": False,
+            },
+            priority=EvidencePriority.CRITICAL,
+        )
 
 
 def _emit_behavior_collection_audit(

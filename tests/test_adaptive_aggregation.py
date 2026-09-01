@@ -2009,13 +2009,13 @@ def test_adaptive_aggregation_audit_projection_is_bounded_and_non_authoritative(
             "conflict_reports": 1,
             "errors": [],
             "pending": 3,
-            "promotions": {"created": 1},
+            "promotions": {"created": 1, "proposals_created": 1},
         },
         actor_type="operator",
         actor_id="uid:1001",
     )
 
-    assert len(runtime.audit.events) == 1
+    assert len(runtime.audit.events) == 2
     event_type, fields = runtime.audit.events[0]
     assert event_type == "ADAPTIVE_AGGREGATION_RECONCILED"
     assert fields["actor"] == {"type": "operator", "id": "uid:1001"}
@@ -2026,3 +2026,16 @@ def test_adaptive_aggregation_audit_projection_is_bounded_and_non_authoritative(
     }
     assert fields["details"]["merged"] == 2
     assert fields["details"]["promotion_requests_created"] == 1
+    proposal_type, proposal_fields = runtime.audit.events[1]
+    assert proposal_type == "ADAPTIVE_REPAIR_PROPOSAL"
+    assert proposal_fields["actor"] == {"type": "operator", "id": "uid:1001"}
+    assert proposal_fields["scope"] == {"aggregation_scope": "application"}
+    assert proposal_fields["outcome"] == {
+        "state": "PROPOSAL_ONLY",
+        "authority_granted": False,
+    }
+    assert proposal_fields["details"] == {
+        "proposal_count": 1,
+        "promotion_requests_created": 1,
+        "authority_granted": False,
+    }
