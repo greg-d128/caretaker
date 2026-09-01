@@ -13,6 +13,25 @@ generation, code hash, policy, authority context, capabilities, and expiry.
 The worker registry verifies that packet before admission and preserves
 probation and acceptance counters independently from packet authority.
 
+## Authority packet transport
+
+`serialize_recovery_authority_packet()` provides a bounded canonical JSON
+envelope for an application-owned socket, shared-memory buffer, or queue. The
+envelope carries the packet content hash and is limited to 64 KiB. The matching
+`deserialize_recovery_authority_packet()` function validates the envelope,
+packet schema, JSON data, timestamps, capabilities, size, and content hash.
+It does not validate the packet against current runtime context and does not
+grant authority.
+
+After transport, the receiving worker or supervisor must call
+`verify_recovery_authority_packet()` with the current supervisor time and
+exact target, generation, code, policy, authority, and capability context.
+Only the existing registry admission path can record the worker as authorized.
+The codec is transport-neutral; Caretaker does not choose a queue or start an
+OS process from it. Transport authentication, delivery/replay handling, and
+application-owned process lifecycle remain separate policy and deployment
+responsibilities.
+
 ## Comparison worker assignment
 
 When the supervisor needs an independent check—for example, because a worker's

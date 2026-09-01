@@ -37,6 +37,9 @@ COMPARISON_WORKER_MAX_BASELINE_SIGNATURES = 128
 COMPARISON_WORKER_MAX_METRICS = 64
 COMPARISON_WORKER_MAX_RECONCILIATION_REPORTS = 128
 WORKER_EVIDENCE_JOIN_MAX_RECORDS = 256
+RECOVERY_AUTHORITY_PACKET_TRANSPORT_SCHEMA_VERSION = 1
+RECOVERY_AUTHORITY_PACKET_MAX_BYTES = 64 * 1024
+RECOVERY_AUTHORITY_PACKET_MAX_CAPABILITIES = 64
 _WORKER_POSTMORTEM_REQUIRED_EVIDENCE = (
     "milestone",
     "partial_queue",
@@ -1431,6 +1434,182 @@ def _packet_hash(packet: RecoveryAuthorityPacket) -> str:
         default=str,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def serialize_recovery_authority_packet(
+    packet: RecoveryAuthorityPacket,
+) -> bytes:
+    """Encode one integrity-checked packet for an application-owned transport.
+
+    The result is a bounded JSON envelope suitable for a socket, shared-memory
+    record, or queue.  It carries integrity evidence only: receiving this
+    envelope does not grant authority or admit a worker.  The receiving side
+    must deserialize it and then run ``verify_recovery_authority_packet``
+    against the live supervisor context.
+    """
+    if not isinstance(packet, RecoveryAuthorityPacket):
+        raise TypeError("authority packet must be a RecoveryAuthorityPacket")
+    if packet.schema_version != 1:
+        raise ValueError("unsupported authority packet schema")
+    if _packet_hash(packet) != packet.content_sha256:
+        raise ValueError("authority packet content hash is invalid")
+    packet_payload = _packet_payload(packet)
+    packet_payload["content_sha256"] = packet.content_sha256
+    envelope = {
+        "schema_version": RECOVERY_AUTHORITY_PACKET_TRANSPORT_SCHEMA_VERSION,
+        "packet": packet_payload,
+        "packet_sha256": packet.content_sha256,
+    }
+    try:
+        encoded = json.dumps(
+            envelope,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("authority packet is not JSON transport data") from exc
+    if len(encoded) > RECOVERY_AUTHORITY_PACKET_MAX_BYTES:
+        raise ValueError(
+            f"authority packet exceeds {RECOVERY_AUTHORITY_PACKET_MAX_BYTES} bytes"
+        )
+    return encoded
+
+
+def _packet_transport_text(
+    value: Any,
+    *,
+    name: str,
+    limit: int = WORKER_FAILURE_SCOPE_MAX_CHARS,
+) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"authority packet {name} must be a non-empty string")
+    result = value.strip()
+    if len(result) > limit:
+        raise ValueError(f"authority packet {name} exceeds {limit} characters")
+    return result
+
+
+def _packet_transport_time(value: Any, *, name: str) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError(f"authority packet {name} must be an ISO timestamp")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"authority packet {name} is invalid") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"authority packet {name} must include a timezone")
+    return parsed
+
+
+def deserialize_recovery_authority_packet(
+    value: bytes | bytearray | str | Mapping[str, Any],
+) -> RecoveryAuthorityPacket:
+    """Decode and integrity-check a transported authority packet.
+
+    This operation validates the packet envelope, canonical packet content,
+    size, and time representation.  It deliberately does not check current
+    target/policy/authority context; that check remains the responsibility of
+    ``verify_recovery_authority_packet`` at admission time.
+    """
+    if isinstance(value, Mapping):
+        try:
+            encoded = json.dumps(
+                value,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("authority packet transport value is not JSON data") from exc
+    elif isinstance(value, (bytes, bytearray)):
+        encoded = bytes(value)
+    elif isinstance(value, str):
+        encoded = value.encode("utf-8")
+    else:
+        raise TypeError("authority packet transport value must be JSON data")
+    if len(encoded) > RECOVERY_AUTHORITY_PACKET_MAX_BYTES:
+        raise ValueError(
+            f"authority packet exceeds {RECOVERY_AUTHORITY_PACKET_MAX_BYTES} bytes"
+        )
+    try:
+        envelope = json.loads(encoded.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("authority packet transport envelope is invalid JSON") from exc
+    if not isinstance(envelope, Mapping):
+        raise ValueError("authority packet transport envelope must be an object")
+    if envelope.get("schema_version") != RECOVERY_AUTHORITY_PACKET_TRANSPORT_SCHEMA_VERSION:
+        raise ValueError("unsupported authority packet transport schema")
+    raw = envelope.get("packet")
+    if not isinstance(raw, Mapping):
+        raise ValueError("authority packet transport envelope is missing its packet")
+    packet_sha256 = envelope.get("packet_sha256")
+    if not isinstance(packet_sha256, str) or len(packet_sha256) != 64:
+        raise ValueError("authority packet transport hash is invalid")
+    try:
+        packet_id = UUID(_packet_transport_text(raw.get("packet_id"), name="packet_id"))
+        schema_version = raw.get("schema_version")
+        if isinstance(schema_version, bool) or schema_version != 1:
+            raise ValueError("unsupported authority packet schema")
+        capabilities = raw.get("capabilities")
+        if not isinstance(capabilities, list):
+            raise ValueError("authority packet capabilities must be an array")
+        if len(capabilities) > RECOVERY_AUTHORITY_PACKET_MAX_CAPABILITIES:
+            raise ValueError(
+                "authority packet contains too many capabilities"
+            )
+        normalized_capabilities = tuple(
+            _packet_transport_text(
+                item,
+                name="capability",
+                limit=WORKER_FAILURE_SCOPE_MAX_CHARS,
+            )
+            for item in capabilities
+        )
+        policy_state = raw.get("policy_state")
+        approvals = raw.get("approvals")
+        if not isinstance(policy_state, Mapping):
+            raise ValueError("authority packet policy_state must be an object")
+        if not isinstance(approvals, Mapping):
+            raise ValueError("authority packet approvals must be an object")
+        packet = RecoveryAuthorityPacket(
+            packet_id=packet_id,
+            issuer_role=_packet_transport_text(raw.get("issuer_role"), name="issuer_role"),
+            target_id=_packet_transport_text(raw.get("target_id"), name="target_id"),
+            generation_id=_packet_transport_text(raw.get("generation_id"), name="generation_id"),
+            code_hash=_packet_transport_text(raw.get("code_hash"), name="code_hash"),
+            policy_fingerprint=_packet_transport_text(
+                raw.get("policy_fingerprint"), name="policy_fingerprint"
+            ),
+            authority_policy_generation=_packet_transport_text(
+                raw.get("authority_policy_generation"),
+                name="authority_policy_generation",
+            ),
+            authority_policy_fingerprint=_packet_transport_text(
+                raw.get("authority_policy_fingerprint"),
+                name="authority_policy_fingerprint",
+            ),
+            issued_at=_packet_transport_time(raw.get("issued_at"), name="issued_at"),
+            expires_at=_packet_transport_time(raw.get("expires_at"), name="expires_at"),
+            capabilities=normalized_capabilities,
+            policy_state=dict(policy_state),
+            approvals=dict(approvals),
+            content_sha256=_packet_transport_text(
+                raw.get("content_sha256"), name="content_sha256", limit=64
+            ),
+            schema_version=schema_version,
+        )
+    except (TypeError, ValueError) as exc:
+        if isinstance(exc, ValueError) and str(exc).startswith("authority packet"):
+            raise
+        raise ValueError("authority packet payload is invalid") from exc
+    if packet.expires_at <= packet.issued_at:
+        raise ValueError("authority packet expires_at must follow issued_at")
+    if packet_sha256 != packet.content_sha256 or _packet_hash(packet) != packet.content_sha256:
+        raise ValueError("authority packet content hash is invalid")
+    return packet
 
 
 def create_recovery_authority_packet(

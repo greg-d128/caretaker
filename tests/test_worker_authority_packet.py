@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from caretaker import create_recovery_authority_packet
+from caretaker import (
+    create_recovery_authority_packet,
+    deserialize_recovery_authority_packet,
+    serialize_recovery_authority_packet,
+    verify_recovery_authority_packet,
+)
 from caretaker import WorkerAcceptancePolicy
 from caretaker.logging import WorkerAcceptanceState, WorkerKind, WorkerRegistry, WorkerState
 import caretaker.logging.supervisor as supervisor_module
@@ -21,6 +27,69 @@ def _packet(*, supervisor_time: datetime):
         capabilities=("observe",),
         supervisor_time=supervisor_time,
     )
+
+
+def test_authority_packet_transport_round_trip_still_requires_live_context() -> None:
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    packet = _packet(supervisor_time=supervisor_time)
+
+    encoded = serialize_recovery_authority_packet(packet)
+    decoded = deserialize_recovery_authority_packet(encoded)
+
+    assert decoded == packet
+    verification = verify_recovery_authority_packet(
+        decoded,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+    )
+    assert verification["valid"] is True
+    assert verification["authority_granted_by_packet"] is False
+
+
+def test_authority_packet_transport_rejects_tampering_and_non_json_state() -> None:
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    packet = _packet(supervisor_time=supervisor_time)
+    envelope = json.loads(serialize_recovery_authority_packet(packet))
+    envelope["packet"]["target_id"] = "app:other"
+
+    with pytest.raises(ValueError, match="content hash is invalid"):
+        deserialize_recovery_authority_packet(envelope)
+
+    non_json = create_recovery_authority_packet(
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        policy_state={"not_json": object()},
+        supervisor_time=supervisor_time,
+    )
+    with pytest.raises(ValueError, match="JSON transport data"):
+        serialize_recovery_authority_packet(non_json)
+
+
+def test_authority_packet_transport_is_bounded() -> None:
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    packet = create_recovery_authority_packet(
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        policy_state={"large": "x" * 70_000},
+        supervisor_time=supervisor_time,
+    )
+
+    with pytest.raises(ValueError, match="exceeds 65536 bytes"):
+        serialize_recovery_authority_packet(packet)
 
 
 def test_worker_registry_requires_exact_authority_packet_context() -> None:
