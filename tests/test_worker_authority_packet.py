@@ -25,6 +25,7 @@ from caretaker import (
 )
 from caretaker import WorkerAcceptancePolicy
 from caretaker.logging import (
+    ApplicationWorkerLifecycle,
     ControlSocketServer,
     WorkerAcceptanceState,
     WorkerKind,
@@ -896,6 +897,52 @@ def test_expired_worker_cohort_rejects_stale_or_live_snapshot() -> None:
             scope="transaction:expired-worker-2",
             recovery_policy=RepairRecoveryPolicy(),
         )
+
+
+def test_application_worker_lifecycle_builds_expiry_recovery_callback() -> None:
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    store = InMemoryRepairStore()
+    supervisor = supervisor_module.CaretakerApplicationSupervisor(
+        object(), failure_store=store
+    )
+    packet = _packet(supervisor_time=supervisor_time)
+    worker = supervisor.workers.register_authorized(
+        WorkerKind.REPAIR_ANALYZER,
+        4321,
+        packet,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+    )
+    lifecycle = ApplicationWorkerLifecycle(
+        supervisor,
+        spawn_worker=lambda _request: {"started": True, "pid": 9876},
+    )
+    callback = lifecycle.build_expiry_recovery_callback(
+        scope=lambda workers, _now: f"transaction:expiry-{workers[0].worker_id}",
+        recovery_policy=RepairRecoveryPolicy(
+            worker_failure_action=RecoveryAction.CONTINUE_DEGRADED,
+        ),
+    )
+
+    result = supervisor.run_control_cycle(
+        supervisor_time=packet.expires_at,
+        on_expired_workers=callback,
+    )
+
+    assert result["ok"] is True
+    assert result["authority_expiry_callback"]["status"] == "COMPLETED"
+    callback_result = result["authority_expiry_callback"]["result"]
+    assert callback_result["worker_ids"] == [str(worker.worker_id)]
+    assert callback_result["reconciliation"]["recovery_decisions"][0][
+        "policy_action"
+    ]["selected_action"] == RecoveryAction.CONTINUE_DEGRADED.name
+    assert len(store.all_worker_failures()) == 1
 
 
 def test_supervisor_control_cycle_retains_callback_failure_as_bounded_evidence() -> None:

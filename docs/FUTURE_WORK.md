@@ -949,6 +949,11 @@ existing durable failure-envelope, post-mortem, reconciliation, and
 policy-action pipeline after revalidating worker identity and an explicit
 transaction scope. Application-owned effects still require explicit handler
 acknowledgements.
+`ApplicationWorkerLifecycle.build_expiry_recovery_callback()` now packages
+this integration for a fixed or application-resolved scope and forwards the
+explicit recovery policy, post-mortem collector, and action handlers through
+the same fail-closed gates. A deployment still owns packet issuance, process
+creation, and the concrete replacement, incident, or shutdown effect.
 
 Recovery action dispatch now has application-owned adapters for incident
 creation and application shutdown. Both effects remain outside Caretaker's

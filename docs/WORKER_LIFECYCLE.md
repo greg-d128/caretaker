@@ -41,6 +41,15 @@ post-mortem, reconciliation, and policy-handler gates. Replacement, incident,
 and shutdown callbacks remain application-owned and must explicitly
 acknowledge their effects.
 
+`ApplicationWorkerLifecycle.build_expiry_recovery_callback()` packages this
+handoff for applications that want the standard recovery pipeline. It accepts
+an explicit `RepairRecoveryPolicy`, a fixed or application-resolved transaction
+scope, optional post-mortem collection, and the application's action handlers.
+The resulting callback can be passed directly as `on_expired_workers` to
+`run_control_cycle()` or `monitor_application()`. A replacement handler must
+still issue a current immutable authority packet and pass packet-bound
+admission; starting a process alone is never treated as a replacement.
+
 ## Authority packet transport
 
 `serialize_recovery_authority_packet()` provides a bounded canonical JSON

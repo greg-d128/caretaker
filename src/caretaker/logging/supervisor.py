@@ -3533,6 +3533,57 @@ class ApplicationWorkerLifecycle:
             acceptance_policy=acceptance_policy,
         )
 
+    def build_expiry_recovery_callback(
+        self,
+        *,
+        scope: str | Callable[[tuple[WorkerHealth, ...], datetime], str],
+        recovery_policy: RepairRecoveryPolicy,
+        recovery_handlers: Mapping[str, Callable[[Mapping[str, Any]], Any]] | None = None,
+        diagnostic_debug: bool | None = None,
+        critical_evidence: bool = False,
+        collect_postmortem: Callable[[WorkerHealth, Mapping[str, Any]], Any] | None = None,
+        require_complete_postmortem: bool = False,
+        minimum_sample_count: int = 30,
+        z_threshold: float = 3.0,
+    ) -> Callable[[tuple[WorkerHealth, ...], datetime], dict[str, Any]]:
+        """Build a control-cycle callback for policy-selected expiry recovery.
+
+        The application chooses the reconciliation scope and supplies any
+        handlers that can create an incident, replace a worker, continue in a
+        degraded mode, roll back, or stop the application.  The returned
+        callback only invokes the supervisor's validation and evidence gates;
+        it never creates a process or supplies missing authority.
+        """
+        if not isinstance(recovery_policy, RepairRecoveryPolicy):
+            raise TypeError("expiry recovery callback requires a RepairRecoveryPolicy")
+        if not isinstance(scope, str) and not callable(scope):
+            raise TypeError("expiry recovery scope must be a string or callable")
+
+        def callback(
+            workers: tuple[WorkerHealth, ...],
+            supervisor_time: datetime,
+        ) -> dict[str, Any]:
+            resolved_scope = (
+                scope(workers, supervisor_time)
+                if callable(scope)
+                else scope
+            )
+            return self.supervisor.handle_expired_worker_cohort(
+                workers,
+                supervisor_time=supervisor_time,
+                scope=resolved_scope,
+                recovery_policy=recovery_policy,
+                recovery_handlers=recovery_handlers,
+                diagnostic_debug=diagnostic_debug,
+                critical_evidence=critical_evidence,
+                collect_postmortem=collect_postmortem,
+                require_complete_postmortem=require_complete_postmortem,
+                minimum_sample_count=minimum_sample_count,
+                z_threshold=z_threshold,
+            )
+
+        return callback
+
 
 def _pid_alive(pid: int) -> bool:
     try:
