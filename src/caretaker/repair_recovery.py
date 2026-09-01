@@ -24,6 +24,7 @@ from .domain import RepairAttemptOutcome, RepairAttemptStage, RepairEpisodeOutco
 RECOVERY_PLAN_SCHEMA_VERSION = 1
 OBSERVATION_RECOVERY_SCHEMA_VERSION = 1
 WORKER_POSTMORTEM_SCHEMA_VERSION = 1
+RECOVERY_LIFECYCLE_SCHEMA_VERSION = 1
 WORKER_POSTMORTEM_MAX_BYTES = 1_048_576
 WORKER_FAILURE_SCOPE_MAX_CHARS = 256
 WORKER_FAILURE_STATUS_MAX_LIMIT = 500
@@ -1130,6 +1131,29 @@ class RepairRecoveryRecord:
     incomplete_records: tuple[Mapping[str, Any], ...] = ()
     policy_action: Mapping[str, Any] = field(default_factory=dict)
     action_execution: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class RepairRecoveryLifecycleMark:
+    """Immutable evidence that one linked Repair record is incomplete.
+
+    Lifecycle marks are a recovery ledger, not updates to the source records.
+    They make the interrupted state durable for a restarted process while
+    preserving the source attempt, incident, and policy evidence exactly as it
+    was written.  A mark is content-addressed so a retry cannot create a
+    second state transition for the same interrupted record.
+    """
+
+    marker_id: UUID
+    attempt_id: str
+    record_type: str
+    record_id: str
+    state: str
+    last_milestone: str
+    observed_at: datetime
+    reason: str
+    source_sha256: str
+    schema_version: int = RECOVERY_LIFECYCLE_SCHEMA_VERSION
 
 
 @dataclass(frozen=True, slots=True)
@@ -2471,9 +2495,84 @@ def _candidate_binding_for_attempt(
     }
 
 
+_RECOVERY_LIFECYCLE_RECORD_TYPES = frozenset(
+    {"attempt", "incident", "episode", "generation", "validation", "approval"}
+)
+_RECOVERY_LIFECYCLE_STATES = frozenset(
+    {"INCOMPLETE_REPAIR", "INCOMPLETE", "NOT_STARTED", "STALE_AFTER_RESTART"}
+)
+
+
+def create_recovery_lifecycle_mark(
+    decision: Mapping[str, Any],
+    lifecycle_record: Mapping[str, Any],
+    *,
+    observed_at: datetime | None = None,
+) -> RepairRecoveryLifecycleMark:
+    """Create one deterministic, bounded marker for interrupted lifecycle state."""
+    if not isinstance(decision, Mapping) or not isinstance(lifecycle_record, Mapping):
+        raise TypeError("recovery lifecycle inputs must be mappings")
+    attempt_id = str(decision.get("attempt_id") or "").strip()
+    record_type = str(lifecycle_record.get("record_type") or "").strip()
+    record_id = str(lifecycle_record.get("record_id") or "").strip()
+    state = str(lifecycle_record.get("state") or "").strip()
+    milestone = str(
+        lifecycle_record.get("last_milestone")
+        or decision.get("last_milestone")
+        or "CREATED"
+    ).strip()
+    reason = str(lifecycle_record.get("reason") or "interrupted Repair transaction").strip()
+    if not attempt_id or len(attempt_id) > WORKER_FAILURE_SCOPE_MAX_CHARS:
+        raise ValueError("recovery lifecycle marker requires a bounded attempt ID")
+    if record_type not in _RECOVERY_LIFECYCLE_RECORD_TYPES:
+        raise ValueError(f"unsupported recovery lifecycle record type: {record_type!r}")
+    if not record_id or len(record_id) > WORKER_FAILURE_SCOPE_MAX_CHARS:
+        raise ValueError("recovery lifecycle marker requires a bounded record ID")
+    if state not in _RECOVERY_LIFECYCLE_STATES:
+        raise ValueError(f"unsupported recovery lifecycle state: {state!r}")
+    if not milestone or len(milestone) > WORKER_FAILURE_SCOPE_MAX_CHARS:
+        raise ValueError("recovery lifecycle marker milestone is not bounded")
+    if not reason or len(reason) > WORKER_FAILURE_SCOPE_MAX_CHARS:
+        raise ValueError("recovery lifecycle marker reason is not bounded")
+
+    source = {
+        "attempt_id": attempt_id,
+        "record_type": record_type,
+        "record_id": record_id,
+        "state": state,
+        "last_milestone": milestone,
+        "reason": reason,
+    }
+    source_sha256 = hashlib.sha256(_recovery_json(source).encode("utf-8")).hexdigest()
+    marker_id = uuid5(
+        NAMESPACE_URL,
+        "caretaker:repair-recovery-lifecycle:" + source_sha256,
+    )
+    return RepairRecoveryLifecycleMark(
+        marker_id=marker_id,
+        attempt_id=attempt_id,
+        record_type=record_type,
+        record_id=record_id,
+        state=state,
+        last_milestone=milestone,
+        observed_at=observed_at or utcnow(),
+        reason=reason,
+        source_sha256=source_sha256,
+    )
+
+
 def _incomplete_lifecycle_records(store: Any, attempt: Any) -> tuple[dict[str, Any], ...]:
     """Project linked lifecycle state without mutating source evidence."""
     records: list[dict[str, Any]] = []
+    attempt_id = str(_field(attempt, "attempt_id", ""))
+    stage = _enum_name(_field(attempt, "stage"))
+    records.append({
+        "record_type": "attempt",
+        "record_id": attempt_id,
+        "state": "INCOMPLETE_REPAIR",
+        "last_milestone": stage or RepairAttemptStage.CREATED.name,
+        "reason": "Repair attempt did not durably complete",
+    })
     incident_id = str(_field(attempt, "incident_id", ""))
     if incident_id:
         records.append({
@@ -2537,7 +2636,6 @@ def _incomplete_lifecycle_records(store: Any, attempt: Any) -> tuple[dict[str, A
             "source_present": generation is not None,
         })
 
-    stage = _enum_name(_field(attempt, "stage"))
     validation_stages = {
         RepairAttemptStage.VALIDATION.name,
         RepairAttemptStage.SCORING.name,
@@ -2547,7 +2645,7 @@ def _incomplete_lifecycle_records(store: Any, attempt: Any) -> tuple[dict[str, A
     }
     records.append({
         "record_type": "validation",
-        "record_id": str(_field(attempt, "attempt_id", "")),
+        "record_id": attempt_id,
         "state": "INCOMPLETE" if stage in validation_stages else "NOT_STARTED",
         "last_milestone": stage or RepairAttemptStage.CREATED.name,
         "persisted_check_count": len(_field(attempt, "validation_results", ()) or ()),
@@ -2781,6 +2879,7 @@ def apply_repair_recovery_plan(
     applied = 0
     skipped = 0
     action_results: list[dict[str, Any]] = []
+    lifecycle_mark_count = 0
     for decision in decisions:
         if not isinstance(decision, Mapping):
             raise ValueError("Repair recovery decision must be an object")
@@ -2798,11 +2897,33 @@ def apply_repair_recovery_plan(
         _validate_recovery_decision_source(store, decision)
         validated_decisions.append(decision)
 
+    lifecycle_writer = getattr(store, "record_recovery_lifecycle_mark", None)
+    if validated_decisions and not callable(lifecycle_writer):
+        raise RuntimeError(
+            "recovery store does not provide durable lifecycle marking"
+        )
+
     # Validate every source before dispatching any application-owned handler or
     # writing a recovery record. A stale decision later in the batch must not
-    # leave an earlier decision partially applied.
+    # leave an earlier decision partially applied. Lifecycle marks are written
+    # before a callback so a callback never runs without durable interrupted
+    # state.
     for decision in validated_decisions:
         attempt_id = str(decision.get("attempt_id") or "")
+        lifecycle_records = tuple(
+            item
+            for item in (decision.get("incomplete_records") or ())
+            if isinstance(item, Mapping)
+        )
+        for lifecycle_record in lifecycle_records:
+            lifecycle_writer(
+                create_recovery_lifecycle_mark(
+                    decision,
+                    lifecycle_record,
+                    observed_at=observed_at,
+                )
+            )
+            lifecycle_mark_count += 1
         action_execution = dispatch_recovery_action(decision, handlers=handlers)
         record = RepairRecoveryRecord(
             recovery_id=uuid4(),
@@ -2843,5 +2964,6 @@ def apply_repair_recovery_plan(
         "read_only": False,
         "source_evidence_modified": False,
         "automatic_reactivation": False,
+        "lifecycle_mark_count": lifecycle_mark_count,
         "action_results": action_results,
     }

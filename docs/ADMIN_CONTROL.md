@@ -53,7 +53,12 @@ it requires authority revalidation and never reactivates a candidate or treats
 an approval as surviving restart. The console's **Recovery** tab can load this
 plan explicitly alongside worker-failure evidence. Plan rows are inspection
 evidence only: the console does not acknowledge the plan, reactivate a
-candidate, retry work, or dispatch a recovery action.
+candidate, retry work, or dispatch a recovery action. When a plan is accepted
+through the engine API, Caretaker first writes immutable, content-addressed
+lifecycle marks for the interrupted attempt and each linked incident, episode,
+generation, validation, or stale-approval record. These marks make incomplete
+state durable across restart and are idempotent; they remain evidence only and
+do not mutate source records, grant authority, or reactivate a candidate.
 
 The application supervisor's worker-failure boundary emits a bounded failure
 envelope immediately, including in-flight work and queue context. It can record

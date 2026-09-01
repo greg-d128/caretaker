@@ -1452,7 +1452,13 @@ success/failure split for each interrupted attempt, while retaining the full
 projection for detail inspection. Automatic FunctionSlot reactivation remains
 future work.
 
-- mark interrupted incidents, generations, attempts, and validations incomplete;
+Applying a recovery plan now also writes immutable, content-addressed lifecycle
+marks for the interrupted attempt and each linked incident, episode, generation,
+validation, or stale-approval record. These marks are durable in both Repair
+stores and are written before any application-owned recovery callback. They are
+explicit recovery evidence, not mutations to source records and not authority
+to continue or reactivate a candidate; repeated application is idempotent.
+
 - reconstruct pending approvals or deliberately stale them for every restart path;
 - verify the current candidate source and policy/authority bindings again after restart;
 - recover probation and long-term observation state without double counting;

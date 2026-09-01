@@ -31,6 +31,7 @@ from .repair_recovery import (
     ComparisonWorkerAssignment,
     ComparisonWorkerComparisonReport,
     ComparisonWorkerResult,
+    RepairRecoveryLifecycleMark,
     RepairRecoveryRecord,
     WorkerFailureRecord,
     WorkerFailureRecoveryRecord,
@@ -74,6 +75,8 @@ class RepairStore(Protocol):
     def all_rollout_worker_acknowledgements(self) -> tuple[Any, ...]: ...
     def record_recovery(self, record: RepairRecoveryRecord) -> None: ...
     def all_recoveries(self) -> tuple[Any, ...]: ...
+    def record_recovery_lifecycle_mark(self, record: RepairRecoveryLifecycleMark) -> None: ...
+    def all_recovery_lifecycle_marks(self) -> tuple[Any, ...]: ...
     def record_worker_failure(self, record: WorkerFailureRecord) -> None: ...
     def all_worker_failures(self) -> tuple[Any, ...]: ...
     def record_worker_failure_recovery(self, record: WorkerFailureRecoveryRecord) -> None: ...
@@ -97,6 +100,7 @@ class InMemoryRepairStore:
         self.candidates: dict[UUID, RepairCandidate] = {}
         self.attempts: dict[UUID, RepairAttempt] = {}
         self.recoveries: dict[str, RepairRecoveryRecord] = {}
+        self.recovery_lifecycle_marks: dict[UUID, RepairRecoveryLifecycleMark] = {}
         self.worker_failures: dict[UUID, WorkerFailureRecord] = {}
         self.worker_failure_recoveries: dict[UUID, WorkerFailureRecoveryRecord] = {}
         self.worker_postmortem_conflicts: dict[UUID, WorkerPostmortemConflictReport] = {}
@@ -280,6 +284,36 @@ class InMemoryRepairStore:
         with self._lock:
             return tuple(sorted(self.recoveries.values(), key=lambda record: record.observed_at))
 
+    def record_recovery_lifecycle_mark(self, record: RepairRecoveryLifecycleMark) -> None:
+        with self._lock:
+            existing = self.recovery_lifecycle_marks.get(record.marker_id)
+            if existing is not None:
+                if (
+                    existing.attempt_id != record.attempt_id
+                    or existing.record_type != record.record_type
+                    or existing.record_id != record.record_id
+                    or existing.state != record.state
+                    or existing.last_milestone != record.last_milestone
+                    or existing.reason != record.reason
+                    or existing.source_sha256 != record.source_sha256
+                ):
+                    raise ValueError(
+                        "recovery lifecycle marker was already recorded with different evidence"
+                    )
+                return
+            self.recovery_lifecycle_marks[record.marker_id] = record
+
+    def all_recovery_lifecycle_marks(
+        self,
+    ) -> tuple[RepairRecoveryLifecycleMark, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    self.recovery_lifecycle_marks.values(),
+                    key=lambda record: record.observed_at,
+                )
+            )
+
     def record_worker_failure(self, record: WorkerFailureRecord) -> None:
         with self._lock:
             self.worker_failures[record.failure_id] = record
@@ -392,6 +426,7 @@ class SQLiteRepairStore:
         "repair_rollout_worker_acknowledgements": "acknowledgement_id",
         "attempts": "attempt_id",
         "recovery_records": "recovery_id",
+        "recovery_lifecycle_marks": "marker_id",
         "worker_failure_records": "failure_id",
         "worker_failure_recoveries": "recovery_id",
         "worker_postmortem_conflicts": "report_id",
@@ -424,7 +459,7 @@ class SQLiteRepairStore:
                 "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
             )
             connection.execute(
-                "INSERT OR REPLACE INTO caretaker_store_metadata(key, value) VALUES ('schema_version', '5')"
+                "INSERT OR REPLACE INTO caretaker_store_metadata(key, value) VALUES ('schema_version', '6')"
             )
             for table in self._TABLES:
                 connection.execute(
@@ -631,6 +666,44 @@ class SQLiteRepairStore:
 
     def all_recoveries(self) -> tuple[Mapping[str, Any], ...]:
         return tuple(self.query_records("recovery_records", limit=10000))
+
+    def record_recovery_lifecycle_mark(self, record: RepairRecoveryLifecycleMark) -> None:
+        payload = json.dumps(_jsonable(record), sort_keys=True, separators=(",", ":"))
+        with self._lock, closing(self._connect()) as connection:
+            existing = connection.execute(
+                "SELECT payload FROM recovery_lifecycle_marks WHERE record_id = ?",
+                (str(record.marker_id),),
+            ).fetchone()
+            if existing is not None:
+                current = json.loads(existing[0])
+                stable_fields = (
+                    "attempt_id",
+                    "record_type",
+                    "record_id",
+                    "state",
+                    "last_milestone",
+                    "reason",
+                    "source_sha256",
+                    "schema_version",
+                )
+                if any(current.get(field) != json.loads(payload).get(field) for field in stable_fields):
+                    raise ValueError(
+                        "recovery lifecycle marker was already recorded with different evidence"
+                    )
+                return
+            connection.execute(
+                "INSERT INTO recovery_lifecycle_marks(record_id, target_id, created_at, payload) VALUES (?, ?, ?, ?)",
+                (
+                    str(record.marker_id),
+                    None,
+                    record.observed_at.isoformat(),
+                    payload,
+                ),
+            )
+            connection.commit()
+
+    def all_recovery_lifecycle_marks(self) -> tuple[Mapping[str, Any], ...]:
+        return tuple(self.query_records("recovery_lifecycle_marks", limit=10000))
 
     def record_worker_failure(self, record: WorkerFailureRecord) -> None:
         self._write("worker_failure_records", record, target_id=None)

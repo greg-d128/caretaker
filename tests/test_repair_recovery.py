@@ -310,10 +310,10 @@ def test_recovery_plan_projects_linked_lifecycle_records_without_mutating_them()
 
     plan = build_repair_recovery_plan(store)
 
-    assert plan["incomplete_lifecycle_record_count"] == 4
+    assert plan["incomplete_lifecycle_record_count"] == 5
     records = plan["decisions"][0]["incomplete_records"]
     assert {item["record_type"] for item in records} == {
-        "incident", "episode", "generation", "validation",
+        "attempt", "incident", "episode", "generation", "validation",
     }
     assert next(item for item in records if item["record_type"] == "incident")["state"] == "INCOMPLETE_REPAIR"
     assert next(item for item in records if item["record_type"] == "validation")["state"] == "INCOMPLETE"
@@ -323,8 +323,60 @@ def test_recovery_plan_projects_linked_lifecycle_records_without_mutating_them()
     applied = apply_repair_recovery_plan(store, plan)
 
     assert applied["applied_count"] == 1
+    assert applied["lifecycle_mark_count"] == 5
     recovery = store.all_recoveries()[0]
-    assert len(recovery.incomplete_records) == 4
+    assert len(recovery.incomplete_records) == 5
+    marks = store.all_recovery_lifecycle_marks()
+    assert len(marks) == 5
+    assert {mark.record_type for mark in marks} == {
+        "attempt", "incident", "episode", "generation", "validation",
+    }
+    assert all(mark.state in {"INCOMPLETE_REPAIR", "INCOMPLETE"} for mark in marks)
+
+
+@pytest.mark.parametrize("store_kind", ["memory", "sqlite"])
+def test_recovery_lifecycle_marks_are_durable_and_idempotent(
+    tmp_path: Path,
+    store_kind: str,
+) -> None:
+    path = tmp_path / "lifecycle.sqlite"
+    store = (
+        InMemoryRepairStore()
+        if store_kind == "memory"
+        else SQLiteRepairStore(path)
+    )
+    interrupted = _attempt(
+        target_id="app:charge",
+        completed=False,
+        outcome=RepairAttemptOutcome.PENDING,
+    )
+    store.record_attempt(interrupted)
+    plan = build_repair_recovery_plan(store)
+
+    first = apply_repair_recovery_plan(store, plan)
+    repeated = apply_repair_recovery_plan(store, plan)
+
+    assert first["lifecycle_mark_count"] == 4
+    assert repeated["lifecycle_mark_count"] == 0
+    marks = store.all_recovery_lifecycle_marks()
+    assert len(marks) == 4
+    marker_ids = {
+        mark["marker_id"] if isinstance(mark, dict) else str(mark.marker_id)
+        for mark in marks
+    }
+    assert len(marker_ids) == 4
+    assert all(
+        len(mark["source_sha256"] if isinstance(mark, dict) else mark.source_sha256) == 64
+        for mark in marks
+    )
+
+    if store_kind == "sqlite":
+        reopened = SQLiteRepairStore(path)
+        reopened_marks = reopened.all_recovery_lifecycle_marks()
+        assert len(reopened_marks) == 4
+        assert {
+            mark["marker_id"] for mark in reopened_marks
+        } == marker_ids
 
 
 def test_recovery_candidate_binding_requires_live_context_and_rejects_mismatch() -> None:
