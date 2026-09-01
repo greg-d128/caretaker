@@ -556,6 +556,7 @@ def _human_readable(policy: RepairPolicy) -> str:
             f"  shadow sample: {policy.rollout.routing.shadow_sample_percentage}%",
             f"  canary percentage: {policy.rollout.routing.canary_percentage}%",
             f"  active candidate percentage: {policy.rollout.routing.active_candidate_percentage}%",
+            f"  candidate failure action: {policy.rollout.candidate_failure_action.value}",
             f"  operator routing changes: {policy.rollout.allow_operator_routing_changes}",
             f"  operator routing increases: {policy.rollout.allow_operator_routing_increases}",
             f"  readiness required for routing increase: {policy.rollout.require_readiness_for_routing_increase}",

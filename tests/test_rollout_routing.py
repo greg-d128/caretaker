@@ -18,6 +18,7 @@ from caretaker import (
     RepairRolloutLedger,
     RepairRolloutPolicy,
     RepairRolloutStage,
+    RolloutFailureAction,
     RepairPolicy,
     RolloutReadinessRequirements,
     RolloutRoutingPolicy,
@@ -27,6 +28,7 @@ from caretaker import (
     execute_rollout,
     execute_slot_rollout,
     repair,
+    summarize_rollout_executions,
 )
 from caretaker.domain import ReplaySafety, SideEffectClass
 from caretaker.observation import ObservationManager
@@ -279,6 +281,115 @@ def test_execute_rollout_zero_canary_percentage_keeps_deployed_path() -> None:
     assert result.candidate_executed is False
     assert result.candidate_authoritative is False
     assert calls == ["deployed"]
+
+
+def test_execute_rollout_can_explicitly_fallback_to_deployed_for_pure_candidate() -> None:
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            candidate_failure_action=RolloutFailureAction.FALLBACK_TO_DEPLOYED,
+            routing=RolloutRoutingPolicy(canary_percentage=100),
+        )
+    )
+    record = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, record, RepairRolloutStage.CANARY)
+    events: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def candidate(value: int) -> int:
+        raise RuntimeError(f"candidate secret: {value}")
+
+    result = execute_rollout(
+        record,
+        policy=ledger.policy,
+        policy_fingerprint="policy-hash",
+        routing_scope="tenant",
+        routing_key="tenant-1",
+        deployed=lambda value: value,
+        candidate=candidate,
+        args=(4,),
+        kwargs={},
+        contract=_pure_contract(),
+        effect_observation=EffectObservation(complete=True),
+        audit_event=lambda *args, **kwargs: events.append((args, kwargs)),
+    )
+
+    assert result.result == 4
+    assert result.fallback_used is True
+    assert result.candidate_authoritative is False
+    assert result.candidate_succeeded is False
+    assert result.execution_observation is not None
+    assert result.execution_observation.fallback_used is True
+    assert result.execution_observation.exception_type == "RuntimeError"
+    assert result.execution_observation.authoritative_implementation.value == "deployed"
+    assert result.execution_observation.candidate_authoritative is False
+    summary = summarize_rollout_executions(
+        record,
+        [result.execution_observation],
+        policy_fingerprint="policy-hash",
+    )
+    assert summary.observation_count == 1
+    assert summary.fallback_count == 1
+    assert any(
+        kwargs["outcome"]["state"] == "FALLBACK_SUCCEEDED"
+        for _, kwargs in events
+    )
+
+
+def test_rollout_fallback_rejects_non_pure_contract() -> None:
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            candidate_failure_action=RolloutFailureAction.FALLBACK_TO_DEPLOYED,
+            routing=RolloutRoutingPolicy(canary_percentage=100),
+        )
+    )
+    record = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, record, RepairRolloutStage.CANARY)
+
+    with pytest.raises(RepairRolloutExecutionError, match="PURE"):
+        execute_rollout(
+            record,
+            policy=ledger.policy,
+            policy_fingerprint="policy-hash",
+            routing_scope="tenant",
+            routing_key="tenant-1",
+            deployed=lambda value: value,
+            candidate=lambda value: (_ for _ in ()).throw(RuntimeError("failed")),
+            args=(4,),
+            kwargs={},
+            contract=FunctionExecutionContract(side_effects=SideEffectClass.READ_ONLY),
+            effect_observation=EffectObservation(complete=True),
+        )
+
+
+def test_rollout_fallback_rejects_observed_external_effects() -> None:
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            candidate_failure_action=RolloutFailureAction.FALLBACK_TO_DEPLOYED,
+            routing=RolloutRoutingPolicy(canary_percentage=100),
+        )
+    )
+    record = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, record, RepairRolloutStage.CANARY)
+
+    with pytest.raises(RepairRolloutExecutionError, match="externally visible effects"):
+        execute_rollout(
+            record,
+            policy=ledger.policy,
+            policy_fingerprint="policy-hash",
+            routing_scope="tenant",
+            routing_key="tenant-1",
+            deployed=lambda value: value,
+            candidate=lambda value: (_ for _ in ()).throw(RuntimeError("failed")),
+            args=(4,),
+            kwargs={},
+            contract=_pure_contract(),
+            effect_observation=EffectObservation(
+                complete=True,
+                externally_visible_categories=("network",),
+            ),
+        )
 
 
 def test_execute_slot_rollout_binds_previous_and_current_versions() -> None:
@@ -647,6 +758,73 @@ def test_execute_slot_rollout_applies_existing_failure_rollback_policy() -> None
     assert failure.counted_as_failure is True
     assert failure.comparison["rolled_back"] is True
     assert failure.rollout_id == record.rollout_id
+
+
+def test_execute_slot_rollout_records_allowed_fallback_as_candidate_failure() -> None:
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            candidate_failure_action=RolloutFailureAction.FALLBACK_TO_DEPLOYED,
+            routing=RolloutRoutingPolicy(canary_percentage=100),
+        )
+    )
+    candidate_id = uuid4()
+    slot = FunctionSlot(
+        target_id="example.target",
+        original=lambda value: value,
+        original_source_hash="base-hash",
+        execution_contract=_pure_contract(),
+    )
+    lease = slot.begin_repair()
+
+    def failing_candidate(value: int) -> int:
+        raise ValueError(f"bad candidate: {value}")
+
+    slot.activate(
+        lease=lease,
+        implementation=failing_candidate,
+        source="candidate-source",
+        source_hash="candidate-hash",
+        repair_attempt_id=uuid4(),
+        candidate_id=candidate_id,
+    )
+    record = ledger.create(
+        target_id="example.target",
+        incident_id=uuid4(),
+        candidate_id=candidate_id,
+        candidate_source_hash="candidate-hash",
+        base_source_hash="base-hash",
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        proposed_by="advisory-engine",
+    )
+    record = _advance(ledger, record, RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, record, RepairRolloutStage.CANARY)
+    store = InMemoryRepairStore()
+
+    result = execute_slot_rollout(
+        slot,
+        record,
+        policy=ledger.policy,
+        policy_fingerprint="policy-hash",
+        routing_scope="tenant",
+        routing_key="tenant-1",
+        args=(4,),
+        kwargs={},
+        effect_observation=EffectObservation(complete=True),
+        observation_manager=ObservationManager(store),
+        observation_policy=ObservationPolicy(rollback_during_probation=False),
+        call_id=uuid4(),
+    )
+
+    assert result.result == 4
+    assert result.fallback_used is True
+    assert slot.observation() is not None
+    assert slot.observation().successful_executions == 0
+    assert slot.observation().failed_executions == 1
+    assert len(store.observations) == 1
+    failure = next(iter(store.observations.values()))
+    assert failure.counted_as_failure is True
 
 
 def test_canary_and_active_field_repair_can_select_candidate_explicitly() -> None:

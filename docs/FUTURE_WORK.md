@@ -993,7 +993,7 @@ Future work may export a signed review bundle containing a unified diff, origina
 
 ## Policy-controlled Repair rollout, mirroring, and shadow execution
 
-**Status: Design clarified; effect-aware contract, evidence gate, deterministic routing decision, registry-aware FunctionSlot invocation bridge, and explicit application-owned raw-result callable binding implemented; fleet-wide routing, implicit arbitrary-callable replacement, and deployment-owned orchestration remain future work.**
+**Status: Design clarified; effect-aware contract, evidence gate, deterministic routing decision, registry-aware FunctionSlot invocation bridge, explicit application-owned raw-result callable binding, and conservative pure-only candidate-failure fallback implemented; richer fallback policy, fleet-wide routing, implicit arbitrary-callable replacement, and deployment-owned orchestration remain future work.**
 
 Caretaker currently supports candidate probation and a narrow
 `PURE_FUNCTION` differential-execution mode. For explicitly confirmed pure
@@ -1044,7 +1044,11 @@ fleet.
 candidate and its preceding deployed version without mutating slot state. When
 the application supplies its `ObservationManager`, authoritative candidate
 calls are recorded through the existing acceptance and rollback policy, while
-shadow calls remain excluded. The supervised application also exposes a bounded,
+shadow calls remain excluded. Candidate failure handling defaults to raising;
+an explicit policy may return the deployed result after a failed candidate only
+for a `PURE` contract with no observed externally visible effects. That fallback
+is retained as failure evidence and does not advance candidate acceptance. The
+supervised application also exposes a bounded,
 read-only `repair-rollout-status` projection containing lifecycle records,
 transition history, and integrity-checked execution summaries. Stale or
 unavailable summaries remain visibly unresolved and cannot advance authority.

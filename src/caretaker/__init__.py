@@ -284,6 +284,7 @@ from .repair_recovery import (
 )
 from .repair_rollout import (
     RepairAuthoritativeImplementation,
+    RolloutFailureAction,
     RepairReleaseKind,
     RepairRolloutAuthority,
     RepairRolloutError,
@@ -682,6 +683,7 @@ __all__ = [
     "verify_comparison_worker_assignment",
     "verify_comparison_worker_result",
     "RepairAuthoritativeImplementation",
+    "RolloutFailureAction",
     "RepairReleaseKind",
     "RepairRolloutAuthority",
     "RepairRolloutError",

@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID, uuid4
 
 from .contracts import Comparator
-from .domain import RepairEvent
+from .domain import RepairEvent, SideEffectClass
 from .execution import EffectObservation, FunctionExecutionContract
 from .shadow import ShadowExecutionAdapter, ShadowExecutionResult, shadow_execute
 
@@ -63,6 +63,13 @@ class RepairReleaseKind(str, Enum):
 class RepairAuthoritativeImplementation(str, Enum):
     DEPLOYED = "deployed"
     CANDIDATE = "candidate"
+
+
+class RolloutFailureAction(str, Enum):
+    """Policy response when a candidate-authoritative call fails."""
+
+    RAISE = "raise"
+    FALLBACK_TO_DEPLOYED = "fallback-to-deployed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +181,7 @@ class RepairRolloutPolicy:
     allow_operator_routing_changes: bool = False
     allow_operator_routing_increases: bool = False
     require_readiness_for_routing_increase: bool = True
+    candidate_failure_action: RolloutFailureAction = RolloutFailureAction.RAISE
     routing: RolloutRoutingPolicy = field(default_factory=RolloutRoutingPolicy)
     readiness: RolloutReadinessRequirements = field(
         default_factory=RolloutReadinessRequirements
@@ -197,6 +205,21 @@ class RepairRolloutPolicy:
                 raise ValueError(f"rollout.{name} must be a boolean")
         if not isinstance(self.routing, RolloutRoutingPolicy):
             raise ValueError("rollout.routing must be a RolloutRoutingPolicy")
+        if isinstance(self.candidate_failure_action, str):
+            try:
+                object.__setattr__(
+                    self,
+                    "candidate_failure_action",
+                    RolloutFailureAction(self.candidate_failure_action),
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "rollout.candidate_failure_action is unsupported"
+                ) from exc
+        if not isinstance(self.candidate_failure_action, RolloutFailureAction):
+            raise ValueError(
+                "rollout.candidate_failure_action must be a RolloutFailureAction"
+            )
         if not isinstance(self.readiness, RolloutReadinessRequirements):
             raise ValueError(
                 "rollout.readiness must be a RolloutReadinessRequirements"
@@ -286,6 +309,9 @@ class RolloutExecutionResult:
     candidate_authoritative: bool
     shadow_result: ShadowExecutionResult | None = None
     execution_observation: "RolloutExecutionObservation | None" = None
+    candidate_succeeded: bool | None = None
+    fallback_used: bool = False
+    candidate_failure_type: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,6 +340,7 @@ class RolloutExecutionObservation:
     policy_fingerprint: str
     created_at: datetime
     content_hash: str
+    fallback_used: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -335,6 +362,7 @@ class RolloutExecutionSummary:
     shadow_equivalent_count: int
     shadow_mismatch_count: int
     shadow_inconclusive_count: int
+    fallback_count: int
     invalid_observation_count: int
     stage_counts: Mapping[str, int]
     evidence_hash: str
@@ -383,7 +411,37 @@ def _execution_observation_payload(
         "exception_type": observation.exception_type,
         "decision_hash": observation.decision_hash,
         "policy_fingerprint": observation.policy_fingerprint,
+        "fallback_used": observation.fallback_used,
     }
+
+
+def _legacy_execution_observation_payload(
+    observation: RolloutExecutionObservation,
+) -> dict[str, Any]:
+    """Return the pre-fallback payload used by older stored observations.
+
+    Fallback evidence was added after rollout observations were already
+    persisted.  Accepting the old payload only for records that cannot claim
+    a fallback preserves those records without weakening validation of new
+    fallback observations.
+    """
+
+    payload = _execution_observation_payload(observation)
+    payload.pop("fallback_used")
+    return payload
+
+
+def _valid_execution_observation_content_hash(
+    observation: RolloutExecutionObservation,
+) -> bool:
+    current_hash = _digest(_execution_observation_payload(observation))
+    if observation.content_hash == current_hash:
+        return True
+    return (
+        not observation.fallback_used
+        and observation.content_hash
+        == _digest(_legacy_execution_observation_payload(observation))
+    )
 
 
 def _worker_acknowledgement_payload(
@@ -1836,6 +1894,7 @@ def execute_rollout(
         effect_observation=effect_observation,
         isolation_adapter=isolation_adapter,
         comparator=comparator,
+        failure_action=policy.candidate_failure_action,
         audit_event=audit_event,
         execution_store=execution_store,
         execution_id=execution_id,
@@ -1876,9 +1935,10 @@ def execute_slot_rollout(
     candidate.  Observation accounting is opt-in. When an
     ``ObservationManager``, its policy, and a call ID are supplied, only
     authoritative candidate calls are counted. Candidate failures are passed
-    to the manager's existing policy-driven rollback logic and then re-raised;
-    there is no silent fallback. Shadow executions are never counted as
-    acceptance observations.
+    to the manager's existing policy-driven rollback logic. An explicitly
+    configured pure-only fallback may return the deployed result, but the
+    candidate failure is still recorded. Shadow executions are never counted
+    as acceptance observations.
     """
 
     if record.stage not in {
@@ -1958,6 +2018,7 @@ def execute_slot_rollout(
             effect_observation=effect_observation,
             isolation_adapter=isolation_adapter,
             comparator=comparator,
+            failure_action=policy.candidate_failure_action,
             audit_event=audit_event,
             execution_store=execution_store,
             execution_id=execution_id,
@@ -1979,16 +2040,28 @@ def execute_slot_rollout(
                 raise exc from accounting_error
         raise
     if decision.candidate_authoritative and observation_manager is not None:
-        observation_manager.record_success(
-            slot=slot,
-            call_id=call_id,
-            policy=observation_policy,
-            output=result.result,
-            mode=decision.strategy,
-            rollout_id=record.rollout_id,
-            routing_decision_hash=decision.decision_hash,
-            audit_event=audit_event,
-        )
+        if result.fallback_used:
+            observation_manager.record_failure(
+                slot=slot,
+                call_id=call_id,
+                exception=RuntimeError("candidate execution failed before deployed fallback"),
+                policy=observation_policy,
+                mode=decision.strategy,
+                rollout_id=record.rollout_id,
+                routing_decision_hash=decision.decision_hash,
+                audit_event=audit_event,
+            )
+        else:
+            observation_manager.record_success(
+                slot=slot,
+                call_id=call_id,
+                policy=observation_policy,
+                output=result.result,
+                mode=decision.strategy,
+                rollout_id=record.rollout_id,
+                routing_decision_hash=decision.decision_hash,
+                audit_event=audit_event,
+            )
     return result
 
 
@@ -2026,6 +2099,7 @@ def _execute_and_record(
     effect_observation: EffectObservation | None,
     isolation_adapter: ShadowExecutionAdapter | None,
     comparator: Comparator | None,
+    failure_action: RolloutFailureAction,
     audit_event: Callable[..., Any] | None,
     execution_store: RepairRolloutStore | None,
     execution_id: UUID | None,
@@ -2041,6 +2115,7 @@ def _execute_and_record(
             effect_observation=effect_observation,
             isolation_adapter=isolation_adapter,
             comparator=comparator,
+            failure_action=failure_action,
             audit_event=audit_event,
         )
     except BaseException as exc:
@@ -2077,7 +2152,9 @@ def _build_execution_observation(
         shadow.candidate_succeeded
         if shadow is not None
         else (
-            True
+            result.candidate_succeeded
+            if result is not None and result.candidate_succeeded is not None
+            else True
             if result is not None and decision.candidate_authoritative
             else False
             if error is not None and decision.candidate_authoritative
@@ -2087,25 +2164,41 @@ def _build_execution_observation(
     original_succeeded = shadow.original_succeeded if shadow is not None else None
     equivalent = shadow.equivalent if shadow is not None else None
     execution_state = "COMPLETED" if result is not None else "FAILED"
+    candidate_authoritative = (
+        result.candidate_authoritative
+        if result is not None
+        else decision.candidate_authoritative
+    )
+    authoritative_implementation = (
+        RepairAuthoritativeImplementation.DEPLOYED.value
+        if result is not None and result.fallback_used
+        else decision.authoritative_implementation.value
+    )
+    exception_type = (
+        result.candidate_failure_type
+        if result is not None and result.candidate_failure_type
+        else type(error).__name__ if error is not None else None
+    )
+    observation_id = execution_id or uuid4()
     content = {
-        "observation_id": str(execution_id or uuid4()),
+        "observation_id": str(observation_id),
         "rollout_id": str(decision.rollout_id),
         "target_id": decision.target_id,
         "candidate_id": str(decision.candidate_id),
         "stage": decision.stage.value,
         "strategy": decision.strategy,
-        "authoritative_implementation": decision.authoritative_implementation.value,
+        "authoritative_implementation": authoritative_implementation,
         "candidate_executed": candidate_executed,
-        "candidate_authoritative": decision.candidate_authoritative,
+        "candidate_authoritative": candidate_authoritative,
         "original_succeeded": original_succeeded,
         "candidate_succeeded": candidate_succeeded,
         "equivalent": equivalent,
         "execution_state": execution_state,
-        "exception_type": type(error).__name__ if error is not None else None,
+        "exception_type": exception_type,
         "decision_hash": decision.decision_hash,
         "policy_fingerprint": decision.policy_fingerprint,
+        "fallback_used": bool(result.fallback_used) if result is not None else False,
     }
-    observation_id = execution_id or uuid4()
     content["observation_id"] = str(observation_id)
     return RolloutExecutionObservation(
         observation_id=observation_id,
@@ -2114,18 +2207,21 @@ def _build_execution_observation(
         candidate_id=decision.candidate_id,
         stage=decision.stage,
         strategy=decision.strategy,
-        authoritative_implementation=decision.authoritative_implementation,
+        authoritative_implementation=RepairAuthoritativeImplementation(
+            authoritative_implementation
+        ),
         candidate_executed=bool(candidate_executed),
-        candidate_authoritative=decision.candidate_authoritative,
+        candidate_authoritative=candidate_authoritative,
         original_succeeded=original_succeeded,
         candidate_succeeded=candidate_succeeded,
         equivalent=equivalent,
         execution_state=execution_state,
-        exception_type=type(error).__name__ if error is not None else None,
+        exception_type=exception_type,
         decision_hash=decision.decision_hash,
         policy_fingerprint=decision.policy_fingerprint,
         created_at=_utcnow(),
         content_hash=_digest(content),
+        fallback_used=bool(result.fallback_used) if result is not None else False,
     )
 
 
@@ -2168,6 +2264,7 @@ def summarize_rollout_executions(
     shadow_equivalent_count = 0
     shadow_mismatch_count = 0
     shadow_inconclusive_count = 0
+    fallback_count = 0
     invalid_count = 0
     for raw in observations:
         observation = _coerce_execution_observation(raw)
@@ -2180,7 +2277,7 @@ def summarize_rollout_executions(
             or observation.candidate_id != record.candidate_id
             or observation.policy_fingerprint != policy_fingerprint
             or observation.policy_fingerprint != record.policy_fingerprint
-            or observation.content_hash != _digest(_execution_observation_payload(observation))
+            or not _valid_execution_observation_content_hash(observation)
         ):
             invalid_count += 1
             continue
@@ -2198,6 +2295,8 @@ def summarize_rollout_executions(
             candidate_success_count += 1
         elif observation.candidate_succeeded is False:
             candidate_failure_count += 1
+        if observation.fallback_used:
+            fallback_count += 1
         if observation.strategy == "shadow":
             shadow_count += 1
             if observation.equivalent is True:
@@ -2222,6 +2321,7 @@ def summarize_rollout_executions(
         "shadow_equivalent_count": shadow_equivalent_count,
         "shadow_mismatch_count": shadow_mismatch_count,
         "shadow_inconclusive_count": shadow_inconclusive_count,
+        "fallback_count": fallback_count,
         "invalid_observation_count": invalid_count,
         "stage_counts": dict(sorted(stage_counts.items())),
     }
@@ -2241,6 +2341,7 @@ def summarize_rollout_executions(
         shadow_equivalent_count=shadow_equivalent_count,
         shadow_mismatch_count=shadow_mismatch_count,
         shadow_inconclusive_count=shadow_inconclusive_count,
+        fallback_count=fallback_count,
         invalid_observation_count=invalid_count,
         stage_counts=dict(sorted(stage_counts.items())),
         evidence_hash=_digest(summary_payload),
@@ -2289,6 +2390,7 @@ def _coerce_execution_observation(
             policy_fingerprint=str(raw["policy_fingerprint"]),
             created_at=datetime.fromisoformat(str(raw["created_at"])),
             content_hash=str(raw["content_hash"]),
+            fallback_used=bool(raw.get("fallback_used", False)),
         )
     except (KeyError, TypeError, ValueError):
         return None
@@ -2362,6 +2464,7 @@ def _execute_rollout_decision(
     effect_observation: EffectObservation | None,
     isolation_adapter: ShadowExecutionAdapter | None,
     comparator: Comparator | None,
+    failure_action: RolloutFailureAction,
     audit_event: Callable[..., Any] | None,
 ) -> RolloutExecutionResult:
     if decision.strategy == "shadow":
@@ -2407,14 +2510,47 @@ def _execute_rollout_decision(
             shadow_result=shadow,
         )
     if decision.candidate_authoritative:
-        return _invoke_rollout_implementation(
-            decision,
-            implementation=candidate,
-            args=args,
-            kwargs=kwargs,
-            candidate_executed=True,
-            audit_event=audit_event,
-        )
+        try:
+            return _invoke_rollout_implementation(
+                decision,
+                implementation=candidate,
+                args=args,
+                kwargs=kwargs,
+                candidate_executed=True,
+                audit_event=audit_event,
+            )
+        except BaseException as candidate_error:
+            if failure_action is not RolloutFailureAction.FALLBACK_TO_DEPLOYED:
+                raise
+            if contract.side_effects is not SideEffectClass.PURE:
+                raise RepairRolloutExecutionError(
+                    "fallback to deployed code requires a PURE execution contract"
+                ) from candidate_error
+            if (
+                effect_observation is not None
+                and effect_observation.externally_visible_categories
+            ):
+                raise RepairRolloutExecutionError(
+                    "fallback to deployed code is blocked by observed externally visible effects"
+                ) from candidate_error
+            fallback = _invoke_rollout_implementation(
+                decision,
+                implementation=deployed,
+                args=args,
+                kwargs=kwargs,
+                candidate_executed=True,
+                candidate_authoritative=False,
+                implementation_label=RepairAuthoritativeImplementation.DEPLOYED.value,
+                audit_state="FALLBACK_SUCCEEDED",
+                audit_event=audit_event,
+            )
+            return replace(
+                fallback,
+                candidate_authoritative=False,
+                candidate_succeeded=False,
+                fallback_used=True,
+                candidate_failure_type=type(candidate_error).__name__[:128],
+            )
     return _invoke_rollout_implementation(
         decision,
         implementation=deployed,
@@ -2433,8 +2569,15 @@ def _invoke_rollout_implementation(
     kwargs: dict[str, Any],
     candidate_executed: bool,
     audit_event: Callable[..., Any] | None,
+    candidate_authoritative: bool | None = None,
+    implementation_label: str | None = None,
+    audit_state: str = "COMPLETED",
 ) -> RolloutExecutionResult:
-    candidate_authoritative = decision.candidate_authoritative
+    actual_candidate_authoritative = (
+        decision.candidate_authoritative
+        if candidate_authoritative is None
+        else candidate_authoritative
+    )
     try:
         result = implementation(*args, **kwargs)
     except BaseException as exc:
@@ -2443,6 +2586,8 @@ def _invoke_rollout_implementation(
                 decision,
                 state="FAILED",
                 candidate_executed=candidate_executed,
+                candidate_authoritative=actual_candidate_authoritative,
+                implementation=implementation_label,
                 exception=exc,
                 audit_event=audit_event,
             )
@@ -2450,15 +2595,18 @@ def _invoke_rollout_implementation(
     if audit_event is not None:
         _emit_rollout_execution_outcome(
             decision,
-            state="COMPLETED",
+            state=audit_state,
             candidate_executed=candidate_executed,
+            candidate_authoritative=actual_candidate_authoritative,
+            implementation=implementation_label,
             audit_event=audit_event,
         )
     return RolloutExecutionResult(
         result=result,
         decision=decision,
         candidate_executed=candidate_executed,
-        candidate_authoritative=candidate_authoritative,
+        candidate_authoritative=actual_candidate_authoritative,
+        candidate_succeeded=(True if actual_candidate_authoritative else None),
     )
 
 
@@ -2467,6 +2615,8 @@ def _emit_rollout_execution_outcome(
     *,
     state: str,
     candidate_executed: bool,
+    candidate_authoritative: bool,
+    implementation: str | None = None,
     audit_event: Callable[..., Any],
     exception: BaseException | None = None,
 ) -> None:
@@ -2485,9 +2635,9 @@ def _emit_rollout_execution_outcome(
         policy={"fingerprint": decision.policy_fingerprint},
         outcome={
             "state": state,
-            "implementation": decision.authoritative_implementation.value,
+            "implementation": implementation or decision.authoritative_implementation.value,
             "candidate_executed": candidate_executed,
-            "candidate_authoritative": decision.candidate_authoritative,
+            "candidate_authoritative": candidate_authoritative,
         },
         details=details,
     )

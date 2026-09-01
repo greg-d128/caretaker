@@ -262,8 +262,14 @@ owns those actions.
 When supplied with the existing `ObservationManager`, `execute_slot_rollout()`
 records authoritative candidate outcomes using the rollout ID and routing
 decision hash. Candidate failures follow the configured observation rollback
-policy and are re-raised. Shadow outcomes remain non-authoritative evidence and
-are not counted toward acceptance.
+policy. By default they are re-raised. A policy may explicitly select
+`candidate_failure_action="fallback-to-deployed"`; this is allowed only when
+the target declares a `PURE` execution contract and supplied effect evidence
+does not report externally visible effects. The candidate failure and deployed
+fallback are both recorded, and the failure still goes through observation
+rollback/accounting. There is no silent fallback for side-effecting or
+incompletely trusted execution. Shadow outcomes remain non-authoritative
+evidence and are not counted toward acceptance.
 
 For applications using a `RepairEngine`, `engine.invoke_rollout()` is the
 registry-aware invocation boundary:
@@ -364,6 +370,10 @@ allowed only for an operator, active revocation requires a new incident, and
 permanent promotion requires deployment authority. The routing decision itself
 is implemented, while side-effect isolation and supervisor-wide traffic
 coordination remain separate capabilities and are not implied by this ledger.
+Candidate failures default to `raise`. The explicit
+`fallback-to-deployed` option is a conservative application-level escape hatch,
+restricted to a `PURE` execution contract with no observed externally visible
+effects; it does not grant authority, change policy, or advance rollout state.
 The execution-contract/effect-evidence layer does
 provide a partial safety signal: a rollout adapter can pass a Guard behavior
 capture through `EffectObservation.from_behavior_capture()` before requesting
