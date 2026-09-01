@@ -1604,7 +1604,8 @@ cannot affect policy or authority.
 **Status: General future work.**
 
 - Wider audit-event normalization and platform-specific tests.
-- Sensitive-file to outbound-network sequence analysis.
+- Stronger sensitive-file to outbound-network analysis across native code,
+  subprocesses, and operating-system event sources.
 - Persistent aggregation rollups and database migrations.
 - Full old-versus-new dependency environment runner.
 - Native-extension and operating-system event attribution.

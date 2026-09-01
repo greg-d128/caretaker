@@ -638,6 +638,7 @@ class OperatorRuntimeRegistry:
             "guard-summary",
             "guard-events",
             "guard-deviations",
+            "guard-sensitive-file-network-sequences",
             "guard-inspections",
             "guard-baseline-accept",
             "guard-assess",
@@ -658,6 +659,20 @@ class OperatorRuntimeRegistry:
                     "ok": True,
                     "target": target_id,
                     "deviations": _jsonable(guard.recent_deviations(target_id, limit=limit)),
+                }
+            if command == "guard-sensitive-file-network-sequences":
+                return {
+                    "ok": True,
+                    "target": target_id,
+                    "sequences": _jsonable(
+                        guard.sensitive_file_network_sequences(
+                            target_id,
+                            limit=limit,
+                            window_seconds=float(request.get("window_seconds", 60.0)),
+                        )
+                    ),
+                    "evidence_only": True,
+                    "absence_claim": False,
                 }
             if command == "guard-inspections":
                 return {

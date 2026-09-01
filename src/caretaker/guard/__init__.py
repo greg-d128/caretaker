@@ -29,6 +29,7 @@ _LAZY = {
     "BaselineManager": ("analytics", "BaselineManager"),
     "BehaviorAggregator": ("analytics", "BehaviorAggregator"),
     "DeviationDetector": ("analytics", "DeviationDetector"),
+    "sensitive_file_network_sequences": ("analytics", "sensitive_file_network_sequences"),
     "StaticCandidateBehaviorAnalyzer": ("analytics", "StaticCandidateBehaviorAnalyzer"),
     "AuditEventCollector": ("collectors", "AuditEventCollector"),
     "DependencyCollector": ("collectors", "DependencyCollector"),

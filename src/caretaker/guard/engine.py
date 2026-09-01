@@ -59,6 +59,7 @@ from .analytics import (
     DeviationDetector,
     StaticCandidateBehaviorAnalyzer,
     evidence_hash,
+    sensitive_file_network_sequences as correlate_sensitive_file_network_sequences,
 )
 from .collectors import AuditEventCollector, DependencyCollector
 from .facade import GuardFacade
@@ -271,6 +272,23 @@ class GuardEngine(GuardFacade):
 
     def recent_events(self, target_id: str, *, limit: int = 100) -> tuple[object, ...]:
         return tuple(self.store.recent_behavior_events(target_id=target_id, limit=limit))
+
+    def sensitive_file_network_sequences(
+        self,
+        target_id: str,
+        *,
+        limit: int = 100,
+        window_seconds: float = 60.0,
+    ) -> tuple[dict[str, Any], ...]:
+        """Return bounded sensitive-file/outbound-network evidence for a target."""
+        if target_id not in self._targets:
+            return ()
+        bounded_limit = max(1, min(int(limit), 500))
+        return correlate_sensitive_file_network_sequences(
+            self.recent_events(target_id, limit=bounded_limit),
+            maximum=min(bounded_limit, 128),
+            window_seconds=window_seconds,
+        )
 
     def recent_deviations(self, target_id: str, *, limit: int = 50) -> tuple[BehaviorDeviation, ...]:
         with self._lock:

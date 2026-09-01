@@ -14,6 +14,7 @@ It does not prove that a package is benign or contain arbitrary hostile code in 
 - audit events for many standard operations;
 - explicit behavior baselines;
 - deterministic novelty and magnitude detection;
+- bounded sensitive-file to outbound-network sequence evidence;
 - candidate behavioral gates and rollback;
 - module quarantine and pre-import fallback routing;
 - queryable evidence and post-mortem records.
@@ -29,6 +30,10 @@ It does not prove that a package is benign or contain arbitrary hostile code in 
 - a compromised interpreter can tamper with Python-level monitoring;
 - same-user or root compromise can observe or modify the process;
 - a malicious first observation can poison an unreviewed candidate baseline.
+- sensitive-file/network sequence results are correlations over observed
+  Python-level events only. Sampling, missing call attribution, native code,
+  subprocesses, and other unobserved activity prevent them from proving that
+  no sequence occurred; the result is evidence and does not authorize action.
 
 ## Baseline safeguards
 

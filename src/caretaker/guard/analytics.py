@@ -6,7 +6,7 @@ import json
 import threading
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 import os
 from typing import Any, Iterable, Mapping
@@ -66,6 +66,122 @@ def _event_attribute_text(event: BehaviorEvent, name: str) -> str | None:
         return None
     text = str(representation).strip()
     return text or None
+
+
+def sensitive_file_network_sequences(
+    events: Iterable[BehaviorEvent],
+    *,
+    maximum: int = 64,
+    window_seconds: float = 60.0,
+) -> tuple[dict[str, Any], ...]:
+    """Find bounded sensitive-file to outbound-network event sequences.
+
+    This is an evidence-only correlation over observed Python-level events. A
+    pair must share a call identity, or—when both calls are unattributed—the
+    same target, process, and thread. Missing events and sampling never imply
+    that no sequence occurred.
+    """
+    if isinstance(maximum, bool) or int(maximum) < 0:
+        raise ValueError("maximum must be a non-negative integer")
+    try:
+        interval = float(window_seconds)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("window_seconds must be finite and non-negative") from exc
+    if interval < 0.0 or interval != interval or interval == float("inf"):
+        raise ValueError("window_seconds must be finite and non-negative")
+    bounded_maximum = min(int(maximum), 128)
+    file_kinds = frozenset({
+        BehaviorEventKind.FILE_OPEN,
+        BehaviorEventKind.FILE_READ,
+        BehaviorEventKind.FILE_WRITE,
+        BehaviorEventKind.DIRECTORY_LIST,
+        BehaviorEventKind.DIRECTORY_WALK,
+    })
+    network_kinds = frozenset({
+        BehaviorEventKind.NETWORK_CONNECT,
+        BehaviorEventKind.NETWORK_SEND,
+    })
+
+    def event_time(event: BehaviorEvent) -> float:
+        value = getattr(event, "occurred_at", None)
+        if not isinstance(value, datetime):
+            return 0.0
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        try:
+            return value.timestamp()
+        except (OverflowError, OSError, ValueError):
+            return 0.0
+
+    ordered = sorted(
+        (event for event in events if isinstance(event, BehaviorEvent)),
+        key=lambda event: (event_time(event), str(event.event_id)),
+    )
+    sensitive_files = [
+        event
+        for event in ordered
+        if event.event_kind in file_kinds
+        and event.resource is not None
+        and event.resource.kind in {"file", "directory"}
+        and bool(event.resource.sensitive)
+    ]
+    networks = [event for event in ordered if event.event_kind in network_kinds]
+    sequences: list[dict[str, Any]] = []
+
+    def same_context(left: BehaviorEvent, right: BehaviorEvent) -> bool:
+        if left.call_id is not None or right.call_id is not None:
+            return left.call_id is not None and left.call_id == right.call_id
+        return (
+            left.target_id == right.target_id
+            and left.process_id == right.process_id
+            and left.thread_id == right.thread_id
+        )
+
+    for file_event in sensitive_files:
+        file_time = event_time(file_event)
+        for network_event in networks:
+            network_time = event_time(network_event)
+            delay = network_time - file_time
+            if delay < 0.0:
+                continue
+            if delay > interval:
+                break
+            if not same_context(file_event, network_event):
+                continue
+            file_resource = file_event.resource
+            network_resource = network_event.resource
+            if file_resource is None or network_resource is None:
+                continue
+            sequences.append(
+                {
+                    "sequence_id": hashlib.sha256(
+                        f"{file_event.event_id}:{network_event.event_id}".encode()
+                    ).hexdigest(),
+                    "call_id": str(file_event.call_id) if file_event.call_id else None,
+                    "target_id": file_event.target_id,
+                    "process_id": file_event.process_id,
+                    "thread_id": file_event.thread_id,
+                    "file_event_id": str(file_event.event_id),
+                    "file_event_kind": file_event.event_kind.name,
+                    "file_occurred_at": file_event.occurred_at.isoformat(),
+                    "sensitive_file": {
+                        "kind": file_resource.kind,
+                        "category": file_resource.category,
+                        "value": file_resource.value[:500],
+                    },
+                    "network_event_id": str(network_event.event_id),
+                    "network_event_kind": network_event.event_kind.name,
+                    "network_occurred_at": network_event.occurred_at.isoformat(),
+                    "network_destination": network_resource.value[:500],
+                    "delay_seconds": min(interval, max(0.0, delay)),
+                    "coverage": "bounded_sample",
+                    "absence_claim": False,
+                }
+            )
+            break
+        if len(sequences) >= bounded_maximum:
+            break
+    return tuple(sequences)
 
 
 @dataclass

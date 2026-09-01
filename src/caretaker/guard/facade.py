@@ -51,6 +51,14 @@ class GuardFacade(Protocol):
 
     def recent_summary(self, target_id: str, *, calls: int = 20) -> BehaviorProfileSummary | None: ...
 
+    def sensitive_file_network_sequences(
+        self,
+        target_id: str,
+        *,
+        limit: int = 100,
+        window_seconds: float = 60.0,
+    ) -> tuple[dict[str, Any], ...]: ...
+
     def execution_effect_observation(
         self, target_id: str, *, calls: int = 20
     ) -> EffectObservation | None: ...
