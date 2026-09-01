@@ -675,6 +675,61 @@ def test_expired_worker_becomes_unauthorized_and_restart_clears_packet() -> None
     assert restarted.authority_packet_expires_at is None
 
 
+def test_terminal_worker_states_cannot_be_revived_by_late_heartbeats() -> None:
+    registry = WorkerRegistry()
+    failed_worker = registry.register(WorkerKind.REPAIR_ANALYZER, 1234)
+    failed = registry.mark_failed(
+        failed_worker.worker_id,
+        error_fingerprint="worker-crash",
+    )
+
+    late_failed = registry.heartbeat(
+        failed.worker_id,
+        state=WorkerState.HEALTHY,
+        current_work_ids=(uuid4(),),
+        queue_depth=4,
+        last_completed_sequence=9,
+        diagnostic_context={"late": True},
+    )
+
+    assert late_failed.state is WorkerState.FAILED
+    assert late_failed.current_work_ids
+    assert late_failed.queue_depth == 4
+    assert late_failed.last_completed_sequence == 9
+    assert late_failed.diagnostic_context == {"late": True}
+
+    unauthorized_worker = registry.register(WorkerKind.REPAIR_ANALYZER, 5678)
+    unauthorized = registry.heartbeat(
+        unauthorized_worker.worker_id,
+        state=WorkerState.UNAUTHORIZED,
+    )
+    late_unauthorized = registry.heartbeat(
+        unauthorized.worker_id,
+        state=WorkerState.HEALTHY,
+        diagnostic_context={"late": True},
+    )
+
+    assert late_unauthorized.state is WorkerState.UNAUTHORIZED
+    assert late_unauthorized.diagnostic_context == {"late": True}
+
+
+def test_record_restart_is_the_only_terminal_worker_reentry_and_rotates_identity() -> None:
+    registry = WorkerRegistry()
+    worker = registry.register(WorkerKind.REPAIR_ANALYZER, 1234)
+    registry.mark_failed(worker.worker_id, error_fingerprint="worker-crash")
+
+    restarted = registry.record_restart(worker.worker_id, pid=5678)
+    after_restart = registry.heartbeat(
+        worker.worker_id,
+        state=WorkerState.HEALTHY,
+    )
+
+    assert restarted.state is WorkerState.STARTING
+    assert restarted.process_start_id != worker.process_start_id
+    assert restarted.process_id == 5678
+    assert after_restart.state is WorkerState.HEALTHY
+
+
 def test_supervisor_cycle_reconciles_silent_worker_authority_expiry_once() -> None:
     events = []
     registry = WorkerRegistry(audit_event=lambda event_type, **fields: events.append((event_type, fields)))

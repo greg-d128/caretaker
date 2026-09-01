@@ -128,6 +128,8 @@ class WorkRegistry:
 
 
 class WorkerRegistry:
+    _TERMINAL_STATES = frozenset({WorkerState.FAILED, WorkerState.UNAUTHORIZED})
+
     def __init__(
         self,
         *,
@@ -147,6 +149,13 @@ class WorkerRegistry:
         # an application has not established a fresh supervisor lifecycle.
         self._authority_handoffs: set[UUID] = set()
         self._lock = threading.RLock()
+
+    @classmethod
+    def _next_state(cls, current: WorkerHealth, requested: WorkerState) -> WorkerState:
+        """Apply the worker lifecycle rule without reviving terminal state."""
+        if current.state in cls._TERMINAL_STATES:
+            return current.state
+        return requested
 
     def _emit_audit(self, event_type: str, **fields: Any) -> None:
         if self.audit_event is not None:
@@ -714,7 +723,10 @@ class WorkerRegistry:
             )
             updated = replace(
                 current,
-                state=WorkerState.FAILED if acceptance_failed else current.state,
+                state=self._next_state(
+                    current,
+                    WorkerState.FAILED if acceptance_failed else current.state,
+                ),
                 last_error_fingerprint=(
                     "worker-acceptance-failed"
                     if acceptance_failed
@@ -747,7 +759,9 @@ class WorkerRegistry:
                 and supervisor_time >= current.authority_packet_expires_at
             )
             updated = replace(
-                current, last_heartbeat_at=datetime.now(timezone.utc), state=state,
+                current,
+                last_heartbeat_at=datetime.now(timezone.utc),
+                state=self._next_state(current, state),
                 current_work_ids=current_work_ids, queue_depth=queue_depth,
                 last_completed_sequence=last_completed_sequence,
                 diagnostic_context=(
@@ -756,9 +770,9 @@ class WorkerRegistry:
                     else dict(diagnostic_context)
                 ),
             )
-            if expired and current.state is not WorkerState.UNAUTHORIZED:
+            if expired and current.state not in self._TERMINAL_STATES:
                 authority_expired = True
-            if expired:
+            if expired and current.state not in self._TERMINAL_STATES:
                 updated = replace(
                     updated,
                     state=WorkerState.UNAUTHORIZED,
@@ -856,9 +870,13 @@ class WorkerRegistry:
             current = self._workers[worker_id]
             updated = replace(
                 current,
-                state=WorkerState.FAILED,
+                state=self._next_state(current, WorkerState.FAILED),
                 last_heartbeat_at=datetime.now(timezone.utc),
-                last_error_fingerprint=error_fingerprint,
+                last_error_fingerprint=(
+                    error_fingerprint
+                    if error_fingerprint is not None
+                    else current.last_error_fingerprint
+                ),
                 diagnostic_context=(
                     current.diagnostic_context
                     if diagnostic_context is None
