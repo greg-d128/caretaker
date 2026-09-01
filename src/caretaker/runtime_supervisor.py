@@ -14,6 +14,7 @@ from typing import Any
 from .logging.supervisor import CaretakerApplicationSupervisor
 from .runtime_supervision import (
     AdaptiveAggregationQueueRegistry,
+    ApplicationWorkerLifecycle,
     Watchdog,
     WorkRegistry,
     WorkerRegistry,
@@ -73,6 +74,7 @@ class ApplicationRuntimeSupervisor:
 
 __all__ = [
     "AdaptiveAggregationQueueRegistry",
+    "ApplicationWorkerLifecycle",
     "ApplicationRuntimeSupervisor",
     "Watchdog",
     "WorkRegistry",

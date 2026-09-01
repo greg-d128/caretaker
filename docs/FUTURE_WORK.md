@@ -2222,7 +2222,9 @@ the same application-runtime package. Worker admission, health state, control,
 and queue coordination are now application-runtime implementations; a
 compatibility wrapper remains in logging. Control and shutdown internals still
 remain to be extracted. No host-level or infrastructure-level authority is
-added.
+added. `ApplicationWorkerLifecycle` is also application-runtime code, with a
+logging compatibility re-export; process creation and cleanup remain
+application-owned callbacks.
 
 `logging/supervisor.py` and `logging/__init__.py` currently include application
 supervision, worker health/authority, adaptive coordination, and recovery

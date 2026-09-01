@@ -6,6 +6,7 @@ from caretaker.logging import Watchdog as LoggingWatchdog
 from caretaker.logging import WorkRegistry as LoggingWorkRegistry
 from caretaker.runtime_supervision import (
     AdaptiveAggregationQueueRegistry,
+    ApplicationWorkerLifecycle,
     Watchdog,
     WorkRegistry,
     WorkerRegistry,
@@ -56,3 +57,10 @@ def test_runtime_queue_registry_is_owned_outside_logging() -> None:
 
 def test_runtime_worker_registry_is_owned_outside_logging() -> None:
     assert WorkerRegistry.__module__ == "caretaker.runtime_supervision"
+
+
+def test_runtime_worker_lifecycle_is_owned_outside_logging() -> None:
+    from caretaker.logging import ApplicationWorkerLifecycle as LoggingWorkerLifecycle
+
+    assert ApplicationWorkerLifecycle.__module__ == "caretaker.runtime_supervision"
+    assert LoggingWorkerLifecycle is ApplicationWorkerLifecycle
