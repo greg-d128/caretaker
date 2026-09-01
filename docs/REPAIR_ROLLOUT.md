@@ -292,6 +292,28 @@ boundary. Automatic replacement of an existing decorated callable with a
 rollout-aware path, fleet-wide routing, and deployment-owned worker lifecycle
 remain future work.
 
+`engine.bind_rollout()` provides a convenience wrapper for applications that
+want an ordinary callable at their traffic boundary. Its `routing_key` may be
+a fixed safe key or an application-owned function of `(args, kwargs)`. Its
+rollout argument may also be a zero-argument provider; that provider is
+evaluated for every invocation so the application can reload the current
+immutable record after an operator transition:
+
+```python
+invoke = engine.bind_rollout(
+    lambda: rollout_store.current(rollout_id),
+    policy=rollout_policy,
+    policy_fingerprint=current_policy_fingerprint,
+    routing_scope="tenant",
+    routing_key=lambda args, kwargs: kwargs["tenant_id"],
+)
+result = invoke(request)
+```
+
+The binding is an application integration convenience, not a background
+traffic controller. It does not infer routing identity, cache mutable rollout
+state as authoritative, activate a slot, or grant authority.
+
 For example:
 
 ```python

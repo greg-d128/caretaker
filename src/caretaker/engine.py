@@ -392,6 +392,68 @@ class RepairEngine:
             worker_process_id=worker_process_id,
         )
 
+    def bind_rollout(
+        self,
+        rollout: "RepairRolloutRecord | Callable[[], RepairRolloutRecord]",
+        *,
+        policy: "RepairRolloutPolicy | None" = None,
+        policy_fingerprint: str,
+        routing_scope: str,
+        routing_key: str | Callable[[tuple[Any, ...], Mapping[str, Any]], str],
+        effect_observation: "EffectObservation | None" = None,
+        behavior_capture: Mapping[str, Any] | None = None,
+        behavior_capture_complete: bool = False,
+        isolation_adapter: "ShadowExecutionAdapter | None" = None,
+        comparator: Callable[[Any, Any], Any] | None = None,
+        audit_event: Callable[..., Any] | None = None,
+        record_observation: bool = True,
+        execution_store: Any | None = None,
+        coordinator: Any | None = None,
+        worker_id: str | None = None,
+        worker_process_id: int | None = None,
+    ) -> Callable[..., "RolloutExecutionResult"]:
+        """Bind rollout routing to an ordinary application callable.
+
+        ``routing_key`` may be a fixed already-safe key or an application-owned
+        resolver receiving the call arguments.  A callable ``rollout`` is
+        treated as a provider and evaluated for every invocation; applications
+        can use that form to reload the current immutable ledger record after a
+        stage transition instead of retaining stale rollout state in a closure.
+        All execution still goes through :meth:`invoke_rollout`.
+        """
+
+        def invoke(*args: Any, **kwargs: Any) -> "RolloutExecutionResult":
+            selected_rollout = rollout() if callable(rollout) else rollout
+            selected_key = (
+                routing_key(tuple(args), dict(kwargs))
+                if callable(routing_key)
+                else routing_key
+            )
+            if not isinstance(selected_key, str) or not selected_key.strip():
+                raise ValueError("rollout routing key must be a non-empty string")
+            return self.invoke_rollout(
+                selected_rollout,
+                policy=policy,
+                policy_fingerprint=policy_fingerprint,
+                routing_scope=routing_scope,
+                routing_key=selected_key,
+                args=tuple(args),
+                kwargs=kwargs,
+                effect_observation=effect_observation,
+                behavior_capture=behavior_capture,
+                behavior_capture_complete=behavior_capture_complete,
+                isolation_adapter=isolation_adapter,
+                comparator=comparator,
+                audit_event=audit_event,
+                record_observation=record_observation,
+                execution_store=execution_store,
+                coordinator=coordinator,
+                worker_id=worker_id,
+                worker_process_id=worker_process_id,
+            )
+
+        return invoke
+
     def record_candidate_observation_success(
         self,
         *,

@@ -367,6 +367,43 @@ def test_engine_rollout_bridge_rejects_unregistered_target() -> None:
         )
 
 
+def test_engine_binds_rollout_to_callable_with_fresh_record_and_key() -> None:
+    ledger = _ledger(canary_percentage=100)
+    engine, target, store, record = _engine_slot_and_record(ledger)
+    provider_calls: list[str] = []
+
+    bound = engine.bind_rollout(
+        lambda: provider_calls.append("loaded") or record,
+        policy=ledger.policy,
+        policy_fingerprint="policy-hash",
+        routing_scope="tenant",
+        routing_key=lambda args, kwargs: f"tenant-{args[0]}",
+        effect_observation=EffectObservation(complete=True),
+    )
+
+    result = bound(4)
+
+    assert result.result == 5
+    assert provider_calls == ["loaded"]
+    assert target.slot.observation().successful_executions == 1
+    assert len(store.observations) == 1
+
+
+def test_engine_rollout_binding_rejects_empty_resolved_key() -> None:
+    ledger = _ledger(canary_percentage=100)
+    engine, _target, _store, record = _engine_slot_and_record(ledger)
+    bound = engine.bind_rollout(
+        record,
+        policy=ledger.policy,
+        policy_fingerprint="policy-hash",
+        routing_scope="tenant",
+        routing_key=lambda args, kwargs: "",
+    )
+
+    with pytest.raises(ValueError, match="non-empty"):
+        bound(4)
+
+
 def test_execute_slot_rollout_can_require_supervisor_worker_context() -> None:
     ledger = _ledger(canary_percentage=100)
     slot, record = _slot_and_record(ledger)

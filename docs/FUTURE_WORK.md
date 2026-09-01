@@ -1015,8 +1015,10 @@ same-stage transitions; increases require explicit policy permission and
 readiness or an override. FunctionSlot activation, atomic fleet percentages,
 and deployment-owned worker orchestration remain future work. A registry-aware
 `RepairEngine.invoke_rollout()` bridge now resolves the rollout target on every
-invocation and delegates to the strict slot binding; automatic replacement of
-existing decorated application callables remains future work.
+invocation and delegates to the strict slot binding. Its explicit
+`bind_rollout()` convenience wrapper can resolve a current record and routing
+key per application call; automatic replacement of existing decorated
+application callables remains future work.
 Optional `RolloutReadinessRequirements` now evaluates explicit evidence
 thresholds for the next stage and reports each passing or failing check without
 advancing the rollout. Thresholds remain disabled by default; staged authority,
