@@ -781,6 +781,61 @@ class WorkerRegistry:
             )
         return updated
 
+    def reconcile_authority_expiry(
+        self,
+        supervisor_time: datetime,
+    ) -> tuple[WorkerHealth, ...]:
+        """Mark packet-bearing workers unauthorized after supervisor time expiry.
+
+        A worker may be silent, so expiry cannot depend on receiving another
+        heartbeat. This method is an explicit supervisor-cycle operation and
+        is idempotent: an already unauthorized or failed worker is not
+        rewritten and does not emit a duplicate expiry event.
+        """
+        if supervisor_time.tzinfo is None or supervisor_time.utcoffset() is None:
+            raise ValueError("supervisor time must be timezone-aware")
+        expired: list[tuple[WorkerHealth, WorkerHealth]] = []
+        with self._lock:
+            for worker_id, current in self._workers.items():
+                if (
+                    current.authority_packet_expires_at is None
+                    or supervisor_time < current.authority_packet_expires_at
+                    or current.state
+                    in {WorkerState.FAILED, WorkerState.UNAUTHORIZED}
+                ):
+                    continue
+                updated = replace(
+                    current,
+                    state=WorkerState.UNAUTHORIZED,
+                    last_error_fingerprint="authority-expired",
+                )
+                self._workers[worker_id] = updated
+                expired.append((current, updated))
+        for previous, updated in expired:
+            self._emit_audit(
+                "WORKER_AUTHORITY_EXPIRED",
+                actor={"type": "supervisor"},
+                scope={
+                    "worker_id": str(updated.worker_id),
+                    "target_id": updated.target_id,
+                },
+                policy={"fingerprint": updated.policy_fingerprint},
+                outcome={"state": "EXPIRED"},
+                details={
+                    "authority_packet_id": (
+                        str(previous.authority_packet_id)
+                        if previous.authority_packet_id is not None
+                        else None
+                    ),
+                    "authority_packet_expires_at": (
+                        previous.authority_packet_expires_at.isoformat()
+                        if previous.authority_packet_expires_at is not None
+                        else None
+                    ),
+                },
+            )
+        return tuple(item[1] for item in expired)
+
     def mark_failed(
         self,
         worker_id: UUID,
@@ -2551,6 +2606,7 @@ class CaretakerApplicationSupervisor:
 
     def monitor_application(self, *, interval_seconds: float = 1.0) -> None:
         while not self._stop.wait(interval_seconds):
+            self.workers.reconcile_authority_expiry(datetime.now(timezone.utc))
             self.workers.heartbeat(self.supervisor_health.worker_id)
             if self.application_pid is not None and not _pid_alive(self.application_pid):
                 self.stop()

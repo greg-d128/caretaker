@@ -929,8 +929,10 @@ evidence conflicts for materially different worker distributions. Automatic
 host-resource collection and broader return-shape distributions remain future
 work.
 Transition deadlines are now policy-defined and stale-worker identities are
-reported fail-closed; automatic replacement or unauthorized-worker lifecycle
-orchestration remains future work.
+reported fail-closed. The supervisor cycle now explicitly reconciles expired
+authority packets even when a worker is silent, marks the worker
+`UNAUTHORIZED`, and emits an idempotent expiry audit event. Automatic
+replacement or unauthorized-worker process orchestration remains future work.
 
 Recovery action dispatch now has application-owned adapters for incident
 creation and application shutdown. Both effects remain outside Caretaker's

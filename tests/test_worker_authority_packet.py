@@ -478,6 +478,44 @@ def test_expired_worker_becomes_unauthorized_and_restart_clears_packet() -> None
     assert restarted.authority_packet_expires_at is None
 
 
+def test_supervisor_cycle_reconciles_silent_worker_authority_expiry_once() -> None:
+    events = []
+    registry = WorkerRegistry(audit_event=lambda event_type, **fields: events.append((event_type, fields)))
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    packet = _packet(supervisor_time=supervisor_time)
+    worker = registry.register_authorized(
+        WorkerKind.REPAIR_ANALYZER,
+        1234,
+        packet,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+    )
+
+    expired = registry.reconcile_authority_expiry(packet.expires_at)
+    repeated = registry.reconcile_authority_expiry(packet.expires_at)
+
+    assert [item.worker_id for item in expired] == [worker.worker_id]
+    assert expired[0].state is WorkerState.UNAUTHORIZED
+    assert repeated == ()
+    assert [event_type for event_type, _ in events] == [
+        "WORKER_AUTHORITY_ISSUED",
+        "WORKER_AUTHORITY_EXPIRED",
+    ]
+
+
+def test_supervisor_cycle_rejects_naive_authority_expiry_time() -> None:
+    registry = WorkerRegistry()
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        registry.reconcile_authority_expiry(datetime(2026, 8, 30, 12, 0))
+
+
 def test_live_worker_can_refresh_packet_without_resetting_acceptance_state() -> None:
     registry = WorkerRegistry()
     supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)

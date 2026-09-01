@@ -13,6 +13,14 @@ generation, code hash, policy, authority context, capabilities, and expiry.
 The worker registry verifies that packet before admission and preserves
 probation and acceptance counters independently from packet authority.
 
+Authority expiry is enforced by the supervisor's control cycle as well as by
+worker heartbeats. A silent packet-bearing worker is marked `UNAUTHORIZED` at
+or after the packet expiry time, and the supervisor emits one
+`WORKER_AUTHORITY_EXPIRED` audit event for that transition. Reconciliation is
+idempotent and does not create a replacement or grant a new packet; deliberate
+replacement still requires the existing policy and application-owned process
+callback path.
+
 ## Authority packet transport
 
 `serialize_recovery_authority_packet()` provides a bounded canonical JSON
