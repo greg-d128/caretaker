@@ -3,8 +3,9 @@
 Workers submit bounded, non-authoritative observation batches.  Only the
 supervisor-side ledger merges them, and it accepts a batch only when the
 supervisor supplies matching target-generation and policy context.  This
-module intentionally does not make promotion or Repair decisions yet; it
-provides the durable ownership and protocol boundary those decisions require.
+module intentionally does not activate Behavior or Repair changes; it
+provides the durable ownership, promotion-evidence, and protocol boundaries
+those decisions require.
 """
 
 from __future__ import annotations
