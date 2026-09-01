@@ -37,7 +37,11 @@ from caretaker.adaptive import (
     validate_lightweight_policy,
 )
 from caretaker.authority import get_authority_runtime_context
-from caretaker.logging import RemoteIncidentCapture
+from caretaker.logging import (
+    CaretakerApplicationSupervisor,
+    RemoteIncidentCapture,
+    WorkerKind,
+)
 
 
 def _batch(*, batch_id: str, worker_id: str = "worker-a", generation_id: str = "generation-a"):
@@ -389,6 +393,56 @@ def test_supervisor_aggregation_merges_batches_and_retains_worker_provenance(tmp
     assert store.acknowledgement(str(first["batch_id"]))["status"] == "ACCEPTED"
     assert store.acknowledgement(str(second["batch_id"]))["status"] == "ACCEPTED"
     assert store.status()["acknowledgements"] == 2
+
+
+def test_supervisor_control_cycle_drains_bound_adaptive_worker_queues(tmp_path: Path):
+    supervisor = CaretakerApplicationSupervisor(object())
+    worker = supervisor.workers.register(WorkerKind.REPAIR_ANALYZER, 4321)
+    queue_store = QueueAdaptiveAggregationStore(queue.Queue())
+    batch = _batch(
+        batch_id="00000000-0000-0000-0000-000000000003",
+        worker_id="untrusted-worker-id",
+    )
+    queue_store.submit(batch)
+    store = SupervisorAdaptiveAggregationStore(tmp_path)
+
+    result = supervisor.reconcile_adaptive_aggregation_queues(
+        {worker.worker_id: queue_store},
+        aggregation_store=store,
+        current_generations={"example.target": "generation-a"},
+        policy_fingerprint="policy-a",
+        authority_policy_generation="7",
+        authority_policy_fingerprint="authority-a",
+    )
+
+    assert result["ok"] is True
+    assert result["authority_granted"] is False
+    assert result["drained"] == 1
+    assert result["reconciliation"]["merged"] == 1
+    aggregate = store.list_aggregates()[0]
+    assert list(aggregate["workers"]) == [str(worker.worker_id)]
+    assert aggregate["workers"][str(worker.worker_id)]["worker_pid"] == 4321
+
+
+def test_supervisor_control_cycle_does_not_drain_failed_worker_queue(tmp_path: Path):
+    supervisor = CaretakerApplicationSupervisor(object())
+    worker = supervisor.workers.register(WorkerKind.REPAIR_ANALYZER, 4321)
+    supervisor.workers.mark_failed(worker.worker_id, error_fingerprint="worker-crash")
+    queue_store = QueueAdaptiveAggregationStore(queue.Queue())
+    queue_store.submit(_batch(batch_id="00000000-0000-0000-0000-000000000004"))
+    store = SupervisorAdaptiveAggregationStore(tmp_path)
+
+    with pytest.raises(PermissionError, match="failed or unauthorized"):
+        supervisor.reconcile_adaptive_aggregation_queues(
+            {worker.worker_id: queue_store},
+            aggregation_store=store,
+            current_generations={"example.target": "generation-a"},
+            policy_fingerprint="policy-a",
+            authority_policy_generation="7",
+            authority_policy_fingerprint="authority-a",
+        )
+
+    assert queue_store.receive() is not None
 
 
 def test_optional_aggregation_scope_requires_extended_context_and_keeps_populations_separate(

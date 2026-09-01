@@ -850,7 +850,11 @@ and binds its worker PID to the authenticated Unix peer PID before writing the
 same single-writer ledger. Unsupervised runs retain the direct local-ledger
 default; an unavailable configured socket is a submission failure rather than
 an implicit local fallback. The application-local queue adapter is now available
-for bounded canonical JSON handoffs; cross-host transport remains future work.
+for bounded canonical JSON handoffs. The supervisor also provides a bounded
+control-cycle helper that drains per-worker queues using registered worker
+identity and reconciles them through the single-writer context gate; failed or
+unauthorized workers are not consumed. Cross-host transport remains future
+work.
 
 The remaining implementation must explicitly define and enforce whether each
 threshold is process-local, application-wide, or workload/population scoped. It

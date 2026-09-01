@@ -58,6 +58,16 @@ Queue contents are untrusted evidence: the sender PID is not authentication,
 queue access does not grant worker or Repair authority, and there is no
 implicit fallback to the local ledger when queue delivery fails.
 
+`CaretakerApplicationSupervisor.reconcile_adaptive_aggregation_queues()` can
+run that operation as one bounded supervisor control-cycle step for a map of
+per-worker queues. It derives each worker PID from the supervisor's live
+registry, refuses failed or unauthorized workers before consuming their queue,
+drains within per-worker and total bounds, and reconciles through the same
+single-writer context checks. The caller still supplies current generation,
+policy, and authority context; queue sender metadata is never used as
+identity. Queue failures are returned as bounded per-worker evidence while
+other queues and already-pending ledger batches may still be reconciled.
+
 `AdaptiveAggregationPolicy.transport` selects `AUTO`, `DIRECT`, `SOCKET`, or
 `QUEUE`. `AUTO` preserves the least-friction behavior (configured supervisor
 socket when present, otherwise the local ledger); `SOCKET` and `QUEUE` fail

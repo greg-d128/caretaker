@@ -14,6 +14,10 @@ from uuid import UUID, uuid4
 
 from .handler import LoggingRuntime
 from .acceptance import WorkerAcceptanceStore
+from ..adaptive_aggregation import (
+    QueueAdaptiveAggregationStore,
+    SupervisorAdaptiveAggregationStore,
+)
 from ..repair_recovery import (
     ComparisonWorkerAssignment,
     ComparisonWorkerComparisonReport,
@@ -56,10 +60,12 @@ from .models import (
     WorkerKind,
     WorkerState,
 )
+from ..transport import APPLICATION_TRANSPORT_MAX_DRAIN_MESSAGES
 
 
 MAX_WORKER_FAILURE_COHORT = 128
 MAX_WORKER_AUTHORITY_HANDOFFS = 4096
+MAX_ADAPTIVE_QUEUE_WORKERS = 128
 
 
 class WorkRegistry:
@@ -2765,6 +2771,176 @@ class CaretakerApplicationSupervisor:
         result["transport_message_id"] = handoff["transport_message_id"]
         result["transport_sender_pid"] = handoff["transport_sender_pid"]
         result["authoritative_worker_pid"] = authoritative_worker_pid
+        return result
+
+    def reconcile_adaptive_aggregation_queues(
+        self,
+        queues: Mapping[UUID | str, QueueAdaptiveAggregationStore],
+        *,
+        aggregation_store: SupervisorAdaptiveAggregationStore,
+        current_generations: Mapping[str, str],
+        policy_fingerprint: str | None = None,
+        policy_fingerprints: Mapping[str, str] | None = None,
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        maximum_batches_per_worker: int = 32,
+        maximum_total_batches: int = APPLICATION_TRANSPORT_MAX_DRAIN_MESSAGES,
+        promotion_policies: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Drain application-owned adaptive queues during one control cycle.
+
+        Each queue is bound to one registered worker.  The supervisor derives
+        the worker PID from that registration and passes it to
+        ``QueueAdaptiveAggregationStore.drain_to``; worker IDs and PIDs inside
+        queue batches are never trusted.  The application supplies current
+        generation, policy, and authority context, which is required before
+        the single-writer ledger can reconcile the drained evidence.
+
+        Queue drain failures are returned as bounded per-worker evidence while
+        other queues and already-pending ledger batches still receive their
+        reconciliation attempt.  No queue failure falls back to a local
+        worker-owned ledger and this operation never grants authority.
+        """
+        if not isinstance(aggregation_store, SupervisorAdaptiveAggregationStore):
+            raise TypeError(
+                "adaptive queue reconciliation requires a supervisor aggregation store"
+            )
+        if not isinstance(queues, Mapping) or not queues:
+            raise ValueError("adaptive queue reconciliation requires at least one worker queue")
+        if len(queues) > MAX_ADAPTIVE_QUEUE_WORKERS:
+            raise ValueError(
+                "adaptive queue reconciliation cannot exceed "
+                f"{MAX_ADAPTIVE_QUEUE_WORKERS} worker queues"
+            )
+        if (
+            isinstance(maximum_batches_per_worker, bool)
+            or not isinstance(maximum_batches_per_worker, int)
+            or not 1 <= maximum_batches_per_worker <= APPLICATION_TRANSPORT_MAX_DRAIN_MESSAGES
+        ):
+            raise ValueError(
+                "maximum_batches_per_worker must be between 1 and "
+                f"{APPLICATION_TRANSPORT_MAX_DRAIN_MESSAGES}"
+            )
+        if (
+            isinstance(maximum_total_batches, bool)
+            or not isinstance(maximum_total_batches, int)
+            or not 1 <= maximum_total_batches <= APPLICATION_TRANSPORT_MAX_DRAIN_MESSAGES
+        ):
+            raise ValueError(
+                "maximum_total_batches must be between 1 and "
+                f"{APPLICATION_TRANSPORT_MAX_DRAIN_MESSAGES}"
+            )
+        if not isinstance(current_generations, Mapping) or not current_generations:
+            raise ValueError("adaptive queue reconciliation requires current generations")
+        if policy_fingerprint is not None and policy_fingerprints is not None:
+            raise ValueError(
+                "adaptive queue reconciliation accepts policy_fingerprint or policy_fingerprints, not both"
+            )
+
+        worker_results: list[dict[str, Any]] = []
+        seen_worker_ids: set[UUID] = set()
+        remaining = maximum_total_batches
+        for raw_worker_id, queue_store in queues.items():
+            try:
+                worker_id = raw_worker_id if isinstance(raw_worker_id, UUID) else UUID(str(raw_worker_id))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("adaptive queue map contains an invalid worker ID") from exc
+            if worker_id in seen_worker_ids:
+                raise ValueError("adaptive queue map contains a duplicate worker ID")
+            seen_worker_ids.add(worker_id)
+            if not isinstance(queue_store, QueueAdaptiveAggregationStore):
+                raise TypeError(
+                    "adaptive queue map values must be QueueAdaptiveAggregationStore instances"
+                )
+            try:
+                worker = self.workers.get(worker_id)
+            except KeyError as exc:
+                raise PermissionError(
+                    "adaptive queue is not bound to a registered worker"
+                ) from exc
+            if worker.state not in {
+                WorkerState.STARTING,
+                WorkerState.HEALTHY,
+                WorkerState.DEGRADED,
+            }:
+                raise PermissionError(
+                    "adaptive queue cannot be drained for a failed or unauthorized worker"
+                )
+            if (
+                isinstance(worker.process_id, bool)
+                or not isinstance(worker.process_id, int)
+                or worker.process_id <= 0
+            ):
+                raise PermissionError("adaptive queue worker has no valid registered process identity")
+            if remaining <= 0:
+                worker_results.append(
+                    {
+                        "worker_id": str(worker.worker_id),
+                        "status": "DEFERRED",
+                        "drained": 0,
+                        "reason": "control-cycle batch bound reached",
+                    }
+                )
+                continue
+            try:
+                drained = queue_store.drain_to(
+                    aggregation_store,
+                    limit=min(maximum_batches_per_worker, remaining),
+                    worker_id=str(worker.worker_id),
+                    worker_pid=worker.process_id,
+                )
+                drained_count = len(drained)
+                remaining -= drained_count
+                worker_results.append(
+                    {
+                        "worker_id": str(worker.worker_id),
+                        "worker_pid": worker.process_id,
+                        "status": "DRAINED",
+                        "drained": drained_count,
+                        "submissions": list(drained),
+                    }
+                )
+            except Exception as exc:
+                worker_results.append(
+                    {
+                        "worker_id": str(worker.worker_id),
+                        "worker_pid": worker.process_id,
+                        "status": "FAILED",
+                        "drained": 0,
+                        "error": f"{type(exc).__name__}: {exc}"[:256],
+                    }
+                )
+
+        reconciliation = aggregation_store.reconcile(
+            current_generations=current_generations,
+            policy_fingerprint=policy_fingerprint,
+            policy_fingerprints=policy_fingerprints,
+            authority_policy_generation=authority_policy_generation,
+            authority_policy_fingerprint=authority_policy_fingerprint,
+            maximum_batches=maximum_total_batches,
+        )
+        promotions = None
+        if promotion_policies is not None:
+            promotions = aggregation_store.evaluate_promotions(
+                current_generations=current_generations,
+                policy_fingerprint=policy_fingerprint,
+                policy_fingerprints=policy_fingerprints,
+                authority_policy_generation=authority_policy_generation,
+                authority_policy_fingerprint=authority_policy_fingerprint,
+                promotion_policies=promotion_policies,
+                maximum=maximum_total_batches,
+            )
+        failed_workers = sum(item["status"] == "FAILED" for item in worker_results)
+        result: dict[str, Any] = {
+            "ok": failed_workers == 0 and not reconciliation.get("errors"),
+            "authority_granted": False,
+            "worker_count": len(worker_results),
+            "drained": sum(int(item.get("drained", 0)) for item in worker_results),
+            "workers": worker_results,
+            "reconciliation": reconciliation,
+        }
+        if promotions is not None:
+            result["promotions"] = promotions
         return result
 
     def monitor_application(self, *, interval_seconds: float = 1.0) -> None:
