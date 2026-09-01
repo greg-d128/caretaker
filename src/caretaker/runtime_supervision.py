@@ -14,7 +14,17 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from uuid import UUID, uuid4
 
-from .logging.models import ActiveWork, CaretakerComponent, WorkState, WorkerHealth
+from .adaptive_aggregation import QueueAdaptiveAggregationStore
+from .logging.models import (
+    ActiveWork,
+    CaretakerComponent,
+    WorkState,
+    WorkerHealth,
+    WorkerState,
+)
+
+
+MAX_ADAPTIVE_QUEUE_WORKERS = 128
 
 
 class WorkRegistry:
@@ -121,4 +131,108 @@ class Watchdog:
             self._thread.join(timeout=2)
 
 
-__all__ = ["Watchdog", "WorkRegistry"]
+class AdaptiveAggregationQueueRegistry:
+    """Own application-worker queue bindings used by supervisor cycles."""
+
+    def __init__(
+        self,
+        *,
+        worker_lookup: Callable[[UUID], WorkerHealth],
+        maximum_workers: int = MAX_ADAPTIVE_QUEUE_WORKERS,
+    ) -> None:
+        self.worker_lookup = worker_lookup
+        self.maximum_workers = maximum_workers
+        self._queues: dict[UUID, QueueAdaptiveAggregationStore] = {}
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def _parse_worker_id(worker_id: UUID | str) -> UUID:
+        try:
+            return worker_id if isinstance(worker_id, UUID) else UUID(str(worker_id))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("adaptive queue binding requires a valid worker ID") from exc
+
+    def bind(
+        self,
+        worker_id: UUID | str,
+        queue_store: QueueAdaptiveAggregationStore,
+    ) -> dict[str, Any]:
+        """Bind one application-owned queue to a live worker."""
+        parsed_worker_id = self._parse_worker_id(worker_id)
+        if not isinstance(queue_store, QueueAdaptiveAggregationStore):
+            raise TypeError("adaptive queue binding requires a QueueAdaptiveAggregationStore")
+        try:
+            worker = self.worker_lookup(parsed_worker_id)
+        except KeyError as exc:
+            raise PermissionError("adaptive queue binding requires a registered worker") from exc
+        if worker.state not in {WorkerState.STARTING, WorkerState.HEALTHY, WorkerState.DEGRADED}:
+            raise PermissionError(
+                "adaptive queue binding cannot target a failed or unauthorized worker"
+            )
+        with self._lock:
+            existing = self._queues.get(parsed_worker_id)
+            if existing is not None and existing is not queue_store:
+                raise ValueError("adaptive queue is already bound; unbind it before replacement")
+            self._queues[parsed_worker_id] = queue_store
+        return {
+            "bound": True,
+            "authority_granted": False,
+            "worker_id": str(worker.worker_id),
+            "worker_pid": worker.process_id,
+            "transport": "QUEUE",
+        }
+
+    def unbind(
+        self,
+        worker_id: UUID | str,
+        *,
+        queue_store: QueueAdaptiveAggregationStore | None = None,
+    ) -> dict[str, Any]:
+        """Remove a binding without draining or deleting its evidence."""
+        parsed_worker_id = self._parse_worker_id(worker_id)
+        if queue_store is not None and not isinstance(queue_store, QueueAdaptiveAggregationStore):
+            raise TypeError("adaptive queue unbinding requires a QueueAdaptiveAggregationStore")
+        with self._lock:
+            existing = self._queues.get(parsed_worker_id)
+            if existing is None:
+                return {
+                    "unbound": False,
+                    "authority_granted": False,
+                    "worker_id": str(parsed_worker_id),
+                }
+            if queue_store is not None and existing is not queue_store:
+                raise ValueError("adaptive queue unbinding does not match its bound queue")
+            self._queues.pop(parsed_worker_id)
+        return {
+            "unbound": True,
+            "authority_granted": False,
+            "worker_id": str(parsed_worker_id),
+        }
+
+    def snapshot(self) -> dict[UUID, QueueAdaptiveAggregationStore]:
+        """Return a shallow snapshot for one bounded control cycle."""
+        with self._lock:
+            return dict(self._queues)
+
+    def status(self) -> tuple[dict[str, Any], ...]:
+        """Return a bounded read-only projection of queue bindings."""
+        bindings = tuple(self.snapshot().items())[: self.maximum_workers]
+        result: list[dict[str, Any]] = []
+        for worker_id, queue_store in bindings:
+            try:
+                worker = self.worker_lookup(worker_id)
+            except KeyError:
+                continue
+            result.append(
+                {
+                    "worker_id": str(worker_id),
+                    "worker_pid": worker.process_id,
+                    "worker_state": worker.state.name,
+                    "queue": queue_store.status(),
+                    "authority_granted": False,
+                }
+            )
+        return tuple(result)
+
+
+__all__ = ["AdaptiveAggregationQueueRegistry", "Watchdog", "WorkRegistry"]

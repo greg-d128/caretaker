@@ -4,7 +4,11 @@ from caretaker import ApplicationRuntimeSupervisor
 from caretaker.logging.supervisor import CaretakerApplicationSupervisor
 from caretaker.logging import Watchdog as LoggingWatchdog
 from caretaker.logging import WorkRegistry as LoggingWorkRegistry
-from caretaker.runtime_supervision import Watchdog, WorkRegistry
+from caretaker.runtime_supervision import (
+    AdaptiveAggregationQueueRegistry,
+    Watchdog,
+    WorkRegistry,
+)
 
 
 class _Runtime:
@@ -36,3 +40,7 @@ def test_runtime_scheduling_and_watchdog_are_owned_outside_logging() -> None:
     assert Watchdog.__module__ == "caretaker.runtime_supervision"
     assert LoggingWorkRegistry is WorkRegistry
     assert LoggingWatchdog is Watchdog
+
+
+def test_runtime_queue_registry_is_owned_outside_logging() -> None:
+    assert AdaptiveAggregationQueueRegistry.__module__ == "caretaker.runtime_supervision"
