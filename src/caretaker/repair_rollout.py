@@ -1,9 +1,9 @@
 """Policy-bound lifecycle records for runtime Repair rollouts.
 
-This module records rollout authority; it does not route application traffic or
-activate a FunctionSlot.  Those responsibilities remain with the application
-and future rollout adapters.  A record therefore cannot grant execution
-authority by itself.
+This module records rollout authority and provides optional supervisor-owned
+application-wide route allocation; it does not activate a FunctionSlot or
+grant execution authority. Ordinary direct routing remains process-local, and
+application-wide allocation is limited to one supervisor/coordinator context.
 """
 
 from __future__ import annotations
@@ -466,6 +466,7 @@ class RolloutRoutingDecision:
     mirror_bucket: int | None = None
     mirror_percentage: int = 0
     mirror_selected: bool = False
+    application_assignment_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -570,6 +571,40 @@ class RolloutWorkerAcknowledgement:
     content_hash: str
 
 
+@dataclass(frozen=True, slots=True)
+class RolloutApplicationRouteAssignment:
+    """Durable supervisor allocation for one application-wide invocation."""
+
+    assignment_id: UUID
+    rollout_id: UUID
+    target_id: str
+    candidate_id: UUID
+    worker_id: str
+    worker_process_id: int
+    stage: RepairRolloutStage
+    routing_scope: str
+    routing_key_digest: str
+    sequence: int
+    bucket: int
+    bucket_count: int
+    configured_percentage: int
+    candidate_selected: bool
+    candidate_authoritative: bool
+    policy_fingerprint: str
+    authority_fingerprint: str
+    routing_policy_fingerprint: str
+    created_at: datetime
+    content_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class RolloutApplicationRoute:
+    """Routing decision paired with its supervisor allocation evidence."""
+
+    decision: RolloutRoutingDecision
+    assignment: RolloutApplicationRouteAssignment
+
+
 def _execution_observation_payload(
     observation: RolloutExecutionObservation,
 ) -> dict[str, Any]:
@@ -650,6 +685,32 @@ def _worker_acknowledgement_payload(
     }
 
 
+def _application_route_assignment_payload(
+    assignment: RolloutApplicationRouteAssignment,
+) -> dict[str, Any]:
+    return {
+        "assignment_id": str(assignment.assignment_id),
+        "rollout_id": str(assignment.rollout_id),
+        "target_id": assignment.target_id,
+        "candidate_id": str(assignment.candidate_id),
+        "worker_id": assignment.worker_id,
+        "worker_process_id": assignment.worker_process_id,
+        "stage": assignment.stage.value,
+        "routing_scope": assignment.routing_scope,
+        "routing_key_digest": assignment.routing_key_digest,
+        "sequence": assignment.sequence,
+        "bucket": assignment.bucket,
+        "bucket_count": assignment.bucket_count,
+        "configured_percentage": assignment.configured_percentage,
+        "candidate_selected": assignment.candidate_selected,
+        "candidate_authoritative": assignment.candidate_authoritative,
+        "policy_fingerprint": assignment.policy_fingerprint,
+        "authority_fingerprint": assignment.authority_fingerprint,
+        "routing_policy_fingerprint": assignment.routing_policy_fingerprint,
+        "created_at": assignment.created_at.isoformat(),
+    }
+
+
 class RepairRolloutStore(Protocol):
     def record_rollout(self, record: RepairRolloutRecord) -> None: ...
     def all_rollouts(self) -> tuple[Any, ...]: ...
@@ -661,6 +722,10 @@ class RepairRolloutStore(Protocol):
         self, record: RolloutWorkerAcknowledgement
     ) -> None: ...
     def all_rollout_worker_acknowledgements(self) -> tuple[Any, ...]: ...
+    def record_rollout_application_route(
+        self, record: RolloutApplicationRouteAssignment
+    ) -> None: ...
+    def all_rollout_application_routes(self) -> tuple[Any, ...]: ...
 
 
 class RolloutArtifactSigner(Protocol):
@@ -1344,8 +1409,10 @@ class RepairRolloutCoordinator:
         self.store = store if store is not None else ledger.store
         self._clock = clock or _utcnow
         self._acknowledgements: dict[UUID, RolloutWorkerAcknowledgement] = {}
+        self._application_routes: dict[UUID, RolloutApplicationRouteAssignment] = {}
         self._lock = threading.RLock()
         self._restore_acknowledgements()
+        self._restore_application_routes()
 
     def acknowledge_worker(
         self,
@@ -1421,8 +1488,25 @@ class RepairRolloutCoordinator:
         routing_scope: str,
         routing_key: str,
         audit_event: Callable[..., Any] | None = None,
+        application_wide: bool = False,
+        assignment_id: UUID | None = None,
     ) -> RolloutRoutingDecision:
         """Return a route only for a worker bound to the current context."""
+
+        if application_wide:
+            if assignment_id is None:
+                raise ValueError(
+                    "application-wide routing requires an assignment_id"
+                )
+            return self.route_application_wide(
+                rollout_id=rollout_id,
+                worker_id=worker_id,
+                worker_process_id=worker_process_id,
+                routing_scope=routing_scope,
+                routing_key=routing_key,
+                assignment_id=assignment_id,
+                audit_event=audit_event,
+            ).decision
 
         record = self.ledger.get(rollout_id)
         self._check_context(record)
@@ -1445,6 +1529,134 @@ class RepairRolloutCoordinator:
             routing_key=routing_key,
             audit_event=audit_event,
         )
+
+    def route_application_wide(
+        self,
+        *,
+        rollout_id: UUID,
+        worker_id: str,
+        worker_process_id: int,
+        routing_scope: str,
+        routing_key: str,
+        assignment_id: UUID,
+        audit_event: Callable[..., Any] | None = None,
+    ) -> RolloutApplicationRoute:
+        """Allocate one route from the supervisor-owned application sequence.
+
+        The assignment is idempotent by application-supplied ID and is
+        persisted before returning. This mode provides one allocation sequence
+        per supervisor/coordinator for the current application; it does not
+        claim coordination across hosts or multiple supervisors.
+        """
+
+        if not isinstance(assignment_id, UUID):
+            raise ValueError("application route assignment_id must be a UUID")
+        record = self.ledger.get(rollout_id)
+        self._check_context(record)
+        normalized_worker_id = str(worker_id).strip()
+        if not normalized_worker_id:
+            raise ValueError("worker_id is required")
+        normalized_scope = str(routing_scope).strip()
+        if not normalized_scope or len(normalized_scope) > 256:
+            raise ValueError(
+                "routing_scope must contain 1..256 non-whitespace characters"
+            )
+        if isinstance(worker_process_id, bool) or worker_process_id <= 0:
+            raise ValueError("worker_process_id must be positive")
+        if self._current_acknowledgement(
+            record,
+            worker_id=normalized_worker_id,
+            worker_process_id=worker_process_id,
+        ) is None:
+            raise PermissionError(
+                "worker has not acknowledged the current rollout context"
+            )
+        with self._lock:
+            existing = self._application_routes.get(assignment_id)
+            if existing is not None:
+                self._validate_application_route_replay(
+                    existing,
+                    record=record,
+                    worker_id=normalized_worker_id,
+                    worker_process_id=worker_process_id,
+                    routing_scope=normalized_scope,
+                    routing_key=routing_key,
+                )
+                decision = decide_rollout_routing(
+                    record,
+                    policy=self.ledger.policy,
+                    policy_fingerprint=self.policy_fingerprint,
+                    routing_scope=normalized_scope,
+                    routing_key=routing_key,
+                    audit_event=audit_event,
+                    _bucket_override=existing.bucket,
+                    _application_assignment_id=existing.assignment_id,
+                )
+                return RolloutApplicationRoute(decision, existing)
+
+            routing = record.routing_policy or self.ledger.policy.routing
+            sequence = max(
+                (
+                    item.sequence
+                    for item in self._application_routes.values()
+                    if item.rollout_id == record.rollout_id
+                    and item.policy_fingerprint == record.policy_fingerprint
+                    and item.authority_fingerprint == record.authority_fingerprint
+                    and item.stage is record.stage
+                    and item.routing_policy_fingerprint
+                    == _routing_policy_fingerprint(
+                        record.routing_policy or self.ledger.policy.routing
+                    )
+                ),
+                default=-1,
+            ) + 1
+            bucket = sequence % routing.bucket_count
+            decision = decide_rollout_routing(
+                record,
+                policy=self.ledger.policy,
+                policy_fingerprint=self.policy_fingerprint,
+                routing_scope=normalized_scope,
+                routing_key=routing_key,
+                audit_event=audit_event,
+                _bucket_override=bucket,
+                _application_assignment_id=assignment_id,
+            )
+            now = self._clock()
+            assignment = RolloutApplicationRouteAssignment(
+                assignment_id=assignment_id,
+                rollout_id=record.rollout_id,
+                target_id=record.target_id,
+                candidate_id=record.candidate_id,
+                worker_id=normalized_worker_id,
+                worker_process_id=int(worker_process_id),
+                stage=record.stage,
+                routing_scope=normalized_scope,
+                routing_key_digest=decision.routing_key_digest,
+                sequence=sequence,
+                bucket=decision.bucket,
+                bucket_count=decision.bucket_count,
+                configured_percentage=decision.configured_percentage,
+                candidate_selected=decision.candidate_selected,
+                candidate_authoritative=decision.candidate_authoritative,
+                policy_fingerprint=record.policy_fingerprint,
+                authority_fingerprint=record.authority_fingerprint,
+                routing_policy_fingerprint=_routing_policy_fingerprint(routing),
+                created_at=now,
+                content_hash="",
+            )
+            assignment = replace(
+                assignment,
+                content_hash=_digest(_application_route_assignment_payload(assignment)),
+            )
+            recorder = getattr(self.store, "record_rollout_application_route", None)
+            if self.store is not None and not callable(recorder):
+                raise RepairRolloutError(
+                    "rollout store does not support application-wide routes"
+                )
+            if callable(recorder):
+                recorder(assignment)
+            self._application_routes[assignment.assignment_id] = assignment
+            return RolloutApplicationRoute(decision, assignment)
 
     def status(self, rollout_id: UUID | None = None) -> dict[str, Any]:
         """Return bounded worker and execution status for supervisor review.
@@ -1482,6 +1694,7 @@ class RepairRolloutCoordinator:
                 "invalid_acknowledgement_count": invalid,
                 "execution_evidence": self._execution_evidence(record),
                 "readiness": self.readiness(record.rollout_id),
+                "application_routing": self._application_routing_status(record),
                 "workers": [
                     {
                         "worker_id": item.worker_id,
@@ -1497,6 +1710,34 @@ class RepairRolloutCoordinator:
             "authority_granted": False,
             "policy_fingerprint": self.policy_fingerprint,
             "rollouts": output,
+        }
+
+    def _application_routing_status(
+        self,
+        record: RepairRolloutRecord,
+    ) -> dict[str, Any]:
+        assignments = tuple(
+            item
+            for item in self._application_routes.values()
+            if item.rollout_id == record.rollout_id
+        )
+        current = tuple(
+            item
+            for item in assignments
+            if item.stage is record.stage
+            and item.policy_fingerprint == record.policy_fingerprint
+            and item.authority_fingerprint == record.authority_fingerprint
+        )
+        return {
+            "mode": "SUPERVISOR_APPLICATION_WIDE",
+            "assignment_count": len(assignments),
+            "current_context_assignment_count": len(current),
+            "candidate_selected_count": sum(item.candidate_selected for item in current),
+            "candidate_authoritative_count": sum(
+                item.candidate_authoritative for item in current
+            ),
+            "sequence_max": max((item.sequence for item in current), default=None),
+            "cross_host_coordination": False,
         }
 
     def readiness(self, rollout_id: UUID) -> dict[str, Any]:
@@ -1800,6 +2041,68 @@ class RepairRolloutCoordinator:
                 continue
             self._acknowledgements[acknowledgement.acknowledgement_id] = acknowledgement
 
+    def _restore_application_routes(self) -> None:
+        if self.store is None:
+            return
+        reader = getattr(self.store, "all_rollout_application_routes", None)
+        if not callable(reader):
+            return
+        for raw in reader():
+            assignment = _coerce_application_route_assignment(raw)
+            if assignment is None or not _valid_application_route_assignment(assignment):
+                continue
+            self._application_routes[assignment.assignment_id] = assignment
+
+    def _validate_application_route_replay(
+        self,
+        assignment: RolloutApplicationRouteAssignment,
+        *,
+        record: RepairRolloutRecord,
+        worker_id: str,
+        worker_process_id: int,
+        routing_scope: str,
+        routing_key: str,
+    ) -> None:
+        if not _valid_application_route_assignment(assignment):
+            raise RepairRolloutError(
+                "application route assignment integrity verification failed"
+            )
+        if (
+            assignment.rollout_id != record.rollout_id
+            or assignment.target_id != record.target_id
+            or assignment.candidate_id != record.candidate_id
+            or assignment.stage is not record.stage
+            or assignment.policy_fingerprint != record.policy_fingerprint
+            or assignment.authority_fingerprint != record.authority_fingerprint
+            or assignment.routing_policy_fingerprint
+            != _routing_policy_fingerprint(
+                record.routing_policy or self.ledger.policy.routing
+            )
+        ):
+            raise RepairRolloutError(
+                "application route assignment is stale for the current rollout"
+            )
+        if assignment.worker_id != worker_id or assignment.worker_process_id != worker_process_id:
+            raise PermissionError(
+                "application route assignment is bound to another worker process"
+            )
+        if assignment.routing_scope != str(routing_scope).strip():
+            raise RepairRolloutError(
+                "application route assignment scope does not match the request"
+            )
+        if not isinstance(routing_key, str) or not routing_key:
+            raise RepairRolloutError("rollout routing key is required")
+        expected_digest = hashlib.sha256(
+            b"caretaker.rollout.routing.key\0"
+            + assignment.routing_scope.encode("utf-8")
+            + b"\0"
+            + routing_key.encode("utf-8")
+        ).hexdigest()
+        if assignment.routing_key_digest != expected_digest:
+            raise RepairRolloutError(
+                "application route assignment key does not match the request"
+            )
+
     def _ledger_require_enabled(self) -> None:
         if not self.policy.enabled:
             raise RepairRolloutError("repair rollout is disabled by policy")
@@ -1962,6 +2265,8 @@ def decide_rollout_routing(
     routing_scope: str,
     routing_key: str,
     audit_event: Callable[..., Any] | None = None,
+    _bucket_override: int | None = None,
+    _application_assignment_id: UUID | None = None,
 ) -> RolloutRoutingDecision:
     """Select a rollout implementation for one scoped invocation.
 
@@ -1996,17 +2301,26 @@ def decide_rollout_routing(
         + b"\0"
         + routing_key.encode("utf-8")
     ).hexdigest()
-    bucket = int.from_bytes(
-        hashlib.sha256(
-            b"caretaker.rollout.routing.bucket\0"
-            + str(record.rollout_id).encode("ascii")
-            + b"\0"
-            + scope.encode("utf-8")
-            + b"\0"
-            + routing_key.encode("utf-8")
-        ).digest()[:8],
-        "big",
-    ) % routing.bucket_count
+    if _bucket_override is None:
+        bucket = int.from_bytes(
+            hashlib.sha256(
+                b"caretaker.rollout.routing.bucket\0"
+                + str(record.rollout_id).encode("ascii")
+                + b"\0"
+                + scope.encode("utf-8")
+                + b"\0"
+                + routing_key.encode("utf-8")
+            ).digest()[:8],
+            "big",
+        ) % routing.bucket_count
+    else:
+        if (
+            isinstance(_bucket_override, bool)
+            or not isinstance(_bucket_override, int)
+            or not 0 <= _bucket_override < routing.bucket_count
+        ):
+            raise RepairRolloutError("application route allocation bucket is invalid")
+        bucket = _bucket_override
     mirror_bucket: int | None = None
 
     percentage = 0
@@ -2100,6 +2414,8 @@ def decide_rollout_routing(
         "mirror_percentage": mirror_percentage,
         "mirror_selected": mirror_selected,
     }
+    if _application_assignment_id is not None:
+        evidence["application_assignment_id"] = str(_application_assignment_id)
     decision = RolloutRoutingDecision(
         rollout_id=record.rollout_id,
         target_id=record.target_id,
@@ -2120,8 +2436,21 @@ def decide_rollout_routing(
         mirror_bucket=mirror_bucket,
         mirror_percentage=mirror_percentage,
         mirror_selected=mirror_selected,
+        application_assignment_id=_application_assignment_id,
     )
     if audit_event is not None:
+        audit_details = {
+            "bucket": bucket,
+            "bucket_count": routing.bucket_count,
+            "configured_percentage": percentage,
+            "mirror_bucket": mirror_bucket,
+            "mirror_percentage": mirror_percentage,
+            "decision_hash": decision.decision_hash,
+        }
+        if _application_assignment_id is not None:
+            audit_details["application_assignment_id"] = str(
+                _application_assignment_id
+            )
         audit_event(
             "REPAIR_ROLLOUT_ROUTING_DECISION",
             actor={"type": "caretaker", "id": "rollout-router"},
@@ -2141,14 +2470,7 @@ def decide_rollout_routing(
                 "authoritative_implementation": implementation.value,
                 "mirror_selected": mirror_selected,
             },
-            details={
-                "bucket": bucket,
-                "bucket_count": routing.bucket_count,
-                "configured_percentage": percentage,
-                "mirror_bucket": mirror_bucket,
-                "mirror_percentage": mirror_percentage,
-                "decision_hash": decision.decision_hash,
-            },
+            details=audit_details,
         )
     return decision
 
@@ -2164,8 +2486,14 @@ def _select_rollout_routing(
     coordinator: RepairRolloutCoordinator | None,
     worker_id: str | None,
     worker_process_id: int | None,
+    application_wide_routing: bool,
+    routing_assignment_id: UUID | None,
 ) -> RolloutRoutingDecision:
     if coordinator is None:
+        if application_wide_routing:
+            raise PermissionError(
+                "application-wide rollout routing requires a coordinator"
+            )
         return decide_rollout_routing(
             record,
             policy=policy,
@@ -2189,6 +2517,8 @@ def _select_rollout_routing(
         routing_scope=routing_scope,
         routing_key=routing_key,
         audit_event=audit_event,
+        application_wide=application_wide_routing,
+        assignment_id=routing_assignment_id,
     )
 
 
@@ -2215,6 +2545,8 @@ def execute_rollout(
     coordinator: RepairRolloutCoordinator | None = None,
     worker_id: str | None = None,
     worker_process_id: int | None = None,
+    application_wide_routing: bool = False,
+    routing_assignment_id: UUID | None = None,
 ) -> RolloutExecutionResult:
     """Invoke an already-authorized rollout path.
 
@@ -2242,6 +2574,8 @@ def execute_rollout(
         coordinator=coordinator,
         worker_id=worker_id,
         worker_process_id=worker_process_id,
+        application_wide_routing=application_wide_routing,
+        routing_assignment_id=routing_assignment_id,
     )
     return _execute_and_record(
         decision,
@@ -2284,6 +2618,8 @@ def execute_slot_rollout(
     coordinator: RepairRolloutCoordinator | None = None,
     worker_id: str | None = None,
     worker_process_id: int | None = None,
+    application_wide_routing: bool = False,
+    routing_assignment_id: UUID | None = None,
 ) -> RolloutExecutionResult:
     """Execute a rollout bound to one slot's current candidate.
 
@@ -2365,6 +2701,8 @@ def execute_slot_rollout(
         coordinator=coordinator,
         worker_id=worker_id,
         worker_process_id=worker_process_id,
+        application_wide_routing=application_wide_routing,
+        routing_assignment_id=routing_assignment_id,
     )
     try:
         result = _execute_and_record(
@@ -2842,6 +3180,68 @@ def _coerce_worker_acknowledgement(
         )
     except (KeyError, TypeError, ValueError):
         return None
+
+
+def _coerce_application_route_assignment(
+    raw: Any,
+) -> RolloutApplicationRouteAssignment | None:
+    if isinstance(raw, RolloutApplicationRouteAssignment):
+        return raw
+    if not isinstance(raw, Mapping):
+        return None
+    try:
+        candidate_selected = raw["candidate_selected"]
+        candidate_authoritative = raw["candidate_authoritative"]
+        if not isinstance(candidate_selected, bool) or not isinstance(
+            candidate_authoritative, bool
+        ):
+            return None
+        return RolloutApplicationRouteAssignment(
+            assignment_id=UUID(str(raw["assignment_id"])),
+            rollout_id=UUID(str(raw["rollout_id"])),
+            target_id=str(raw["target_id"]),
+            candidate_id=UUID(str(raw["candidate_id"])),
+            worker_id=str(raw["worker_id"]),
+            worker_process_id=int(raw["worker_process_id"]),
+            stage=_coerce_rollout_enum(raw["stage"], RepairRolloutStage),
+            routing_scope=str(raw["routing_scope"]),
+            routing_key_digest=str(raw["routing_key_digest"]),
+            sequence=int(raw["sequence"]),
+            bucket=int(raw["bucket"]),
+            bucket_count=int(raw["bucket_count"]),
+            configured_percentage=int(raw["configured_percentage"]),
+            candidate_selected=candidate_selected,
+            candidate_authoritative=candidate_authoritative,
+            policy_fingerprint=str(raw["policy_fingerprint"]),
+            authority_fingerprint=str(raw["authority_fingerprint"]),
+            routing_policy_fingerprint=str(raw["routing_policy_fingerprint"]),
+            created_at=datetime.fromisoformat(str(raw["created_at"])),
+            content_hash=str(raw["content_hash"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _valid_application_route_assignment(
+    assignment: RolloutApplicationRouteAssignment,
+) -> bool:
+    return (
+        bool(assignment.worker_id.strip())
+        and assignment.worker_process_id > 0
+        and bool(assignment.routing_scope.strip())
+        and len(assignment.routing_scope) <= 256
+        and assignment.sequence >= 0
+        and 0 <= assignment.bucket < assignment.bucket_count
+        and 100 <= assignment.bucket_count <= 1_000_000
+        and 0 <= assignment.configured_percentage <= 100
+        and isinstance(assignment.candidate_selected, bool)
+        and isinstance(assignment.candidate_authoritative, bool)
+        and bool(assignment.policy_fingerprint.strip())
+        and bool(assignment.authority_fingerprint.strip())
+        and bool(assignment.routing_policy_fingerprint.strip())
+        and assignment.content_hash
+        == _digest(_application_route_assignment_payload(assignment))
+    )
 
 
 def _valid_worker_acknowledgement(

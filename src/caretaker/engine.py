@@ -367,6 +367,8 @@ class RepairEngine:
         coordinator: Any | None = None,
         worker_id: str | None = None,
         worker_process_id: int | None = None,
+        application_wide_routing: bool = False,
+        routing_assignment_id: UUID | None = None,
     ) -> "RolloutExecutionResult":
         """Invoke a registered target through an authorized rollout record.
 
@@ -418,6 +420,8 @@ class RepairEngine:
             coordinator=coordinator,
             worker_id=worker_id,
             worker_process_id=worker_process_id,
+            application_wide_routing=application_wide_routing,
+            routing_assignment_id=routing_assignment_id,
         )
 
     def bind_rollout(
@@ -439,6 +443,8 @@ class RepairEngine:
         coordinator: Any | None = None,
         worker_id: str | None = None,
         worker_process_id: int | None = None,
+        application_wide_routing: bool = False,
+        routing_assignment_id: UUID | None = None,
     ) -> Callable[..., "RolloutExecutionResult"]:
         """Bind rollout routing to an ordinary application callable.
 
@@ -478,6 +484,8 @@ class RepairEngine:
                 coordinator=coordinator,
                 worker_id=worker_id,
                 worker_process_id=worker_process_id,
+                application_wide_routing=application_wide_routing,
+                routing_assignment_id=routing_assignment_id,
             )
 
         return invoke
@@ -502,6 +510,8 @@ class RepairEngine:
         coordinator: Any | None = None,
         worker_id: str | None = None,
         worker_process_id: int | None = None,
+        application_wide_routing: bool = False,
+        routing_assignment_id: UUID | None = None,
     ) -> Callable[..., Any]:
         """Return a raw-result callable bound to a decorated target.
 
@@ -541,6 +551,8 @@ class RepairEngine:
             coordinator=coordinator,
             worker_id=worker_id,
             worker_process_id=worker_process_id,
+            application_wide_routing=application_wide_routing,
+            routing_assignment_id=routing_assignment_id,
         )
 
         @functools.wraps(function)

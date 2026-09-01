@@ -42,6 +42,7 @@ from .repair_recovery import (
 from .repair_rollout import (
     RepairRolloutRecord,
     RepairRolloutTransition,
+    RolloutApplicationRouteAssignment,
     RolloutExecutionObservation,
     RolloutWorkerAcknowledgement,
 )
@@ -121,6 +122,7 @@ class InMemoryRepairStore:
         self.rollout_transitions: dict[UUID, RepairRolloutTransition] = {}
         self.rollout_executions: dict[UUID, RolloutExecutionObservation] = {}
         self.rollout_worker_acknowledgements: dict[UUID, RolloutWorkerAcknowledgement] = {}
+        self.rollout_application_routes: dict[UUID, RolloutApplicationRouteAssignment] = {}
         self.observations: dict[UUID, ObservationRecord] = {}
         self.internal_incidents: dict[UUID, InternalIncident] = {}
         self.integrity_verifications: dict[UUID, IntegrityVerification] = {}
@@ -283,6 +285,28 @@ class InMemoryRepairStore:
                 sorted(
                     self.rollout_worker_acknowledgements.values(),
                     key=lambda record: record.acknowledged_at,
+                )
+            )
+
+    def record_rollout_application_route(
+        self, record: RolloutApplicationRouteAssignment
+    ) -> None:
+        with self._lock:
+            existing = self.rollout_application_routes.get(record.assignment_id)
+            if existing is not None and existing != record:
+                raise ValueError(
+                    "application route assignment ID was already recorded with different evidence"
+                )
+            self.rollout_application_routes[record.assignment_id] = record
+
+    def all_rollout_application_routes(
+        self,
+    ) -> tuple[RolloutApplicationRouteAssignment, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    self.rollout_application_routes.values(),
+                    key=lambda record: record.sequence,
                 )
             )
 
@@ -474,6 +498,7 @@ class SQLiteRepairStore:
         "repair_rollout_transitions": "transition_id",
         "repair_rollout_executions": "observation_id",
         "repair_rollout_worker_acknowledgements": "acknowledgement_id",
+        "repair_rollout_application_routes": "assignment_id",
         "attempts": "attempt_id",
         "recovery_records": "recovery_id",
         "recovery_lifecycle_marks": "marker_id",
@@ -511,7 +536,7 @@ class SQLiteRepairStore:
                 "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
             )
             connection.execute(
-                "INSERT OR REPLACE INTO caretaker_store_metadata(key, value) VALUES ('schema_version', '8')"
+                "INSERT OR REPLACE INTO caretaker_store_metadata(key, value) VALUES ('schema_version', '9')"
             )
             for table in self._TABLES:
                 connection.execute(
@@ -711,6 +736,39 @@ class SQLiteRepairStore:
     ) -> tuple[Mapping[str, Any], ...]:
         return tuple(
             self.query_records("repair_rollout_worker_acknowledgements", limit=10000)
+        )
+
+    def record_rollout_application_route(
+        self, record: RolloutApplicationRouteAssignment
+    ) -> None:
+        payload = json.dumps(_jsonable(record), sort_keys=True, separators=(",", ":"))
+        with self._lock, closing(self._connect()) as connection:
+            existing = connection.execute(
+                "SELECT payload FROM repair_rollout_application_routes WHERE record_id = ?",
+                (str(record.assignment_id),),
+            ).fetchone()
+            if existing is not None:
+                if existing[0] != payload:
+                    raise ValueError(
+                        "application route assignment ID was already recorded with different evidence"
+                    )
+                return
+            connection.execute(
+                "INSERT INTO repair_rollout_application_routes(record_id, target_id, created_at, payload) VALUES (?, ?, ?, ?)",
+                (
+                    str(record.assignment_id),
+                    record.target_id,
+                    record.created_at.isoformat(),
+                    payload,
+                ),
+            )
+            connection.commit()
+
+    def all_rollout_application_routes(
+        self,
+    ) -> tuple[Mapping[str, Any], ...]:
+        return tuple(
+            self.query_records("repair_rollout_application_routes", limit=10000)
         )
 
     def record_recovery(self, record: RepairRecoveryRecord) -> None:

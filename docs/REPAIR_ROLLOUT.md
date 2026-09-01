@@ -2,9 +2,11 @@
 
 `RepairRolloutLedger` records the authority lifecycle of a runtime Repair
 candidate. It is an evidence and coordination boundary; it does not activate a
-`FunctionSlot`, route application traffic, or grant authority to a candidate.
-The embedding application remains responsible for performing the authorized
-operation.
+`FunctionSlot` or grant authority to a candidate. The embedding application
+remains responsible for performing the authorized operation. An optional
+`RepairRolloutCoordinator` can allocate application-wide route decisions within
+one supervisor/control-plane context, but it does not provide cross-host or
+multi-supervisor coordination.
 
 ## Lifecycle
 
@@ -239,12 +241,25 @@ available for analysis but become stale and cannot be used for routing.
 
 The supervised runtime exposes two authenticated worker requests:
 `repair-rollout-worker-ack` records the worker acknowledgement, and
-`repair-rollout-route` returns the existing deterministic routing decision only
-after the acknowledgement and current worker packet/process checks succeed.
+`repair-rollout-route` returns a deterministic routing decision only after the
+acknowledgement and current worker packet/process checks succeed. A request may
+set `application_wide=true` and provide an application-generated
+`assignment_id`; the supervisor then allocates the next bounded routing bucket
+from its durable application sequence and returns the assignment evidence.
+Reusing an assignment ID is idempotent only when the rollout context, worker
+process, routing scope, and routing-key digest all match.
 The route response contains a digest of the routing key, never the raw key.
 Neither request advances a rollout, changes policy, activates a FunctionSlot,
 or grants execution authority. These requests are a coordination/evidence
 boundary; the application still owns invocation and failure handling.
+
+Application-wide assignments are content-hashed, durably persisted when a
+rollout store is configured, restored after supervisor restart, and exposed as
+read-only status counts. Their sequence is scoped to the current
+supervisor/coordinator and rollout policy/authority context. This provides
+application-wide allocation for a single application control plane; exact
+atomic percentages across hosts or independent supervisors remain outside this
+capability.
 
 The coordinator status projection also includes a bounded execution-evidence
 summary from the durable rollout store: completed and failed calls, candidate
@@ -406,9 +421,10 @@ explicitly marked `UNSIGNED`.
 `RepairRolloutPolicy` is disabled by default so existing Repair behavior does
 not change. When enabled, validation is required, direct field activation is
 allowed only for an operator, active revocation requires a new incident, and
-permanent promotion requires deployment authority. The routing decision itself
-is implemented, while side-effect isolation and supervisor-wide traffic
-coordination remain separate capabilities and are not implied by this ledger.
+permanent promotion requires deployment authority. The routing decision and
+single-supervisor application-wide allocation are implemented, while
+side-effect isolation and cross-host/multi-supervisor traffic coordination
+remain separate capabilities and are not implied by this ledger.
 Candidate failures default to `raise`. The explicit
 `fallback-to-deployed` option is a conservative application-level escape hatch,
 restricted to a `PURE` execution contract with no observed externally visible

@@ -1303,6 +1303,323 @@ def test_supervisor_rollout_coordinator_requires_current_worker_ack() -> None:
     assert status["rollouts"][0]["stale_acknowledgement_count"] == 1
 
 
+def test_application_wide_route_allocations_are_shared_idempotent_and_bounded() -> None:
+    store = InMemoryRepairStore()
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            routing=RolloutRoutingPolicy(canary_percentage=50, bucket_count=100),
+        ),
+        store=store,
+    )
+    validated = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, validated, RepairRolloutStage.CANARY)
+    coordinator = RepairRolloutCoordinator(
+        ledger,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        store=store,
+    )
+    coordinator.acknowledge_worker(
+        rollout_id=record.rollout_id,
+        worker_id="worker-a",
+        worker_process_id=401,
+    )
+    coordinator.acknowledge_worker(
+        rollout_id=record.rollout_id,
+        worker_id="worker-b",
+        worker_process_id=402,
+    )
+
+    first_id = uuid4()
+    first = coordinator.route_application_wide(
+        rollout_id=record.rollout_id,
+        worker_id="worker-a",
+        worker_process_id=401,
+        routing_scope="tenant",
+        routing_key="tenant-1",
+        assignment_id=first_id,
+    )
+    second = coordinator.route_application_wide(
+        rollout_id=record.rollout_id,
+        worker_id="worker-b",
+        worker_process_id=402,
+        routing_scope="tenant",
+        routing_key="tenant-2",
+        assignment_id=uuid4(),
+    )
+    assert first.assignment.sequence == 0
+    assert second.assignment.sequence == 1
+    assert first.decision.application_assignment_id == first_id
+    assert first.decision.candidate_authoritative is True
+    assert second.decision.candidate_authoritative is True
+
+    repeated = coordinator.route_application_wide(
+        rollout_id=record.rollout_id,
+        worker_id="worker-a",
+        worker_process_id=401,
+        routing_scope="tenant",
+        routing_key="tenant-1",
+        assignment_id=first_id,
+    )
+    assert repeated.assignment == first.assignment
+    assert repeated.decision == first.decision
+    assert len(store.all_rollout_application_routes()) == 2
+
+    for index in range(48):
+        coordinator.route_application_wide(
+            rollout_id=record.rollout_id,
+            worker_id="worker-a",
+            worker_process_id=401,
+            routing_scope="tenant",
+            routing_key=f"tenant-extra-{index}",
+            assignment_id=uuid4(),
+        )
+    boundary = coordinator.route_application_wide(
+        rollout_id=record.rollout_id,
+        worker_id="worker-b",
+        worker_process_id=402,
+        routing_scope="tenant",
+        routing_key="tenant-boundary",
+        assignment_id=uuid4(),
+    )
+    assert boundary.assignment.sequence == 50
+    assert boundary.decision.candidate_authoritative is False
+    status = coordinator.status(record.rollout_id)["rollouts"][0]["application_routing"]
+    assert status["assignment_count"] == 51
+    assert status["candidate_authoritative_count"] == 50
+    assert status["cross_host_coordination"] is False
+
+
+def test_application_wide_routes_survive_coordinator_restart(tmp_path) -> None:
+    store = SQLiteRepairStore(tmp_path / "repair.sqlite")
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            routing=RolloutRoutingPolicy(canary_percentage=100),
+        ),
+        store=store,
+    )
+    record = _advance(
+        ledger,
+        _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED),
+        RepairRolloutStage.CANARY,
+    )
+    coordinator = RepairRolloutCoordinator(
+        ledger,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        store=store,
+    )
+    coordinator.acknowledge_worker(
+        rollout_id=record.rollout_id,
+        worker_id="worker-a",
+        worker_process_id=501,
+    )
+    first_id = uuid4()
+    first = coordinator.route_application_wide(
+        rollout_id=record.rollout_id,
+        worker_id="worker-a",
+        worker_process_id=501,
+        routing_scope="tenant",
+        routing_key="tenant-1",
+        assignment_id=first_id,
+    )
+
+    reopened_ledger = RepairRolloutLedger(policy=ledger.policy, store=store)
+    reopened = RepairRolloutCoordinator(
+        reopened_ledger,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        store=store,
+    )
+    repeated = reopened.route_application_wide(
+        rollout_id=record.rollout_id,
+        worker_id="worker-a",
+        worker_process_id=501,
+        routing_scope="tenant",
+        routing_key="tenant-1",
+        assignment_id=first_id,
+    )
+    next_route = reopened.route_application_wide(
+        rollout_id=record.rollout_id,
+        worker_id="worker-a",
+        worker_process_id=501,
+        routing_scope="tenant",
+        routing_key="tenant-2",
+        assignment_id=uuid4(),
+    )
+    assert repeated.assignment == first.assignment
+    assert next_route.assignment.sequence == 1
+    assert len(store.all_rollout_application_routes()) == 2
+
+
+def test_execute_rollout_uses_application_wide_supervisor_assignment() -> None:
+    store = InMemoryRepairStore()
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            routing=RolloutRoutingPolicy(canary_percentage=100),
+        ),
+        store=store,
+    )
+    record = _advance(
+        ledger,
+        _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED),
+        RepairRolloutStage.CANARY,
+    )
+    coordinator = RepairRolloutCoordinator(
+        ledger,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        store=store,
+    )
+    coordinator.acknowledge_worker(
+        rollout_id=record.rollout_id,
+        worker_id="worker-a",
+        worker_process_id=601,
+    )
+    assignment_id = uuid4()
+
+    result = _execute(
+        ledger,
+        record,
+        lambda value: value,
+        lambda value: value + 1,
+        coordinator=coordinator,
+        worker_id="worker-a",
+        worker_process_id=601,
+        application_wide_routing=True,
+        routing_assignment_id=assignment_id,
+    )
+
+    assert result.result == 5
+    assert result.decision.application_assignment_id == assignment_id
+    assert result.candidate_authoritative is True
+    assert len(store.all_rollout_application_routes()) == 1
+
+
+def test_application_wide_route_replay_is_bound_to_worker_and_key() -> None:
+    store = InMemoryRepairStore()
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            routing=RolloutRoutingPolicy(canary_percentage=100),
+        ),
+        store=store,
+    )
+    record = _advance(
+        ledger,
+        _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED),
+        RepairRolloutStage.CANARY,
+    )
+    coordinator = RepairRolloutCoordinator(
+        ledger,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        store=store,
+    )
+    coordinator.acknowledge_worker(
+        rollout_id=record.rollout_id,
+        worker_id="worker-a",
+        worker_process_id=701,
+    )
+    coordinator.acknowledge_worker(
+        rollout_id=record.rollout_id,
+        worker_id="worker-b",
+        worker_process_id=702,
+    )
+    assignment_id = uuid4()
+    coordinator.route_application_wide(
+        rollout_id=record.rollout_id,
+        worker_id="worker-a",
+        worker_process_id=701,
+        routing_scope="tenant",
+        routing_key="tenant-1",
+        assignment_id=assignment_id,
+    )
+
+    with pytest.raises(PermissionError, match="another worker"):
+        coordinator.route_application_wide(
+            rollout_id=record.rollout_id,
+            worker_id="worker-b",
+            worker_process_id=702,
+            routing_scope="tenant",
+            routing_key="tenant-1",
+            assignment_id=assignment_id,
+        )
+    with pytest.raises(RepairRolloutError, match="key does not match"):
+        coordinator.route_application_wide(
+            rollout_id=record.rollout_id,
+            worker_id="worker-a",
+            worker_process_id=701,
+            routing_scope="tenant",
+            routing_key="tenant-2",
+            assignment_id=assignment_id,
+        )
+
+
+def test_application_wide_route_replay_is_invalidated_by_routing_policy_change() -> None:
+    store = InMemoryRepairStore()
+    policy = RepairRolloutPolicy(
+        enabled=True,
+        allow_operator_routing_changes=True,
+        routing=RolloutRoutingPolicy(canary_percentage=100),
+    )
+    ledger = RepairRolloutLedger(policy=policy, store=store)
+    record = _advance(
+        ledger,
+        _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED),
+        RepairRolloutStage.CANARY,
+    )
+    coordinator = RepairRolloutCoordinator(
+        ledger,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        store=store,
+    )
+    coordinator.acknowledge_worker(
+        rollout_id=record.rollout_id,
+        worker_id="worker-a",
+        worker_process_id=801,
+    )
+    assignment_id = uuid4()
+    coordinator.route_application_wide(
+        rollout_id=record.rollout_id,
+        worker_id="worker-a",
+        worker_process_id=801,
+        routing_scope="tenant",
+        routing_key="tenant-1",
+        assignment_id=assignment_id,
+    )
+    updated = ledger.update_routing_percentages(
+        record.rollout_id,
+        shadow_sample_percentage=0,
+        canary_percentage=99,
+        active_candidate_percentage=0,
+        authority_type=RepairRolloutAuthority.OPERATOR,
+        authority_id="operator-1",
+        reason="reduce canary allocation",
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+    )
+    coordinator.acknowledge_worker(
+        rollout_id=updated.rollout_id,
+        worker_id="worker-a",
+        worker_process_id=801,
+    )
+
+    with pytest.raises(RepairRolloutError, match="stale"):
+        coordinator.route_application_wide(
+            rollout_id=updated.rollout_id,
+            worker_id="worker-a",
+            worker_process_id=801,
+            routing_scope="tenant",
+            routing_key="tenant-1",
+            assignment_id=assignment_id,
+        )
+
+
 def test_rollout_coordinator_does_not_treat_missing_execution_store_as_progress() -> None:
     ledger = _ledger()
     record = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)

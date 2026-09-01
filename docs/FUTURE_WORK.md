@@ -993,7 +993,7 @@ Future work may export a signed review bundle containing a unified diff, origina
 
 ## Policy-controlled Repair rollout, mirroring, and shadow execution
 
-**Status: In progress in development tree; effect-aware contract, evidence gate, deterministic routing decision, registry-aware FunctionSlot invocation bridge, explicit application-owned raw-result callable binding, conservative pure-only candidate-failure fallback, policy-controlled candidate-authoritative mirroring, policy-defined staged routing ramps, stage-specific readiness requirements, and readiness-gated supervisor-cycle advancement implemented; richer fallback policy, fleet-wide routing, implicit arbitrary-callable replacement, and deployment-owned orchestration remain future work.**
+**Status: In progress in development tree; effect-aware contract, evidence gate, deterministic routing decision, registry-aware FunctionSlot invocation bridge, explicit application-owned raw-result callable binding, conservative pure-only candidate-failure fallback, policy-controlled candidate-authoritative mirroring, policy-defined staged routing ramps, stage-specific readiness requirements, readiness-gated supervisor-cycle advancement, and durable supervisor-owned application-wide route allocation implemented; richer fallback policy, cross-host or multi-supervisor fleet coordination, implicit arbitrary-callable replacement, and deployment-owned orchestration remain future work.**
 
 Caretaker currently supports candidate probation and a narrow
 `PURE_FUNCTION` differential-execution mode. For explicitly confirmed pure
@@ -1098,8 +1098,9 @@ stages: pause is fail-closed and readiness-free, resume requires readiness or
 an explicit override, and a paused rollout cannot advance or become permanent
 until resumed. Policy-authorized operator percentage changes are recorded as
 same-stage transitions; increases require explicit policy permission and
-readiness or an override. FunctionSlot activation, atomic fleet percentages,
-and deployment-owned worker orchestration remain future work. A registry-aware
+readiness or an override. FunctionSlot activation, atomic cross-host or
+multi-supervisor percentages, and deployment-owned worker orchestration remain
+future work. A registry-aware
 `RepairEngine.invoke_rollout()` bridge now resolves the rollout target on every
 invocation and delegates to the strict slot binding. Its explicit
 `bind_rollout()` convenience wrapper can resolve a current record and routing
@@ -1124,6 +1125,15 @@ shadow, canary, and active stages. The supervisor selects the requirements for
 the next stage under review, and unspecified stages inherit the global policy.
 These overrides remain evidence gates only; they do not grant authority or
 permit lifecycle skips.
+The supervisor can also allocate application-wide route assignments for a
+single application control plane. Each application-supplied assignment ID is
+idempotent, binds the decision to the acknowledged worker process and current
+rollout context, retains a content-hashed durable assignment, and uses a
+bounded supervisor-owned sequence so multiple workers share one allocation
+space. This remains a routing/evidence boundary: it does not activate a
+FunctionSlot, grant authority, or coordinate across hosts or independent
+supervisors. Atomic multi-host fleet percentages and cross-supervisor
+coordination remain future work.
 The supervised control plane now has an explicitly confirmed operator advance
 request that uses those readiness results for promotion and preserves a
 separate safety path for retirement or incident-backed revocation. A proposed

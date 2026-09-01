@@ -2206,14 +2206,34 @@ def main(argv: list[str] | None = None) -> int:
             record = coordinator.ledger.get(rollout_id)
             if worker.target_id != record.target_id:
                 raise PermissionError("rollout worker target does not match rollout target")
-            decision = coordinator.route(
-                rollout_id=rollout_id,
-                worker_id=str(worker.worker_id),
-                worker_process_id=worker.process_id,
-                routing_scope=str(request.get("routing_scope") or ""),
-                routing_key=str(request.get("routing_key") or ""),
-            )
-            return {
+            application_wide = request.get("application_wide") is True
+            assignment = None
+            if application_wide:
+                try:
+                    assignment_id = UUID(str(request["assignment_id"]))
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise ValueError(
+                        "application-wide rollout route requires a valid assignment_id"
+                    ) from exc
+                application_route = coordinator.route_application_wide(
+                    rollout_id=rollout_id,
+                    worker_id=str(worker.worker_id),
+                    worker_process_id=worker.process_id,
+                    routing_scope=str(request.get("routing_scope") or ""),
+                    routing_key=str(request.get("routing_key") or ""),
+                    assignment_id=assignment_id,
+                )
+                decision = application_route.decision
+                assignment = application_route.assignment
+            else:
+                decision = coordinator.route(
+                    rollout_id=rollout_id,
+                    worker_id=str(worker.worker_id),
+                    worker_process_id=worker.process_id,
+                    routing_scope=str(request.get("routing_scope") or ""),
+                    routing_key=str(request.get("routing_key") or ""),
+                )
+            response = {
                 "ok": True,
                 "read_only": True,
                 "authority_granted": False,
@@ -2234,8 +2254,18 @@ def main(argv: list[str] | None = None) -> int:
                     "policy_fingerprint": decision.policy_fingerprint,
                     "decision_hash": decision.decision_hash,
                     "reason": decision.reason,
+                    "application_assignment_id": (
+                        str(decision.application_assignment_id)
+                        if decision.application_assignment_id is not None
+                        else None
+                    ),
                 },
             }
+            if assignment is not None:
+                response["application_route_assignment"] = json.loads(
+                    json.dumps(asdict(assignment), default=str)
+                )
+            return response
         if command == "repair-rollout-advance":
             ledger = rollout_ledger_holder.get("ledger")
             coordinator = rollout_coordinator_holder.get("coordinator")
