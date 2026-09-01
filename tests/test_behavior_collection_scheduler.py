@@ -735,6 +735,40 @@ def test_guard_backlog_reports_waiting_and_queued_current_generations(
     assert queued["items"][0]["request_id"] == request["request_id"]
 
 
+def test_guard_backlog_does_not_apply_an_older_generation_request(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("CARETAKER_DATA_DIR", str(tmp_path))
+    guard = GuardEngine(policy=GuardPolicy())
+
+    def sample(value: int) -> int:
+        return value
+
+    guard.register_target(
+        "example.generation-backlog",
+        sample,
+        GuardBinding(enabled=True),
+        periodic=False,
+    )
+    guard.behavior_collection_scheduler.enqueue(
+        scope="function",
+        subject="example.generation-backlog",
+        requested_calls=1,
+        requested_by="uid:1001",
+        reason="old generation request",
+        requested_generation="generation-old",
+    )
+
+    item = next(
+        item
+        for item in guard.behavior_collection_backlog()["items"]
+        if item["target_id"] == "example.generation-backlog"
+    )
+
+    assert item["status"] == "armed_waiting"
+    assert item["request_id"] is None
+
+
 def test_guard_backlog_marks_stale_and_suspicious_generations_for_opt_in_priority(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -658,9 +658,11 @@ evidence-collection request, not acceptance of the resulting behavior as a
 trusted Guard baseline. Generation-aware collection requests now fail closed
 when the resulting capture has a missing or different generation; the failed
 capture remains bounded evidence with its mismatch reason. The same generation
-binding is used by live behavior comparison. Requested evidence targets or
-durations and durable eventual outcomes remain part of the broader coverage
-orchestration work.
+binding is used by live behavior comparison. Backlog classification also
+ignores queued or failed requests explicitly bound to an older generation, so
+they cannot suppress current-generation coverage. Requested evidence targets
+or durations and durable eventual outcomes remain part of the broader
+coverage orchestration work.
 
 Behavior collection must have an application-wide resource budget. A scheduler
 should limit active high-cost collection using measured overhead as well as a

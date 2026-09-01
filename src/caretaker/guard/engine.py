@@ -1098,6 +1098,12 @@ class GuardEngine(GuardFacade):
                 or 0
             )
             request = requests.get(("function", target_id))
+            if request is not None:
+                requested_generation = str(request.get("requested_generation") or "")
+                if requested_generation and requested_generation != generation_id:
+                    # Retain old-generation work in the scheduler, but do not
+                    # let it classify or suppress coverage for this generation.
+                    request = None
             priority = 0
             priority_reasons: list[str] = []
             snapshot_age_seconds: float | None = None
