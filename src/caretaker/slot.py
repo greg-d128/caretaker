@@ -247,6 +247,107 @@ class FunctionSlot:
             self._state = SlotState.CANDIDATE_ACTIVE
             return self._observation
 
+    def restore_observation_session(
+        self,
+        *,
+        candidate_id: UUID,
+        function_version: int,
+        started_at: datetime,
+        successful_executions: int,
+        failed_executions: int,
+        acceptance: AcceptanceCriteria,
+        now: datetime | None = None,
+    ) -> ObservationSession:
+        """Restore counters for the current candidate without activating it.
+
+        The application must first establish the candidate as the current
+        implementation through its ordinary, authorized activation path. This
+        method only rehydrates the observation session from separately
+        deduplicated evidence. It never changes the current implementation,
+        creates a candidate, or grants authority.
+
+        A fresh zero-count session created by an application activation may be
+        replaced by the recovered counters. Once local observations exist,
+        only an identical restore is accepted; silently merging two unknown
+        counter sets would risk double counting.
+        """
+        if not isinstance(candidate_id, UUID):
+            raise TypeError("candidate_id must be a UUID")
+        if (
+            isinstance(function_version, bool)
+            or not isinstance(function_version, int)
+            or function_version < 0
+        ):
+            raise ValueError("function_version must be a non-negative integer")
+        if started_at.tzinfo is None or started_at.utcoffset() is None:
+            raise ValueError("started_at must be timezone-aware")
+        for name, value in (
+            ("successful_executions", successful_executions),
+            ("failed_executions", failed_executions),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
+
+        current_time = now or utcnow()
+        if current_time.tzinfo is None or current_time.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        if not isinstance(acceptance, AcceptanceCriteria):
+            raise TypeError("acceptance must be AcceptanceCriteria")
+
+        if long_term_accepted(
+            successful_executions=successful_executions,
+            failed_executions=failed_executions,
+            started_at=started_at,
+            criteria=acceptance,
+            now=current_time,
+        ):
+            candidate_state = CandidateState.LONG_TERM_ACCEPTED
+        elif short_term_accepted(
+            successful_executions=successful_executions,
+            failed_executions=failed_executions,
+            criteria=acceptance,
+        ):
+            candidate_state = CandidateState.INITIALLY_VALIDATED
+        elif failed_executions:
+            candidate_state = CandidateState.DEGRADED
+        else:
+            candidate_state = CandidateState.ACTIVE_PROBATION
+
+        restored = ObservationSession(
+            candidate_id=candidate_id,
+            function_version=function_version,
+            started_at=started_at,
+            successful_executions=successful_executions,
+            failed_executions=failed_executions,
+            state=candidate_state,
+        )
+        with self._condition:
+            if (
+                self._current.candidate_id != candidate_id
+                or self._current.number != function_version
+            ):
+                raise SlotConflictError(
+                    "observation recovery does not match the current candidate"
+                )
+            existing = self._observation
+            if existing is not None:
+                if existing == restored:
+                    return existing
+                if (
+                    existing.candidate_id != candidate_id
+                    or existing.function_version != function_version
+                    or existing.successful_executions != 0
+                    or existing.failed_executions != 0
+                ):
+                    raise SlotConflictError(
+                        "observation recovery would merge with local observations"
+                    )
+            self._observation = restored
+            self._current = replace(self._current, candidate_state=candidate_state)
+            self._state = self._state_for_current_version()
+            self._condition.notify_all()
+            return restored
+
     def rollback(self, expected_version: int) -> FunctionVersion:
         with self._condition:
             if self._current.number != expected_version:

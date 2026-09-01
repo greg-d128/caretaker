@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
 from .contracts import Comparator, normalize_comparison_result
 from .domain import CandidateState, ObservationRecord, utcnow
 from .policy import ObservationPolicy
-from .slot import FunctionSlot, FunctionVersion
+from .slot import FunctionSlot, FunctionVersion, ObservationSession
 from .shadow import (
     ShadowExecutionAdapter,
     ShadowExecutionResult,
@@ -49,6 +51,75 @@ class ObservationFailureDecision:
 class ObservationManager:
     def __init__(self, store: RepairStore) -> None:
         self.store = store
+
+    def restore_candidate_observation(
+        self,
+        *,
+        slot: FunctionSlot,
+        recovery_state: Mapping[str, Any],
+        started_at: datetime,
+        policy: ObservationPolicy,
+        now: datetime | None = None,
+    ) -> ObservationSession:
+        """Apply a verified, deduplicated recovery projection to a live slot.
+
+        ``recover_candidate_observation_state`` is deliberately read-only. An
+        application may call this method only after it has authorized and
+        activated the matching candidate. Conflicting evidence, a missing
+        recovery identity, or a non-ready projection fails closed; no counters
+        are merged and no implementation is changed.
+        """
+        if not isinstance(recovery_state, Mapping):
+            raise TypeError("recovery_state must be a mapping")
+        if recovery_state.get("schema_version") != 1:
+            raise ValueError("unsupported observation recovery schema version")
+        if recovery_state.get("read_only") is not True:
+            raise ValueError("observation recovery must be a read-only projection")
+        if recovery_state.get("authority_granted") is not False:
+            raise ValueError("observation recovery cannot grant authority")
+        if recovery_state.get("state") != "PERSISTED_EVIDENCE_READY":
+            raise ValueError("observation recovery evidence is not ready to restore")
+        if recovery_state.get("target_id") != slot.target_id:
+            raise ValueError("observation recovery target does not match the slot")
+
+        try:
+            candidate_id = UUID(str(recovery_state.get("candidate_id") or ""))
+        except (ValueError, AttributeError) as exc:
+            raise ValueError("observation recovery candidate ID is invalid") from exc
+        function_version = recovery_state.get("function_version")
+        if isinstance(function_version, bool) or not isinstance(function_version, int):
+            raise ValueError("observation recovery function version is invalid")
+        observation_count = recovery_state.get("observation_count")
+        if isinstance(observation_count, bool) or not isinstance(observation_count, int):
+            raise ValueError("observation recovery count is invalid")
+        if observation_count <= 0:
+            raise ValueError("observation recovery requires persisted observations")
+        if recovery_state.get("conflicting_observation_ids"):
+            raise ValueError("observation recovery contains conflicting evidence")
+
+        successful_executions = recovery_state.get("successful_executions")
+        failed_executions = recovery_state.get("failed_executions")
+        if (
+            isinstance(successful_executions, bool)
+            or not isinstance(successful_executions, int)
+            or successful_executions < 0
+            or isinstance(failed_executions, bool)
+            or not isinstance(failed_executions, int)
+            or failed_executions < 0
+        ):
+            raise ValueError("observation recovery execution counts are invalid")
+        if successful_executions + failed_executions != observation_count:
+            raise ValueError("observation recovery counts do not match observation count")
+
+        return slot.restore_observation_session(
+            candidate_id=candidate_id,
+            function_version=function_version,
+            started_at=started_at,
+            successful_executions=successful_executions,
+            failed_executions=failed_executions,
+            acceptance=policy,
+            now=now,
+        )
 
     def record_success(
         self,

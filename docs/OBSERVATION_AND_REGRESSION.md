@@ -28,6 +28,19 @@ After activation, a candidate starts in `ACTIVE_PROBATION`. Successful execution
 
 Failures are counted separately from successes. During probation, automatic rollback occurs only after the configured failure budget is exceeded. Long-term acceptance uses count and rate budgets and does not automatically roll back unless configured.
 
+Persisted observation evidence can be rehydrated after a process-local manager
+restart with `ObservationManager.restore_candidate_observation()`. The caller
+must first establish the exact candidate and function version through the
+application's ordinary authorized activation path, then pass the bounded,
+read-only result from `recover_candidate_observation_state()` and the
+application's original observation start time. The method derives the
+candidate state from the current observation policy; it does not trust a state
+label supplied by persisted evidence. It rejects conflicting evidence, mismatched
+candidate/version identities, and attempts to merge with already-counted local
+observations. Reapplying the same projection is idempotent. This restores
+probation/acceptance counters without replaying calls, reactivating a candidate,
+or granting authority.
+
 ## Function execution contracts and effect evidence
 
 Registered targets may declare a `FunctionExecutionContract`:

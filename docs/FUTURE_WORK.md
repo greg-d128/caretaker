@@ -1662,8 +1662,14 @@ without replaying calls or treating the projection as candidate activation;
 continuation still requires live candidate, policy, and authority
 revalidation. The Recovery console shows the bounded observation count and
 success/failure split for each interrupted attempt, while retaining the full
-projection for detail inspection. Automatic FunctionSlot reactivation remains
-future work.
+projection for detail inspection. An application that has independently
+activated the exact candidate can now use
+`ObservationManager.restore_candidate_observation()` to rehydrate the
+deduplicated counters into its fresh zero-count observation session. The
+restore requires an exact target/candidate/version match, derives the state
+from the active observation policy, rejects conflicting evidence or local
+counter merges, and is idempotent. It does not reactivate a candidate or grant
+authority; automatic FunctionSlot reactivation remains future work.
 
 Applying a recovery plan now also writes immutable, content-addressed lifecycle
 marks for the interrupted attempt and each linked incident, episode, generation,

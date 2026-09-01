@@ -29,8 +29,20 @@ from caretaker import (
     select_recovery_action,
     recover_candidate_observation_state,
 )
-from caretaker.domain import ObservationRecord, RepairAttempt, RepairAttemptOutcome, RepairAttemptStage
-from caretaker.policy import PolicyConfigurationError, RepairPolicy, validate_policy
+from caretaker.domain import (
+    ObservationRecord,
+    RepairAttempt,
+    RepairAttemptOutcome,
+    RepairAttemptStage,
+)
+from caretaker.observation import ObservationManager
+from caretaker.policy import (
+    ObservationPolicy,
+    PolicyConfigurationError,
+    RepairPolicy,
+    validate_policy,
+)
+from caretaker.slot import FunctionSlot, SlotConflictError
 
 
 def _attempt(*, target_id: str, completed: bool, outcome: RepairAttemptOutcome) -> RepairAttempt:
@@ -124,6 +136,138 @@ def test_observation_recovery_is_durable_idempotent_and_read_only(tmp_path: Path
         assert recovered["failed_executions"] == 1
         assert recovered["duplicate_observation_count"] == 0
         assert recovered["double_count_protection"] == "OBSERVATION_ID_UNIQUENESS"
+
+
+def test_observation_recovery_rehydrates_live_candidate_without_granting_authority() -> None:
+    store = InMemoryRepairStore()
+    slot = FunctionSlot(
+        target_id="app:charge",
+        original=lambda value: value,
+        original_source="return value",
+        original_source_hash="base-hash",
+    )
+    candidate_id = uuid4()
+    lease = slot.begin_repair()
+    slot.activate(
+        lease=lease,
+        implementation=lambda value: value + 1,
+        source="return value + 1",
+        source_hash="candidate-hash",
+        repair_attempt_id=uuid4(),
+        candidate_id=candidate_id,
+    )
+    occurred_at = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    first = _observation(
+        target_id=slot.target_id,
+        candidate_id=candidate_id,
+        call_id=uuid4(),
+        occurred_at=occurred_at,
+        success=True,
+    )
+    second = _observation(
+        target_id=slot.target_id,
+        candidate_id=candidate_id,
+        call_id=uuid4(),
+        occurred_at=occurred_at + timedelta(minutes=1),
+        success=True,
+    )
+    store.record_observation(first)
+    store.record_observation(second)
+    recovered = recover_candidate_observation_state(
+        store,
+        target_id=slot.target_id,
+        candidate_id=str(candidate_id),
+        function_version=1,
+    )
+    manager = ObservationManager(store)
+    policy = ObservationPolicy(
+        initial_successful_executions=2,
+        long_term_successful_executions=10,
+    )
+
+    restored = manager.restore_candidate_observation(
+        slot=slot,
+        recovery_state=recovered,
+        started_at=occurred_at,
+        policy=policy,
+        now=occurred_at + timedelta(minutes=2),
+    )
+
+    assert restored.successful_executions == 2
+    assert restored.failed_executions == 0
+    assert restored.state.name == "INITIALLY_VALIDATED"
+    assert slot.load().source_hash == "candidate-hash"
+    assert slot.snapshot()["candidate_state"] == "INITIALLY_VALIDATED"
+    assert manager.restore_candidate_observation(
+        slot=slot,
+        recovery_state=recovered,
+        started_at=occurred_at,
+        policy=policy,
+        now=occurred_at + timedelta(minutes=2),
+    ) == restored
+
+
+def test_observation_recovery_rejects_conflicts_and_local_counter_merges() -> None:
+    store = InMemoryRepairStore()
+    slot = FunctionSlot(target_id="app:charge", original=lambda value: value)
+    candidate_id = uuid4()
+    lease = slot.begin_repair()
+    slot.activate(
+        lease=lease,
+        implementation=lambda value: value + 1,
+        source="return value + 1",
+        source_hash="candidate-hash",
+        repair_attempt_id=uuid4(),
+        candidate_id=candidate_id,
+    )
+    occurred_at = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    store.record_observation(
+        _observation(
+            target_id=slot.target_id,
+            candidate_id=candidate_id,
+            call_id=uuid4(),
+            occurred_at=occurred_at,
+            success=True,
+        )
+    )
+    state = recover_candidate_observation_state(
+        store,
+        target_id=slot.target_id,
+        candidate_id=str(candidate_id),
+        function_version=1,
+    )
+    manager = ObservationManager(store)
+    policy = ObservationPolicy()
+    restored = manager.restore_candidate_observation(
+        slot=slot,
+        recovery_state=state,
+        started_at=occurred_at,
+        policy=policy,
+        now=occurred_at + timedelta(minutes=1),
+    )
+    assert restored.successful_executions == 1
+
+    altered = dict(state)
+    altered["successful_executions"] = 2
+    altered["observation_count"] = 2
+    with pytest.raises(SlotConflictError, match="merge with local observations"):
+        manager.restore_candidate_observation(
+            slot=slot,
+            recovery_state=altered,
+            started_at=occurred_at,
+            policy=policy,
+            now=occurred_at + timedelta(minutes=1),
+        )
+
+    conflicting = dict(state)
+    conflicting["state"] = "CONFLICTING_EVIDENCE"
+    with pytest.raises(ValueError, match="not ready"):
+        manager.restore_candidate_observation(
+            slot=slot,
+            recovery_state=conflicting,
+            started_at=occurred_at,
+            policy=policy,
+        )
 
 
 def test_recovery_plan_includes_persisted_candidate_observation_state() -> None:
