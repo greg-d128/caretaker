@@ -265,6 +265,33 @@ decision hash. Candidate failures follow the configured observation rollback
 policy and are re-raised. Shadow outcomes remain non-authoritative evidence and
 are not counted toward acceptance.
 
+For applications using a `RepairEngine`, `engine.invoke_rollout()` is the
+registry-aware invocation boundary:
+
+```python
+result = engine.invoke_rollout(
+    rollout,
+    policy=rollout_policy,
+    policy_fingerprint=current_policy_fingerprint,
+    routing_scope="tenant",
+    routing_key=tenant_id,
+    args=(request,),
+)
+```
+
+The engine resolves the rollout's target ID through the current registry and
+then delegates to `execute_slot_rollout()`. This means the installed
+`FunctionSlot` candidate and its preceding deployed version are checked on
+every invocation, rather than being captured by a long-lived application
+closure. Candidate-authoritative calls are recorded through the engine's
+existing `ObservationManager` by default; callers that already account for
+outcomes elsewhere may set `record_observation=False`. The method does not
+activate a slot, change lifecycle state, or create authority, and applications
+remain responsible for choosing the routing key and deciding when to use this
+boundary. Automatic replacement of an existing decorated callable with a
+rollout-aware path, fleet-wide routing, and deployment-owned worker lifecycle
+remain future work.
+
 For example:
 
 ```python

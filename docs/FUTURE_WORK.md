@@ -934,7 +934,7 @@ Future work may export a signed review bundle containing a unified diff, origina
 
 ## Policy-controlled Repair rollout, mirroring, and shadow execution
 
-**Status: Design clarified; effect-aware contract, evidence gate, deterministic routing decision, and a narrow invocation adapter implemented; rollout orchestration remains future work.**
+**Status: Design clarified; effect-aware contract, evidence gate, deterministic routing decision, and registry-aware FunctionSlot invocation bridge implemented; automatic application traffic orchestration remains future work.**
 
 Caretaker currently supports candidate probation and a narrow
 `PURE_FUNCTION` differential-execution mode. For explicitly confirmed pure
@@ -1013,7 +1013,10 @@ an explicit override, and a paused rollout cannot advance or become permanent
 until resumed. Policy-authorized operator percentage changes are recorded as
 same-stage transitions; increases require explicit policy permission and
 readiness or an override. FunctionSlot activation, atomic fleet percentages,
-and deployment-owned worker orchestration remain future work.
+and deployment-owned worker orchestration remain future work. A registry-aware
+`RepairEngine.invoke_rollout()` bridge now resolves the rollout target on every
+invocation and delegates to the strict slot binding; automatic replacement of
+existing decorated application callables remains future work.
 Optional `RolloutReadinessRequirements` now evaluates explicit evidence
 thresholds for the next stage and reports each passing or failing check without
 advancing the rollout. Thresholds remain disabled by default; staged authority,

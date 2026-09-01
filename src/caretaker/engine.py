@@ -317,6 +317,81 @@ class RepairEngine:
         """
         return apply_repair_recovery_plan(self.store, plan, handlers=handlers)
 
+    def invoke_rollout(
+        self,
+        rollout: "RepairRolloutRecord",
+        *,
+        policy: "RepairRolloutPolicy | None" = None,
+        policy_fingerprint: str,
+        routing_scope: str,
+        routing_key: str,
+        args: tuple[Any, ...] = (),
+        kwargs: Mapping[str, Any] | None = None,
+        effect_observation: "EffectObservation | None" = None,
+        behavior_capture: Mapping[str, Any] | None = None,
+        behavior_capture_complete: bool = False,
+        isolation_adapter: "ShadowExecutionAdapter | None" = None,
+        comparator: Callable[[Any, Any], Any] | None = None,
+        audit_event: Callable[..., Any] | None = None,
+        record_observation: bool = True,
+        execution_store: Any | None = None,
+        execution_id: UUID | None = None,
+        coordinator: Any | None = None,
+        worker_id: str | None = None,
+        worker_process_id: int | None = None,
+    ) -> "RolloutExecutionResult":
+        """Invoke a registered target through an authorized rollout record.
+
+        This is the application-facing bridge between the target registry's
+        installed ``FunctionSlot`` and the policy-bound rollout executor.  It
+        resolves the target by the rollout's own identity on every call, so a
+        stale or mismatched rollout cannot be applied to another slot.  The
+        rollout executor still performs candidate/source, policy, authority,
+        worker-context, and effect-isolation checks.
+
+        The engine records authoritative candidate outcomes by default using
+        the target's existing observation policy.  Shadow outcomes remain
+        evidence only.  Set ``record_observation=False`` only when the caller
+        is deliberately supplying accounting through another application-owned
+        path.
+        """
+        target_id = str(getattr(rollout, "target_id", "")).strip()
+        if not target_id:
+            raise ValueError("rollout target_id is required")
+        target = self.registry.find(target_id)
+        if target is None:
+            raise KeyError(f"rollout target is not registered: {target_id}")
+
+        from .repair_rollout import execute_slot_rollout
+
+        observation_manager = self.observation if record_observation else None
+        observation_policy = target.policy.observation if record_observation else None
+        call_id = uuid4() if record_observation else None
+        return execute_slot_rollout(
+            target.slot,
+            rollout,
+            policy=policy if policy is not None else target.policy.rollout,
+            policy_fingerprint=policy_fingerprint,
+            routing_scope=routing_scope,
+            routing_key=routing_key,
+            args=tuple(args),
+            kwargs=dict(kwargs or {}),
+            effect_observation=effect_observation,
+            behavior_capture=behavior_capture,
+            behavior_capture_complete=behavior_capture_complete,
+            isolation_adapter=isolation_adapter,
+            comparator=comparator,
+            audit_event=audit_event,
+            observation_manager=observation_manager,
+            observation_policy=observation_policy,
+            call_id=call_id,
+            execution_store=execution_store,
+            execution_id=execution_id,
+            coordinator=coordinator,
+            worker_id=worker_id,
+            worker_process_id=worker_process_id,
+        )
+
     def record_candidate_observation_success(
         self,
         *,
@@ -2244,4 +2319,11 @@ class RepairEngine:
         return hashlib.sha256(repr(payload).encode("utf-8")).hexdigest()
 if TYPE_CHECKING:
     from .guard.facade import GuardFacade
+    from .execution import EffectObservation
+    from .repair_rollout import (
+        RepairRolloutPolicy,
+        RepairRolloutRecord,
+        RolloutExecutionResult,
+    )
+    from .shadow import ShadowExecutionAdapter
     from .guard.models import BehaviorDeviation

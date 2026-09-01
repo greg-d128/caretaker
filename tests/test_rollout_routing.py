@@ -10,6 +10,7 @@ from caretaker import (
     FunctionExecutionContract,
     InMemoryRepairStore,
     ObservationPolicy,
+    RepairEngine,
     RepairRolloutAuthority,
     RepairRolloutCoordinator,
     RepairRolloutError,
@@ -17,6 +18,7 @@ from caretaker import (
     RepairRolloutLedger,
     RepairRolloutPolicy,
     RepairRolloutStage,
+    RepairPolicy,
     RolloutReadinessRequirements,
     RolloutRoutingPolicy,
     SQLiteRepairStore,
@@ -27,6 +29,7 @@ from caretaker import (
 )
 from caretaker.domain import ReplaySafety, SideEffectClass
 from caretaker.observation import ObservationManager
+from caretaker.registry import build_target
 from caretaker.run import (
     _handle_rollout_advance_request,
     _handle_rollout_pause_request,
@@ -117,6 +120,47 @@ def _slot_and_record(ledger: RepairRolloutLedger):
         proposed_by="advisory-engine",
     )
     return slot, record
+
+
+def _engine_slot_and_record(
+    ledger: RepairRolloutLedger,
+    final_stage: RepairRolloutStage = RepairRolloutStage.CANARY,
+):
+    store = InMemoryRepairStore()
+    engine = RepairEngine(store=store)
+
+    def deployed(value: int) -> int:
+        return value
+
+    target = build_target(
+        deployed,
+        policy=RepairPolicy(rollout=ledger.policy),
+        target_id="example.target",
+        execution_contract=_pure_contract(),
+    )
+    engine.register(target)
+    candidate_id = uuid4()
+    lease = target.slot.begin_repair()
+    target.slot.activate(
+        lease=lease,
+        implementation=lambda value: value + 1,
+        source="candidate-source",
+        source_hash="candidate-hash",
+        repair_attempt_id=uuid4(),
+        candidate_id=candidate_id,
+    )
+    record = ledger.create(
+        target_id=target.target_id,
+        incident_id=uuid4(),
+        candidate_id=candidate_id,
+        candidate_source_hash="candidate-hash",
+        base_source_hash=target.slot.previous().source_hash,
+        policy_fingerprint="policy-hash",
+        authority_fingerprint="authority-hash",
+        proposed_by="advisory-engine",
+    )
+    record = _advance(ledger, record, RepairRolloutStage.VALIDATED)
+    return engine, target, store, _advance(ledger, record, final_stage)
 
 
 def _execute(ledger: RepairRolloutLedger, record, deployed, candidate, **kwargs):
@@ -260,6 +304,67 @@ def test_execute_slot_rollout_binds_previous_and_current_versions() -> None:
     assert result.shadow_result.candidate_result == 5
     assert result.candidate_authoritative is False
     assert slot.load().number == version_before
+
+
+def test_engine_invokes_registered_slot_rollout_and_records_observation() -> None:
+    ledger = _ledger(canary_percentage=100)
+    engine, target, store, record = _engine_slot_and_record(ledger)
+
+    result = engine.invoke_rollout(
+        record,
+        policy=ledger.policy,
+        policy_fingerprint="policy-hash",
+        routing_scope="tenant",
+        routing_key="tenant-1",
+        args=(4,),
+        effect_observation=EffectObservation(complete=True),
+    )
+
+    assert result.result == 5
+    assert result.candidate_authoritative is True
+    assert target.slot.observation() is not None
+    assert target.slot.observation().successful_executions == 1
+    assert len(store.observations) == 1
+
+
+def test_engine_rollout_bridge_keeps_shadow_result_non_authoritative() -> None:
+    ledger = _ledger(shadow_sample_percentage=100)
+    engine, target, store, record = _engine_slot_and_record(
+        ledger, final_stage=RepairRolloutStage.SHADOW
+    )
+
+    result = engine.invoke_rollout(
+        record,
+        policy=ledger.policy,
+        policy_fingerprint="policy-hash",
+        routing_scope="tenant",
+        routing_key="tenant-1",
+        args=(4,),
+        effect_observation=EffectObservation(complete=True),
+    )
+
+    assert result.result == 4
+    assert result.shadow_result is not None
+    assert result.shadow_result.candidate_result == 5
+    assert result.candidate_authoritative is False
+    assert target.slot.observation().successful_executions == 0
+    assert store.observations == {}
+
+
+def test_engine_rollout_bridge_rejects_unregistered_target() -> None:
+    ledger = _ledger(canary_percentage=100)
+    engine = RepairEngine()
+    record = _record(ledger)
+
+    with pytest.raises(KeyError, match="not registered"):
+        engine.invoke_rollout(
+            record,
+            policy=ledger.policy,
+            policy_fingerprint="policy-hash",
+            routing_scope="tenant",
+            routing_key="tenant-1",
+            args=(4,),
+        )
 
 
 def test_execute_slot_rollout_can_require_supervisor_worker_context() -> None:
