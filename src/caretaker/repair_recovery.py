@@ -19,6 +19,11 @@ from typing import Any, Callable
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from .domain import RepairAttemptOutcome, RepairAttemptStage, RepairEpisodeOutcome, utcnow
+from .transport import (
+    APPLICATION_TRANSPORT_MAX_MESSAGE_BYTES,
+    ApplicationLocalQueueTransport,
+    ApplicationTransportError,
+)
 
 
 RECOVERY_PLAN_SCHEMA_VERSION = 1
@@ -1757,6 +1762,166 @@ def deserialize_worker_replacement_request(
         authority_packet=packet,
         reason=reason,
     )
+
+
+class QueueWorkerAuthorityPacketTransport:
+    """Carry worker authority packets through an application-owned queue.
+
+    Queue receipt only decodes and verifies the packet envelope.  It does not
+    authenticate the sender, admit a worker, or grant authority.  The
+    application must bind the received handoff to its live worker context and
+    call the existing supervisor registry admission method.
+    """
+
+    def __init__(
+        self,
+        channel: Any | ApplicationLocalQueueTransport,
+        *,
+        maximum_message_bytes: int = APPLICATION_TRANSPORT_MAX_MESSAGE_BYTES,
+    ) -> None:
+        self.transport = (
+            channel
+            if isinstance(channel, ApplicationLocalQueueTransport)
+            else ApplicationLocalQueueTransport(
+                channel,
+                maximum_message_bytes=maximum_message_bytes,
+            )
+        )
+
+    def send(
+        self,
+        packet: RecoveryAuthorityPacket,
+        *,
+        operation: str,
+        handoff_id: str | UUID,
+        worker_kind: str,
+        worker_id: str | UUID | None = None,
+        process_start_id: str | UUID | None = None,
+    ) -> dict[str, Any]:
+        if operation not in {"register", "refresh"}:
+            raise ValueError("worker authority queue operation must be register or refresh")
+        if not isinstance(worker_kind, str) or not worker_kind.strip() or len(worker_kind) > 64:
+            raise ValueError("worker authority queue worker_kind is invalid")
+        try:
+            parsed_handoff_id = UUID(str(handoff_id))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("worker authority queue requires a valid handoff_id") from exc
+        payload: dict[str, Any] = {
+            "operation": operation,
+            "handoff_id": str(parsed_handoff_id),
+            "worker_kind": worker_kind.strip(),
+            "packet": json.loads(serialize_recovery_authority_packet(packet)),
+        }
+        if operation == "refresh":
+            if worker_id is None or process_start_id is None:
+                raise ValueError(
+                    "worker authority queue refresh requires worker_id and process_start_id"
+                )
+            try:
+                payload["worker_id"] = str(UUID(str(worker_id)))
+                payload["process_start_id"] = str(UUID(str(process_start_id)))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "worker authority queue refresh requires valid worker and process-start IDs"
+                ) from exc
+        elif worker_id is not None or process_start_id is not None:
+            raise ValueError(
+                "worker_id and process_start_id are only valid for refresh"
+            )
+        return self.transport.send("worker-authority-packet", payload)
+
+    def receive(self, *, timeout: float = 0.0) -> dict[str, Any] | None:
+        try:
+            message = self.transport.receive(timeout=timeout)
+        except ApplicationTransportError:
+            raise
+        if message is None:
+            return None
+        if message["message_type"] != "worker-authority-packet":
+            raise ValueError("application queue message is not a worker authority packet")
+        payload = message["payload"]
+        operation = payload.get("operation")
+        if operation not in {"register", "refresh"}:
+            raise ValueError("worker authority queue operation is invalid")
+        expected_fields = {"operation", "handoff_id", "worker_kind", "packet"}
+        if operation == "refresh":
+            expected_fields.update({"worker_id", "process_start_id"})
+        if set(payload) != expected_fields:
+            raise ValueError("worker authority queue payload fields are invalid")
+        try:
+            handoff_id = UUID(str(payload["handoff_id"]))
+            packet = deserialize_recovery_authority_packet(payload["packet"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("worker authority queue payload is invalid") from exc
+        worker_kind = payload.get("worker_kind")
+        if not isinstance(worker_kind, str) or not worker_kind.strip() or len(worker_kind) > 64:
+            raise ValueError("worker authority queue worker_kind is invalid")
+        result: dict[str, Any] = {
+            "operation": operation,
+            "handoff_id": str(handoff_id),
+            "worker_kind": worker_kind.strip(),
+            "packet": packet,
+            "transport_message_id": message["message_id"],
+            "transport_sender_pid": message["sender_pid"],
+        }
+        if operation == "refresh":
+            try:
+                result["worker_id"] = str(UUID(str(payload["worker_id"])))
+                result["process_start_id"] = str(UUID(str(payload["process_start_id"])))
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("worker authority queue refresh payload is invalid") from exc
+        elif "worker_id" in payload or "process_start_id" in payload:
+            raise ValueError("worker authority queue register payload has refresh fields")
+        return result
+
+
+class QueueWorkerReplacementRequestTransport:
+    """Carry a supervisor-issued replacement request through a local queue."""
+
+    def __init__(
+        self,
+        channel: Any | ApplicationLocalQueueTransport,
+        *,
+        maximum_message_bytes: int = APPLICATION_TRANSPORT_MAX_MESSAGE_BYTES,
+    ) -> None:
+        self.transport = (
+            channel
+            if isinstance(channel, ApplicationLocalQueueTransport)
+            else ApplicationLocalQueueTransport(
+                channel,
+                maximum_message_bytes=maximum_message_bytes,
+            )
+        )
+
+    def send(self, request: WorkerReplacementRequest) -> dict[str, Any]:
+        return self.transport.send(
+            "worker-replacement-request",
+            {"replacement": json.loads(serialize_worker_replacement_request(request))},
+        )
+
+    def receive(self, *, timeout: float = 0.0) -> dict[str, Any] | None:
+        try:
+            message = self.transport.receive(timeout=timeout)
+        except ApplicationTransportError:
+            raise
+        if message is None:
+            return None
+        if message["message_type"] != "worker-replacement-request":
+            raise ValueError("application queue message is not a worker replacement request")
+        payload = message["payload"]
+        if set(payload) != {"replacement"}:
+            raise ValueError("worker replacement queue payload fields are invalid")
+        try:
+            request = deserialize_worker_replacement_request(
+                payload["replacement"]
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("worker replacement queue payload is invalid") from exc
+        return {
+            "request": request,
+            "transport_message_id": message["message_id"],
+            "transport_sender_pid": message["sender_pid"],
+        }
 
 
 def create_recovery_authority_packet(

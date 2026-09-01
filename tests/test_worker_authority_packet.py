@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -13,6 +14,8 @@ from caretaker import (
     create_recovery_authority_packet,
     deserialize_recovery_authority_packet,
     deserialize_worker_replacement_request,
+    QueueWorkerAuthorityPacketTransport,
+    QueueWorkerReplacementRequestTransport,
     serialize_recovery_authority_packet,
     serialize_worker_replacement_request,
     verify_recovery_authority_packet,
@@ -104,6 +107,57 @@ def test_authority_packet_transport_is_bounded() -> None:
 
     with pytest.raises(ValueError, match="exceeds 65536 bytes"):
         serialize_recovery_authority_packet(packet)
+
+
+def test_queue_worker_authority_transport_round_trips_without_admitting_worker() -> None:
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    packet = _packet(supervisor_time=supervisor_time)
+    transport = QueueWorkerAuthorityPacketTransport(queue.Queue())
+
+    delivery = transport.send(
+        packet,
+        operation="register",
+        handoff_id=uuid4(),
+        worker_kind=WorkerKind.REPAIR_ANALYZER.name,
+    )
+    handoff = transport.receive()
+
+    assert delivery["message_type"] == "worker-authority-packet"
+    assert handoff is not None
+    assert handoff["packet"] == packet
+    assert handoff["worker_kind"] == WorkerKind.REPAIR_ANALYZER.name
+    assert handoff["transport_sender_pid"] == os.getpid()
+    assert "worker_id" not in handoff
+
+
+def test_queue_worker_replacement_transport_round_trips_request() -> None:
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    registry = WorkerRegistry()
+    original = registry.register(WorkerKind.REPAIR_ANALYZER, 4321)
+    registry.mark_failed(original.worker_id, error_fingerprint="worker-crash")
+    packet = _packet(supervisor_time=supervisor_time)
+    request = registry.prepare_replacement(
+        original.worker_id,
+        packet,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+    )
+    transport = QueueWorkerReplacementRequestTransport(queue.Queue())
+
+    delivery = transport.send(request)
+    handoff = transport.receive()
+
+    assert delivery["message_type"] == "worker-replacement-request"
+    assert handoff is not None
+    assert handoff["request"] == request
+    assert handoff["request"].failed_worker_id == original.worker_id
+    assert handoff["transport_sender_pid"] == os.getpid()
 
 
 def test_transported_authority_admission_binds_peer_and_rejects_replay() -> None:

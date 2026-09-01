@@ -1368,9 +1368,15 @@ process spawning and replacement orchestration remain future work. The
 application-owned local control socket now transports both initial/refresh
 packets and the existing single-use replacement request; it binds each
 registration to the authenticated Unix peer PID and returns the registry's
-process-start identity. Shared-memory/queue and cross-host packet transport,
-durable replay state, and deployment-specific process orchestration remain
-future work.
+process-start identity. The bounded application-owned queue envelope can also
+carry local packet handoffs, but queue access and sender PID are provenance
+rather than authentication. Cross-host packet transport, durable replay state,
+and deployment-specific process orchestration remain future work.
+
+Typed `QueueWorkerAuthorityPacketTransport` and
+`QueueWorkerReplacementRequestTransport` helpers now decode those local
+handoffs, while leaving live-context validation, registry admission, and
+process lifecycle effects to the application and supervisor.
 
 The registry also supports `refresh_authorized()` for a live worker that needs
 to reacquire an expiring approval packet. Refresh requires the worker to remain

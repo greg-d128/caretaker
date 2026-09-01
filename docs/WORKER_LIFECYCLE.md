@@ -51,6 +51,13 @@ must bind receipt to the live worker context before admission. Cross-host
 authentication, durable cross-restart replay state, and process lifecycle
 orchestration remain future work.
 
+`QueueWorkerAuthorityPacketTransport` and
+`QueueWorkerReplacementRequestTransport` provide typed convenience wrappers
+for the same queue envelope. They decode the existing packet/request codecs
+and return transport provenance for the application to verify and admit. They
+do not call the registry, start a process, consume a replacement request, or
+turn queue access into worker authority.
+
 The replacement handler provides the corresponding application-owned launch
 boundary. `spawn_worker(request)` receives the immutable replacement request
 and must return a positive process ID only after the application has started
