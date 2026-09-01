@@ -2638,6 +2638,7 @@ def _emit_rollout_execution_outcome(
             "implementation": implementation or decision.authoritative_implementation.value,
             "candidate_executed": candidate_executed,
             "candidate_authoritative": candidate_authoritative,
+            "fallback_used": state == "FALLBACK_SUCCEEDED",
         },
         details=details,
     )

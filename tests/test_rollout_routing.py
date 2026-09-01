@@ -333,6 +333,11 @@ def test_execute_rollout_can_explicitly_fallback_to_deployed_for_pure_candidate(
         kwargs["outcome"]["state"] == "FALLBACK_SUCCEEDED"
         for _, kwargs in events
     )
+    fallback_event = next(
+        kwargs for _, kwargs in events
+        if kwargs["outcome"]["state"] == "FALLBACK_SUCCEEDED"
+    )
+    assert fallback_event["outcome"]["fallback_used"] is True
 
 
 def test_rollout_fallback_rejects_non_pure_contract() -> None:
