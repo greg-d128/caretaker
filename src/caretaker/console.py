@@ -1297,7 +1297,7 @@ class CaretakerConsoleApp(App):
                 table = DataTable(id="rollout-table")
                 table.cursor_type = "row"
                 table.add_columns(
-                    "#", "Target", "Stage", "Control", "Release", "Candidate", "Executions", "Candidate results", "Shadow", "Workers", "Readiness", "Evidence", "Updated"
+                    "#", "Target", "Stage", "Control", "Release", "Candidate", "Executions", "Candidate results", "Fallbacks", "Shadow", "Workers", "Readiness", "Evidence", "Updated"
                 )
                 yield table
                 yield RichLog(id="rollout-output", wrap=True, markup=False)
@@ -4729,6 +4729,7 @@ class CaretakerConsoleApp(App):
                 f"{summary.get('candidate_success_count', 0)} ok/"
                 f"{summary.get('candidate_failure_count', 0)} fail"
             )
+            fallback_results = str(summary.get("fallback_count", 0))
             shadow_results = (
                 f"{summary.get('shadow_equivalent_count', 0)} eq/"
                 f"{summary.get('shadow_mismatch_count', 0)} diff"
@@ -4759,6 +4760,7 @@ class CaretakerConsoleApp(App):
                 self._compact_log_text(record.get("candidate_id"), limit=14) or "-",
                 str(summary.get("observation_count", 0)),
                 candidate_results,
+                fallback_results,
                 shadow_results,
                 self._compact_log_text(worker_results, limit=20) or "-",
                 self._compact_log_text(readiness_status, limit=16) or "-",

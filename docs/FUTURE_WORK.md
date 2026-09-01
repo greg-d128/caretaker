@@ -1052,6 +1052,9 @@ supervised application also exposes a bounded,
 read-only `repair-rollout-status` projection containing lifecycle records,
 transition history, and integrity-checked execution summaries. Stale or
 unavailable summaries remain visibly unresolved and cannot advance authority.
+The Rollouts console displays fallback counts separately from candidate success
+and failure counts, preserving the distinction between deployed fallback and
+candidate acceptance for operators.
 
 The first supervisor coordination slice is now implemented through
 `RepairRolloutCoordinator`. An authenticated worker can acknowledge the exact

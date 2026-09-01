@@ -1487,6 +1487,7 @@ def test_console_displays_read_only_rollout_execution_status(tmp_path):
                         "observation_count": 5,
                         "candidate_success_count": 3,
                         "candidate_failure_count": 1,
+                        "fallback_count": 1,
                         "shadow_equivalent_count": 1,
                         "shadow_mismatch_count": 0,
                     },
@@ -1518,6 +1519,7 @@ def test_console_displays_read_only_rollout_execution_status(tmp_path):
             assert "Transitions 1" in status
             assert "Read-only" in status
             assert "2 current/3 ack" in str(app.query_one("#rollout-table", DataTable).get_row_at(0))
+            assert "1" in str(app.query_one("#rollout-table", DataTable).get_row_at(0))
             assert "READY" in str(app.query_one("#rollout-table", DataTable).get_row_at(0))
             app._rollout_records[0]["execution_summary_status"] = "STALE_OR_UNAVAILABLE"
             assert app._rollout_records[0]["execution_summary_status"] == "STALE_OR_UNAVAILABLE"

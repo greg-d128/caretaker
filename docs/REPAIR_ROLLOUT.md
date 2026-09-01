@@ -271,6 +271,10 @@ rollback/accounting. There is no silent fallback for side-effecting or
 incompletely trusted execution. Shadow outcomes remain non-authoritative
 evidence and are not counted toward acceptance.
 
+The Rollouts console displays fallback counts separately from candidate success
+and failure counts, so a deployed result returned after a candidate failure
+remains visibly distinct from candidate acceptance.
+
 For applications using a `RepairEngine`, `engine.invoke_rollout()` is the
 registry-aware invocation boundary:
 
