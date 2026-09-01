@@ -1029,7 +1029,7 @@ Future work may export a signed review bundle containing a unified diff, origina
 
 ## Policy-controlled Repair rollout, mirroring, and shadow execution
 
-**Status: In progress in development tree; effect-aware contract, evidence gate, deterministic routing decision, registry-aware FunctionSlot invocation bridge, explicit application-owned raw-result callable binding, conservative pure-only candidate-failure fallback, policy-controlled candidate-authoritative mirroring, policy-defined staged routing ramps, stage-specific readiness requirements, readiness-gated supervisor-cycle advancement, and durable supervisor-owned application-wide route allocation implemented; richer fallback policy, cross-host or multi-supervisor fleet coordination, implicit arbitrary-callable replacement, and deployment-owned orchestration remain future work.**
+**Status: In progress in development tree; effect-aware contract, evidence gate, deterministic routing decision, registry-aware FunctionSlot invocation bridge, explicit application-owned raw-result callable binding, conservative pure and opt-in complete-evidence read-only candidate-failure fallback, policy-controlled candidate-authoritative mirroring, policy-defined staged routing ramps, stage-specific readiness requirements, readiness-gated supervisor-cycle advancement, and durable supervisor-owned application-wide route allocation implemented; cross-host or multi-supervisor fleet coordination, implicit arbitrary-callable replacement, and deployment-owned orchestration remain future work.**
 
 Caretaker currently supports candidate probation and a narrow
 `PURE_FUNCTION` differential-execution mode. For explicitly confirmed pure
@@ -1096,8 +1096,10 @@ the application supplies its `ObservationManager`, authoritative candidate
 calls are recorded through the existing acceptance and rollback policy, while
 shadow calls remain excluded. Candidate failure handling defaults to raising;
 an explicit policy may return the deployed result after a failed candidate only
-for a `PURE` contract with no observed externally visible effects. That fallback
-is retained as failure evidence and does not advance candidate acceptance. The
+for a `PURE` contract with no observed externally visible effects. An opt-in
+`READ_ONLY` fallback additionally requires complete effect evidence and no
+observed externally visible effects. Either fallback is retained as failure
+evidence and does not advance candidate acceptance. The
 supervised application also exposes a bounded,
 read-only `repair-rollout-status` projection containing lifecycle records,
 transition history, and integrity-checked execution summaries. Stale or

@@ -313,13 +313,16 @@ When supplied with the existing `ObservationManager`, `execute_slot_rollout()`
 records authoritative candidate outcomes using the rollout ID and routing
 decision hash. Candidate failures follow the configured observation rollback
 policy. By default they are re-raised. A policy may explicitly select
-`candidate_failure_action="fallback-to-deployed"`; this is allowed only when
-the target declares a `PURE` execution contract and supplied effect evidence
-does not report externally visible effects. The candidate failure and deployed
-fallback are both recorded, and the failure still goes through observation
-rollback/accounting. There is no silent fallback for side-effecting or
-incompletely trusted execution. Shadow outcomes remain non-authoritative
-evidence and are not counted toward acceptance.
+`candidate_failure_action="fallback-to-deployed"` for a `PURE` contract when
+supplied effect evidence does not report externally visible effects. A
+`READ_ONLY` contract may use the same fallback only when
+`allow_read_only_candidate_fallback=true` is explicitly enabled and the
+application supplies complete effect evidence with no observed externally
+visible effects. Incomplete evidence always fails closed. The candidate
+failure and deployed fallback are both recorded, and the failure still goes
+through observation rollback/accounting. There is no silent fallback for
+side-effecting or incompletely trusted execution. Shadow outcomes remain
+non-authoritative evidence and are not counted toward acceptance.
 
 The Rollouts console displays fallback counts separately from candidate success
 and failure counts, so a deployed result returned after a candidate failure

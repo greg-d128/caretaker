@@ -558,6 +558,7 @@ def _human_readable(policy: RepairPolicy) -> str:
             f"  active candidate percentage: {policy.rollout.routing.active_candidate_percentage}%",
             f"  candidate mirror percentage: {policy.rollout.routing.candidate_mirror_percentage}%",
             f"  candidate failure action: {policy.rollout.candidate_failure_action.value}",
+            f"  read-only candidate fallback: {policy.rollout.allow_read_only_candidate_fallback}",
             f"  operator routing changes: {policy.rollout.allow_operator_routing_changes}",
             f"  operator routing increases: {policy.rollout.allow_operator_routing_increases}",
             f"  readiness required for routing increase: {policy.rollout.require_readiness_for_routing_increase}",

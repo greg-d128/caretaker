@@ -460,6 +460,73 @@ def test_rollout_fallback_rejects_non_pure_contract() -> None:
         )
 
 
+def test_rollout_can_fallback_for_read_only_contract_with_complete_effect_evidence() -> None:
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            candidate_failure_action=RolloutFailureAction.FALLBACK_TO_DEPLOYED,
+            allow_read_only_candidate_fallback=True,
+            routing=RolloutRoutingPolicy(canary_percentage=100),
+        )
+    )
+    record = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, record, RepairRolloutStage.CANARY)
+
+    result = execute_rollout(
+        record,
+        policy=ledger.policy,
+        policy_fingerprint="policy-hash",
+        routing_scope="tenant",
+        routing_key="tenant-1",
+        deployed=lambda value: value,
+        candidate=lambda value: (_ for _ in ()).throw(RuntimeError("candidate failed")),
+        args=(4,),
+        kwargs={},
+        contract=FunctionExecutionContract(
+            side_effects=SideEffectClass.READ_ONLY,
+            retry_safety=ReplaySafety.IDEMPOTENT,
+        ),
+        effect_observation=EffectObservation(
+            categories=("filesystem",),
+            event_kinds=("FILE_READ",),
+            event_count=1,
+            complete=True,
+        ),
+    )
+
+    assert result.result == 4
+    assert result.fallback_used is True
+    assert result.candidate_succeeded is False
+
+
+def test_rollout_read_only_fallback_rejects_incomplete_effect_evidence() -> None:
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(
+            enabled=True,
+            candidate_failure_action=RolloutFailureAction.FALLBACK_TO_DEPLOYED,
+            allow_read_only_candidate_fallback=True,
+            routing=RolloutRoutingPolicy(canary_percentage=100),
+        )
+    )
+    record = _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED)
+    record = _advance(ledger, record, RepairRolloutStage.CANARY)
+
+    with pytest.raises(RepairRolloutExecutionError, match="complete effect evidence"):
+        execute_rollout(
+            record,
+            policy=ledger.policy,
+            policy_fingerprint="policy-hash",
+            routing_scope="tenant",
+            routing_key="tenant-1",
+            deployed=lambda value: value,
+            candidate=lambda value: (_ for _ in ()).throw(RuntimeError("candidate failed")),
+            args=(4,),
+            kwargs={},
+            contract=FunctionExecutionContract(side_effects=SideEffectClass.READ_ONLY),
+            effect_observation=EffectObservation(complete=False),
+        )
+
+
 def test_rollout_fallback_rejects_observed_external_effects() -> None:
     ledger = RepairRolloutLedger(
         policy=RepairRolloutPolicy(

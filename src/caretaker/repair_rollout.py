@@ -307,6 +307,10 @@ class RepairRolloutPolicy:
     allow_operator_routing_increases: bool = False
     require_readiness_for_routing_increase: bool = True
     candidate_failure_action: RolloutFailureAction = RolloutFailureAction.RAISE
+    # A READ_ONLY contract may use the deployed implementation after a
+    # candidate failure only when the application explicitly opts in and
+    # supplies complete effect evidence.  The default remains fail-closed.
+    allow_read_only_candidate_fallback: bool = False
     routing: RolloutRoutingPolicy = field(default_factory=RolloutRoutingPolicy)
     ramp: RolloutRampPolicy = field(default_factory=RolloutRampPolicy)
     readiness: RolloutReadinessRequirements = field(
@@ -327,6 +331,7 @@ class RepairRolloutPolicy:
             "allow_operator_routing_changes",
             "allow_operator_routing_increases",
             "require_readiness_for_routing_increase",
+            "allow_read_only_candidate_fallback",
         ):
             if not isinstance(getattr(self, name), bool):
                 raise ValueError(f"rollout.{name} must be a boolean")
@@ -2588,6 +2593,7 @@ def execute_rollout(
         isolation_adapter=isolation_adapter,
         comparator=comparator,
         failure_action=policy.candidate_failure_action,
+        allow_read_only_candidate_fallback=policy.allow_read_only_candidate_fallback,
         audit_event=audit_event,
         execution_store=execution_store,
         execution_id=execution_id,
@@ -2716,6 +2722,7 @@ def execute_slot_rollout(
             isolation_adapter=isolation_adapter,
             comparator=comparator,
             failure_action=policy.candidate_failure_action,
+            allow_read_only_candidate_fallback=policy.allow_read_only_candidate_fallback,
             audit_event=audit_event,
             execution_store=execution_store,
             execution_id=execution_id,
@@ -2797,6 +2804,7 @@ def _execute_and_record(
     isolation_adapter: ShadowExecutionAdapter | None,
     comparator: Comparator | None,
     failure_action: RolloutFailureAction,
+    allow_read_only_candidate_fallback: bool,
     audit_event: Callable[..., Any] | None,
     execution_store: RepairRolloutStore | None,
     execution_id: UUID | None,
@@ -2813,6 +2821,7 @@ def _execute_and_record(
             isolation_adapter=isolation_adapter,
             comparator=comparator,
             failure_action=failure_action,
+            allow_read_only_candidate_fallback=allow_read_only_candidate_fallback,
             audit_event=audit_event,
         )
     except BaseException as exc:
@@ -3287,6 +3296,7 @@ def _execute_rollout_decision(
     isolation_adapter: ShadowExecutionAdapter | None,
     comparator: Comparator | None,
     failure_action: RolloutFailureAction,
+    allow_read_only_candidate_fallback: bool,
     audit_event: Callable[..., Any] | None,
 ) -> RolloutExecutionResult:
     if decision.strategy == "shadow":
@@ -3358,17 +3368,12 @@ def _execute_rollout_decision(
                 )
             if failure_action is not RolloutFailureAction.FALLBACK_TO_DEPLOYED:
                 raise candidate_error
-            if contract.side_effects is not SideEffectClass.PURE:
-                raise RepairRolloutExecutionError(
-                    "fallback to deployed code requires a PURE execution contract"
-                ) from candidate_error
-            if (
-                effect_observation is not None
-                and effect_observation.externally_visible_categories
-            ):
-                raise RepairRolloutExecutionError(
-                    "fallback to deployed code is blocked by observed externally visible effects"
-                ) from candidate_error
+            _require_candidate_fallback_safety(
+                contract,
+                effect_observation,
+                allow_read_only_candidate_fallback=allow_read_only_candidate_fallback,
+                candidate_error=candidate_error,
+            )
             fallback = _invoke_rollout_implementation(
                 decision,
                 implementation=deployed,
@@ -3418,17 +3423,12 @@ def _execute_rollout_decision(
         except BaseException as candidate_error:
             if failure_action is not RolloutFailureAction.FALLBACK_TO_DEPLOYED:
                 raise
-            if contract.side_effects is not SideEffectClass.PURE:
-                raise RepairRolloutExecutionError(
-                    "fallback to deployed code requires a PURE execution contract"
-                ) from candidate_error
-            if (
-                effect_observation is not None
-                and effect_observation.externally_visible_categories
-            ):
-                raise RepairRolloutExecutionError(
-                    "fallback to deployed code is blocked by observed externally visible effects"
-                ) from candidate_error
+            _require_candidate_fallback_safety(
+                contract,
+                effect_observation,
+                allow_read_only_candidate_fallback=allow_read_only_candidate_fallback,
+                candidate_error=candidate_error,
+            )
             fallback = _invoke_rollout_implementation(
                 decision,
                 implementation=deployed,
@@ -3455,6 +3455,49 @@ def _execute_rollout_decision(
         candidate_executed=False,
         audit_event=audit_event,
     )
+
+
+def _require_candidate_fallback_safety(
+    contract: FunctionExecutionContract,
+    effect_observation: EffectObservation | None,
+    *,
+    allow_read_only_candidate_fallback: bool,
+    candidate_error: BaseException,
+) -> None:
+    """Enforce the policy and evidence gate for deployed fallback.
+
+    A pure declaration retains the existing compatibility behavior: observed
+    externally visible effects still block fallback, but an absent observation
+    does not change the legacy pure-only path.  READ_ONLY is deliberately
+    stricter because filesystem reads and similar observations are not proof
+    that duplicate execution is harmless; it requires complete evidence and
+    an explicit policy opt-in.
+    """
+
+    if contract.side_effects is SideEffectClass.PURE:
+        if effect_observation is not None and effect_observation.externally_visible_categories:
+            raise RepairRolloutExecutionError(
+                "fallback to deployed code is blocked by observed externally visible effects"
+            ) from candidate_error
+        return
+    if contract.side_effects is not SideEffectClass.READ_ONLY:
+        raise RepairRolloutExecutionError(
+            "fallback to deployed code requires a PURE execution contract or an explicitly "
+            "enabled READ_ONLY fallback"
+        ) from candidate_error
+    if not allow_read_only_candidate_fallback:
+        raise RepairRolloutExecutionError(
+            "fallback to deployed code requires a PURE execution contract or an explicitly "
+            "enabled READ_ONLY fallback"
+        ) from candidate_error
+    if effect_observation is None or not effect_observation.complete:
+        raise RepairRolloutExecutionError(
+            "READ_ONLY fallback requires complete effect evidence"
+        ) from candidate_error
+    if effect_observation.externally_visible_categories:
+        raise RepairRolloutExecutionError(
+            "fallback to deployed code is blocked by observed externally visible effects"
+        ) from candidate_error
 
 
 def _invoke_rollout_implementation(
