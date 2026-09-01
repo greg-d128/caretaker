@@ -1061,6 +1061,101 @@ def test_replacement_action_handler_uses_packet_admission_and_acceptance() -> No
     assert len(spawned) == 1
 
 
+def test_replacement_action_handler_cleans_up_process_when_admission_fails(
+    monkeypatch,
+) -> None:
+    runtime = FakeRuntime()
+    supervisor = CaretakerApplicationSupervisor(runtime)
+    original = supervisor.workers.register(WorkerKind.REPAIR_ANALYZER, 1234)
+    supervisor.workers.mark_failed(original.worker_id, error_fingerprint="worker-crash")
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    packet = create_recovery_authority_packet(
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        capabilities=("observe",),
+        supervisor_time=supervisor_time,
+    )
+    stopped: list[int] = []
+
+    def reject_admission(*args, **kwargs):
+        raise PermissionError("simulated admission race")
+
+    monkeypatch.setattr(supervisor.workers, "register_replacement", reject_admission)
+    handler = supervisor.build_replacement_action_handler(
+        failed_worker_id=original.worker_id,
+        packet=packet,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+        spawn_worker=lambda _request: {"started": True, "pid": 5678},
+        stop_worker=lambda pid: stopped.append(pid) or {"accepted": True, "stopped": True},
+    )
+
+    result = handler({"target_id": "app:charge"})
+
+    assert result["accepted"] is False
+    assert result["process_cleanup"] == {
+        "status": "STOPPED",
+        "accepted": True,
+        "result": {"accepted": True, "stopped": True},
+    }
+    assert stopped == [5678]
+
+
+def test_replacement_action_handler_reports_missing_process_cleanup_callback(
+    monkeypatch,
+) -> None:
+    runtime = FakeRuntime()
+    supervisor = CaretakerApplicationSupervisor(runtime)
+    original = supervisor.workers.register(WorkerKind.REPAIR_ANALYZER, 1234)
+    supervisor.workers.mark_failed(original.worker_id, error_fingerprint="worker-crash")
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    packet = create_recovery_authority_packet(
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        capabilities=("observe",),
+        supervisor_time=supervisor_time,
+    )
+
+    monkeypatch.setattr(
+        supervisor.workers,
+        "register_replacement",
+        lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("simulated admission race")),
+    )
+    handler = supervisor.build_replacement_action_handler(
+        failed_worker_id=original.worker_id,
+        packet=packet,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+        spawn_worker=lambda _request: {"started": True, "pid": 5678},
+    )
+
+    result = handler({"target_id": "app:charge"})
+
+    assert result["accepted"] is False
+    assert result["process_cleanup"]["status"] == "REQUIRED"
+    assert result["process_cleanup"]["accepted"] is False
+
+
 def test_incident_action_handler_requires_application_acknowledgement() -> None:
     decision = {
         "target_id": "app:charge",

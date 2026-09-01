@@ -1724,6 +1724,7 @@ class CaretakerApplicationSupervisor:
         authority_policy_generation: str,
         authority_policy_fingerprint: str,
         spawn_worker: Callable[[WorkerReplacementRequest], Any],
+        stop_worker: Callable[[int], Any] | None = None,
         allowed_capabilities: set[str] | frozenset[str] = frozenset(),
         policy: RepairRecoveryPolicy | None = None,
         acceptance_policy: WorkerAcceptancePolicy | None = None,
@@ -1734,12 +1735,39 @@ class CaretakerApplicationSupervisor:
         process here; it only admits the returned process through the existing
         packet, expiry, context, and acceptance checks.
         """
+        def cleanup_started_process(pid: int) -> dict[str, Any]:
+            if stop_worker is None:
+                return {
+                    "status": "REQUIRED",
+                    "accepted": False,
+                    "reason": "application-owned process cleanup callback is not configured",
+                }
+            try:
+                result = stop_worker(pid)
+            except Exception as exc:
+                return {
+                    "status": "FAILED",
+                    "accepted": False,
+                    "reason": f"{type(exc).__name__}: {exc}"[:256],
+                }
+            accepted = bool(
+                result
+                if not isinstance(result, Mapping)
+                else result.get("accepted") or result.get("stopped")
+            )
+            return {
+                "status": "STOPPED" if accepted else "REJECTED",
+                "accepted": accepted,
+                "result": dict(result) if isinstance(result, Mapping) else result,
+            }
+
         def handler(decision: Mapping[str, Any]) -> dict[str, Any]:
             if decision.get("target_id") not in {None, target_id}:
                 return {
                     "accepted": False,
                     "reason": "recovery target does not match replacement context",
                 }
+            started_pid: int | None = None
             try:
                 request = self.workers.prepare_replacement(
                     failed_worker_id,
@@ -1766,6 +1794,7 @@ class CaretakerApplicationSupervisor:
                         "accepted": False,
                         "reason": "replacement worker callback did not return a valid pid",
                     }
+                started_pid = pid
                 replacement = self.workers.register_replacement(
                     request,
                     WorkerKind[request.worker_kind],
@@ -1782,17 +1811,22 @@ class CaretakerApplicationSupervisor:
                     acceptance_policy=acceptance_policy,
                 )
             except Exception as exc:
-                return {
+                result = {
                     "accepted": False,
                     "reason": f"replacement admission failed: {type(exc).__name__}: {exc}"[:256],
                 }
+                if started_pid is not None:
+                    result["process_cleanup"] = cleanup_started_process(started_pid)
+                return result
             if replacement.acceptance_state.name not in {"PROBATION", "ACCEPTED"}:
-                return {
+                result = {
                     "accepted": False,
                     "reason": "replacement did not enter probation or accepted state",
                     "replacement_worker_id": str(replacement.worker_id),
                     "acceptance_state": replacement.acceptance_state.name,
                 }
+                result["process_cleanup"] = cleanup_started_process(pid)
+                return result
             return {
                 "accepted": True,
                 "started": True,
@@ -1821,6 +1855,7 @@ class CaretakerApplicationSupervisor:
         authority_policy_generation: str,
         authority_policy_fingerprint: str,
         spawn_worker: Callable[[WorkerReplacementRequest], Any],
+        stop_worker: Callable[[int], Any] | None = None,
         allowed_capabilities: set[str] | frozenset[str] = frozenset(),
         policy: RepairRecoveryPolicy | None = None,
         acceptance_policy: WorkerAcceptancePolicy | None = None,
@@ -1843,6 +1878,7 @@ class CaretakerApplicationSupervisor:
             authority_policy_generation=authority_policy_generation,
             authority_policy_fingerprint=authority_policy_fingerprint,
             spawn_worker=spawn_worker,
+            stop_worker=stop_worker,
             allowed_capabilities=allowed_capabilities,
             policy=policy,
             acceptance_policy=acceptance_policy,

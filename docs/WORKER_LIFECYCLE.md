@@ -39,6 +39,17 @@ verification and registry admission remain the gates that record a worker as
 authorized. Shared-memory, queue, cross-host authentication, and durable
 cross-restart replay state remain future transport work.
 
+The replacement handler provides the corresponding application-owned launch
+boundary. `spawn_worker(request)` receives the immutable replacement request
+and must return a positive process ID only after the application has started
+the process. The new process must remain unable to perform ordinary worker
+work until it has presented the nested packet through the configured transport
+and been admitted. If admission fails after a process has started, the handler
+calls the optional `stop_worker(pid)` callback and reports its result. A
+missing or rejected cleanup callback is explicit failure evidence; it is never
+treated as successful replacement. Caretaker does not terminate operating
+system processes itself.
+
 Replacement workers use the existing `WorkerReplacementRequest` as a second
 bounded local handoff. `serialize_worker_replacement_request()` includes the
 failed-worker identity, worker kind, issuance time, reason, and nested

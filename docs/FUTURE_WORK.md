@@ -1289,9 +1289,12 @@ The supervisor now exposes a policy decision boundary for failed workers. It
 records bounded in-flight evidence immediately, supports incident capture, and
 only counts a worker as restarted after a callback-owned replacement reports
 success. Restart exhaustion selects the existing degraded, disable, or stop
-action vocabulary. Process spawning, cross-process replacement packet
-distribution, and general policy-specific incident/shutdown orchestration
-remain future work. The supervised writer, event-server, control-server, and
+action vocabulary. A replacement handler now also requires an application-owned
+cleanup callback when a process starts but packet admission fails, and reports
+missing or rejected cleanup explicitly rather than treating the process as a
+successful replacement. Direct process spawning, cross-process replacement
+packet distribution, and general policy-specific incident/shutdown
+orchestration remain future work. The supervised writer, event-server, control-server, and
 system-collector failure paths now create an initial Incident Capsule
 immediately through the application-owned callback; process spawning remains a
 deployment-specific future capability.
