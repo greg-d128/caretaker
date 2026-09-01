@@ -37,6 +37,7 @@ from ..repair_recovery import (
     validate_worker_acceptance_policy,
     verify_comparison_worker_assignment,
     verify_comparison_worker_result,
+    deserialize_recovery_authority_packet,
     verify_recovery_authority_packet,
 )
 from .models import (
@@ -54,6 +55,7 @@ from .models import (
 
 
 MAX_WORKER_FAILURE_COHORT = 128
+MAX_WORKER_AUTHORITY_HANDOFFS = 4096
 
 
 class WorkRegistry:
@@ -129,6 +131,11 @@ class WorkerRegistry:
         self._workers: dict[UUID, WorkerHealth] = {}
         self._acceptance_policies: dict[UUID, WorkerAcceptancePolicy] = {}
         self._replacement_requests: set[UUID] = set()
+        # Handoff IDs are transport transaction IDs.  They are intentionally
+        # never evicted during a registry lifetime: evicting them would make a
+        # previously accepted packet replayable.  The bound fails closed when
+        # an application has not established a fresh supervisor lifecycle.
+        self._authority_handoffs: set[UUID] = set()
         self._lock = threading.RLock()
 
     def _emit_audit(self, event_type: str, **fields: Any) -> None:
@@ -374,6 +381,115 @@ class WorkerRegistry:
                 "authority_packet_expires_at": packet.expires_at.isoformat(),
             },
         )
+        return updated
+
+    @staticmethod
+    def _parse_authority_handoff_id(handoff_id: str | UUID) -> UUID:
+        try:
+            parsed = handoff_id if isinstance(handoff_id, UUID) else UUID(str(handoff_id))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("worker authority handoff requires a valid handoff_id") from exc
+        return parsed
+
+    def register_transported_authorized(
+        self,
+        kind: WorkerKind,
+        peer_pid: int,
+        transport_value: Any,
+        *,
+        handoff_id: str | UUID,
+        supervisor_time: datetime,
+        target_id: str,
+        generation_id: str,
+        code_hash: str,
+        policy_fingerprint: str,
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        allowed_capabilities: set[str] | frozenset[str] = frozenset(),
+        policy: RepairRecoveryPolicy | None = None,
+        acceptance_policy: WorkerAcceptancePolicy | None = None,
+    ) -> WorkerHealth:
+        """Admit a worker from a local transport with peer-PID binding.
+
+        The transport envelope is decoded before admission, while the caller's
+        authenticated Unix peer PID is the only process identity accepted. A
+        handoff ID is consumed only after successful packet/context admission,
+        so a valid handoff cannot be replayed to create a second worker.
+        """
+        if isinstance(peer_pid, bool) or not isinstance(peer_pid, int) or peer_pid <= 0:
+            raise ValueError("worker authority handoff requires a positive peer PID")
+        parsed_handoff = self._parse_authority_handoff_id(handoff_id)
+        packet = deserialize_recovery_authority_packet(transport_value)
+        with self._lock:
+            if parsed_handoff in self._authority_handoffs:
+                raise PermissionError("worker authority handoff has already been consumed")
+            if len(self._authority_handoffs) >= MAX_WORKER_AUTHORITY_HANDOFFS:
+                raise PermissionError("worker authority handoff capacity is exhausted")
+            admitted = self.register_authorized(
+                kind,
+                peer_pid,
+                packet,
+                supervisor_time=supervisor_time,
+                target_id=target_id,
+                generation_id=generation_id,
+                code_hash=code_hash,
+                policy_fingerprint=policy_fingerprint,
+                authority_policy_generation=authority_policy_generation,
+                authority_policy_fingerprint=authority_policy_fingerprint,
+                allowed_capabilities=allowed_capabilities,
+                policy=policy,
+                acceptance_policy=acceptance_policy,
+            )
+            self._authority_handoffs.add(parsed_handoff)
+        return admitted
+
+    def refresh_transported_authorized(
+        self,
+        worker_id: UUID,
+        peer_pid: int,
+        transport_value: Any,
+        *,
+        handoff_id: str | UUID,
+        process_start_id: str | UUID,
+        supervisor_time: datetime,
+        target_id: str,
+        generation_id: str,
+        code_hash: str,
+        policy_fingerprint: str,
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        allowed_capabilities: set[str] | frozenset[str] = frozenset(),
+        policy: RepairRecoveryPolicy | None = None,
+    ) -> WorkerHealth:
+        """Refresh a packet over local transport for its registered process."""
+        if isinstance(peer_pid, bool) or not isinstance(peer_pid, int) or peer_pid <= 0:
+            raise ValueError("worker authority handoff requires a positive peer PID")
+        parsed_handoff = self._parse_authority_handoff_id(handoff_id)
+        packet = deserialize_recovery_authority_packet(transport_value)
+        with self._lock:
+            current = self._workers[worker_id]
+            if current.process_id != peer_pid:
+                raise PermissionError("worker process identity does not match its registration")
+            if str(current.process_start_id) != str(process_start_id):
+                raise PermissionError("worker process start identity does not match its registration")
+            if parsed_handoff in self._authority_handoffs:
+                raise PermissionError("worker authority handoff has already been consumed")
+            if len(self._authority_handoffs) >= MAX_WORKER_AUTHORITY_HANDOFFS:
+                raise PermissionError("worker authority handoff capacity is exhausted")
+            updated = self.refresh_authorized(
+                worker_id,
+                packet,
+                supervisor_time=supervisor_time,
+                target_id=target_id,
+                generation_id=generation_id,
+                code_hash=code_hash,
+                policy_fingerprint=policy_fingerprint,
+                authority_policy_generation=authority_policy_generation,
+                authority_policy_fingerprint=authority_policy_fingerprint,
+                allowed_capabilities=allowed_capabilities,
+                policy=policy,
+            )
+            self._authority_handoffs.add(parsed_handoff)
         return updated
 
     def prepare_replacement(
@@ -2170,6 +2286,111 @@ class CaretakerApplicationSupervisor:
             "acceptance_state": updated.acceptance_state.name,
             "acceptance_successful_executions": updated.acceptance_successful_executions,
             "acceptance_failed_executions": updated.acceptance_failed_executions,
+            "authority_granted": False,
+        }
+
+    def handle_worker_authority_packet(
+        self,
+        request: Mapping[str, Any],
+        credentials: tuple[int, int, int],
+        *,
+        allowed_worker_kinds: set[WorkerKind] | frozenset[WorkerKind],
+        supervisor_time: datetime,
+        target_id: str,
+        generation_id: str,
+        code_hash: str,
+        policy_fingerprint: str,
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        allowed_capabilities: set[str] | frozenset[str] = frozenset(),
+        policy: RepairRecoveryPolicy | None = None,
+        acceptance_policy: WorkerAcceptancePolicy | None = None,
+    ) -> dict[str, Any]:
+        """Admit or refresh a worker packet received on the local control socket.
+
+        The application supplies the current context through this method's
+        keyword arguments.  Request fields are transport data only; in
+        particular, a worker cannot choose its PID, policy context, or allowed
+        worker kind.  ``ControlSocketServer`` supplies authenticated peer
+        credentials to this handler.
+        """
+        if request.get("command") != "worker-authority-packet":
+            raise ValueError("unsupported worker authority packet command")
+        try:
+            kind = WorkerKind[str(request["worker_kind"]).upper()]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("worker authority packet requires a valid worker_kind") from exc
+        if kind not in allowed_worker_kinds:
+            raise PermissionError("worker authority packet kind is not permitted")
+        operation = request.get("operation")
+        if operation not in {"register", "refresh"}:
+            raise ValueError("worker authority packet operation must be register or refresh")
+        handoff_id = request.get("handoff_id")
+        if not isinstance(handoff_id, str) or not handoff_id.strip():
+            raise ValueError("worker authority packet requires a handoff_id")
+        transport_value = request.get("packet")
+        if not isinstance(transport_value, Mapping):
+            raise ValueError("worker authority packet requires a JSON transport envelope")
+        if operation == "register":
+            worker = self.workers.register_transported_authorized(
+                kind,
+                credentials[0],
+                transport_value,
+                handoff_id=handoff_id,
+                supervisor_time=supervisor_time,
+                target_id=target_id,
+                generation_id=generation_id,
+                code_hash=code_hash,
+                policy_fingerprint=policy_fingerprint,
+                authority_policy_generation=authority_policy_generation,
+                authority_policy_fingerprint=authority_policy_fingerprint,
+                allowed_capabilities=allowed_capabilities,
+                policy=policy,
+                acceptance_policy=acceptance_policy,
+            )
+        else:
+            try:
+                worker_id = UUID(str(request["worker_id"]))
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("worker authority refresh requires a valid worker_id") from exc
+            process_start_id = request.get("process_start_id")
+            if not isinstance(process_start_id, str) or not process_start_id.strip():
+                raise ValueError("worker authority refresh requires process_start_id")
+            worker = self.workers.refresh_transported_authorized(
+                worker_id,
+                credentials[0],
+                transport_value,
+                handoff_id=handoff_id,
+                process_start_id=process_start_id,
+                supervisor_time=supervisor_time,
+                target_id=target_id,
+                generation_id=generation_id,
+                code_hash=code_hash,
+                policy_fingerprint=policy_fingerprint,
+                authority_policy_generation=authority_policy_generation,
+                authority_policy_fingerprint=authority_policy_fingerprint,
+                allowed_capabilities=allowed_capabilities,
+                policy=policy,
+            )
+        return {
+            "ok": True,
+            "operation": operation,
+            "worker_id": str(worker.worker_id),
+            "process_id": worker.process_id,
+            "process_start_id": str(worker.process_start_id),
+            "worker_kind": worker.worker_kind.name,
+            "authority_packet_id": (
+                str(worker.authority_packet_id)
+                if worker.authority_packet_id is not None
+                else None
+            ),
+            "authority_packet_expires_at": (
+                worker.authority_packet_expires_at.isoformat()
+                if worker.authority_packet_expires_at is not None
+                else None
+            ),
+            "state": worker.state.name,
+            "acceptance_state": worker.acceptance_state.name,
             "authority_granted": False,
         }
 

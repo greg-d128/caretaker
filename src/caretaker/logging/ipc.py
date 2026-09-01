@@ -22,13 +22,17 @@ from uuid import UUID
 from .models import AttachmentReference, EvidencePriority, LogEnvelope
 from .records import TLVLogCodec
 from .segments import SegmentWriter
+from ..repair_recovery import RecoveryAuthorityPacket, serialize_recovery_authority_packet
 
 
 _PEERCRED = struct.Struct("3i")
 
 
 _UNIX_SOCKET_PATH_LIMIT = 100
-_CONTROL_REQUEST_LIMIT = 64 * 1024
+# Keep enough headroom for a maximum-size authority-packet envelope plus the
+# bounded control metadata surrounding it.  The packet codec remains capped at
+# 64 KiB; this is only the outer framed request limit.
+_CONTROL_REQUEST_LIMIT = 128 * 1024
 _CONTROL_RESPONSE_LIMIT = 16 * 1024 * 1024
 
 
@@ -666,6 +670,57 @@ def submit_worker_acceptance_observation(
     }
     if observed_at is not None:
         request["observed_at"] = str(observed_at)
+    return control_request(path, request, timeout=timeout)
+
+
+def submit_worker_authority_packet(
+    path: str | Path,
+    *,
+    packet: RecoveryAuthorityPacket,
+    handoff_id: str | UUID,
+    worker_kind: str,
+    operation: str = "register",
+    worker_id: str | UUID | None = None,
+    process_start_id: str | UUID | None = None,
+    timeout: float = 5.0,
+) -> dict[str, Any]:
+    """Submit one authority packet through the authenticated local transport.
+
+    The packet is encoded with the bounded transport codec and sent as a JSON
+    object because the control protocol itself is JSON.  The server derives
+    process identity from Unix peer credentials.  ``refresh`` additionally
+    requires the registered worker and process-start identities.
+    """
+    if not isinstance(worker_kind, str) or not worker_kind.strip():
+        raise ValueError("worker authority packet worker_kind cannot be empty")
+    if operation not in {"register", "refresh"}:
+        raise ValueError("worker authority packet operation must be register or refresh")
+    try:
+        parsed_handoff = UUID(str(handoff_id))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("worker authority packet requires a valid handoff_id") from exc
+    encoded = serialize_recovery_authority_packet(packet)
+    request: dict[str, Any] = {
+        "command": "worker-authority-packet",
+        "operation": operation,
+        "handoff_id": str(parsed_handoff),
+        "worker_kind": worker_kind.strip(),
+        "packet": json.loads(encoded),
+    }
+    if operation == "refresh":
+        if worker_id is None or process_start_id is None:
+            raise ValueError(
+                "worker authority refresh requires worker_id and process_start_id"
+            )
+        try:
+            request["worker_id"] = str(UUID(str(worker_id)))
+            request["process_start_id"] = str(UUID(str(process_start_id)))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "worker authority refresh requires valid worker and process-start IDs"
+            ) from exc
+    elif worker_id is not None or process_start_id is not None:
+        raise ValueError("worker_id and process_start_id are only valid for refresh")
     return control_request(path, request, timeout=timeout)
 
 

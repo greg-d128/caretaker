@@ -41,6 +41,7 @@ from .ipc import (
     acknowledge_adaptive_transition,
     accept_adaptive_transition,
     submit_worker_acceptance_observation,
+    submit_worker_authority_packet,
     sign_control_request,
     peer_credentials,
     unix_socket_exists,

@@ -23,14 +23,21 @@ packet schema, JSON data, timestamps, capabilities, size, and content hash.
 It does not validate the packet against current runtime context and does not
 grant authority.
 
-After transport, the receiving worker or supervisor must call
-`verify_recovery_authority_packet()` with the current supervisor time and
-exact target, generation, code, policy, authority, and capability context.
-Only the existing registry admission path can record the worker as authorized.
-The codec is transport-neutral; Caretaker does not choose a queue or start an
-OS process from it. Transport authentication, delivery/replay handling, and
-application-owned process lifecycle remain separate policy and deployment
-responsibilities.
+The local supervisor control-socket path now provides
+`submit_worker_authority_packet()` for register and refresh handoffs. The
+corresponding supervisor handler accepts only explicitly allow-listed worker
+kinds, derives the process ID from authenticated Unix peer credentials, and
+requires the application to supply the current live context. A unique handoff
+ID is consumed after successful admission and is retained for the supervisor
+lifetime, so an accepted envelope cannot be replayed to create another worker.
+Refresh additionally requires the registered worker ID and process-start ID.
+
+The transport path still does not create an OS process, choose a deployment
+transport, or grant authority by itself. The application owns process
+creation and must wire the handler with authoritative current context; packet
+verification and registry admission remain the gates that record a worker as
+authorized. Shared-memory, queue, cross-host authentication, and durable
+cross-restart replay state remain future transport work.
 
 ## Comparison worker assignment
 

@@ -1241,8 +1241,11 @@ The recovery API also provides fail-closed `validate_supervisor_time()` and
 authoritative, report the measured skew, reject skew beyond the configured
 tolerance, and reject packets at or after expiry. A bounded, canonical JSON
 transport codec now carries and verifies packet integrity across an
-application-owned transport, but it does not authenticate the transport,
-validate live context, admit workers, or implement multiprocess lifecycle.
+application-owned transport. The local supervisor control socket also
+provides process-bound register/refresh handoffs with an application-supplied
+live context and bounded in-memory replay protection. Cross-host
+authentication, shared-memory/queue adapters, durable replay state, and
+multiprocess lifecycle orchestration remain future work.
 
 The application worker registry now supports packet-aware admission and marks
 an admitted worker unauthorized when its packet expires; restarting it clears

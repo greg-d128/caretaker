@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
+import threading
+import time
 from datetime import datetime, timedelta, timezone
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -12,7 +16,14 @@ from caretaker import (
     verify_recovery_authority_packet,
 )
 from caretaker import WorkerAcceptancePolicy
-from caretaker.logging import WorkerAcceptanceState, WorkerKind, WorkerRegistry, WorkerState
+from caretaker.logging import (
+    ControlSocketServer,
+    WorkerAcceptanceState,
+    WorkerKind,
+    WorkerRegistry,
+    WorkerState,
+    submit_worker_authority_packet,
+)
 import caretaker.logging.supervisor as supervisor_module
 
 
@@ -90,6 +101,164 @@ def test_authority_packet_transport_is_bounded() -> None:
 
     with pytest.raises(ValueError, match="exceeds 65536 bytes"):
         serialize_recovery_authority_packet(packet)
+
+
+def test_transported_authority_admission_binds_peer_and_rejects_replay() -> None:
+    registry = WorkerRegistry()
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    packet = _packet(supervisor_time=supervisor_time)
+    handoff_id = uuid4()
+
+    worker = registry.register_transported_authorized(
+        WorkerKind.REPAIR_ANALYZER,
+        4321,
+        serialize_recovery_authority_packet(packet),
+        handoff_id=handoff_id,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+    )
+    assert worker.process_id == 4321
+    assert worker.authority_packet_id == packet.packet_id
+
+    with pytest.raises(PermissionError, match="already been consumed"):
+        registry.register_transported_authorized(
+            WorkerKind.REPAIR_ANALYZER,
+            9876,
+            serialize_recovery_authority_packet(packet),
+            handoff_id=handoff_id,
+            supervisor_time=supervisor_time,
+            target_id="app:charge",
+            generation_id="generation-7",
+            code_hash="code-hash",
+            policy_fingerprint="policy-hash",
+            authority_policy_generation="authority-8",
+            authority_policy_fingerprint="authority-hash",
+            allowed_capabilities={"observe"},
+        )
+
+
+def test_local_authority_packet_socket_binds_peer_and_refreshes_identity(tmp_path) -> None:
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    supervisor = supervisor_module.CaretakerApplicationSupervisor(object())
+    socket_path = tmp_path / "supervisor.sock"
+    context = {
+        "target_id": "app:charge",
+        "generation_id": "generation-7",
+        "code_hash": "code-hash",
+        "policy_fingerprint": "policy-hash",
+        "authority_policy_generation": "authority-8",
+        "authority_policy_fingerprint": "authority-hash",
+        "allowed_capabilities": {"observe"},
+    }
+
+    def handler(request, credentials):
+        return supervisor.handle_worker_authority_packet(
+            request,
+            credentials,
+            allowed_worker_kinds={WorkerKind.REPAIR_ANALYZER},
+            supervisor_time=supervisor_time,
+            **context,
+        )
+
+    server = ControlSocketServer(
+        socket_path,
+        handler,
+        allowed_uids={os.getuid()},
+    )
+    server.start()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for _ in range(50):
+            if socket_path.exists():
+                break
+            time.sleep(0.01)
+        packet = _packet(supervisor_time=supervisor_time)
+        response = submit_worker_authority_packet(
+            socket_path,
+            packet=packet,
+            handoff_id=uuid4(),
+            worker_kind=WorkerKind.REPAIR_ANALYZER.name,
+        )
+        assert response["ok"] is True
+        assert response["process_id"] == os.getpid()
+        worker = supervisor.workers.get(UUID(response["worker_id"]))
+        assert response["process_start_id"] == str(worker.process_start_id)
+
+        refreshed_time = supervisor_time + timedelta(seconds=60)
+        refreshed_packet = create_recovery_authority_packet(
+            target_id="app:charge",
+            generation_id="generation-7",
+            code_hash="code-hash",
+            policy_fingerprint="policy-hash",
+            authority_policy_generation="authority-9",
+            authority_policy_fingerprint="authority-hash-new",
+            capabilities=("observe",),
+            supervisor_time=refreshed_time,
+        )
+        supervisor_context = context.copy()
+        supervisor_context.update({
+            "authority_policy_generation": "authority-9",
+            "authority_policy_fingerprint": "authority-hash-new",
+        })
+        server.handler = lambda request, credentials: supervisor.handle_worker_authority_packet(
+            request,
+            credentials,
+            allowed_worker_kinds={WorkerKind.REPAIR_ANALYZER},
+            supervisor_time=refreshed_time,
+            **supervisor_context,
+        )
+        refresh_handoff_id = uuid4()
+        refreshed = submit_worker_authority_packet(
+            socket_path,
+            packet=refreshed_packet,
+            handoff_id=refresh_handoff_id,
+            worker_kind=WorkerKind.REPAIR_ANALYZER.name,
+            operation="refresh",
+            worker_id=worker.worker_id,
+            process_start_id=worker.process_start_id,
+        )
+        assert refreshed["ok"] is True
+        assert refreshed["worker_id"] == str(worker.worker_id)
+        assert refreshed["process_id"] == os.getpid()
+
+        replay = submit_worker_authority_packet(
+            socket_path,
+            packet=refreshed_packet,
+            handoff_id=refresh_handoff_id,
+            worker_kind=WorkerKind.REPAIR_ANALYZER.name,
+            operation="refresh",
+            worker_id=worker.worker_id,
+            process_start_id=worker.process_start_id,
+        )
+        assert replay["ok"] is False
+        assert "handoff" in replay["error"]
+
+        with pytest.raises(PermissionError, match="process identity"):
+            supervisor.handle_worker_authority_packet(
+                {
+                    "command": "worker-authority-packet",
+                    "operation": "refresh",
+                    "handoff_id": str(uuid4()),
+                    "worker_kind": WorkerKind.REPAIR_ANALYZER.name,
+                    "worker_id": str(worker.worker_id),
+                    "process_start_id": str(worker.process_start_id),
+                    "packet": json.loads(serialize_recovery_authority_packet(refreshed_packet)),
+                },
+                (os.getpid() + 1, os.getuid(), os.getgid()),
+                allowed_worker_kinds={WorkerKind.REPAIR_ANALYZER},
+                supervisor_time=refreshed_time,
+                **supervisor_context,
+            )
+    finally:
+        server.stop()
+        thread.join(timeout=2)
 
 
 def test_worker_registry_requires_exact_authority_packet_context() -> None:
