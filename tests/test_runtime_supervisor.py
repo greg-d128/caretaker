@@ -94,7 +94,9 @@ def test_runtime_boundary_functions_are_application_owned() -> None:
         handle_worker_replacement_packet,
         handle_worker_replacement_queue_handoff,
         build_authorized_restart_callback,
+        build_incident_action_handler,
         build_replacement_action_handler,
+        build_shutdown_action_handler,
         stop_application,
         stop_runtime_supervisor,
     )
@@ -116,7 +118,9 @@ def test_runtime_boundary_functions_are_application_owned() -> None:
     assert handle_worker_replacement_packet.__module__ == "caretaker.runtime_supervision"
     assert handle_worker_replacement_queue_handoff.__module__ == "caretaker.runtime_supervision"
     assert build_authorized_restart_callback.__module__ == "caretaker.runtime_supervision"
+    assert build_incident_action_handler.__module__ == "caretaker.runtime_supervision"
     assert build_replacement_action_handler.__module__ == "caretaker.runtime_supervision"
+    assert build_shutdown_action_handler.__module__ == "caretaker.runtime_supervision"
     assert handle_worker_failure_cohort.__module__ == "caretaker.runtime_supervision"
     assert stop_application.__module__ == "caretaker.runtime_supervision"
     assert stop_runtime_supervisor.__module__ == "caretaker.runtime_supervision"

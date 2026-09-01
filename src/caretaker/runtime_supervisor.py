@@ -20,7 +20,9 @@ from .runtime_supervision import (
     ApplicationWorkerLifecycle,
     accept_comparison_worker_result,
     build_authorized_restart_callback,
+    build_incident_action_handler,
     build_replacement_action_handler,
+    build_shutdown_action_handler,
     capture_worker_failure_evidence,
     compare_comparison_worker_result,
     handle_expired_worker_cohort,
@@ -207,9 +209,18 @@ class ApplicationRuntimeSupervisor:
         """Build a packet-verified replacement handler through the runtime seam."""
         return build_replacement_action_handler(self._implementation, **kwargs)
 
+    @staticmethod
+    def build_incident_action_handler(create_incident: Callable[[Mapping[str, Any]], Any]) -> Callable[[Mapping[str, Any]], dict[str, Any]]:
+        """Build an incident action adapter through the runtime seam."""
+        return build_incident_action_handler(create_incident)
+
     def build_authorized_restart_callback(self, **kwargs: Any) -> Callable[[Any], dict[str, Any]]:
         """Build a packet-verified restart callback through the runtime seam."""
         return build_authorized_restart_callback(self._implementation, **kwargs)
+
+    def build_shutdown_action_handler(self, stop_application: Callable[[Mapping[str, Any]], Any] | None = None) -> Callable[[Mapping[str, Any]], dict[str, Any]]:
+        """Build a shutdown action adapter through the runtime seam."""
+        return build_shutdown_action_handler(self._implementation, stop_application)
 
     def issue_comparison_worker_assignment(self, *args: Any, **kwargs: Any) -> Any:
         """Issue a bounded comparison assignment through the runtime seam."""

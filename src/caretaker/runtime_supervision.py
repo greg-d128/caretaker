@@ -1959,6 +1959,93 @@ def capture_worker_failure_evidence(
     }
 
 
+def build_incident_action_handler(
+    create_incident: Callable[[Mapping[str, Any]], Any],
+) -> Callable[[Mapping[str, Any]], dict[str, Any]]:
+    """Build an application-owned incident action adapter.
+
+    Incident persistence is owned by the embedding application. The
+    callback receives the complete recovery decision, including its
+    policy action and bounded recovery evidence, and must return a
+    mapping with ``accepted=True`` and a durable ``incident_id``. A
+    non-mapping result is converted to an explicit rejection so the
+    recovery dispatcher cannot mistake a callback that returned
+    ``None`` for a successfully created incident.
+    """
+    if not callable(create_incident):
+        raise TypeError("create_incident must be callable")
+
+    def handler(decision: Mapping[str, Any]) -> dict[str, Any]:
+        try:
+            result = create_incident(decision)
+        except Exception as exc:
+            return {
+                "accepted": False,
+                "reason": f"incident callback failed: {type(exc).__name__}: {exc}"[:256],
+            }
+        if not isinstance(result, Mapping):
+            return {
+                "accepted": False,
+                "reason": "incident callback must return an acknowledgement mapping",
+            }
+        return dict(result)
+
+    return handler
+
+def build_shutdown_action_handler(
+    supervisor: Any,
+    stop_application_callback: Callable[[Mapping[str, Any]], Any] | None = None,
+) -> Callable[[Mapping[str, Any]], dict[str, Any]]:
+    """Build an application-boundary shutdown action adapter.
+
+    By default this wraps the supervisor's application process-group
+    shutdown implementation. An embedding application may provide a
+    callback instead; it must accept the complete recovery decision and
+    return a mapping with ``accepted=True`` and
+    ``shutdown_requested=True``. The latter is an explicit application
+    acknowledgement, not a Caretaker authority grant.
+    """
+    if stop_application_callback is not None and not callable(stop_application_callback):
+        raise TypeError("stop_application must be callable")
+
+    def handler(decision: Mapping[str, Any]) -> dict[str, Any]:
+        try:
+            if stop_application_callback is None:
+                raw_result = stop_application(supervisor)
+                if not isinstance(raw_result, Mapping):
+                    return {
+                        "accepted": False,
+                        "reason": "supervisor shutdown did not return an acknowledgement mapping",
+                    }
+                result = dict(raw_result)
+                if result.get("boundary") == "none":
+                    result["accepted"] = False
+                    result["reason"] = "no application boundary is configured"
+                    return result
+                boundary_alive = bool(
+                    result.get("boundary_alive", result.get("application_alive", True))
+                )
+                result["shutdown_requested"] = not boundary_alive
+                result["accepted"] = bool(result["shutdown_requested"])
+                if not result["accepted"]:
+                    result["reason"] = "application boundary remains alive after shutdown request"
+                return result
+            result = stop_application_callback(decision)
+        except Exception as exc:
+            return {
+                "accepted": False,
+                "reason": f"shutdown callback failed: {type(exc).__name__}: {exc}"[:256],
+            }
+        if not isinstance(result, Mapping):
+            return {
+                "accepted": False,
+                "reason": "shutdown callback must return an acknowledgement mapping",
+            }
+        return dict(result)
+
+    return handler
+
+
 def handle_worker_acceptance_observation(
     supervisor: Any,
     request: Mapping[str, Any],
@@ -3462,7 +3549,9 @@ __all__ = [
     "ApplicationWorkerLifecycle",
     "accept_comparison_worker_result",
     "build_authorized_restart_callback",
+    "build_incident_action_handler",
     "build_replacement_action_handler",
+    "build_shutdown_action_handler",
     "capture_worker_failure_evidence",
     "compare_comparison_worker_result",
     "handle_expired_worker_cohort",

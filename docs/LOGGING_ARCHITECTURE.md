@@ -121,6 +121,10 @@ runtime enforces bounded per-worker and total drains, validates worker state
 and process identity, reconciles generation/policy context, and evaluates
 configured promotions without granting authority.
 
+Incident and shutdown recovery adapters are runtime-owned wiring boundaries.
+They validate callback acknowledgements and preserve application ownership of
+incident persistence and process-group shutdown effects.
+
 Application monitoring and application-boundary shutdown are also implemented
 in the application-runtime package. The legacy logging supervisor delegates to
 those functions, and the runtime owner exposes them directly while preserving
