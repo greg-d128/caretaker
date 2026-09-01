@@ -18,6 +18,8 @@ from .logging.supervisor import CaretakerApplicationSupervisor
 from .runtime_supervision import (
     AdaptiveAggregationQueueRegistry,
     ApplicationWorkerLifecycle,
+    build_authorized_restart_callback,
+    build_replacement_action_handler,
     capture_worker_failure_evidence,
     handle_expired_worker_cohort,
     handle_worker_failure,
@@ -189,6 +191,14 @@ class ApplicationRuntimeSupervisor:
             recovery_policy=recovery_policy,
             recovery_handlers=recovery_handlers,
         )
+
+    def build_replacement_action_handler(self, **kwargs: Any) -> Callable[[Mapping[str, Any]], dict[str, Any]]:
+        """Build a packet-verified replacement handler through the runtime seam."""
+        return build_replacement_action_handler(self._implementation, **kwargs)
+
+    def build_authorized_restart_callback(self, **kwargs: Any) -> Callable[[Any], dict[str, Any]]:
+        """Build a packet-verified restart callback through the runtime seam."""
+        return build_authorized_restart_callback(self._implementation, **kwargs)
 
     def handle_expired_worker_cohort(
         self,

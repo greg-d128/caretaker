@@ -99,6 +99,11 @@ owned. The runtime compares persisted evidence, selects the configured policy
 action, and records pending/executed outcomes; it never treats reconciliation
 as authority and only dispatches explicitly supplied application handlers.
 
+Packet-verified replacement and restart callback construction is runtime-owned.
+The runtime validates the supervisor-issued packet and replacement admission;
+the embedding application still supplies process creation and cleanup, and a
+callback cannot turn diagnostic evidence into authority.
+
 Application monitoring and application-boundary shutdown are also implemented
 in the application-runtime package. The legacy logging supervisor delegates to
 those functions, and the runtime owner exposes them directly while preserving

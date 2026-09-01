@@ -2229,9 +2229,11 @@ control-cycle implementation now lives in the application package and is
 exposed directly by `ApplicationRuntimeSupervisor`. Application monitoring,
 process-boundary shutdown, failure evidence capture, single-worker failure
 handling, and failure reconciliation/action checkpoints now use
-application-runtime implementations. Recovery handlers remain application-
-owned; remaining work is to extract only the other specialized orchestration
-boundaries without broadening the application authority boundary.
+application-runtime implementations. Packet-verified replacement and restart
+callback construction is also runtime-owned. Recovery handlers and process
+creation remain application-owned; remaining work is to extract only the other
+specialized orchestration boundaries without broadening the application
+authority boundary.
 
 `logging/supervisor.py` and `logging/__init__.py` currently include application
 supervision, worker health/authority, adaptive coordination, and recovery

@@ -1766,6 +1766,198 @@ def capture_worker_failure_evidence(
     }
 
 
+def build_replacement_action_handler(
+    supervisor: Any,
+    *,
+    failed_worker_id: UUID,
+    packet: RecoveryAuthorityPacket,
+    supervisor_time: datetime,
+    target_id: str,
+    generation_id: str,
+    code_hash: str,
+    policy_fingerprint: str,
+    authority_policy_generation: str,
+    authority_policy_fingerprint: str,
+    spawn_worker: Callable[[WorkerReplacementRequest], Any],
+    stop_worker: Callable[[int], Any] | None = None,
+    allowed_capabilities: set[str] | frozenset[str] = frozenset(),
+    policy: RepairRecoveryPolicy | None = None,
+    acceptance_policy: WorkerAcceptancePolicy | None = None,
+) -> Callable[[Mapping[str, Any]], dict[str, Any]]:
+    """Build a recovery handler backed by packet-verified admission.
+
+    The application owns ``spawn_worker``. Caretaker never starts an OS
+    process here; it only admits the returned process through the existing
+    packet, expiry, context, and acceptance checks.
+    """
+    def cleanup_started_process(pid: int) -> dict[str, Any]:
+        if stop_worker is None:
+            return {
+                "status": "REQUIRED",
+                "accepted": False,
+                "reason": "application-owned process cleanup callback is not configured",
+            }
+        try:
+            result = stop_worker(pid)
+        except Exception as exc:
+            return {
+                "status": "FAILED",
+                "accepted": False,
+                "reason": f"{type(exc).__name__}: {exc}"[:256],
+            }
+        accepted = bool(
+            result
+            if not isinstance(result, Mapping)
+            else result.get("accepted") or result.get("stopped")
+        )
+        return {
+            "status": "STOPPED" if accepted else "REJECTED",
+            "accepted": accepted,
+            "result": dict(result) if isinstance(result, Mapping) else result,
+        }
+
+    def handler(decision: Mapping[str, Any]) -> dict[str, Any]:
+        if decision.get("target_id") not in {None, target_id}:
+            return {
+                "accepted": False,
+                "reason": "recovery target does not match replacement context",
+            }
+        started_pid: int | None = None
+        try:
+            request = supervisor.workers.prepare_replacement(
+                failed_worker_id,
+                packet,
+                supervisor_time=supervisor_time,
+                target_id=target_id,
+                generation_id=generation_id,
+                code_hash=code_hash,
+                policy_fingerprint=policy_fingerprint,
+                authority_policy_generation=authority_policy_generation,
+                authority_policy_fingerprint=authority_policy_fingerprint,
+                allowed_capabilities=allowed_capabilities,
+                policy=policy,
+            )
+            started = spawn_worker(request)
+            if not isinstance(started, Mapping) or not bool(started.get("started")):
+                return {
+                    "accepted": False,
+                    "reason": "application did not start replacement worker",
+                }
+            pid = started.get("pid")
+            if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+                return {
+                    "accepted": False,
+                    "reason": "replacement worker callback did not return a valid pid",
+                }
+            started_pid = pid
+            replacement = supervisor.workers.register_replacement(
+                request,
+                WorkerKind[request.worker_kind],
+                pid,
+                supervisor_time=supervisor_time,
+                target_id=target_id,
+                generation_id=generation_id,
+                code_hash=code_hash,
+                policy_fingerprint=policy_fingerprint,
+                authority_policy_generation=authority_policy_generation,
+                authority_policy_fingerprint=authority_policy_fingerprint,
+                allowed_capabilities=allowed_capabilities,
+                policy=policy,
+                acceptance_policy=acceptance_policy,
+            )
+        except Exception as exc:
+            result = {
+                "accepted": False,
+                "reason": f"replacement admission failed: {type(exc).__name__}: {exc}"[:256],
+            }
+            if started_pid is not None:
+                result["process_cleanup"] = cleanup_started_process(started_pid)
+            return result
+        if replacement.acceptance_state.name not in {"PROBATION", "ACCEPTED"}:
+            result = {
+                "accepted": False,
+                "reason": "replacement did not enter probation or accepted state",
+                "replacement_worker_id": str(replacement.worker_id),
+                "acceptance_state": replacement.acceptance_state.name,
+            }
+            result["process_cleanup"] = cleanup_started_process(pid)
+            return result
+        return {
+            "accepted": True,
+            "started": True,
+            "pid": pid,
+            "failed_worker_id": str(failed_worker_id),
+            "replacement_worker_id": str(replacement.worker_id),
+            "authority_packet_id": str(packet.packet_id),
+            "authority_packet_verified": True,
+            "authority_packet_expires_at": packet.expires_at.isoformat(),
+            "acceptance_state": replacement.acceptance_state.name,
+            "request_id": str(request.request_id),
+        }
+
+    return handler
+
+def build_authorized_restart_callback(
+    supervisor: Any,
+    *,
+    failed_worker_id: UUID,
+    packet: RecoveryAuthorityPacket,
+    supervisor_time: datetime,
+    target_id: str,
+    generation_id: str,
+    code_hash: str,
+    policy_fingerprint: str,
+    authority_policy_generation: str,
+    authority_policy_fingerprint: str,
+    spawn_worker: Callable[[WorkerReplacementRequest], Any],
+    stop_worker: Callable[[int], Any] | None = None,
+    allowed_capabilities: set[str] | frozenset[str] = frozenset(),
+    policy: RepairRecoveryPolicy | None = None,
+    acceptance_policy: WorkerAcceptancePolicy | None = None,
+) -> Callable[[WorkerHealth], dict[str, Any]]:
+    """Build a restart callback that performs packet-verified admission.
+
+    The embedding application owns process creation. The callback is safe
+    to pass to ``handle_worker_failure``: it supplies the immutable packet
+    to the application callback, verifies the returned PID, admits the new
+    worker, and reports the replacement identity back to the supervisor.
+    """
+    replacement_handler = build_replacement_action_handler(
+        supervisor,
+        failed_worker_id=failed_worker_id,
+        packet=packet,
+        supervisor_time=supervisor_time,
+        target_id=target_id,
+        generation_id=generation_id,
+        code_hash=code_hash,
+        policy_fingerprint=policy_fingerprint,
+        authority_policy_generation=authority_policy_generation,
+        authority_policy_fingerprint=authority_policy_fingerprint,
+        spawn_worker=spawn_worker,
+        stop_worker=stop_worker,
+        allowed_capabilities=allowed_capabilities,
+        policy=policy,
+        acceptance_policy=acceptance_policy,
+    )
+
+    def callback(worker: WorkerHealth) -> dict[str, Any]:
+        if worker.worker_id != failed_worker_id:
+            return {
+                "started": False,
+                "error": "restart callback received an unexpected worker identity",
+            }
+        result = replacement_handler({"target_id": target_id})
+        if not bool(result.get("accepted")):
+            return {
+                "started": False,
+                "error": str(result.get("reason") or "replacement admission was rejected")[:256],
+                "handler_result": result,
+            }
+        return dict(result)
+
+    return callback
+
+
 def handle_worker_failure(
     supervisor: Any,
     worker: WorkerHealth,
@@ -2350,10 +2542,14 @@ def handle_expired_worker_cohort(
 __all__ = [
     "AdaptiveAggregationQueueRegistry",
     "ApplicationWorkerLifecycle",
+    "build_authorized_restart_callback",
+    "build_replacement_action_handler",
     "capture_worker_failure_evidence",
     "handle_expired_worker_cohort",
+    "handle_worker_failure",
     "handle_worker_failure_cohort",
     "MAX_WORKER_FAILURE_COHORT",
+    "reconcile_worker_failures",
     "Watchdog",
     "WorkRegistry",
     "WorkerRegistry",
