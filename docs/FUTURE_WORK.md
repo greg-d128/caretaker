@@ -2227,7 +2227,9 @@ logging compatibility re-export; process creation and cleanup remain
 application-owned callbacks. The bounded control-cycle implementation now
 lives in the application package and is exposed directly by
 `ApplicationRuntimeSupervisor`; control and shutdown internals beyond that
-cycle remain to be extracted.
+cycle remain to be extracted. Application monitoring and process-boundary
+shutdown now use application-runtime implementations; remaining logging
+supervisor code is orchestration and compatibility delegation.
 
 `logging/supervisor.py` and `logging/__init__.py` currently include application
 supervision, worker health/authority, adaptive coordination, and recovery

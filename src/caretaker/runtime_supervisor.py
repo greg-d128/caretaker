@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
+import signal
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +21,10 @@ from .runtime_supervision import (
     Watchdog,
     WorkRegistry,
     WorkerRegistry,
+    monitor_application,
     run_supervisor_control_cycle,
+    stop_application,
+    stop_runtime_supervisor,
 )
 
 
@@ -64,7 +68,7 @@ class ApplicationRuntimeSupervisor:
         self._implementation.start()
 
     def stop(self) -> None:
-        self._implementation.stop()
+        stop_runtime_supervisor(self._implementation)
 
     def run_control_cycle(
         self,
@@ -79,6 +83,34 @@ class ApplicationRuntimeSupervisor:
             supervisor_time=supervisor_time,
             on_expired_workers=on_expired_workers,
             on_cycle=on_cycle,
+        )
+
+    def monitor_application(
+        self,
+        *,
+        interval_seconds: float = 1.0,
+        on_expired_workers: Callable[[tuple[Any, ...], datetime], Any] | None = None,
+        on_cycle: Callable[[datetime], Any] | None = None,
+    ) -> None:
+        """Monitor the application boundary through the runtime seam."""
+        return monitor_application(
+            self._implementation,
+            interval_seconds=interval_seconds,
+            on_expired_workers=on_expired_workers,
+            on_cycle=on_cycle,
+        )
+
+    def stop_application(
+        self,
+        *,
+        graceful_signal: int = signal.SIGTERM,
+        timeout_seconds: float = 10.0,
+    ) -> dict[str, object]:
+        """Stop the application boundary through the runtime seam."""
+        return stop_application(
+            self._implementation,
+            graceful_signal=graceful_signal,
+            timeout_seconds=timeout_seconds,
         )
 
     def __getattr__(self, name: str) -> Any:

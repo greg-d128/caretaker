@@ -72,3 +72,15 @@ def test_application_runtime_supervisor_exposes_control_cycle_owner() -> None:
 
     assert result["ok"] is True
     assert result["authority_granted"] is False
+
+
+def test_runtime_boundary_functions_are_application_owned() -> None:
+    from caretaker.runtime_supervision import (
+        monitor_application,
+        stop_application,
+        stop_runtime_supervisor,
+    )
+
+    assert monitor_application.__module__ == "caretaker.runtime_supervision"
+    assert stop_application.__module__ == "caretaker.runtime_supervision"
+    assert stop_runtime_supervisor.__module__ == "caretaker.runtime_supervision"

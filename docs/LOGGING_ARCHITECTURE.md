@@ -73,6 +73,11 @@ application package. The legacy supervisor method delegates to it, and
 directly; expiry and cycle callbacks remain application-owned and cannot grant
 authority.
 
+Application monitoring and application-boundary shutdown are also implemented
+in the application-runtime package. The legacy logging supervisor delegates to
+those functions, and the runtime owner exposes them directly while preserving
+the existing process-group boundary and graceful/forced-stop behavior.
+
 ## Channels
 
 - `APPLICATION`

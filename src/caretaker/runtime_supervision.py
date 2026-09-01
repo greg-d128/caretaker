@@ -8,7 +8,9 @@ their implementation must not depend on the logging supervisor or runtime.
 from __future__ import annotations
 
 import os
+import signal
 import threading
+import time
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -1522,13 +1524,116 @@ def run_supervisor_control_cycle(
                 "result": callback_result,
                 "authority_granted": False,
             }
-        return result
+    return result
 
 
+def _boundary_alive(pid: int, process_group_id: int | None) -> bool:
+    if process_group_id is None:
+        return _pid_alive(pid)
+    try:
+        os.killpg(process_group_id, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+def monitor_application(
+    supervisor: Any,
+    *,
+    interval_seconds: float = 1.0,
+    on_expired_workers: Callable[[tuple[WorkerHealth, ...], datetime], Any] | None = None,
+    on_cycle: Callable[[datetime], Any] | None = None,
+) -> None:
+    """Monitor the application and invoke optional cycle callbacks."""
+    while not supervisor._stop.wait(interval_seconds):
+        cycle = supervisor.run_control_cycle(
+            on_expired_workers=on_expired_workers,
+            on_cycle=on_cycle,
+        )
+        if cycle["application_alive"] is False:
+            supervisor.stop()
+            return
+
+def stop_application(
+    supervisor: Any,
+    *,
+    graceful_signal: int = signal.SIGTERM,
+    timeout_seconds: float = 10.0,
+) -> dict[str, object]:
+    """Stop the supervised application boundary and report the outcome.
+
+    The launcher creates a dedicated session/process group for the
+    application. Signalling that group keeps application descendants in
+    Caretaker's application-scoped authority boundary without signalling
+    the supervisor or unrelated same-UID processes.
+    """
+    if supervisor.application_pid is None:
+        return {"boundary": "none", "application_alive": False, "forced": False}
+
+    process_group_id = supervisor.application_process_group_id
+    boundary = "process_group" if process_group_id is not None else "process"
+    send = (
+        (lambda sig: os.killpg(process_group_id, sig))
+        if process_group_id is not None
+        else (lambda sig: os.kill(supervisor.application_pid, sig))
+    )
+    try:
+        send(graceful_signal)
+    except ProcessLookupError:
+        return {
+            "boundary": boundary,
+            "process_group_id": process_group_id,
+            "application_alive": False,
+            "forced": False,
+        }
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline and _boundary_alive(supervisor.application_pid, process_group_id):
+        if supervisor.application_process is not None:
+            supervisor.application_process.poll()
+        time.sleep(0.1)
+    forced = _boundary_alive(supervisor.application_pid, process_group_id)
+    if forced:
+        try:
+            send(signal.SIGKILL)
+        except ProcessLookupError:
+            forced = False
+        forced_deadline = time.monotonic() + min(max(timeout_seconds, 0.0), 1.0)
+        while time.monotonic() < forced_deadline and _boundary_alive(supervisor.application_pid, process_group_id):
+            if supervisor.application_process is not None:
+                supervisor.application_process.poll()
+            time.sleep(0.05)
+    return {
+        "boundary": boundary,
+        "process_group_id": process_group_id,
+        "application_alive": (
+            supervisor.application_process.poll() is None
+            if supervisor.application_process is not None
+            else _pid_alive(supervisor.application_pid)
+        ),
+        "boundary_alive": _boundary_alive(supervisor.application_pid, process_group_id),
+        "forced": forced,
+    }
+
+def stop_runtime_supervisor(supervisor: Any) -> None:
+    supervisor._stop.set()
+    supervisor.watchdog.stop()
+    supervisor._audit_event(
+        "SUPERVISOR_STATE_CHANGED",
+        actor={"type": "supervisor", "id": str(supervisor.supervisor_health.worker_id)},
+        scope={"worker_id": str(supervisor.supervisor_health.worker_id)},
+        outcome={"state": "STOPPED"},
+        details={"application_pid": supervisor.application_pid},
+    )
+    supervisor.runtime.close()
 __all__ = [
     "AdaptiveAggregationQueueRegistry",
     "ApplicationWorkerLifecycle",
     "Watchdog",
     "WorkRegistry",
     "WorkerRegistry",
+    "monitor_application",
+    "run_supervisor_control_cycle",
+    "stop_application",
+    "stop_runtime_supervisor",
 ]
