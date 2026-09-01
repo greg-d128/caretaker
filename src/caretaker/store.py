@@ -182,6 +182,13 @@ class RepairIntegrityStore(Protocol):
     def record_integrity_incident(self, record: IntegrityIncident) -> None: ...
 
 
+class RepairPostmortemStore(Protocol):
+    """Capability required to persist internal post-mortem evidence."""
+
+    def recent_events(self, target_id: str | None, limit: int = 50) -> tuple[RepairEvent, ...]: ...
+    def record_internal_incident(self, record: InternalIncident) -> None: ...
+
+
 class _CapabilityStoreView:
     """Read/write capability projection over one physical store.
 
@@ -224,6 +231,7 @@ _WORKER_RECOVERY_METHODS = frozenset({
     "all_worker_evidence_joins",
 })
 _INTEGRITY_METHODS = frozenset({"record_integrity_verification", "record_integrity_incident"})
+_POSTMORTEM_METHODS = frozenset({"recent_events", "record_internal_incident"})
 
 
 def lifecycle_store_view(store: RepairStore) -> RepairLifecycleStore:
@@ -248,6 +256,12 @@ def integrity_store_view(store: RepairStore) -> RepairIntegrityStore:
     """Return the integrity-record capability over an existing store."""
 
     return _CapabilityStoreView(store, _INTEGRITY_METHODS)  # type: ignore[return-value]
+
+
+def postmortem_store_view(store: RepairStore) -> RepairPostmortemStore:
+    """Return the internal post-mortem capability over an existing store."""
+
+    return _CapabilityStoreView(store, _POSTMORTEM_METHODS)  # type: ignore[return-value]
 
 
 class InMemoryRepairStore:

@@ -14,7 +14,7 @@ from .domain import InternalIncident, utcnow
 from .registry import TargetRegistry
 from .runtime import snapshot_context
 from .state import exception_evidence, value_snapshot
-from .store import RepairStore, _jsonable
+from .store import RepairPostmortemStore, _jsonable
 from .telemetry import CorrelatedLogHandler, logger
 
 
@@ -22,7 +22,7 @@ class PostMortemRecorder:
     def __init__(
         self,
         *,
-        store: RepairStore,
+        store: RepairPostmortemStore,
         registry: TargetRegistry,
         log_handler: CorrelatedLogHandler | None = None,
         emergency_path: str | Path = ".caretaker/emergency/internal-incidents.jsonl",

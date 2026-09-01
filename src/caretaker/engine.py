@@ -83,6 +83,7 @@ from .store import (
     RepairStore,
     evidence_store_view,
     lifecycle_store_view,
+    postmortem_store_view,
     worker_recovery_store_view,
 )
 from .telemetry import CorrelatedLogHandler, logger
@@ -207,7 +208,7 @@ class RepairEngine:
         self._active_incidents: dict[UUID, dict[str, Any]] = {}
         self._active_validations: dict[UUID, dict[str, Any]] = {}
         self.postmortem = PostMortemRecorder(
-            store=self.store,
+            store=postmortem_store_view(self.store),
             registry=self.registry,
             log_handler=self.log_handler,
         )
