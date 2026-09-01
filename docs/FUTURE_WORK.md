@@ -1361,8 +1361,11 @@ outlier report. Missing or insufficient signatures are reported as
 read-only evidence and does not select recovery or change policy. A bounded
 supervisor reconciliation now consolidates multiple independently produced
 reports when their assignment contexts match exactly; it retains conflicts and
-incomplete coverage and does not average shared baselines. Post-mortem
-integration and deployment-wide orchestration remain future work.
+incomplete coverage and does not average shared baselines. It can join that
+result to a same-scope, target-bound worker post-mortem reconciliation as
+evidence, without merging the two statistical summaries. Packet-level
+post-mortem comparison improvements and deployment-wide orchestration remain
+future work.
 
 ### Recovery decisions recorded for the next implementation slice
 

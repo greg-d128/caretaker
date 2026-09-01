@@ -8,6 +8,7 @@ import pytest
 from caretaker import (
     ComparisonWorkerComparisonReport,
     ComparisonWorkerReconciliationReport,
+    WorkerEvidenceJoinReport,
     ComparisonWorkerResult,
     InMemoryRepairStore,
     SQLiteRepairStore,
@@ -18,7 +19,9 @@ from caretaker import (
     worker_failure_recovery_status,
     compare_comparison_worker_result,
     reconcile_comparison_worker_reports,
+    join_worker_evidence_reconciliations,
     verify_comparison_worker_reconciliation_report,
+    verify_worker_evidence_join_report,
     verify_comparison_worker_assignment,
     verify_comparison_worker_result,
 )
@@ -432,6 +435,26 @@ def test_supervisor_persists_comparison_report_reconciliation() -> None:
     assert status["authority_granted"] is False
     assert runtime.audit.events[-1]["event_type"] == "WORKER_COMPARISON_RECONCILED"
 
+    joined = supervisor.join_worker_evidence_reconciliations(
+        {
+            "scope": first_assignment.scope,
+            "target_ids": (first_assignment.target_id,),
+            "record_ids": ("failure-a", "failure-b"),
+            "packet_hashes": ("a" * 64, "b" * 64),
+            "comparison": {"status": "COMBINED"},
+            "conflict": False,
+        },
+        reconciled,
+        assignment_contexts=(first_assignment, second_assignment),
+        joined_at=now,
+        store=store,
+    )
+    assert joined.status == "AGREEMENT"
+    assert len(store.all_worker_evidence_joins()) == 1
+    status = worker_failure_recovery_status(store)
+    assert status["worker_evidence_join_count"] == 1
+    assert status["worker_evidence_joins"][0]["status"] == "AGREEMENT"
+
 
 def test_comparison_reports_reconcile_only_with_matching_independent_contexts(
     tmp_path: Path,
@@ -558,3 +581,86 @@ def test_comparison_report_reconciliation_preserves_conflict_and_missing_context
     )
     assert incomplete.status == "INCOMPLETE_EVIDENCE"
     assert any("context is required" in reason for reason in incomplete.reasons)
+
+
+def test_worker_evidence_join_binds_postmortems_to_comparison_reports(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    packet, first_assignment = _assignment(now)
+    second_assignment = create_comparison_worker_assignment(
+        packet,
+        scope=first_assignment.scope,
+        evidence_refs=first_assignment.evidence_refs,
+        supervisor_time=now,
+        policy=RepairRecoveryPolicy(),
+    )
+    reports = []
+    for assignment, worker_id in (
+        (first_assignment, "worker-a"),
+        (second_assignment, "worker-b"),
+    ):
+        result = create_comparison_worker_result(
+            assignment,
+            worker_id=worker_id,
+            evidence={
+                "behavior_signature": {
+                    "sample_count": 30,
+                    "metrics": {
+                        "duration_ms": {"mean": 10.0, "standard_deviation": 1.0}
+                    },
+                }
+            },
+            observed_at=now,
+        )
+        reports.append(
+            compare_comparison_worker_result(
+                result,
+                assignment=assignment,
+                baseline_signatures=(_signature(10.0, source_id="baseline"),),
+                compared_at=now,
+            )
+        )
+    comparison = reconcile_comparison_worker_reports(
+        tuple(reports),
+        assignment_contexts=(first_assignment, second_assignment),
+        reconciled_at=now,
+    )
+    postmortem = {
+        "scope": first_assignment.scope,
+        "target_ids": (first_assignment.target_id,),
+        "record_ids": ("failure-1", "failure-2"),
+        "packet_hashes": ("a" * 64, "b" * 64),
+        "comparison": {"status": "COMBINED"},
+        "conflict": False,
+    }
+
+    joined = join_worker_evidence_reconciliations(
+        postmortem,
+        comparison,
+        assignment_contexts=(first_assignment, second_assignment),
+        joined_at=now,
+    )
+
+    assert isinstance(joined, WorkerEvidenceJoinReport)
+    assert joined.status == "AGREEMENT"
+    assert joined.postmortem_status == "COMBINED"
+    assert joined.comparison_status == "AGREEMENT"
+    assert joined.postmortem_record_ids == ("failure-1", "failure-2")
+    assert verify_worker_evidence_join_report(joined)["valid"] is True
+    for store in (
+        InMemoryRepairStore(),
+        SQLiteRepairStore(tmp_path / "worker-evidence-join.sqlite"),
+    ):
+        store.record_worker_evidence_join(joined)
+        stored = store.all_worker_evidence_joins()[0]
+        assert verify_worker_evidence_join_report(stored)["valid"] is True
+
+    not_comparable = join_worker_evidence_reconciliations(
+        {**postmortem, "target_ids": ("app:refund",)},
+        comparison,
+        assignment_contexts=(first_assignment, second_assignment),
+        joined_at=now,
+    )
+    assert not_comparable.status == "NOT_COMPARABLE"
+    assert any("target is not" in reason for reason in not_comparable.reasons)

@@ -60,6 +60,12 @@ baselines must never be double-counted. The resulting
 `ComparisonWorkerReconciliationReport` is durable, hash-verifiable, visible in
 the read-only status projection, and cannot select recovery or grant authority.
 
+The supervisor can join that report to a same-scope worker post-mortem
+reconciliation. The join requires assignment contexts to bind the comparison
+evidence to the post-mortem target, preserves all source IDs and packet hashes,
+and classifies target mismatches as `NOT_COMPARABLE`. It does not merge the
+statistical summaries or treat agreement as proof of safety or authority.
+
 The assignment/result/comparison/reconciliation contract is the current
 application-scoped protocol slice. Combining comparison reports with worker
 post-mortems, cross-process transport, fleet coordination, and

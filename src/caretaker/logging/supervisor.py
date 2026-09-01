@@ -18,6 +18,7 @@ from ..repair_recovery import (
     ComparisonWorkerComparisonReport,
     ComparisonWorkerReconciliationReport,
     ComparisonWorkerResult,
+    WorkerEvidenceJoinReport,
     RecoveryAuthorityPacket,
     RepairRecoveryPolicy,
     WorkerAcceptancePolicy,
@@ -27,6 +28,7 @@ from ..repair_recovery import (
     create_comparison_worker_assignment,
     compare_comparison_worker_result,
     reconcile_comparison_worker_reports,
+    join_worker_evidence_reconciliations,
     dispatch_recovery_action,
     evaluate_worker_acceptance,
     reconcile_worker_failure_records,
@@ -1960,6 +1962,49 @@ class CaretakerApplicationSupervisor:
                 "unique_report_count": report.unique_report_count,
                 "conflict_report_count": report.conflict_report_count,
                 "incomplete_report_count": report.incomplete_report_count,
+                "persisted": persisted,
+            },
+        )
+        return report
+
+    def join_worker_evidence_reconciliations(
+        self,
+        postmortem_reconciliation: Mapping[str, Any],
+        comparison_reconciliation: ComparisonWorkerReconciliationReport | Mapping[str, Any],
+        *,
+        assignment_contexts: tuple[
+            ComparisonWorkerAssignment | Mapping[str, Any], ...
+        ] = (),
+        joined_at: datetime | None = None,
+        store: Any | None = None,
+    ) -> WorkerEvidenceJoinReport:
+        """Link post-mortem and comparison evidence without granting authority."""
+
+        report = join_worker_evidence_reconciliations(
+            postmortem_reconciliation,
+            comparison_reconciliation,
+            assignment_contexts=assignment_contexts,
+            joined_at=joined_at,
+        )
+        target_store = store if store is not None else self.failure_store
+        persisted = False
+        if target_store is not None:
+            recorder = getattr(target_store, "record_worker_evidence_join", None)
+            if not callable(recorder):
+                raise TypeError("evidence join store does not support joins")
+            recorder(report)
+            persisted = True
+        self._audit_event(
+            "WORKER_COMPARISON_RECONCILED",
+            actor={"type": "supervisor", "id": str(self.supervisor_health.worker_id)},
+            scope={"reconciliation_scope": report.scope},
+            outcome={"state": report.status, "authority_granted": False},
+            details={
+                "join_id": str(report.join_id),
+                "postmortem_status": report.postmortem_status,
+                "comparison_status": report.comparison_status,
+                "postmortem_conflict": report.postmortem_conflict,
+                "comparison_conflict": report.comparison_conflict,
                 "persisted": persisted,
             },
         )

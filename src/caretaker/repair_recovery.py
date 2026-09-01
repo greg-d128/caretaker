@@ -36,6 +36,7 @@ COMPARISON_WORKER_MAX_KIND_CHARS = 64
 COMPARISON_WORKER_MAX_BASELINE_SIGNATURES = 128
 COMPARISON_WORKER_MAX_METRICS = 64
 COMPARISON_WORKER_MAX_RECONCILIATION_REPORTS = 128
+WORKER_EVIDENCE_JOIN_MAX_RECORDS = 256
 _WORKER_POSTMORTEM_REQUIRED_EVIDENCE = (
     "milestone",
     "partial_queue",
@@ -365,6 +366,28 @@ class ComparisonWorkerReconciliationReport:
     outliers: tuple[Mapping[str, Any], ...]
     reasons: tuple[str, ...]
     reconciled_at: datetime
+    content_sha256: str
+    schema_version: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerEvidenceJoinReport:
+    """Evidence-only join between post-mortem and comparison reconciliation."""
+
+    join_id: UUID
+    scope: str
+    target_ids: tuple[str, ...]
+    postmortem_record_ids: tuple[str, ...]
+    postmortem_packet_hashes: tuple[str, ...]
+    comparison_report_ids: tuple[str, ...]
+    comparison_result_ids: tuple[str, ...]
+    postmortem_status: str
+    comparison_status: str
+    status: str
+    postmortem_conflict: bool
+    comparison_conflict: bool
+    reasons: tuple[str, ...]
+    joined_at: datetime
     content_sha256: str
     schema_version: int = 1
 
@@ -2288,6 +2311,11 @@ def reconcile_worker_postmortems(
         "schema_version": WORKER_POSTMORTEM_SCHEMA_VERSION,
         "scope": normalized_scope,
         "target_ids": tuple(sorted(target_contexts)),
+        "record_ids": tuple(
+            [record_id for ids in record_ids_by_hash.values() for record_id in ids]
+            + [item["record_id"] for item in invalid_records]
+        ),
+        "packet_hashes": tuple(packet_hash for packet_hash, _ in packet_items),
         "input_count": len(records),
         "complete_record_count": sum(len(ids) for ids in record_ids_by_hash.values()),
         "unique_packet_count": len(packet_items),
@@ -2299,6 +2327,238 @@ def reconcile_worker_postmortems(
         "conflict_report": report,
         "retained_packets": tuple(packet for _, packet in packet_items),
         "authority_granted": False,
+    }
+
+
+def join_worker_evidence_reconciliations(
+    postmortem_reconciliation: Mapping[str, Any],
+    comparison_reconciliation: ComparisonWorkerReconciliationReport | Mapping[str, Any],
+    *,
+    assignment_contexts: Sequence[ComparisonWorkerAssignment | Mapping[str, Any]] = (),
+    joined_at: datetime | None = None,
+) -> WorkerEvidenceJoinReport:
+    """Join worker post-mortem and comparison evidence without merging it.
+
+    The join is valid only when both reconcilers describe the same scope and
+    the comparison assignments resolve to the post-mortem target identities.
+    It retains references to both evidence sets; it never treats agreement as
+    authority or combines their statistics a second time.
+    """
+    if not isinstance(postmortem_reconciliation, Mapping):
+        raise TypeError("post-mortem reconciliation must be a mapping")
+    comparison_check = verify_comparison_worker_reconciliation_report(
+        comparison_reconciliation
+    )
+    reasons: list[str] = list(comparison_check["failures"])
+    postmortem_scope = str(postmortem_reconciliation.get("scope") or "")
+    comparison_scope = str(comparison_check.get("scope") or "")
+    scope = postmortem_scope[:WORKER_FAILURE_SCOPE_MAX_CHARS]
+    if not postmortem_scope:
+        reasons.append("post-mortem reconciliation scope is missing")
+    if not comparison_scope:
+        reasons.append("comparison reconciliation scope is missing")
+    if postmortem_scope != comparison_scope:
+        reasons.append("post-mortem and comparison scopes differ")
+
+    def value(record: Any, name: str, default: Any = None) -> Any:
+        if isinstance(record, Mapping):
+            return record.get(name, default)
+        return getattr(record, name, default)
+
+    def bounded_ids(values: Any) -> tuple[str, ...]:
+        if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
+            return ()
+        return tuple(dict.fromkeys(str(item)[:256] for item in values if str(item)))[:WORKER_EVIDENCE_JOIN_MAX_RECORDS]
+
+    target_ids = bounded_ids(postmortem_reconciliation.get("target_ids", ()))
+    record_ids = bounded_ids(
+        postmortem_reconciliation.get("record_ids", ())
+    )
+    packet_hashes = bounded_ids(
+        postmortem_reconciliation.get("packet_hashes", ())
+    )
+    if not record_ids:
+        conflict = postmortem_reconciliation.get("conflict_report")
+        record_ids = bounded_ids(value(conflict, "record_ids", ()))
+    if not packet_hashes:
+        conflict = postmortem_reconciliation.get("conflict_report")
+        packet_hashes = bounded_ids(value(conflict, "packet_hashes", ()))
+
+    comparison_assignment_ids = bounded_ids(
+        value(comparison_reconciliation, "assignment_ids", ())
+    )
+    comparison_report_ids = bounded_ids(
+        value(comparison_reconciliation, "report_ids", ())
+    )
+    comparison_result_ids = bounded_ids(
+        value(comparison_reconciliation, "result_ids", ())
+    )
+    if not assignment_contexts:
+        reasons.append(
+            "assignment contexts are required to bind comparison evidence to targets"
+        )
+    context_by_assignment: dict[str, Any] = {}
+    for index, context in enumerate(assignment_contexts):
+        if not isinstance(context, (ComparisonWorkerAssignment, Mapping)):
+            reasons.append(f"assignment-{index}: context is not a mapping")
+            continue
+        assignment_id = str(value(context, "assignment_id") or "")
+        if not assignment_id or assignment_id not in comparison_assignment_ids:
+            reasons.append(f"assignment-{index}: context is not referenced by comparison")
+            continue
+        if assignment_id in context_by_assignment:
+            reasons.append(f"assignment-{index}: duplicate assignment context")
+            continue
+        context_by_assignment[assignment_id] = context
+        if str(value(context, "scope") or "") != comparison_scope:
+            reasons.append(f"assignment {assignment_id}: scope does not match")
+        context_target = str(value(context, "target_id") or "")
+        if context_target and context_target not in target_ids:
+            reasons.append(f"assignment {assignment_id}: target is not in post-mortem evidence")
+
+    for assignment_id in comparison_assignment_ids:
+        if assignment_id not in context_by_assignment:
+            reasons.append(f"assignment {assignment_id}: context is missing")
+
+    postmortem_comparison = postmortem_reconciliation.get("comparison", {})
+    if not isinstance(postmortem_comparison, Mapping):
+        postmortem_comparison = {}
+    postmortem_status = str(postmortem_comparison.get("status") or "UNKNOWN")
+    comparison_status = str(value(comparison_reconciliation, "status") or "UNKNOWN")
+    postmortem_conflict = bool(postmortem_reconciliation.get("conflict"))
+    comparison_conflict = comparison_status == "CONFLICT"
+    if not comparison_check["valid"]:
+        status = "INCOMPLETE_EVIDENCE"
+    elif any(
+        reason in {
+            "post-mortem and comparison scopes differ",
+        }
+        or "target is not" in reason
+        or "scope does not match" in reason
+        for reason in reasons
+    ):
+        status = "NOT_COMPARABLE"
+    elif postmortem_conflict or comparison_conflict:
+        status = "CONFLICT"
+    elif reasons:
+        status = "INCOMPLETE_EVIDENCE"
+    elif postmortem_status != "COMBINED":
+        status = "INCOMPLETE_EVIDENCE"
+        reasons.append("post-mortem evidence is not statistically combined")
+    elif comparison_status != "AGREEMENT":
+        status = "INCOMPLETE_EVIDENCE"
+        reasons.append("comparison evidence is not in agreement")
+    else:
+        status = "AGREEMENT"
+
+    joined_time = joined_at or utcnow()
+    payload = {
+        "scope": scope,
+        "target_ids": list(target_ids),
+        "postmortem_record_ids": list(record_ids),
+        "postmortem_packet_hashes": list(packet_hashes),
+        "comparison_report_ids": list(comparison_report_ids),
+        "comparison_result_ids": list(comparison_result_ids),
+        "postmortem_status": postmortem_status,
+        "comparison_status": comparison_status,
+        "status": status,
+        "postmortem_conflict": postmortem_conflict,
+        "comparison_conflict": comparison_conflict,
+        "reasons": list(dict.fromkeys(reason[:256] for reason in reasons))[:32],
+        "joined_at": joined_time.isoformat(),
+    }
+    encoded = _comparison_json_bytes(
+        payload,
+        limit=COMPARISON_WORKER_EVIDENCE_MAX_BYTES,
+        label="worker evidence join report",
+    )
+    join_id = uuid5(
+        NAMESPACE_URL,
+        "caretaker:worker-evidence-join:" + hashlib.sha256(encoded).hexdigest(),
+    )
+    report = WorkerEvidenceJoinReport(
+        join_id=join_id,
+        scope=scope,
+        target_ids=target_ids,
+        postmortem_record_ids=record_ids,
+        postmortem_packet_hashes=packet_hashes,
+        comparison_report_ids=comparison_report_ids,
+        comparison_result_ids=comparison_result_ids,
+        postmortem_status=postmortem_status,
+        comparison_status=comparison_status,
+        status=status,
+        postmortem_conflict=postmortem_conflict,
+        comparison_conflict=comparison_conflict,
+        reasons=tuple(payload["reasons"]),
+        joined_at=joined_time,
+        content_sha256="",
+    )
+    report_encoded = _comparison_json_bytes(
+        {
+            "join_id": str(report.join_id),
+            **payload,
+            "schema_version": report.schema_version,
+        },
+        limit=COMPARISON_WORKER_EVIDENCE_MAX_BYTES,
+        label="worker evidence join report",
+    )
+    return replace(report, content_sha256=hashlib.sha256(report_encoded).hexdigest())
+
+
+def verify_worker_evidence_join_report(
+    report: WorkerEvidenceJoinReport | Mapping[str, Any],
+) -> dict[str, Any]:
+    """Verify a stored worker-evidence join report as read-only evidence."""
+    value = lambda name, default=None: _comparison_report_value(report, name, default)
+    join_id = str(value("join_id", ""))
+    stored_hash = str(value("content_sha256", ""))
+    failures: list[str] = []
+    try:
+        UUID(join_id)
+    except (ValueError, AttributeError):
+        failures.append("JOIN_ID_INVALID")
+    if len(stored_hash) != 64:
+        failures.append("JOIN_CONTENT_HASH_MISSING")
+    try:
+        encoded = _comparison_json_bytes(
+            {
+                "join_id": join_id,
+                "scope": str(value("scope", "")),
+                "target_ids": list(value("target_ids", ()) or ()),
+                "postmortem_record_ids": list(value("postmortem_record_ids", ()) or ()),
+                "postmortem_packet_hashes": list(value("postmortem_packet_hashes", ()) or ()),
+                "comparison_report_ids": list(value("comparison_report_ids", ()) or ()),
+                "comparison_result_ids": list(value("comparison_result_ids", ()) or ()),
+                "postmortem_status": str(value("postmortem_status", "")),
+                "comparison_status": str(value("comparison_status", "")),
+                "status": str(value("status", "")),
+                "postmortem_conflict": bool(value("postmortem_conflict", False)),
+                "comparison_conflict": bool(value("comparison_conflict", False)),
+                "reasons": list(value("reasons", ()) or ()),
+                "joined_at": (
+                    value("joined_at").isoformat()
+                    if isinstance(value("joined_at"), datetime)
+                    else str(value("joined_at", ""))
+                ),
+                "schema_version": int(value("schema_version", 1)),
+            },
+            limit=COMPARISON_WORKER_EVIDENCE_MAX_BYTES,
+            label="worker evidence join report",
+        )
+        calculated_hash = hashlib.sha256(encoded).hexdigest()
+    except (TypeError, ValueError):
+        calculated_hash = ""
+        failures.append("JOIN_CONTENT_INVALID")
+    if stored_hash and calculated_hash and stored_hash != calculated_hash:
+        failures.append("JOIN_CONTENT_HASH_MISMATCH")
+    return {
+        "valid": not failures,
+        "authority_granted": False,
+        "join_id": join_id,
+        "scope": str(value("scope", "")),
+        "status": str(value("status", "")),
+        "content_sha256": stored_hash,
+        "failures": tuple(dict.fromkeys(failures)),
     }
 
 
@@ -2581,6 +2841,34 @@ def worker_failure_recovery_status(
             "content_sha256": bounded(_field(record, "content_sha256", ""), 64),
         }
 
+    def worker_evidence_join_summary(record: Any) -> dict[str, Any]:
+        return {
+            "join_id": bounded(_field(record, "join_id", ""), 64),
+            "scope": bounded(_field(record, "scope", "")),
+            "status": bounded(_field(record, "status", ""), 32),
+            "postmortem_status": bounded(
+                _field(record, "postmortem_status", ""), 32
+            ),
+            "comparison_status": bounded(
+                _field(record, "comparison_status", ""), 32
+            ),
+            "target_count": len(_field(record, "target_ids", ()) or ()),
+            "postmortem_record_count": len(
+                _field(record, "postmortem_record_ids", ()) or ()
+            ),
+            "comparison_report_count": len(
+                _field(record, "comparison_report_ids", ()) or ()
+            ),
+            "postmortem_conflict": bool(
+                _field(record, "postmortem_conflict", False)
+            ),
+            "comparison_conflict": bool(
+                _field(record, "comparison_conflict", False)
+            ),
+            "joined_at": timestamp(_field(record, "joined_at")),
+            "content_sha256": bounded(_field(record, "content_sha256", ""), 64),
+        }
+
     failures = tuple(store.all_worker_failures())
     recoveries = tuple(store.all_worker_failure_recoveries())
     conflicts = tuple(store.all_worker_postmortem_conflicts())
@@ -2598,6 +2886,8 @@ def worker_failure_recovery_status(
         if callable(reconciliation_reader)
         else ()
     )
+    join_reader = getattr(store, "all_worker_evidence_joins", None)
+    joins = tuple(join_reader()) if callable(join_reader) else ()
     return {
         "schema_version": WORKER_POSTMORTEM_SCHEMA_VERSION,
         "read_only": True,
@@ -2613,6 +2903,7 @@ def worker_failure_recovery_status(
         "comparison_result_count": len(results),
         "comparison_report_count": len(comparisons),
         "comparison_reconciliation_count": len(reconciliations),
+        "worker_evidence_join_count": len(joins),
         "comparison_assignments": [
             comparison_assignment_summary(item) for item in assignments[-limit:]
         ],
@@ -2625,6 +2916,9 @@ def worker_failure_recovery_status(
         "comparison_reconciliations": [
             comparison_reconciliation_summary(item)
             for item in reconciliations[-limit:]
+        ],
+        "worker_evidence_joins": [
+            worker_evidence_join_summary(item) for item in joins[-limit:]
         ],
     }
 

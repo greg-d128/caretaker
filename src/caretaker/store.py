@@ -34,6 +34,7 @@ from .repair_recovery import (
     ComparisonWorkerResult,
     RepairRecoveryLifecycleMark,
     RepairRecoveryRecord,
+    WorkerEvidenceJoinReport,
     WorkerFailureRecord,
     WorkerFailureRecoveryRecord,
     WorkerPostmortemConflictReport,
@@ -94,6 +95,8 @@ class RepairStore(Protocol):
         self, record: ComparisonWorkerReconciliationReport
     ) -> None: ...
     def all_comparison_worker_reconciliations(self) -> tuple[Any, ...]: ...
+    def record_worker_evidence_join(self, record: WorkerEvidenceJoinReport) -> None: ...
+    def all_worker_evidence_joins(self) -> tuple[Any, ...]: ...
 
 
 class InMemoryRepairStore:
@@ -113,6 +116,7 @@ class InMemoryRepairStore:
         self.comparison_worker_results: dict[UUID, ComparisonWorkerResult] = {}
         self.comparison_worker_comparisons: dict[UUID, ComparisonWorkerComparisonReport] = {}
         self.comparison_worker_reconciliations: dict[UUID, ComparisonWorkerReconciliationReport] = {}
+        self.worker_evidence_joins: dict[UUID, WorkerEvidenceJoinReport] = {}
         self.rollouts: dict[UUID, RepairRolloutRecord] = {}
         self.rollout_transitions: dict[UUID, RepairRolloutTransition] = {}
         self.rollout_executions: dict[UUID, RolloutExecutionObservation] = {}
@@ -438,6 +442,24 @@ class InMemoryRepairStore:
                 )
             )
 
+    def record_worker_evidence_join(self, record: WorkerEvidenceJoinReport) -> None:
+        with self._lock:
+            existing = self.worker_evidence_joins.get(record.join_id)
+            if existing is not None and existing != record:
+                raise ValueError(
+                    "worker evidence join ID was already recorded with different evidence"
+                )
+            self.worker_evidence_joins[record.join_id] = record
+
+    def all_worker_evidence_joins(self) -> tuple[WorkerEvidenceJoinReport, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    self.worker_evidence_joins.values(),
+                    key=lambda record: record.joined_at,
+                )
+            )
+
 
 class SQLiteRepairStore:
     """Small JSON-backed event store with one logical stream per table."""
@@ -462,6 +484,7 @@ class SQLiteRepairStore:
         "comparison_worker_results": "result_id",
         "comparison_worker_comparisons": "comparison_id",
         "comparison_worker_reconciliations": "reconciliation_id",
+        "worker_evidence_joins": "join_id",
         "events": "event_id",
         "observations": "observation_id",
         "internal_incidents": "internal_incident_id",
@@ -488,7 +511,7 @@ class SQLiteRepairStore:
                 "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
             )
             connection.execute(
-                "INSERT OR REPLACE INTO caretaker_store_metadata(key, value) VALUES ('schema_version', '7')"
+                "INSERT OR REPLACE INTO caretaker_store_metadata(key, value) VALUES ('schema_version', '8')"
             )
             for table in self._TABLES:
                 connection.execute(
@@ -803,6 +826,12 @@ class SQLiteRepairStore:
         return tuple(
             self.query_records("comparison_worker_reconciliations", limit=10000)
         )
+
+    def record_worker_evidence_join(self, record: WorkerEvidenceJoinReport) -> None:
+        self._write("worker_evidence_joins", record, target_id=record.scope)
+
+    def all_worker_evidence_joins(self) -> tuple[Mapping[str, Any], ...]:
+        return tuple(self.query_records("worker_evidence_joins", limit=10000))
 
     def query_records(
         self,
