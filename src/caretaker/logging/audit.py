@@ -455,6 +455,18 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
             "authority_granted": False,
         },
     ),
+    "REPAIR_RETENTION_COMPACTION": _event_definition(
+        description="A policy-authorized Repair retention compaction deleted archived records.",
+        minimum_priority=EvidencePriority.CRITICAL,
+        required_fields=("scope.archive_plan_sha256", "outcome.state"),
+        example={
+            "state": "COMPLETED",
+            "compacted_records": 12,
+            "remaining_records": 0,
+            "source_deleted": True,
+            "authority_granted": False,
+        },
+    ),
 })
 
 

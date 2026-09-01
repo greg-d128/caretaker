@@ -233,6 +233,15 @@ class IntegrityRepairPolicy:
 
 
 @dataclass(frozen=True, slots=True)
+class RepairRetentionPolicy:
+    """Policy for bounded, archive-before-delete Repair retention runs."""
+
+    allow_automatic_compaction: bool = False
+    maximum_records_per_run: int = 1000
+    maximum_reference_scan_records: int = 10_000
+
+
+@dataclass(frozen=True, slots=True)
 class RepairPolicy:
     triggers: tuple[TriggerSpec, ...] = field(
         default_factory=lambda: (ExceptionTrigger(),)
@@ -248,6 +257,7 @@ class RepairPolicy:
     limits: RepairLimits = field(default_factory=RepairLimits)
     stability: StabilityPolicy = field(default_factory=StabilityPolicy)
     integrity: IntegrityRepairPolicy = field(default_factory=IntegrityRepairPolicy)
+    retention: RepairRetentionPolicy = field(default_factory=RepairRetentionPolicy)
     recovery: RepairRecoveryPolicy = field(default_factory=RepairRecoveryPolicy)
     rollout: RepairRolloutPolicy = field(default_factory=RepairRolloutPolicy)
     logging: LoggingBinding = field(default_factory=LoggingBinding)
@@ -278,6 +288,26 @@ class RepairPolicy:
         )
 
 
+def validate_repair_retention_policy(policy: RepairRetentionPolicy) -> None:
+    if not isinstance(policy, RepairRetentionPolicy):
+        raise PolicyConfigurationError("retention policy must be a RepairRetentionPolicy")
+    errors: list[str] = []
+    if (
+        isinstance(policy.maximum_records_per_run, bool)
+        or not isinstance(policy.maximum_records_per_run, int)
+        or policy.maximum_records_per_run <= 0
+    ):
+        errors.append("retention.maximum_records_per_run must be a positive integer")
+    if (
+        isinstance(policy.maximum_reference_scan_records, bool)
+        or not isinstance(policy.maximum_reference_scan_records, int)
+        or policy.maximum_reference_scan_records <= 0
+    ):
+        errors.append("retention.maximum_reference_scan_records must be a positive integer")
+    if errors:
+        raise PolicyConfigurationError("Invalid Caretaker retention policy:\n- " + "\n- ".join(errors))
+
+
 def validate_policy(policy: RepairPolicy) -> None:
     """Validate policy semantics at decoration time.
 
@@ -286,6 +316,13 @@ def validate_policy(policy: RepairPolicy) -> None:
     """
 
     errors: list[str] = []
+    try:
+        validate_repair_retention_policy(policy.retention)
+    except PolicyConfigurationError as exc:
+        errors.extend(
+            line[2:] if line.startswith("- ") else line
+            for line in str(exc).splitlines()[1:]
+        )
     recovery = policy.recovery
     if recovery.approval_packet_ttl_seconds <= 0:
         errors.append("recovery.approval_packet_ttl_seconds must be greater than zero")
@@ -587,6 +624,10 @@ def _human_readable(policy: RepairPolicy) -> str:
             f"  differential mode: {policy.observation.differential_execution.mode.name}",
             "Integrity:",
             f"  protected automatic repair: {policy.integrity.allow_protected_automatic_repair}",
+            "Retention:",
+            f"  automatic compaction: {policy.retention.allow_automatic_compaction}",
+            f"  maximum records per run: {policy.retention.maximum_records_per_run}",
+            f"  maximum reference scan records: {policy.retention.maximum_reference_scan_records}",
             "Guard integration:",
             f"  enabled: {policy.guard.enabled}",
             f"  include Guard context in repair: {policy.guard.include_guard_context_in_repair}",

@@ -230,6 +230,7 @@ from .policy import (
     OutputValidationTrigger,
     RepairLimits,
     RepairPolicy,
+    RepairRetentionPolicy,
     RetryPolicy,
     ScoringPolicy,
     StabilityPolicy,
@@ -237,6 +238,7 @@ from .policy import (
     TimeoutTrigger,
     ValidationPolicy,
     PolicyConfigurationError,
+    validate_repair_retention_policy,
     validate_policy,
 )
 from .postmortem import ExceptionHookManager, PostMortemRecorder
@@ -688,6 +690,8 @@ __all__ = [
     "RepairLimits",
     "RepairMode",
     "RepairPolicy",
+    "RepairRetentionPolicy",
+    "validate_repair_retention_policy",
     "caretaker",
     "RepairResolution",
     "RegressionCorpus",

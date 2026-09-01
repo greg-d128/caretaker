@@ -80,4 +80,9 @@ emit the registered `REPAIR_RETENTION_ARCHIVE` audit event through the
 application's output-only audit callback. The status operation also validates
 an interrupted `.partial.jsonl` sidecar and reports its current record count so
 operators can safely resume it. Family-owned compaction and resumable deletion
-remain future work.
+are now policy-authorized through `SQLiteRepairStore.retention_compact()`.
+Compaction requires a complete verified archive, rechecks source rows, scans
+within a bounded policy limit for references, deletes only ordinary unreferenced
+records in one SQLite transaction, and emits a critical audit event. It remains
+disabled by default; archive migration and family-specific compaction beyond
+the Repair store remain future work.

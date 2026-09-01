@@ -25,7 +25,9 @@
   JSONL records, gzip compression, stale-plan rechecks, atomic completion, and
   read-only archive verification, with optional `REPAIR_RETENTION_ARCHIVE`
   audit events and partial-archive status inspection; source deletion and
-  compaction remain deferred.
+  compaction are now available through an explicit opt-in Repair retention
+  policy with archive verification, bounded reference scanning, and critical
+  audit events.
 
 ## 0.6.1
 

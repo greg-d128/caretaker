@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import pytest
 
-from caretaker import SQLiteRepairStore
+from caretaker import RepairRetentionPolicy, SQLiteRepairStore
 
 
 def _insert_record(path, table: str, *, target_id: str | None, payload: dict, created_at: datetime) -> None:
@@ -227,3 +227,77 @@ def test_retention_archive_rejects_valid_archive_with_wrong_record_set(tmp_path)
 
     with pytest.raises(ValueError, match="does not match"):
         store.retention_archive(plan, archive_path=archive_path)
+
+
+def test_retention_compaction_requires_policy_and_deletes_only_after_archive(tmp_path) -> None:
+    path = tmp_path / "repair.sqlite"
+    store = SQLiteRepairStore(path)
+    old = datetime.now(timezone.utc) - timedelta(days=2)
+    _insert_record(path, "candidates", target_id="compact.target", payload={"kind": "derived"}, created_at=old)
+    plan = store.retention_dry_run(
+        older_than=datetime.now(timezone.utc) - timedelta(days=1),
+        families=("candidates",),
+    )
+    archive_path = tmp_path / "repair.jsonl.gz"
+    with pytest.raises(PermissionError, match="not permitted"):
+        store.retention_compact(
+            plan,
+            archive_path=archive_path,
+            policy=RepairRetentionPolicy(),
+        )
+
+    audit_events: list[tuple[str, dict]] = []
+    result = store.retention_compact(
+        plan,
+        archive_path=archive_path,
+        policy=RepairRetentionPolicy(allow_automatic_compaction=True),
+        audit_event=lambda event_type, **fields: audit_events.append((event_type, fields)),
+    )
+    assert result["compaction_state"] == "COMPLETED"
+    assert result["compacted_records"] == 1
+    assert result["already_compacted_records"] == 0
+    assert store.query_records("candidates", limit=100) == ()
+    assert archive_path.exists()
+    assert [event[0] for event in audit_events] == [
+        "REPAIR_RETENTION_ARCHIVE",
+        "REPAIR_RETENTION_COMPACTION",
+    ]
+    assert audit_events[1][1]["scope"]["archive_plan_sha256"] == result["plan_sha256"]
+    assert audit_events[1][1]["details"]["archive_path"] == str(archive_path)
+    assert audit_events[1][1]["outcome"]["authority_granted"] is False
+
+    repeated = store.retention_compact(
+        plan,
+        archive_path=archive_path,
+        policy=RepairRetentionPolicy(allow_automatic_compaction=True),
+    )
+    assert repeated["compaction_state"] == "COMPLETED"
+    assert repeated["compacted_records"] == 0
+    assert repeated["already_compacted_records"] == 1
+
+
+def test_retention_compaction_preserves_referenced_record(tmp_path) -> None:
+    path = tmp_path / "repair.sqlite"
+    store = SQLiteRepairStore(path)
+    old = datetime.now(timezone.utc) - timedelta(days=2)
+    _insert_record(path, "candidates", target_id="referenced.target", payload={"kind": "derived"}, created_at=old)
+    plan = store.retention_dry_run(
+        older_than=datetime.now(timezone.utc) - timedelta(days=1),
+        families=("candidates",),
+    )
+    candidate_id = plan["candidate_records"][0]["record_id"]
+    _insert_record(
+        path,
+        "episodes",
+        target_id="referenced.target",
+        payload={"candidate_id": candidate_id},
+        created_at=old,
+    )
+
+    with pytest.raises(ValueError, match="still referenced"):
+        store.retention_compact(
+            plan,
+            archive_path=tmp_path / "repair.jsonl.gz",
+            policy=RepairRetentionPolicy(allow_automatic_compaction=True),
+        )
+    assert store.query_records("candidates", limit=100)[0]["kind"] == "derived"

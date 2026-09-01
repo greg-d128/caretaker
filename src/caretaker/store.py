@@ -18,6 +18,7 @@ from typing import Any, Callable, Protocol
 from uuid import UUID
 
 from .integrity.models import IntegrityIncident, IntegrityVerification
+from .policy import RepairRetentionPolicy, validate_repair_retention_policy
 
 from .domain import (
     CandidateGeneration,
@@ -1569,6 +1570,143 @@ class SQLiteRepairStore:
             }, audit_event, state="PARTIAL")
         raise FileNotFoundError(f"retention archive not found: {destination}")
 
+    def retention_compact(
+        self,
+        plan: Mapping[str, Any],
+        *,
+        archive_path: str | Path,
+        policy: RepairRetentionPolicy,
+        audit_event: Callable[..., Any] | None = None,
+    ) -> Mapping[str, Any]:
+        """Archive and policy-authorize bounded deletion of Repair records.
+
+        Compaction is available to an approved policy without a live operator.
+        It first completes or resumes the archive, then verifies the archive
+        and current rows while holding a SQLite write transaction. Protected
+        records, referenced records, and changed rows fail closed. Repeating
+        the same plan is idempotent: records already absent from a verified
+        archive are counted as previously compacted.
+        """
+
+        validate_repair_retention_policy(policy)
+        if not policy.allow_automatic_compaction:
+            raise PermissionError(
+                "Repair retention compaction is not permitted by policy"
+            )
+        archive_result = self.retention_archive(
+            plan,
+            archive_path=archive_path,
+            maximum_records=policy.maximum_records_per_run,
+            audit_event=audit_event,
+        )
+        if not archive_result["complete"]:
+            return _finish_retention_compaction_result({
+                **archive_result,
+                "compaction_state": "ARCHIVE_INCOMPLETE",
+                "compacted_records": 0,
+                "already_compacted_records": 0,
+            }, audit_event, state="ARCHIVE_INCOMPLETE")
+
+        destination = Path(archive_path)
+        summary = _read_retention_archive(destination)
+        record_items = summary["records"]
+        all_keys = set(record_items)
+        compacted = 0
+        already_compacted = 0
+        remaining = 0
+        selected_keys: set[tuple[str, str]] = set()
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                current_rows: dict[tuple[str, str], tuple[Any, ...]] = {}
+                for family, record_id in sorted(all_keys):
+                    row = connection.execute(
+                        f"SELECT target_id, created_at, payload FROM {family} WHERE record_id = ?",
+                        (record_id,),
+                    ).fetchone()
+                    current_rows[(family, record_id)] = row
+                pending_keys = [key for key, row in current_rows.items() if row is not None]
+                selected_keys = set(pending_keys[: policy.maximum_records_per_run])
+                already_compacted = len(all_keys) - len(pending_keys)
+                remaining = len(pending_keys) - len(selected_keys)
+
+                if selected_keys:
+                    reference_limit = policy.maximum_reference_scan_records
+                    scanned = 0
+                    for family in self._TABLES:
+                        rows = connection.execute(
+                            f"SELECT record_id, payload FROM {family} LIMIT ?",
+                            (reference_limit - scanned + 1,),
+                        ).fetchall()
+                        if len(rows) > reference_limit - scanned:
+                            raise ValueError(
+                                "retention reference scan exceeded its policy bound"
+                            )
+                        for row in rows:
+                            scanned += 1
+                            source_key = (family, row[0])
+                            if source_key in selected_keys:
+                                continue
+                            try:
+                                payload = json.loads(row[1])
+                            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                                raise ValueError(
+                                    "retention reference scan encountered invalid JSON"
+                                ) from exc
+                            referenced = _payload_contains_any_value(
+                                payload, {record_id for _, record_id in selected_keys}
+                            )
+                            if referenced is not None:
+                                raise ValueError(
+                                    "retention record is still referenced: "
+                                    f"{referenced[0]}/{referenced[1]}"
+                                )
+
+                    for key in selected_keys:
+                        family, record_id = key
+                        row = current_rows[key]
+                        archived = record_items[key]
+                        try:
+                            payload = json.loads(row[2])
+                        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                            raise ValueError("retention source row is no longer valid JSON") from exc
+                        if (
+                            row[0] != archived["target_id"]
+                            or row[1] != archived["created_at"]
+                            or _canonical_json_bytes(payload)
+                            != _canonical_json_bytes(archived["payload"])
+                            or _retention_preservation_reason(family, payload) is not None
+                        ):
+                            raise ValueError(
+                                "retention source row changed or became protected: "
+                                f"{family}/{record_id}"
+                            )
+                    for family, record_id in selected_keys:
+                        deleted = connection.execute(
+                            f"DELETE FROM {family} WHERE record_id = ?",
+                            (record_id,),
+                        ).rowcount
+                        if deleted != 1:
+                            raise ValueError(
+                                "retention source row disappeared during compaction: "
+                                f"{family}/{record_id}"
+                            )
+                    compacted = len(selected_keys)
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+
+        remaining = len(all_keys) - already_compacted - compacted
+        state = "COMPLETED" if remaining == 0 else "PARTIAL"
+        return _finish_retention_compaction_result({
+            **archive_result,
+            "compaction_state": state,
+            "compacted_records": compacted,
+            "already_compacted_records": already_compacted,
+            "remaining_records": remaining,
+        }, audit_event, state=state)
+
     def query_records(
         self,
         table: str,
@@ -1633,6 +1771,40 @@ def _finish_retention_result(
                 "remaining_records": min(int(result.get("remaining_records", 0)), 1000000),
                 "source_deleted": False,
                 "archive_verified": state == "VERIFIED",
+                "archive_path": str(result.get("archive_path", ""))[:512],
+            },
+        )
+    except Exception as exc:  # pragma: no cover - callback boundary is deployment-owned
+        result["audit_error"] = f"{type(exc).__name__}: retention audit callback failed"
+    return result
+
+
+def _finish_retention_compaction_result(
+    result: dict[str, Any],
+    audit_event: Callable[..., Any] | None,
+    *,
+    state: str,
+) -> dict[str, Any]:
+    if audit_event is None:
+        return result
+    try:
+        audit_event(
+            "REPAIR_RETENTION_COMPACTION",
+            actor={"type": "system", "id": "repair-store"},
+            scope={
+                "archive_plan_sha256": str(result.get("plan_sha256", ""))[:128],
+            },
+            policy={},
+            outcome={
+                "state": state,
+                "authority_granted": False,
+            },
+            details={
+                "compacted_records": min(int(result.get("compacted_records", 0)), 1000000),
+                "already_compacted_records": min(int(result.get("already_compacted_records", 0)), 1000000),
+                "remaining_records": min(int(result.get("remaining_records", 0)), 1000000),
+                "source_deleted": bool(result.get("compacted_records", 0)),
+                "archive_path": str(result.get("archive_path", ""))[:512],
             },
         )
     except Exception as exc:  # pragma: no cover - callback boundary is deployment-owned
@@ -1709,6 +1881,7 @@ def _read_retention_archive(path: Path) -> dict[str, Any]:
     digest = hashlib.sha256()
     count = 0
     record_keys: set[tuple[str, str]] = set()
+    records: dict[tuple[str, str], dict[str, Any]] = {}
     for item, line in zip(lines[1:-1], raw.splitlines()[1:-1]):
         if item.get("kind") != "retention_archive_record":
             raise ValueError("retention archive contains an unexpected record")
@@ -1730,6 +1903,7 @@ def _read_retention_archive(path: Path) -> dict[str, Any]:
         if key in record_keys:
             raise ValueError("retention archive contains a duplicate record")
         record_keys.add(key)
+        records[key] = item
         digest.update(line + b"\n")
         count += 1
     if footer.get("record_count") != count or footer.get("records_sha256") != digest.hexdigest():
@@ -1738,6 +1912,7 @@ def _read_retention_archive(path: Path) -> dict[str, Any]:
         "plan_sha256": lines[0].get("plan_sha256"),
         "record_count": count,
         "record_keys": record_keys,
+        "records": records,
     }
 
 
@@ -1773,6 +1948,27 @@ def _payload_contains_key(value: Any, keys: set[str]) -> bool:
     if isinstance(value, (list, tuple)):
         return any(_payload_contains_key(item, keys) for item in value)
     return False
+
+
+def _payload_contains_any_value(
+    value: Any,
+    values: set[str],
+) -> tuple[str, str] | None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if isinstance(item, str) and item in values:
+                return str(key), item
+            found = _payload_contains_any_value(item, values)
+            if found is not None:
+                return found
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            found = _payload_contains_any_value(item, values)
+            if found is not None:
+                return found
+    elif isinstance(value, str) and value in values:
+        return "value", value
+    return None
 
 
 def _jsonable(value: Any) -> Any:

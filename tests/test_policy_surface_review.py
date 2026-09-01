@@ -16,7 +16,12 @@ from caretaker.guard.policy import (
     validate_guard_policy,
 )
 from caretaker.logging.policy import OperatorLoggingPolicy, validate_operator_logging_policy
-from caretaker.policy import RepairPolicy, PolicyConfigurationError, validate_policy
+from caretaker.policy import (
+    PolicyConfigurationError,
+    RepairPolicy,
+    RepairRetentionPolicy,
+    validate_policy,
+)
 from caretaker.policy_semantics import (
     RESERVED_SETTINGS,
     REVIEWED_POLICY_SURFACE_HASH,
@@ -54,6 +59,33 @@ def test_candidate_guard_resource_budgets_are_executable_policy() -> None:
             ),
         )
     )
+
+
+def test_retention_compaction_bounds_are_executable_policy() -> None:
+    validate_policy(
+        replace(
+            RepairPolicy(),
+            retention=RepairRetentionPolicy(
+                allow_automatic_compaction=True,
+                maximum_records_per_run=25,
+                maximum_reference_scan_records=250,
+            ),
+        )
+    )
+    with pytest.raises(PolicyConfigurationError, match="maximum_records_per_run"):
+        validate_policy(
+            replace(
+                RepairPolicy(),
+                retention=RepairRetentionPolicy(maximum_records_per_run=0),
+            )
+        )
+    with pytest.raises(PolicyConfigurationError, match="maximum_reference_scan_records"):
+        validate_policy(
+            replace(
+                RepairPolicy(),
+                retention=RepairRetentionPolicy(maximum_reference_scan_records=0),
+            )
+        )
 
 
 def test_reserved_repair_promises_fail_explicitly():
