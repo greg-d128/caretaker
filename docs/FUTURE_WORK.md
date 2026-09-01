@@ -2213,23 +2213,23 @@ existing data, and recovery queries; do not multiply physical stores.
 
 `ApplicationRuntimeSupervisor` now provides the application-runtime ownership
 boundary and `run.py` composes through it. It delegates to the historical
-logging supervisor during the compatibility phase, so the worker, health,
-control, and shutdown implementation still needs to be extracted
+logging supervisor during the compatibility phase, so some worker, health,
+control, and recovery implementation still needs to be extracted
 method-by-method. Runtime scheduling (`WorkRegistry`) and health monitoring
 (`Watchdog`) now live in the application package, with compatibility
 re-exports from logging. Adaptive aggregation queue binding state now lives in
 the same application-runtime package. Worker admission, health state, control,
-and queue coordination are now application-runtime implementations; a
-compatibility wrapper remains in logging. Control and shutdown internals still
-remain to be extracted. No host-level or infrastructure-level authority is
-added. `ApplicationWorkerLifecycle` is also application-runtime code, with a
-logging compatibility re-export; process creation and cleanup remain
-application-owned callbacks. The bounded control-cycle implementation now
-lives in the application package and is exposed directly by
-`ApplicationRuntimeSupervisor`; control and shutdown internals beyond that
-cycle remain to be extracted. Application monitoring and process-boundary
-shutdown now use application-runtime implementations; remaining logging
-supervisor code is orchestration and compatibility delegation.
+queue coordination, and failed-worker cohort handling are now application-
+runtime implementations; a compatibility wrapper remains in logging. No
+host-level or infrastructure-level authority is added. `ApplicationWorkerLifecycle`
+is also application-runtime code, with a logging compatibility re-export;
+process creation and cleanup remain application-owned callbacks. The bounded
+control-cycle implementation now lives in the application package and is
+exposed directly by `ApplicationRuntimeSupervisor`. Application monitoring,
+process-boundary shutdown, and failure evidence capture now use
+application-runtime implementations. Remaining work is to extract the other
+recovery orchestration boundaries while keeping reconciliation and recovery
+handlers application-owned.
 
 `logging/supervisor.py` and `logging/__init__.py` currently include application
 supervision, worker health/authority, adaptive coordination, and recovery

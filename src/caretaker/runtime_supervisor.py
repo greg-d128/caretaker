@@ -8,7 +8,7 @@ move here incrementally without changing the logging API.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
 import signal
 from pathlib import Path
@@ -19,6 +19,7 @@ from .runtime_supervision import (
     AdaptiveAggregationQueueRegistry,
     ApplicationWorkerLifecycle,
     capture_worker_failure_evidence,
+    handle_worker_failure_cohort,
     Watchdog,
     WorkRegistry,
     WorkerRegistry,
@@ -105,6 +106,35 @@ class ApplicationRuntimeSupervisor:
             collect_postmortem=collect_postmortem,
             require_complete_postmortem=require_complete_postmortem,
             reconciliation_scope=reconciliation_scope,
+        )
+
+    def handle_worker_failure_cohort(
+        self,
+        workers: Iterable[Any],
+        *,
+        scope: str,
+        recovery_policy: Any,
+        recovery_handlers: Mapping[str, Callable[[Mapping[str, Any]], Any]] | None = None,
+        diagnostic_debug: bool | None = None,
+        critical_evidence: bool = False,
+        collect_postmortem: Callable[[Any, Any], Any] | None = None,
+        require_complete_postmortem: bool = False,
+        minimum_sample_count: int = 30,
+        z_threshold: float = 3.0,
+    ) -> dict[str, Any]:
+        """Handle a failed-worker cohort through the runtime seam."""
+        return handle_worker_failure_cohort(
+            self._implementation,
+            workers,
+            scope=scope,
+            recovery_policy=recovery_policy,
+            recovery_handlers=recovery_handlers,
+            diagnostic_debug=diagnostic_debug,
+            critical_evidence=critical_evidence,
+            collect_postmortem=collect_postmortem,
+            require_complete_postmortem=require_complete_postmortem,
+            minimum_sample_count=minimum_sample_count,
+            z_threshold=z_threshold,
         )
 
     def monitor_application(

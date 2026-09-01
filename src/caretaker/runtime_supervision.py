@@ -11,7 +11,7 @@ import os
 import signal
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
@@ -37,6 +37,7 @@ from .repair_recovery import (
     deserialize_worker_replacement_request,
     create_worker_failure_record,
     evaluate_worker_acceptance,
+    resolve_worker_failure_scope,
     validate_worker_acceptance_policy,
     verify_recovery_authority_packet,
 )
@@ -44,6 +45,7 @@ from .repair_recovery import (
 
 MAX_ADAPTIVE_QUEUE_WORKERS = 128
 MAX_WORKER_AUTHORITY_HANDOFFS = 4096
+MAX_WORKER_FAILURE_COHORT = 128
 
 
 class WorkRegistry:
@@ -1757,10 +1759,88 @@ def capture_worker_failure_evidence(
         **metadata,
     }
 
+
+def handle_worker_failure_cohort(
+    supervisor: Any,
+    workers: Iterable[WorkerHealth],
+    *,
+    scope: str,
+    recovery_policy: RepairRecoveryPolicy,
+    recovery_handlers: Mapping[str, Callable[[Mapping[str, Any]], Any]] | None = None,
+    diagnostic_debug: bool | None = None,
+    critical_evidence: bool = False,
+    collect_postmortem: Callable[[WorkerHealth, Mapping[str, Any]], Any] | None = None,
+    require_complete_postmortem: bool = False,
+    minimum_sample_count: int = 30,
+    z_threshold: float = 3.0,
+) -> dict[str, Any]:
+    """Capture a failed-worker cohort before one scope-level action.
+
+    The caller supplies the workers belonging to one continuous transaction.
+    Every member is persisted under the same reconciliation scope before the
+    supervisor compares evidence and dispatches the policy-selected action.
+    Application-owned handlers remain responsible for incident creation,
+    replacement, or shutdown. This function never grants authority.
+    """
+    if supervisor.failure_store is None:
+        raise RuntimeError("worker failure cohort handling requires a failure store")
+    normalized_scope = resolve_worker_failure_scope({}, scope=scope)
+    unique_workers: dict[UUID, WorkerHealth] = {}
+    for worker in workers:
+        if not isinstance(worker, WorkerHealth):
+            raise TypeError("worker failure cohort must contain WorkerHealth records")
+        if len(unique_workers) >= MAX_WORKER_FAILURE_COHORT:
+            raise ValueError(
+                "worker failure cohort cannot contain more than "
+                f"{MAX_WORKER_FAILURE_COHORT} workers"
+            )
+        if worker.worker_id in unique_workers:
+            raise ValueError("worker failure cohort contains a duplicate worker")
+        if worker.state not in {WorkerState.FAILED, WorkerState.UNAUTHORIZED}:
+            raise ValueError(
+                "worker failure cohort requires failed or unauthorized workers"
+            )
+        unique_workers[worker.worker_id] = worker
+    if not unique_workers:
+        raise ValueError("worker failure cohort must contain at least one worker")
+
+    require_complete_postmortem = bool(require_complete_postmortem) or (
+        critical_evidence
+        and recovery_policy.require_full_worker_postmortem_for_critical_evidence
+    )
+    evidence = [
+        supervisor.capture_worker_failure_evidence(
+            worker,
+            diagnostic_debug=diagnostic_debug,
+            critical_evidence=critical_evidence,
+            collect_postmortem=collect_postmortem,
+            require_complete_postmortem=require_complete_postmortem,
+            reconciliation_scope=normalized_scope,
+        )
+        for worker in unique_workers.values()
+    ]
+    reconciliation = supervisor.reconcile_worker_failures(
+        scope=normalized_scope,
+        minimum_sample_count=minimum_sample_count,
+        z_threshold=z_threshold,
+        recovery_policy=recovery_policy,
+        recovery_handlers=recovery_handlers,
+    )
+    return {
+        "ok": all(item["failure_persistence_status"] == "PERSISTED" for item in evidence),
+        "scope": normalized_scope,
+        "worker_ids": [str(item.worker_id) for item in unique_workers.values()],
+        "evidence": evidence,
+        "reconciliation": reconciliation,
+        "authority_granted": False,
+    }
+
 __all__ = [
     "AdaptiveAggregationQueueRegistry",
     "ApplicationWorkerLifecycle",
     "capture_worker_failure_evidence",
+    "handle_worker_failure_cohort",
+    "MAX_WORKER_FAILURE_COHORT",
     "Watchdog",
     "WorkRegistry",
     "WorkerRegistry",

@@ -78,11 +78,13 @@ def test_runtime_boundary_functions_are_application_owned() -> None:
     from caretaker.runtime_supervision import (
         monitor_application,
         capture_worker_failure_evidence,
+        handle_worker_failure_cohort,
         stop_application,
         stop_runtime_supervisor,
     )
 
     assert monitor_application.__module__ == "caretaker.runtime_supervision"
     assert capture_worker_failure_evidence.__module__ == "caretaker.runtime_supervision"
+    assert handle_worker_failure_cohort.__module__ == "caretaker.runtime_supervision"
     assert stop_application.__module__ == "caretaker.runtime_supervision"
     assert stop_runtime_supervisor.__module__ == "caretaker.runtime_supervision"

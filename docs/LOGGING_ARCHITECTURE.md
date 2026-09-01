@@ -77,6 +77,12 @@ Failure evidence capture is likewise application-runtime behavior: rollback
 envelopes, optional diagnostic detail, post-mortem collection, and persistence
 are handled by the runtime package before policy-selected recovery actions.
 
+Failed-worker cohort handling is also runtime-owned. The runtime validates the
+bounded cohort, persists each rollback envelope under one explicit scope, and
+then invokes the existing reconciliation boundary. Recovery handlers remain
+application-owned; cohort handling never creates replacement authority or
+starts a process by itself.
+
 Application monitoring and application-boundary shutdown are also implemented
 in the application-runtime package. The legacy logging supervisor delegates to
 those functions, and the runtime owner exposes them directly while preserving

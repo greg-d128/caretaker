@@ -71,14 +71,13 @@ from ..runtime_supervision import (
     WorkerRegistry as ApplicationWorkerRegistry,
     capture_worker_failure_evidence as runtime_capture_worker_failure_evidence,
     capture_worker_failure_evidence_internal,
+    handle_worker_failure_cohort as runtime_handle_worker_failure_cohort,
+    MAX_WORKER_FAILURE_COHORT,
     monitor_application,
     run_supervisor_control_cycle,
     stop_application,
     stop_runtime_supervisor,
 )
-
-
-MAX_WORKER_FAILURE_COHORT = 128
 
 
 def _legacy_authority_verifier(*args: Any, **kwargs: Any) -> Any:
@@ -436,66 +435,20 @@ class CaretakerApplicationSupervisor:
         minimum_sample_count: int = 30,
         z_threshold: float = 3.0,
     ) -> dict[str, Any]:
-        """Capture a failed-worker cohort before one scope-level action.
-
-        The caller supplies the workers belonging to one continuous
-        transaction. Every member is persisted under the same reconciliation
-        scope before the supervisor compares evidence and dispatches the
-        policy-selected action. Application-owned handlers remain responsible
-        for incident creation, replacement, or shutdown.
-        """
-        if self.failure_store is None:
-            raise RuntimeError("worker failure cohort handling requires a failure store")
-        normalized_scope = resolve_worker_failure_scope({}, scope=scope)
-        unique_workers: dict[UUID, WorkerHealth] = {}
-        for worker in workers:
-            if not isinstance(worker, WorkerHealth):
-                raise TypeError("worker failure cohort must contain WorkerHealth records")
-            if len(unique_workers) >= MAX_WORKER_FAILURE_COHORT:
-                raise ValueError(
-                    "worker failure cohort cannot contain more than "
-                    f"{MAX_WORKER_FAILURE_COHORT} workers"
-                )
-            if worker.worker_id in unique_workers:
-                raise ValueError("worker failure cohort contains a duplicate worker")
-            if worker.state not in {WorkerState.FAILED, WorkerState.UNAUTHORIZED}:
-                raise ValueError(
-                    "worker failure cohort requires failed or unauthorized workers"
-                )
-            unique_workers[worker.worker_id] = worker
-        if not unique_workers:
-            raise ValueError("worker failure cohort must contain at least one worker")
-
-        require_complete_postmortem = bool(require_complete_postmortem) or (
-            critical_evidence
-            and recovery_policy.require_full_worker_postmortem_for_critical_evidence
-        )
-        evidence = [
-            self.capture_worker_failure_evidence(
-                worker,
-                diagnostic_debug=diagnostic_debug,
-                critical_evidence=critical_evidence,
-                collect_postmortem=collect_postmortem,
-                require_complete_postmortem=require_complete_postmortem,
-                reconciliation_scope=normalized_scope,
-            )
-            for worker in unique_workers.values()
-        ]
-        reconciliation = self.reconcile_worker_failures(
-            scope=normalized_scope,
-            minimum_sample_count=minimum_sample_count,
-            z_threshold=z_threshold,
+        """Capture and reconcile a failed-worker cohort through runtime ownership."""
+        return runtime_handle_worker_failure_cohort(
+            self,
+            workers,
+            scope=scope,
             recovery_policy=recovery_policy,
             recovery_handlers=recovery_handlers,
+            diagnostic_debug=diagnostic_debug,
+            critical_evidence=critical_evidence,
+            collect_postmortem=collect_postmortem,
+            require_complete_postmortem=require_complete_postmortem,
+            minimum_sample_count=minimum_sample_count,
+            z_threshold=z_threshold,
         )
-        return {
-            "ok": all(item["failure_persistence_status"] == "PERSISTED" for item in evidence),
-            "scope": normalized_scope,
-            "worker_ids": [str(item.worker_id) for item in unique_workers.values()],
-            "evidence": evidence,
-            "reconciliation": reconciliation,
-            "authority_granted": False,
-        }
 
     def handle_expired_worker_cohort(
         self,
