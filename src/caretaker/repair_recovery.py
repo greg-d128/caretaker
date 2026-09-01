@@ -42,6 +42,19 @@ _WORKER_POSTMORTEM_REQUIRED_EVIDENCE = (
     "partial_queue",
     "policy_state",
 )
+_WORKER_POSTMORTEM_CONTEXT_FIELDS = (
+    "worker_kind",
+    "target_id",
+    "transaction_id",
+    "episode_id",
+    "attempt_id",
+    "generation_id",
+    "code_hash",
+    "policy_fingerprint",
+    "authority_policy_generation",
+    "authority_policy_fingerprint",
+    "transaction_state",
+)
 
 
 class RecoveryAction(Enum):
@@ -2073,6 +2086,53 @@ def verify_worker_postmortem_packet(
     }
 
 
+def _postmortem_context_comparison(
+    packet_items: Sequence[tuple[str, Mapping[str, Any]]],
+) -> dict[str, Any]:
+    """Compare shared packet context without copying values into reports."""
+    contexts: list[tuple[str, Mapping[str, Any]]] = []
+    for packet_hash, packet in packet_items:
+        envelope = packet.get("failure_envelope")
+        if isinstance(envelope, Mapping):
+            contexts.append((packet_hash, envelope))
+    compared: dict[str, dict[str, str]] = {}
+    differences: list[dict[str, Any]] = []
+    for field_name in _WORKER_POSTMORTEM_CONTEXT_FIELDS:
+        values: list[tuple[str, str]] = []
+        for packet_hash, context in contexts:
+            value = context.get(field_name)
+            if value is None or value == "":
+                values = []
+                break
+            try:
+                encoded = json.dumps(
+                    value,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ).encode("utf-8")
+            except (TypeError, ValueError):
+                values = []
+                break
+            values.append((packet_hash, hashlib.sha256(encoded).hexdigest()))
+        if not values:
+            continue
+        compared[field_name] = {packet_hash: value_hash for packet_hash, value_hash in values}
+        if len({value_hash for _, value_hash in values}) > 1:
+            differences.append(
+                {
+                    "field": field_name,
+                    "packet_hashes": tuple(packet_hash for packet_hash, _ in values),
+                    "value_hashes": tuple(value_hash for _, value_hash in values),
+                }
+            )
+    return {
+        "status": "CONFLICT" if differences else ("COMPARED" if compared else "NOT_COMPARABLE"),
+        "fields": compared,
+        "differences": differences,
+    }
+
+
 def reconcile_worker_postmortems(
     records: tuple[WorkerFailureRecord | Mapping[str, Any], ...] | list[WorkerFailureRecord | Mapping[str, Any]],
     *,
@@ -2163,6 +2223,8 @@ def reconcile_worker_postmortems(
         "z_threshold": float(z_threshold),
         "metrics": {},
     }
+    packet_context = _postmortem_context_comparison(packet_items)
+    comparison["packet_context"] = packet_context
     conflict_reason: str | None = None
     signatures: list[tuple[str, Mapping[str, Any], int, Mapping[str, Any]]] = []
     for packet_hash, packet in packet_items:
@@ -2198,6 +2260,8 @@ def reconcile_worker_postmortems(
     if len(packet_items) > 1:
         if len(target_contexts) > 1 or (target_contexts and missing_target_context):
             conflict_reason = "worker post-mortem records have different or missing target identities"
+        elif packet_context["status"] == "CONFLICT":
+            conflict_reason = "worker post-mortem packets have conflicting transaction context"
         elif same_worker_conflict:
             conflict_reason = "one worker supplied divergent post-mortem packet hashes"
         elif len(signatures) != len(packet_items):

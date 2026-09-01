@@ -1370,8 +1370,9 @@ reports when their assignment contexts match exactly; it retains conflicts and
 incomplete coverage and does not average shared baselines. It can join that
 result to a same-scope, target-bound worker post-mortem reconciliation as
 evidence, without merging the two statistical summaries. Packet-level
-post-mortem comparison improvements and deployment-wide orchestration remain
-future work.
+post-mortem reconciliation now compares shared transaction context using
+per-value hashes and retains context conflicts without combining statistics.
+Deployment-wide orchestration remains future work.
 
 ### Recovery decisions recorded for the next implementation slice
 

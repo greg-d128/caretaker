@@ -695,6 +695,44 @@ def test_worker_postmortem_reconciliation_never_combines_different_targets() -> 
     )
 
 
+def test_worker_postmortem_reconciliation_rejects_conflicting_packet_context() -> None:
+    def record(worker_id: str, generation_id: str):
+        return create_worker_failure_record(
+            {
+                "worker_id": worker_id,
+                "worker_kind": "REPAIR_ANALYZER",
+                "target_id": "app:charge",
+                "transaction_id": "txn-context",
+                "generation_id": generation_id,
+                "transaction_state": "ROLLED_BACK",
+            },
+            postmortem_evidence={
+                "milestone": "VALIDATION",
+                "partial_queue": [],
+                "policy_state": {},
+                "behavior_signature": {
+                    "sample_count": 100,
+                    "metrics": {
+                        "duration_ms": {"mean": 10.0, "standard_deviation": 1.0},
+                    },
+                },
+            },
+        )
+
+    result = reconcile_worker_postmortems(
+        [record("worker-1", "generation-a"), record("worker-2", "generation-b")],
+        scope="transaction:txn-context",
+    )
+
+    assert result["comparison"]["status"] == "RETAINED_NOT_COMBINED"
+    assert result["comparison"]["packet_context"]["status"] == "CONFLICT"
+    assert result["comparison"]["packet_context"]["differences"][0]["field"] == "generation_id"
+    assert result["conflict"] is True
+    assert result["conflict_report"].reason == (
+        "worker post-mortem packets have conflicting transaction context"
+    )
+
+
 def test_worker_failure_reconciliation_groups_persisted_records_and_retains_incomplete_evidence() -> None:
     store = InMemoryRepairStore()
     complete = create_worker_failure_record(
