@@ -848,6 +848,34 @@ def test_supervisor_reconciliation_selects_critical_action_and_requires_handler_
     assert calls == ["transaction:txn-critical"]
 
 
+def test_supervisor_evidence_only_reconciliation_is_audited() -> None:
+    runtime = FakeRuntime()
+    store = InMemoryRepairStore()
+    supervisor = CaretakerApplicationSupervisor(runtime, failure_store=store)
+    store.record_worker_failure(
+        create_worker_failure_record(
+            {
+                "worker_id": "worker-evidence-only",
+                "worker_kind": "REPAIR_ANALYZER",
+                "transaction_id": "txn-evidence-only",
+                "transaction_state": "ROLLED_BACK",
+            },
+            postmortem_evidence={
+                "milestone": "VALIDATION",
+                "partial_queue": [],
+                "policy_state": {},
+            },
+        )
+    )
+
+    result = supervisor.reconcile_worker_failures()
+
+    assert result["group_count"] == 1
+    assert [item["event_type"] for item in runtime.audit.events] == [
+        "WORKER_POSTMORTEM_RECONCILED"
+    ]
+
+
 def test_worker_failure_recovery_checkpoint_survives_sqlite_reopen(tmp_path) -> None:
     store = SQLiteRepairStore(tmp_path / "repair.sqlite")
     record = create_worker_failure_record(
