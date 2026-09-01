@@ -1543,15 +1543,31 @@ class SQLiteRepairStore:
         if audit_event is not None and not callable(audit_event):
             raise TypeError("retention audit_event must be callable")
         destination = Path(archive_path)
-        summary = _read_retention_archive(destination)
-        return _finish_retention_result({
-            "schema_version": REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION,
-            "archive_path": str(destination),
-            "complete": True,
-            "plan_sha256": summary["plan_sha256"],
-            "record_count": summary["record_count"],
-            "record_families": sorted({family for family, _ in summary["record_keys"]}),
-        }, audit_event, state="VERIFIED")
+        if destination.exists():
+            summary = _read_retention_archive(destination)
+            return _finish_retention_result({
+                "schema_version": REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION,
+                "archive_path": str(destination),
+                "complete": True,
+                "partial": False,
+                "plan_sha256": summary["plan_sha256"],
+                "record_count": summary["record_count"],
+                "record_families": sorted({family for family, _ in summary["record_keys"]}),
+            }, audit_event, state="VERIFIED")
+        partial = destination.with_name(destination.name + ".partial.jsonl")
+        if partial.exists():
+            header, records = _read_retention_partial(partial)
+            return _finish_retention_result({
+                "schema_version": REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION,
+                "archive_path": str(destination),
+                "partial_path": str(partial),
+                "complete": False,
+                "partial": True,
+                "plan_sha256": header["plan_sha256"],
+                "record_count": len(records),
+                "record_families": sorted({family for family, _ in records}),
+            }, audit_event, state="PARTIAL")
+        raise FileNotFoundError(f"retention archive not found: {destination}")
 
     def query_records(
         self,
@@ -1640,6 +1656,13 @@ def _read_retention_partial(
         raise ValueError("retention partial contains invalid JSON") from exc
     if not lines or lines[0].get("kind") != "retention_archive_header":
         raise ValueError("retention partial header is missing")
+    if (
+        lines[0].get("schema_version") != REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION
+        or lines[0].get("store_schema_version") != REPAIR_STORE_SCHEMA_VERSION
+        or lines[0].get("format") != "caretaker-repair-retention-jsonl-v1"
+        or not isinstance(lines[0].get("plan_sha256"), str)
+    ):
+        raise ValueError("retention partial header is unsupported")
     records: dict[tuple[str, str], dict[str, Any]] = {}
     for item in lines[1:]:
         if item.get("kind") != "retention_archive_record":

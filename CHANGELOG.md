@@ -24,7 +24,8 @@
 - Add a resumable, archive-only Repair-store retention operation with canonical
   JSONL records, gzip compression, stale-plan rechecks, atomic completion, and
   read-only archive verification, with optional `REPAIR_RETENTION_ARCHIVE`
-  audit events; source deletion and compaction remain deferred.
+  audit events and partial-archive status inspection; source deletion and
+  compaction remain deferred.
 
 ## 0.6.1
 

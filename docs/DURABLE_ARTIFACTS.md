@@ -77,5 +77,7 @@ archive and reports its plan fingerprint, record count, and families without
 touching the source store. The archive rechecks each source row before copying
 and never deletes source records. Both archive and verification operations can
 emit the registered `REPAIR_RETENTION_ARCHIVE` audit event through the
-application's output-only audit callback. Family-owned compaction and
-resumable deletion remain future work.
+application's output-only audit callback. The status operation also validates
+an interrupted `.partial.jsonl` sidecar and reports its current record count so
+operators can safely resume it. Family-owned compaction and resumable deletion
+remain future work.

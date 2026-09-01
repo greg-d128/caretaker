@@ -148,6 +148,11 @@ def test_retention_archive_resumes_from_bounded_partial_and_rechecks_rows(tmp_pa
     assert first["archived_records"] == 1
     assert first["remaining_records"] == 1
     assert Path(first["partial_path"]).exists()
+    partial_status = store.retention_archive_status(archive_path)
+    assert partial_status["complete"] is False
+    assert partial_status["partial"] is True
+    assert partial_status["record_count"] == 1
+    assert partial_status["record_families"] == ["candidates"]
 
     second = store.retention_archive(plan, archive_path=archive_path, maximum_records=1)
     assert second["complete"] is True
