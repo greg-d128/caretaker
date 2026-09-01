@@ -259,6 +259,16 @@ def test_scheduler_reports_sampling_density_and_enforces_call_budget(
     assert budget["recent_requested_calls"] == 20
     assert budget["recent_call_rate_per_minute"] == 10
     assert budget["sampling_density"] == 0.5
+    assert budget["recent_subject_costs"] == [{
+        "scope": "function",
+        "subject": "target-a",
+        "collection_count": 1,
+        "collection_seconds": 0.0,
+        "observed_calls": 10,
+        "requested_calls": 20,
+        "sampling_density": 0.5,
+        "average_duration_seconds": 0.0,
+    }]
 
     queued = scheduler.enqueue(
         scope="function",
@@ -733,6 +743,8 @@ def test_guard_backlog_reports_waiting_and_queued_current_generations(
     queued = guard.behavior_collection_backlog()
     assert queued["counts"] == {"queued": 1}
     assert queued["items"][0]["request_id"] == request["request_id"]
+    assert queued["resource_budget"]["state"] == "NORMAL"
+    assert queued["queue_pressure"]["pending"] == 1
 
 
 def test_guard_backlog_does_not_apply_an_older_generation_request(

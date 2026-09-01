@@ -1716,6 +1716,7 @@ class BehaviorCollectionScheduler:
         recent_seconds = 0.0
         recent_observed_calls = 0
         recent_requested_calls = 0
+        recent_subjects: dict[str, dict[str, Any]] = {}
         for request in self._requests():
             completed_at = request.get("completed_at")
             if completed_at is None:
@@ -1743,6 +1744,26 @@ class BehaviorCollectionScheduler:
                 observed_calls = requested_calls = 0
             recent_observed_calls += max(0, observed_calls)
             recent_requested_calls += max(0, requested_calls)
+            subject_key = f"{request.get('scope') or ''}:{request.get('subject') or ''}"
+            subject = recent_subjects.setdefault(
+                subject_key,
+                {
+                    "scope": str(request.get("scope") or ""),
+                    "subject": str(request.get("subject") or ""),
+                    "collection_count": 0,
+                    "collection_seconds": 0.0,
+                    "observed_calls": 0,
+                    "requested_calls": 0,
+                },
+            )
+            subject["collection_count"] += 1
+            subject["collection_seconds"] += (
+                duration_value
+                if duration is not None and math.isfinite(duration_value) and duration_value >= 0.0
+                else 0.0
+            )
+            subject["observed_calls"] += max(0, observed_calls)
+            subject["requested_calls"] += max(0, requested_calls)
         sampling_density = (
             min(1.0, recent_observed_calls / recent_requested_calls)
             if recent_requested_calls
@@ -1809,6 +1830,25 @@ class BehaviorCollectionScheduler:
             state = "HARD_LIMIT"
         elif soft_reasons:
             state = "SOFT_LIMIT"
+        subject_costs = []
+        for subject in recent_subjects.values():
+            requested = int(subject["requested_calls"])
+            observed = int(subject["observed_calls"])
+            subject_costs.append(
+                {
+                    **subject,
+                    "sampling_density": min(1.0, observed / requested) if requested else None,
+                    "average_duration_seconds": (
+                        subject["collection_seconds"] / subject["collection_count"]
+                        if subject["collection_count"]
+                        else 0.0
+                    ),
+                }
+            )
+        subject_costs.sort(
+            key=lambda item: (-float(item["collection_seconds"]), str(item["subject"]))
+        )
+        subject_costs = subject_costs[:128]
         return {
             "state": state,
             "window_seconds": 60,
@@ -1827,6 +1867,7 @@ class BehaviorCollectionScheduler:
             "process_memory_measurement_available": memory_measurement_available,
             "soft_limit_process_memory_bytes": self.soft_budget_process_memory_bytes,
             "hard_limit_process_memory_bytes": self.hard_budget_process_memory_bytes,
+            "recent_subject_costs": subject_costs,
         }
 
     def enqueue(
@@ -2092,6 +2133,7 @@ class BehaviorCollectionScheduler:
                     "authority_policy_generation",
                     "authority_policy_fingerprint",
                     "error",
+                    "duration_seconds",
                 }
             }
             return capture, completed

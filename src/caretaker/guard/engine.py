@@ -1057,6 +1057,14 @@ class GuardEngine(GuardFacade):
                 "items": [],
                 "counts": {},
             }
+        scheduler = self.behavior_collection_scheduler
+        scheduler_status = scheduler.status() if scheduler is not None else {}
+        resource_budget = dict(scheduler_status.get("resource_budget") or {})
+        subject_costs = {
+            f"{item.get('scope')}:{item.get('subject')}": item
+            for item in resource_budget.get("recent_subject_costs", ())
+            if isinstance(item, Mapping)
+        }
         summaries = {
             (str(item.get("subject_key") or ""), str(item.get("generation_id") or "")): item
             for item in self.behavior_snapshot_store.list_summaries(limit=500)
@@ -1170,6 +1178,9 @@ class GuardEngine(GuardFacade):
                     "priority": priority,
                     "priority_reasons": priority_reasons,
                     "snapshot_age_seconds": snapshot_age_seconds,
+                    "recent_collection_cost": subject_costs.get(
+                        f"function:{target_id}"
+                    ),
                 }
             )
         bounded = items[: max(1, min(int(limit), 500))]
@@ -1182,6 +1193,8 @@ class GuardEngine(GuardFacade):
             "items": bounded,
             "counts": counts,
             "total": len(items),
+            "resource_budget": resource_budget,
+            "queue_pressure": dict(scheduler_status.get("queue_pressure") or {}),
         }
 
     def behavior_collection_requests(self, *, limit: int = 100) -> tuple[dict[str, Any], ...]:

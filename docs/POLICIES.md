@@ -104,7 +104,11 @@ wall-clock cost over a rolling minute. The soft limit is advisory and appears
 in scheduler status. Once the hard limit is reached, new requests remain
 queued until the window clears; existing collection is not interrupted. The
 default is unlimited, preserving the least-friction profile. These budgets
-measure scheduled collection duration only. Optional
+measure scheduled collection duration only. Scheduler status and capture
+provenance also expose bounded recent cost by scope and subject, including
+duration, observed/requested calls, sampling density, and average duration.
+This is visibility evidence only; it does not change automatic promotion or
+grant authority. Optional
 `collection_soft_budget_calls_per_minute` and
 `collection_hard_budget_calls_per_minute` settings similarly bound observed
 collection calls. Scheduler status reports the rolling observed call rate,

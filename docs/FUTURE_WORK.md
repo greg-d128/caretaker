@@ -693,8 +693,14 @@ budgets provide the same boundary for call volume, and status reports rolling
 observed call rate plus observed/requested sampling density. Queue pressure is
 also reported as pending-request utilization, available slots, and a full or
 available state; full queues retain the request and apply explicit
-backpressure. Host-resource-aware and density-aware cost budgeting remain
-future work. An optional process-scoped RSS boundary now provides a fail-closed
+backpressure. The scheduler now exposes bounded per-subject recent collection
+cost evidence in its resource-budget projection, including collection seconds,
+observed and requested calls, sampling density, and average duration. Capture
+responses also retain measured duration in their collection provenance. This
+makes hot or expensive subjects visible to the operator without treating
+telemetry as authority or silently changing automatic-promotion behavior.
+Host-resource-aware and density-aware enforcement remain future work. An
+optional process-scoped RSS boundary now provides a fail-closed
 application-process measurement when configured; host, cgroup, and
 multi-process resource coordination remain future work.
 
