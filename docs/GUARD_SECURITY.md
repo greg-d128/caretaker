@@ -19,6 +19,17 @@ It does not prove that a package is benign or contain arbitrary hostile code in 
 - module quarantine and pre-import fallback routing;
 - queryable evidence and post-mortem records.
 
+## Operator access to sequence evidence
+
+After selecting a Guard-enabled target in the Caretaker console, an operator
+can use **File/network sequences** to request the bounded sensitive-file to
+outbound-network correlation report. The action is read-only and displays the
+same evidence exposed by the runtime control plane; it does not change a
+baseline, policy, incident, or Repair state. Each result is explicitly marked
+as sampled evidence and does not make an absence claim. The control-plane
+command is `guard-sensitive-file-network-sequences` for scripted or other
+trusted operator tooling.
+
 ## Bypass and ambiguity risks
 
 - native extensions can call operating-system APIs below Python wrappers;

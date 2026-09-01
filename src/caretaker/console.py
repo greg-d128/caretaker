@@ -910,6 +910,7 @@ class CaretakerConsoleApp(App):
                     yield Button("Observed activity", id="guard-events", disabled=True)
                     yield Button("Deviations", id="guard-deviations", disabled=True)
                     yield Button("Code inspections", id="guard-inspections", disabled=True)
+                    yield Button("File/network sequences", id="guard-file-network", disabled=True)
                     yield Checkbox("I reviewed baseline evidence", id="guard-baseline-confirm", disabled=True)
                     yield Button("Accept as expected", id="guard-baseline", disabled=True)
                     yield Button("Analyze with local AI", id="guard-assess", disabled=True)
@@ -2429,7 +2430,8 @@ class CaretakerConsoleApp(App):
             self._selected_guard_target = target_id
             for button_id in (
                 "#guard-summary", "#guard-events", "#guard-deviations",
-                "#guard-inspections", "#guard-assess", "#guard-open-behavior",
+                "#guard-inspections", "#guard-file-network", "#guard-assess",
+                "#guard-open-behavior",
                 "#guard-open-logs", "#guard-open-investigate",
             ):
                 self.query_one(button_id, Button).disabled = False
@@ -6267,6 +6269,7 @@ class CaretakerConsoleApp(App):
                     "guard-events": "runtime-guard-events",
                     "guard-deviations": "runtime-guard-deviations",
                     "guard-inspections": "runtime-guard-inspections",
+                    "guard-file-network": "runtime-guard-sensitive-file-network-sequences",
                     "guard-baseline": "runtime-guard-baseline-accept",
                     "guard-assess": "runtime-guard-assess",
                 }

@@ -689,6 +689,65 @@ def test_stale_table_selection_after_refresh_is_ignored(tmp_path):
     asyncio.run(exercise())
 
 
+def test_guard_console_exposes_sensitive_file_network_sequences(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)) as pilot:
+            requests = []
+
+            async def request(command: str, **payload):
+                requests.append((command, payload))
+                assert command == "runtime-guard-sensitive-file-network-sequences"
+                return {
+                    "ok": True,
+                    "target": payload["target"],
+                    "sequences": [{
+                        "sequence_id": "sequence-1",
+                        "file_event_id": "event-file",
+                        "network_event_id": "event-network",
+                        "coverage": "bounded_sample",
+                    }],
+                    "evidence_only": True,
+                    "absence_claim": False,
+                }
+
+            app._request = request  # type: ignore[method-assign]
+            app._guard_records = [{
+                "target_id": "app.worker",
+                "status": "DEVIATION",
+                "severity": "HIGH",
+                "last_check": "2026-08-31T12:00:00Z",
+                "violation_count": 1,
+                "escalation_count": 0,
+                "summary": {"target_id": "app.worker"},
+                "deviations": [],
+                "inspections": [],
+                "decisions": [],
+            }]
+            app._apply_guard_filter()
+            table = app.query_one("#guard-table", DataTable)
+            key = next(iter(table.rows))
+            await app.on_data_table_row_selected(DataTable.RowSelected(table, 0, key))
+            assert app.query_one("#guard-file-network", Button).disabled is False
+
+            app._activate_tab("guard")
+            await pilot.pause()
+            await pilot.click("#guard-file-network")
+            await pilot.pause()
+
+            assert requests == [(
+                "runtime-guard-sensitive-file-network-sequences",
+                {"target": "app.worker", "limit": 100},
+            )]
+            rendered = "\n".join(line.text for line in app.query_one("#guard-output", RichLog).lines)
+            assert "sequence-1" in rendered
+            assert "evidence_only" in rendered
+            assert "absence_claim" in rendered
+
+    asyncio.run(exercise())
+
+
 def test_behavior_archive_controls_fit_in_console(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 
