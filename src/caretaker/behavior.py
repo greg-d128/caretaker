@@ -3284,6 +3284,8 @@ def _duration_distribution_report(
         spread_ratio = float("inf")
     else:
         spread_ratio = max(old_deviation, new_deviation) / min(old_deviation, new_deviation)
+    finite_sigma = sigma if math.isfinite(sigma) else None
+    finite_spread_ratio = spread_ratio if math.isfinite(spread_ratio) else None
     report.update({
         "state": "shift-signal"
         if sigma >= _DISTRIBUTION_SIGMA_THRESHOLD or spread_ratio >= _DISTRIBUTION_SIGMA_THRESHOLD
@@ -3292,8 +3294,10 @@ def _duration_distribution_report(
         if sigma >= _DISTRIBUTION_SIGMA_THRESHOLD or spread_ratio >= _DISTRIBUTION_SIGMA_THRESHOLD
         else "no-three-sigma-distribution-signal",
         "mean_difference": mean_difference,
-        "mean_sigma": sigma,
-        "spread_ratio": spread_ratio,
+        "mean_sigma": finite_sigma,
+        "mean_sigma_unbounded": not math.isfinite(sigma),
+        "spread_ratio": finite_spread_ratio,
+        "spread_ratio_unbounded": not math.isfinite(spread_ratio),
         "mean_shift_at_three_sigma": sigma >= _DISTRIBUTION_SIGMA_THRESHOLD,
         "spread_shift_at_three_sigma": spread_ratio >= _DISTRIBUTION_SIGMA_THRESHOLD,
     })

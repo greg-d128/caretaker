@@ -248,6 +248,49 @@ def test_duration_distribution_report_preserves_insufficient_or_legacy_evidence(
     assert report["absence_claim_allowed"] is False
 
 
+def test_duration_distribution_report_bounds_zero_variance_signals(
+    tmp_path: Path, monkeypatch
+):
+    store = BehaviorSnapshotStore(tmp_path)
+    older = _capture(code_hash="a" * 64, events=20)
+    older["profile"]["statistics"] = {
+        "duration_seconds": {
+            "count": 20,
+            "average": 0.010,
+            "standard_deviation": 0.0,
+        }
+    }
+    newer = _capture(code_hash="a" * 64, events=20)
+    newer["profile"]["statistics"] = {
+        "duration_seconds": {
+            "count": 20,
+            "average": 0.010,
+            "standard_deviation": 0.100,
+        }
+    }
+    timestamps = iter(
+        (
+            datetime(2026, 3, 1, tzinfo=timezone.utc),
+            datetime(2026, 3, 1, tzinfo=timezone.utc),
+            datetime(2026, 3, 2, tzinfo=timezone.utc),
+            datetime(2026, 3, 2, tzinfo=timezone.utc),
+            datetime(2026, 3, 3, tzinfo=timezone.utc),
+        )
+    )
+    monkeypatch.setattr("caretaker.behavior.utcnow", lambda: next(timestamps))
+
+    report = compare_snapshots(store.create(older), store.create(newer))[
+        "duration_distribution"
+    ]
+
+    assert report["state"] == "shift-signal"
+    assert report["mean_shift_at_three_sigma"] is False
+    assert report["spread_shift_at_three_sigma"] is True
+    assert report["spread_ratio"] is None
+    assert report["spread_ratio_unbounded"] is True
+    assert json.dumps(report, allow_nan=False)
+
+
 def test_operator_capture_provenance_is_bounded_persisted_and_hash_protected(tmp_path: Path):
     store = BehaviorSnapshotStore(tmp_path)
     capture = _capture(code_hash="a" * 64, events=3)
