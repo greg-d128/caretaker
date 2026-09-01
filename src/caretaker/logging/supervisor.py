@@ -69,6 +69,8 @@ from ..runtime_supervision import (
     Watchdog,
     WorkRegistry,
     WorkerRegistry as ApplicationWorkerRegistry,
+    capture_worker_failure_evidence as runtime_capture_worker_failure_evidence,
+    capture_worker_failure_evidence_internal,
     monitor_application,
     run_supervisor_control_cycle,
     stop_application,
@@ -388,90 +390,16 @@ class CaretakerApplicationSupervisor:
         require_complete_postmortem: bool = False,
         reconciliation_scope: str | None = None,
     ) -> tuple[dict[str, Any], Any | None, dict[str, Any]]:
-        """Capture and durably store one failed worker before any action."""
-        if worker.state not in {WorkerState.FAILED, WorkerState.UNAUTHORIZED}:
-            raise ValueError("worker failure evidence requires a failed or unauthorized worker")
-        envelope = self.worker_failure_envelope(
+        """Capture one failed-worker envelope through the runtime owner."""
+        return capture_worker_failure_evidence_internal(
+            self,
             worker,
             diagnostic_debug=diagnostic_debug,
+            critical_evidence=critical_evidence,
+            collect_postmortem=collect_postmortem,
+            require_complete_postmortem=require_complete_postmortem,
+            reconciliation_scope=reconciliation_scope,
         )
-        self._audit_event(
-            "WORKER_FAILED",
-            actor={"type": "worker", "id": str(worker.worker_id)},
-            scope={
-                "worker_id": str(worker.worker_id),
-                "target_id": worker.target_id,
-            },
-            policy={
-                "fingerprint": worker.policy_fingerprint,
-                "authority_packet_id": envelope.get("authority_packet_id"),
-            },
-            outcome={
-                "state": "ROLLED_BACK",
-                "reason": envelope.get("last_error_fingerprint") or "worker_failure",
-            },
-            details={
-                "worker_kind": worker.worker_kind.name,
-                "detail_level": envelope.get("detail_level"),
-            },
-        )
-        postmortem_evidence: Mapping[str, Any] | None = None
-        postmortem_error: str | None = None
-        if collect_postmortem is not None:
-            try:
-                collected = collect_postmortem(worker, envelope)
-                if isinstance(collected, Mapping):
-                    postmortem_evidence = collected
-                else:
-                    postmortem_error = "post-mortem callback must return an evidence mapping"
-            except Exception as exc:
-                postmortem_error = (
-                    f"post-mortem callback failed: {type(exc).__name__}: {exc}"
-                )[:256]
-        postmortem_status = (
-            "INCOMPLETE"
-            if critical_evidence and require_complete_postmortem
-            else (
-                "INVALID"
-                if postmortem_error
-                else (
-                    "COLLECTED"
-                    if postmortem_evidence is not None
-                    else "NOT_REQUESTED"
-                )
-            )
-        )
-        failure_record = None
-        failure_persistence_error = None
-        if self.failure_store is not None:
-            try:
-                failure_record = create_worker_failure_record(
-                    envelope,
-                    critical_evidence=critical_evidence,
-                    postmortem_evidence=postmortem_evidence,
-                    postmortem_error=postmortem_error,
-                    require_complete_postmortem=require_complete_postmortem,
-                    scope=reconciliation_scope,
-                )
-                self.failure_store.record_worker_failure(failure_record)
-                failure_persistence_status = "PERSISTED"
-                postmortem_status = failure_record.postmortem_status
-            except Exception as exc:
-                failure_persistence_status = "FAILED"
-                failure_persistence_error = f"{type(exc).__name__}: {exc}"[:256]
-        else:
-            failure_persistence_status = "NOT_CONFIGURED"
-        return envelope, failure_record, {
-            "failure_persistence_status": failure_persistence_status,
-            "failure_persistence_error": failure_persistence_error,
-            "postmortem_status": postmortem_status,
-            "postmortem_error": postmortem_error,
-            "reconciliation_scope": (
-                failure_record.reconciliation_scope
-                if failure_record is not None
-                else reconciliation_scope
-            ),
-        }
 
     def capture_worker_failure_evidence(
         self,
@@ -483,14 +411,9 @@ class CaretakerApplicationSupervisor:
         require_complete_postmortem: bool = False,
         reconciliation_scope: str | None = None,
     ) -> dict[str, Any]:
-        """Persist one rollback envelope without selecting a recovery action.
-
-        This is the evidence half of coordinated failure handling. It is safe
-        to call for every worker in one transaction before invoking
-        ``reconcile_worker_failures``; it never creates authority or starts a
-        replacement process.
-        """
-        envelope, failure_record, metadata = self._capture_worker_failure_evidence(
+        """Persist one rollback envelope through the runtime owner."""
+        return runtime_capture_worker_failure_evidence(
+            self,
             worker,
             diagnostic_debug=diagnostic_debug,
             critical_evidence=critical_evidence,
@@ -498,14 +421,6 @@ class CaretakerApplicationSupervisor:
             require_complete_postmortem=require_complete_postmortem,
             reconciliation_scope=reconciliation_scope,
         )
-        return {
-            "ok": failure_record is not None,
-            "worker_id": str(worker.worker_id),
-            "failure_id": str(failure_record.failure_id) if failure_record else None,
-            "failure_envelope": envelope,
-            "authority_granted": False,
-            **metadata,
-        }
 
     def handle_worker_failure_cohort(
         self,

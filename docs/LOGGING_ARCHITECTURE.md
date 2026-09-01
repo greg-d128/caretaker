@@ -73,6 +73,10 @@ application package. The legacy supervisor method delegates to it, and
 directly; expiry and cycle callbacks remain application-owned and cannot grant
 authority.
 
+Failure evidence capture is likewise application-runtime behavior: rollback
+envelopes, optional diagnostic detail, post-mortem collection, and persistence
+are handled by the runtime package before policy-selected recovery actions.
+
 Application monitoring and application-boundary shutdown are also implemented
 in the application-runtime package. The legacy logging supervisor delegates to
 those functions, and the runtime owner exposes them directly while preserving

@@ -18,6 +18,7 @@ from .logging.supervisor import CaretakerApplicationSupervisor
 from .runtime_supervision import (
     AdaptiveAggregationQueueRegistry,
     ApplicationWorkerLifecycle,
+    capture_worker_failure_evidence,
     Watchdog,
     WorkRegistry,
     WorkerRegistry,
@@ -83,6 +84,27 @@ class ApplicationRuntimeSupervisor:
             supervisor_time=supervisor_time,
             on_expired_workers=on_expired_workers,
             on_cycle=on_cycle,
+        )
+
+    def capture_worker_failure_evidence(
+        self,
+        worker: Any,
+        *,
+        diagnostic_debug: bool | None = None,
+        critical_evidence: bool = False,
+        collect_postmortem: Callable[[Any, Any], Any] | None = None,
+        require_complete_postmortem: bool = False,
+        reconciliation_scope: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist one rollback envelope through the runtime seam."""
+        return capture_worker_failure_evidence(
+            self._implementation,
+            worker,
+            diagnostic_debug=diagnostic_debug,
+            critical_evidence=critical_evidence,
+            collect_postmortem=collect_postmortem,
+            require_complete_postmortem=require_complete_postmortem,
+            reconciliation_scope=reconciliation_scope,
         )
 
     def monitor_application(
