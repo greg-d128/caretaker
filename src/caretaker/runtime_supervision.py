@@ -22,9 +22,11 @@ from .logging.acceptance import WorkerAcceptanceStore
 from .logging.models import (
     ActiveWork,
     CaretakerComponent,
+    EvidencePriority,
     WorkState,
     WorkerHealth,
     WorkerAcceptanceState,
+    WorkerFailureAction,
     WorkerKind,
     WorkerState,
 )
@@ -1758,6 +1760,257 @@ def capture_worker_failure_evidence(
         "authority_granted": False,
         **metadata,
     }
+
+
+def handle_worker_failure(
+    supervisor: Any,
+    worker: WorkerHealth,
+    *,
+    policy: Any,
+    create_incident: Callable[[Mapping[str, Any]], Any] | None = None,
+    restart_worker: Callable[[WorkerHealth], Any] | None = None,
+    disable_component: Callable[[WorkerHealth], Any] | None = None,
+    diagnostic_debug: bool | None = None,
+    critical_evidence: bool = False,
+    collect_postmortem: Callable[[WorkerHealth, Mapping[str, Any]], Any] | None = None,
+    require_complete_postmortem: bool = False,
+    reconciliation_scope: str | None = None,
+) -> dict[str, Any]:
+    """Apply the policy boundary for one failed worker.
+
+    The supervisor records failure evidence and chooses an action, but
+    worker creation and component-specific shutdown remain callbacks owned
+    by the application boundary. A callback must report success before the
+    registry treats a worker as restarted.
+    """
+    envelope, failure_record, failure_metadata = capture_worker_failure_evidence_internal(
+        supervisor,
+        worker,
+        diagnostic_debug=diagnostic_debug,
+        critical_evidence=critical_evidence,
+        collect_postmortem=collect_postmortem,
+        require_complete_postmortem=require_complete_postmortem,
+        reconciliation_scope=reconciliation_scope,
+    )
+    failure_persistence_status = failure_metadata["failure_persistence_status"]
+    failure_persistence_error = failure_metadata["failure_persistence_error"]
+    postmortem_status = failure_metadata["postmortem_status"]
+    postmortem_error = failure_metadata["postmortem_error"]
+    incident_error = None
+    incident_result: Mapping[str, Any] | None = None
+    if create_incident is not None:
+        try:
+            captured = create_incident(envelope)
+            if isinstance(captured, Mapping):
+                incident_result = captured
+            incident_status = "RECORDED"
+            supervisor._audit_event(
+                "INCIDENT_CAPTURED",
+                actor={"type": "supervisor", "id": str(supervisor.supervisor_health.worker_id)},
+                scope={
+                    "worker_id": str(worker.worker_id),
+                    "target_id": worker.target_id,
+                    "incident_id": incident_result.get("incident_id") if incident_result else None,
+                },
+                outcome={"state": "RECORDED"},
+                details={
+                    "capsule_id": incident_result.get("capsule_id") if incident_result else None,
+                    "incident_recorded": bool(
+                        incident_result.get("incident_recorded")
+                        if incident_result
+                        else True
+                    ),
+                },
+                priority=EvidencePriority.IMPORTANT,
+            )
+        except Exception as exc:
+            incident_status = "FAILED"
+            incident_error = f"{type(exc).__name__}: {exc}"[:256]
+    else:
+        incident_status = "NOT_CONFIGURED"
+    restart_policy = policy
+    restart_requested = (
+        bool(getattr(restart_policy, "enabled", False))
+        and worker.restart_count < int(getattr(restart_policy, "maximum_restarts", 0))
+    )
+    restart_result: dict[str, Any] | None = None
+    if restart_requested and restart_worker is not None:
+        supervisor._audit_event(
+            "WORKER_REPLACEMENT_REQUESTED",
+            actor={"type": "supervisor", "id": str(supervisor.supervisor_health.worker_id)},
+            scope={
+                "worker_id": str(worker.worker_id),
+                "target_id": worker.target_id,
+            },
+            outcome={
+                "state": "REQUESTED",
+                "reason": "worker_failure_policy",
+            },
+            details={"restart_count": worker.restart_count},
+        )
+        try:
+            raw_result = restart_worker(worker)
+            if isinstance(raw_result, Mapping):
+                restart_result = dict(raw_result)
+            elif raw_result:
+                restart_result = {"started": True}
+        except Exception as exc:
+            restart_result = {
+                "started": False,
+                "error": f"{type(exc).__name__}: {exc}"[:256],
+            }
+        replacement = None
+        if restart_result and bool(restart_result.get("started")):
+            replacement_id = restart_result.get("replacement_worker_id")
+            if replacement_id is not None:
+                try:
+                    replacement = supervisor.workers.get(UUID(str(replacement_id)))
+                except (KeyError, TypeError, ValueError):
+                    replacement = None
+                if (
+                    replacement is None
+                    or replacement.replaced_worker_id != worker.worker_id
+                    or replacement.authority_packet_id is None
+                    or replacement.state
+                    not in {WorkerState.STARTING, WorkerState.HEALTHY, WorkerState.DEGRADED}
+                ):
+                    replacement = None
+                    restart_result = {
+                        "started": False,
+                        "error": (
+                            "replacement callback did not return a packet-authorized "
+                            "replacement admitted by the supervisor"
+                        ),
+                    }
+            elif worker.authority_packet_id is not None:
+                restart_result = {
+                    "started": False,
+                    "error": (
+                        "an already-authorized worker must be replaced through "
+                        "packet-verified supervisor admission"
+                    ),
+                }
+        if restart_result and bool(restart_result.get("started")):
+            restarted = replacement or supervisor.workers.record_restart(
+                worker.worker_id,
+                pid=(
+                    int(restart_result["pid"])
+                    if restart_result.get("pid") is not None
+                    else None
+                ),
+            )
+            restart_result["worker_id"] = str(restarted.worker_id)
+            restart_result["restart_count"] = restarted.restart_count
+            supervisor._audit_event(
+                "WORKER_REPLACED",
+                actor={"type": "supervisor", "id": str(supervisor.supervisor_health.worker_id)},
+                scope={
+                    "worker_id": str(worker.worker_id),
+                    "target_id": worker.target_id,
+                },
+                outcome={"state": "RESTARTED"},
+                details={
+                    "replacement_worker_id": str(restarted.worker_id),
+                    "restart_count": restarted.restart_count,
+                },
+            )
+            supervisor._audit_recovery_decision(
+                {
+                    "scope": reconciliation_scope or f"worker:{worker.worker_id}",
+                    "target_id": worker.target_id,
+                    "policy_action": {
+                        "selected_action": "RESTART_WORKER",
+                        "status": "SELECTED",
+                    },
+                    "action_execution": {
+                        "status": "RESTARTED",
+                        "authority_granted": False,
+                    },
+                    "reconciliation": {},
+                }
+            )
+            return {
+                "ok": True,
+                "action": "RESTARTED",
+                "incident_status": incident_status,
+                "incident_error": incident_error,
+                "failure_persistence_status": failure_persistence_status,
+                "failure_persistence_error": failure_persistence_error,
+                "postmortem_status": postmortem_status,
+                "postmortem_error": postmortem_error,
+                "reconciliation_scope": (
+                    failure_record.reconciliation_scope
+                    if failure_record is not None
+                    else reconciliation_scope
+                ),
+                "restart": {
+                    **restart_result,
+                },
+                "failure_envelope": envelope,
+            }
+    exhaustion = getattr(
+        restart_policy,
+        "exhaustion_action",
+        WorkerFailureAction.DISABLE_COMPONENT,
+    )
+    if not isinstance(exhaustion, WorkerFailureAction):
+        exhaustion = WorkerFailureAction[str(exhaustion).upper()]
+    callback_result = None
+    if exhaustion is WorkerFailureAction.DISABLE_COMPONENT and disable_component is not None:
+        callback_result = disable_component(worker)
+    elif exhaustion is WorkerFailureAction.STOP_APPLICATION:
+        callback_result = stop_application(supervisor)
+    result = {
+        "ok": True,
+        "action": exhaustion.name,
+        "incident_status": incident_status,
+        "incident_error": incident_error,
+        "failure_persistence_status": failure_persistence_status,
+        "failure_persistence_error": failure_persistence_error,
+        "postmortem_status": postmortem_status,
+        "postmortem_error": postmortem_error,
+        "reconciliation_scope": (
+            failure_record.reconciliation_scope
+            if supervisor.failure_store is not None and failure_persistence_status == "PERSISTED"
+            else reconciliation_scope
+        ),
+        "restart": restart_result,
+        "failure_envelope": envelope,
+    }
+    callback_accepted = isinstance(callback_result, Mapping) and bool(
+        callback_result.get("accepted")
+    )
+    supervisor._audit_recovery_decision(
+        {
+            "scope": reconciliation_scope or f"worker:{worker.worker_id}",
+            "target_id": worker.target_id,
+            "policy_action": {
+                "selected_action": exhaustion.name,
+                "status": "SELECTED",
+            },
+            "action_execution": {
+                "status": "EXECUTED" if callback_accepted else "PLANNED_ONLY",
+                "authority_granted": False,
+            },
+            "reconciliation": {},
+            "critical_evidence_conflict": bool(critical_evidence),
+        }
+    )
+    if callback_result is not None:
+        result["action_result"] = callback_result
+    supervisor.runtime.event(
+        logger_name="caretaker.watchdog",
+        severity=50 if exhaustion is WorkerFailureAction.STOP_APPLICATION else 40,
+        channel=__import__("caretaker.logging.models", fromlist=["LogChannel"]).LogChannel.CARETAKER_INTERNAL,
+        message=f"Caretaker worker failure policy applied: {exhaustion.name}",
+        fields={
+            "worker_id": str(worker.worker_id),
+            "action": exhaustion.name,
+            "incident_status": incident_status,
+            "transaction_state": "ROLLED_BACK",
+        },
+    )
+    return result
 
 
 def handle_worker_failure_cohort(

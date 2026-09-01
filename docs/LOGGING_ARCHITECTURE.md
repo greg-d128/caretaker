@@ -88,6 +88,12 @@ authoritative supervisor clock, registered process-start identity, and
 `UNAUTHORIZED` state are checked before an expired worker enters cohort
 recovery; an untrusted or stale snapshot is rejected.
 
+Single-worker failure handling is runtime-owned as well. It captures the
+rollback envelope, records the incident when configured, applies the bounded
+restart/exhaustion policy, and emits the recovery audit event. Process
+creation, component disablement, and incident persistence callbacks remain
+application-owned and must pass their existing acknowledgement gates.
+
 Application monitoring and application-boundary shutdown are also implemented
 in the application-runtime package. The legacy logging supervisor delegates to
 those functions, and the runtime owner exposes them directly while preserving

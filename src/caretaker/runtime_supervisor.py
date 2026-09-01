@@ -20,6 +20,7 @@ from .runtime_supervision import (
     ApplicationWorkerLifecycle,
     capture_worker_failure_evidence,
     handle_expired_worker_cohort,
+    handle_worker_failure,
     handle_worker_failure_cohort,
     Watchdog,
     WorkRegistry,
@@ -136,6 +137,35 @@ class ApplicationRuntimeSupervisor:
             require_complete_postmortem=require_complete_postmortem,
             minimum_sample_count=minimum_sample_count,
             z_threshold=z_threshold,
+        )
+
+    def handle_worker_failure(
+        self,
+        worker: Any,
+        *,
+        policy: Any,
+        create_incident: Callable[[Mapping[str, Any]], Any] | None = None,
+        restart_worker: Callable[[Any], Any] | None = None,
+        disable_component: Callable[[Any], Any] | None = None,
+        diagnostic_debug: bool | None = None,
+        critical_evidence: bool = False,
+        collect_postmortem: Callable[[Any, Any], Any] | None = None,
+        require_complete_postmortem: bool = False,
+        reconciliation_scope: str | None = None,
+    ) -> dict[str, Any]:
+        """Handle one failed worker through the runtime seam."""
+        return handle_worker_failure(
+            self._implementation,
+            worker,
+            policy=policy,
+            create_incident=create_incident,
+            restart_worker=restart_worker,
+            disable_component=disable_component,
+            diagnostic_debug=diagnostic_debug,
+            critical_evidence=critical_evidence,
+            collect_postmortem=collect_postmortem,
+            require_complete_postmortem=require_complete_postmortem,
+            reconciliation_scope=reconciliation_scope,
         )
 
     def handle_expired_worker_cohort(

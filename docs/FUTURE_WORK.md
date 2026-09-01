@@ -2220,16 +2220,16 @@ method-by-method. Runtime scheduling (`WorkRegistry`) and health monitoring
 re-exports from logging. Adaptive aggregation queue binding state now lives in
 the same application-runtime package. Worker admission, health state, control,
 queue coordination, failed-worker cohort handling, and expired-worker
-validation are now application-runtime implementations; a compatibility
-wrapper remains in logging. No host-level or infrastructure-level authority is
-added. `ApplicationWorkerLifecycle`
+validation are now application-runtime implementations, as is single-worker
+failure handling; a compatibility wrapper remains in logging. No host-level or
+infrastructure-level authority is added. `ApplicationWorkerLifecycle`
 is also application-runtime code, with a logging compatibility re-export;
 process creation and cleanup remain application-owned callbacks. The bounded
 control-cycle implementation now lives in the application package and is
 exposed directly by `ApplicationRuntimeSupervisor`. Application monitoring,
-process-boundary shutdown, and failure evidence capture now use
-application-runtime implementations. Remaining work is to extract the other
-recovery orchestration boundaries while keeping reconciliation and recovery
+process-boundary shutdown, failure evidence capture, and single-worker failure
+handling now use application-runtime implementations. Remaining work is to
+extract reconciliation/action-checkpoint orchestration while keeping recovery
 handlers application-owned.
 
 `logging/supervisor.py` and `logging/__init__.py` currently include application
