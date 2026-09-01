@@ -169,6 +169,26 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
         minimum_priority=EvidencePriority.CRITICAL,
         example={"failed_worker_id": "worker-old", "replacement_worker_id": "worker-new"},
     ),
+    "WORKER_COMPARISON_ASSIGNMENT": _event_definition(
+        description="A supervisor issued a bounded independent evidence assignment.",
+        minimum_priority=EvidencePriority.CRITICAL,
+        example={
+            "assignment_id": "assignment-uuid",
+            "authority_packet_id": "packet-uuid",
+            "state": "ISSUED",
+            "authority_granted": False,
+        },
+    ),
+    "WORKER_COMPARISON_RESULT": _event_definition(
+        description="A registered comparison worker returned bounded evidence.",
+        minimum_priority=EvidencePriority.CRITICAL,
+        example={
+            "assignment_id": "assignment-uuid",
+            "result_id": "result-uuid",
+            "state": "ACCEPTED",
+            "authority_granted": False,
+        },
+    ),
     "SUPERVISOR_STATE_CHANGED": _event_definition(
         description="The application-scoped supervisor state changed.",
         minimum_priority=EvidencePriority.CRITICAL,

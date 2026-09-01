@@ -80,6 +80,8 @@ All event types share these redaction rules:
 | `WORKER_FAILED` | `CRITICAL` | — | `{"transaction_state": "ROLLED_BACK", "failure_id": "failure-uuid"}` |
 | `WORKER_REPLACEMENT_REQUESTED` | `CRITICAL` | — | `{"failed_worker_id": "worker-old", "replacement_request_id": "request-uuid"}` |
 | `WORKER_REPLACED` | `CRITICAL` | — | `{"failed_worker_id": "worker-old", "replacement_worker_id": "worker-new"}` |
+| `WORKER_COMPARISON_ASSIGNMENT` | `CRITICAL` | — | `{"assignment_id": "assignment-uuid", "authority_packet_id": "packet-uuid", "state": "ISSUED", "authority_granted": false}` |
+| `WORKER_COMPARISON_RESULT` | `CRITICAL` | — | `{"assignment_id": "assignment-uuid", "result_id": "result-uuid", "state": "ACCEPTED", "authority_granted": false}` |
 | `SUPERVISOR_STATE_CHANGED` | `CRITICAL` | — | `{"state": "CONTROL_PLANE_LOST", "reason": "heartbeat_timeout"}` |
 | `INCIDENT_CAPTURED` | `IMPORTANT` | — | `{"incident_id": "incident-uuid", "capture_level": "STANDARD"}` |
 | `VALIDATION_DECISION` | `IMPORTANT` | — | `{"state": "ELIGIBLE", "validation_id": "validation-uuid"}` |

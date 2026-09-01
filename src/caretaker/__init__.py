@@ -224,6 +224,8 @@ from .policy import (
 from .postmortem import ExceptionHookManager, PostMortemRecorder
 from .provider import CandidateProposal, OllamaRepairProvider, StaticRepairProvider
 from .repair_recovery import (
+    ComparisonWorkerAssignment,
+    ComparisonWorkerResult,
     RecoveryAction,
     RecoveryAuthorityPacket,
     RecoveryPlanStaleError,
@@ -240,6 +242,8 @@ from .repair_recovery import (
     apply_repair_recovery_plan,
     build_repair_recovery_plan,
     create_recovery_authority_packet,
+    create_comparison_worker_assignment,
+    create_comparison_worker_result,
     create_worker_failure_record,
     create_worker_failure_recovery_record,
     create_worker_postmortem_packet,
@@ -257,6 +261,8 @@ from .repair_recovery import (
     validate_worker_acceptance_policy,
     verify_worker_postmortem_packet,
     verify_recovery_authority_packet,
+    verify_comparison_worker_assignment,
+    verify_comparison_worker_result,
 )
 from .repair_rollout import (
     RepairAuthoritativeImplementation,
@@ -610,6 +616,8 @@ __all__ = [
     "validate_recovery_candidate_binding",
     "RecoveryAction",
     "RecoveryAuthorityPacket",
+    "ComparisonWorkerAssignment",
+    "ComparisonWorkerResult",
     "RecoveryPlanStaleError",
     "RepairRecoveryPolicy",
     "apply_repair_recovery_plan",
@@ -630,9 +638,13 @@ __all__ = [
     "evaluate_worker_acceptance",
     "validate_worker_acceptance_policy",
     "create_recovery_authority_packet",
+    "create_comparison_worker_assignment",
+    "create_comparison_worker_result",
     "validate_authority_expiry",
     "validate_supervisor_time",
     "verify_recovery_authority_packet",
+    "verify_comparison_worker_assignment",
+    "verify_comparison_worker_result",
     "RepairAuthoritativeImplementation",
     "RepairReleaseKind",
     "RepairRolloutAuthority",

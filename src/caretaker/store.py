@@ -28,6 +28,8 @@ from .domain import (
     RepairEvent,
 )
 from .repair_recovery import (
+    ComparisonWorkerAssignment,
+    ComparisonWorkerResult,
     RepairRecoveryRecord,
     WorkerFailureRecord,
     WorkerFailureRecoveryRecord,
@@ -77,6 +79,10 @@ class RepairStore(Protocol):
     def all_worker_failure_recoveries(self) -> tuple[Any, ...]: ...
     def record_worker_postmortem_conflict(self, record: WorkerPostmortemConflictReport) -> None: ...
     def all_worker_postmortem_conflicts(self) -> tuple[Any, ...]: ...
+    def record_comparison_worker_assignment(self, record: ComparisonWorkerAssignment) -> None: ...
+    def all_comparison_worker_assignments(self) -> tuple[Any, ...]: ...
+    def record_comparison_worker_result(self, record: ComparisonWorkerResult) -> None: ...
+    def all_comparison_worker_results(self) -> tuple[Any, ...]: ...
 
 
 class InMemoryRepairStore:
@@ -91,6 +97,8 @@ class InMemoryRepairStore:
         self.worker_failures: dict[UUID, WorkerFailureRecord] = {}
         self.worker_failure_recoveries: dict[UUID, WorkerFailureRecoveryRecord] = {}
         self.worker_postmortem_conflicts: dict[UUID, WorkerPostmortemConflictReport] = {}
+        self.comparison_worker_assignments: dict[UUID, ComparisonWorkerAssignment] = {}
+        self.comparison_worker_results: dict[UUID, ComparisonWorkerResult] = {}
         self.rollouts: dict[UUID, RepairRolloutRecord] = {}
         self.rollout_transitions: dict[UUID, RepairRolloutTransition] = {}
         self.rollout_executions: dict[UUID, RolloutExecutionObservation] = {}
@@ -302,6 +310,46 @@ class InMemoryRepairStore:
                 )
             )
 
+    def record_comparison_worker_assignment(
+        self, record: ComparisonWorkerAssignment
+    ) -> None:
+        with self._lock:
+            existing = self.comparison_worker_assignments.get(record.assignment_id)
+            if existing is not None and existing != record:
+                raise ValueError(
+                    "comparison assignment ID was already recorded with different evidence"
+                )
+            self.comparison_worker_assignments[record.assignment_id] = record
+
+    def all_comparison_worker_assignments(
+        self,
+    ) -> tuple[ComparisonWorkerAssignment, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    self.comparison_worker_assignments.values(),
+                    key=lambda record: record.issued_at,
+                )
+            )
+
+    def record_comparison_worker_result(self, record: ComparisonWorkerResult) -> None:
+        with self._lock:
+            existing = self.comparison_worker_results.get(record.result_id)
+            if existing is not None and existing != record:
+                raise ValueError(
+                    "comparison result ID was already recorded with different evidence"
+                )
+            self.comparison_worker_results[record.result_id] = record
+
+    def all_comparison_worker_results(self) -> tuple[ComparisonWorkerResult, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    self.comparison_worker_results.values(),
+                    key=lambda record: record.observed_at,
+                )
+            )
+
 
 class SQLiteRepairStore:
     """Small JSON-backed event store with one logical stream per table."""
@@ -321,6 +369,8 @@ class SQLiteRepairStore:
         "worker_failure_records": "failure_id",
         "worker_failure_recoveries": "recovery_id",
         "worker_postmortem_conflicts": "report_id",
+        "comparison_worker_assignments": "assignment_id",
+        "comparison_worker_results": "result_id",
         "events": "event_id",
         "observations": "observation_id",
         "internal_incidents": "internal_incident_id",
@@ -347,7 +397,7 @@ class SQLiteRepairStore:
                 "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
             )
             connection.execute(
-                "INSERT OR REPLACE INTO caretaker_store_metadata(key, value) VALUES ('schema_version', '3')"
+                "INSERT OR REPLACE INTO caretaker_store_metadata(key, value) VALUES ('schema_version', '4')"
             )
             for table in self._TABLES:
                 connection.execute(
@@ -572,6 +622,30 @@ class SQLiteRepairStore:
 
     def all_worker_postmortem_conflicts(self) -> tuple[Mapping[str, Any], ...]:
         return tuple(self.query_records("worker_postmortem_conflicts", limit=10000))
+
+    def record_comparison_worker_assignment(
+        self, record: ComparisonWorkerAssignment
+    ) -> None:
+        self._write(
+            "comparison_worker_assignments",
+            record,
+            target_id=record.target_id,
+        )
+
+    def all_comparison_worker_assignments(self) -> tuple[Mapping[str, Any], ...]:
+        return tuple(
+            self.query_records("comparison_worker_assignments", limit=10000)
+        )
+
+    def record_comparison_worker_result(self, record: ComparisonWorkerResult) -> None:
+        self._write(
+            "comparison_worker_results",
+            record,
+            target_id=None,
+        )
+
+    def all_comparison_worker_results(self) -> tuple[Mapping[str, Any], ...]:
+        return tuple(self.query_records("comparison_worker_results", limit=10000))
 
     def query_records(
         self,

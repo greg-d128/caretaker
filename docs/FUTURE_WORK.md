@@ -1341,6 +1341,18 @@ checkpoint state without returning packet payloads or exposing an action
 endpoint. It is evidence visibility only; deployment-specific lifecycle
 orchestration remains future work.
 
+The supervisor can now issue a bounded, content-hashed
+`ComparisonWorkerAssignment` under an existing authorized worker packet. An
+application-owned worker may use that assignment to independently review
+referenced evidence and return a bounded `ComparisonWorkerResult`. The
+supervisor binds result acceptance to the registered worker's PID and process
+start identity, exact target/policy/authority context, packet, assignment,
+and result hashes. Assignment and result records are durable and visible as
+read-only status; they are evidence only and cannot grant authority, change
+policy, or select recovery. The application still owns process creation and
+transport, and combining comparison results into a larger reconciliation or
+fleet-wide orchestration remains future work.
+
 ### Recovery decisions recorded for the next implementation slice
 
 The following decisions close the current recovery-design questions:

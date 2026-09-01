@@ -27,6 +27,11 @@ WORKER_POSTMORTEM_SCHEMA_VERSION = 1
 WORKER_POSTMORTEM_MAX_BYTES = 1_048_576
 WORKER_FAILURE_SCOPE_MAX_CHARS = 256
 WORKER_FAILURE_STATUS_MAX_LIMIT = 500
+COMPARISON_WORKER_ASSIGNMENT_MAX_BYTES = 64 * 1024
+COMPARISON_WORKER_EVIDENCE_MAX_BYTES = 256 * 1024
+COMPARISON_WORKER_MAX_EVIDENCE_REFS = 64
+COMPARISON_WORKER_MAX_EVIDENCE_REF_CHARS = 256
+COMPARISON_WORKER_MAX_KIND_CHARS = 64
 _WORKER_POSTMORTEM_REQUIRED_EVIDENCE = (
     "milestone",
     "partial_queue",
@@ -267,6 +272,411 @@ class WorkerReplacementRequest:
             "authority_packet_expires_at": self.authority_packet.expires_at.isoformat(),
             "reason": self.reason[:256],
         }
+
+
+@dataclass(frozen=True, slots=True)
+class ComparisonWorkerAssignment:
+    """Bounded supervisor work assignment for an independent evidence check.
+
+    The assignment is evidence routing, not an authority grant. The worker
+    must receive and independently verify the referenced
+    ``RecoveryAuthorityPacket`` before doing any work. Its expiry is never
+    later than that packet's expiry.
+    """
+
+    assignment_id: UUID
+    scope: str
+    target_id: str
+    generation_id: str
+    code_hash: str
+    policy_fingerprint: str
+    authority_policy_generation: str
+    authority_policy_fingerprint: str
+    worker_kind: str
+    authority_packet_id: UUID
+    evidence_refs: tuple[str, ...]
+    issued_at: datetime
+    expires_at: datetime
+    content_sha256: str
+    schema_version: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class ComparisonWorkerResult:
+    """Content-addressed, non-authoritative evidence from a comparison worker."""
+
+    result_id: UUID
+    assignment_id: UUID
+    worker_id: str
+    status: str
+    evidence: Mapping[str, Any]
+    observed_at: datetime
+    content_sha256: str
+    schema_version: int = 1
+
+
+def _comparison_assignment_payload(
+    assignment: ComparisonWorkerAssignment | Mapping[str, Any],
+) -> dict[str, Any]:
+    def value(name: str, default: Any = None) -> Any:
+        return assignment.get(name, default) if isinstance(assignment, Mapping) else getattr(assignment, name, default)
+
+    return {
+        "assignment_id": str(value("assignment_id")),
+        "scope": str(value("scope")),
+        "target_id": str(value("target_id")),
+        "generation_id": str(value("generation_id")),
+        "code_hash": str(value("code_hash")),
+        "policy_fingerprint": str(value("policy_fingerprint")),
+        "authority_policy_generation": str(value("authority_policy_generation")),
+        "authority_policy_fingerprint": str(value("authority_policy_fingerprint")),
+        "worker_kind": str(value("worker_kind")),
+        "authority_packet_id": str(value("authority_packet_id")),
+        "evidence_refs": [str(item) for item in (value("evidence_refs", ()) or ())],
+        "issued_at": (
+            value("issued_at").isoformat()
+            if isinstance(value("issued_at"), datetime)
+            else str(value("issued_at"))
+        ),
+        "expires_at": (
+            value("expires_at").isoformat()
+            if isinstance(value("expires_at"), datetime)
+            else str(value("expires_at"))
+        ),
+        "schema_version": int(value("schema_version", 1)),
+    }
+
+
+def _comparison_result_payload(
+    result: ComparisonWorkerResult | Mapping[str, Any],
+) -> dict[str, Any]:
+    def value(name: str, default: Any = None) -> Any:
+        return result.get(name, default) if isinstance(result, Mapping) else getattr(result, name, default)
+
+    return {
+        "result_id": str(value("result_id")),
+        "assignment_id": str(value("assignment_id")),
+        "worker_id": str(value("worker_id")),
+        "status": str(value("status")),
+        "evidence": value("evidence", {}),
+        "observed_at": (
+            value("observed_at").isoformat()
+            if isinstance(value("observed_at"), datetime)
+            else str(value("observed_at"))
+        ),
+        "schema_version": int(value("schema_version", 1)),
+    }
+
+
+def _comparison_json_bytes(payload: Mapping[str, Any], *, limit: int, label: str) -> bytes:
+    try:
+        encoded = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be JSON-shaped") from exc
+    if len(encoded) > limit:
+        raise ValueError(f"{label} exceeds {limit} bytes")
+    return encoded
+
+
+def create_comparison_worker_assignment(
+    packet: RecoveryAuthorityPacket,
+    *,
+    scope: str,
+    evidence_refs: Sequence[str] = (),
+    supervisor_time: datetime,
+    worker_kind: str = "REPAIR_ANALYZER",
+    policy: RepairRecoveryPolicy | None = None,
+) -> ComparisonWorkerAssignment:
+    """Issue a bounded comparison assignment under an existing worker packet."""
+
+    if not isinstance(packet, RecoveryAuthorityPacket):
+        raise TypeError("comparison assignment requires a RecoveryAuthorityPacket")
+    normalized_scope = str(scope or "").strip()
+    if not normalized_scope or len(normalized_scope) > WORKER_FAILURE_SCOPE_MAX_CHARS:
+        raise ValueError("comparison assignment scope must contain 1..256 characters")
+    normalized_kind = str(worker_kind or "").strip()
+    if not normalized_kind or len(normalized_kind) > COMPARISON_WORKER_MAX_KIND_CHARS:
+        raise ValueError(
+            "comparison assignment worker_kind must contain 1..64 characters"
+        )
+    if isinstance(evidence_refs, (str, bytes)):
+        raise TypeError("comparison assignment evidence_refs must be a sequence")
+    if len(evidence_refs) > COMPARISON_WORKER_MAX_EVIDENCE_REFS:
+        raise ValueError(
+            f"comparison assignment cannot reference more than {COMPARISON_WORKER_MAX_EVIDENCE_REFS} items"
+        )
+    normalized_refs: list[str] = []
+    for ref in evidence_refs:
+        value = str(ref or "").strip()
+        if not value or len(value) > COMPARISON_WORKER_MAX_EVIDENCE_REF_CHARS:
+            raise ValueError("comparison assignment evidence references must be bounded")
+        if value in normalized_refs:
+            raise ValueError("comparison assignment evidence references must be unique")
+        normalized_refs.append(value)
+    packet_check = verify_recovery_authority_packet(
+        packet,
+        supervisor_time=supervisor_time,
+        target_id=packet.target_id,
+        generation_id=packet.generation_id,
+        code_hash=packet.code_hash,
+        policy_fingerprint=packet.policy_fingerprint,
+        authority_policy_generation=packet.authority_policy_generation,
+        authority_policy_fingerprint=packet.authority_policy_fingerprint,
+        allowed_capabilities=set(packet.capabilities),
+        policy=policy,
+    )
+    if not packet_check["valid"]:
+        raise PermissionError(
+            "comparison assignment packet rejected: "
+            + ", ".join(str(item) for item in packet_check["failures"])
+        )
+    assignment = ComparisonWorkerAssignment(
+        assignment_id=uuid4(),
+        scope=normalized_scope,
+        target_id=packet.target_id,
+        generation_id=packet.generation_id,
+        code_hash=packet.code_hash,
+        policy_fingerprint=packet.policy_fingerprint,
+        authority_policy_generation=packet.authority_policy_generation,
+        authority_policy_fingerprint=packet.authority_policy_fingerprint,
+        worker_kind=normalized_kind,
+        authority_packet_id=packet.packet_id,
+        evidence_refs=tuple(normalized_refs),
+        issued_at=supervisor_time,
+        expires_at=packet.expires_at,
+        content_sha256="",
+    )
+    encoded = _comparison_json_bytes(
+        _comparison_assignment_payload(assignment),
+        limit=COMPARISON_WORKER_ASSIGNMENT_MAX_BYTES,
+        label="comparison assignment",
+    )
+    return replace(assignment, content_sha256=hashlib.sha256(encoded).hexdigest())
+
+
+def verify_comparison_worker_assignment(
+    assignment: ComparisonWorkerAssignment | Mapping[str, Any],
+    packet: RecoveryAuthorityPacket,
+    *,
+    supervisor_time: datetime,
+    target_id: str,
+    generation_id: str,
+    code_hash: str,
+    policy_fingerprint: str,
+    authority_policy_generation: str,
+    authority_policy_fingerprint: str,
+    allowed_capabilities: set[str] | frozenset[str] = frozenset(),
+    policy: RepairRecoveryPolicy | None = None,
+) -> dict[str, Any]:
+    """Verify assignment integrity, exact context, packet identity, and expiry."""
+
+    failures: list[str] = []
+    payload = _comparison_assignment_payload(assignment)
+    supplied_hash = str(
+        assignment.get("content_sha256", "")
+        if isinstance(assignment, Mapping)
+        else getattr(assignment, "content_sha256", "")
+    )
+    encoded = _comparison_json_bytes(
+        payload,
+        limit=COMPARISON_WORKER_ASSIGNMENT_MAX_BYTES,
+        label="comparison assignment",
+    )
+    if payload.get("schema_version") != 1:
+        failures.append("UNSUPPORTED_ASSIGNMENT_SCHEMA")
+    if hashlib.sha256(encoded).hexdigest() != supplied_hash:
+        failures.append("ASSIGNMENT_CONTENT_HASH_MISMATCH")
+    value = lambda name: assignment.get(name) if isinstance(assignment, Mapping) else getattr(assignment, name)
+    for name, expected in {
+        "target_id": str(target_id),
+        "generation_id": str(generation_id),
+        "code_hash": str(code_hash),
+        "policy_fingerprint": str(policy_fingerprint),
+        "authority_policy_generation": str(authority_policy_generation),
+        "authority_policy_fingerprint": str(authority_policy_fingerprint),
+    }.items():
+        if str(value(name)) != expected:
+            failures.append(f"CONTEXT_MISMATCH:{name}")
+    if str(value("authority_packet_id")) != str(packet.packet_id):
+        failures.append("AUTHORITY_PACKET_ID_MISMATCH")
+    if str(value("worker_kind") or "").strip() == "":
+        failures.append("WORKER_KIND_MISSING")
+    refs = value("evidence_refs") or ()
+    if not isinstance(refs, Sequence) or isinstance(refs, (str, bytes)):
+        failures.append("EVIDENCE_REFS_INVALID")
+    else:
+        if len(refs) > COMPARISON_WORKER_MAX_EVIDENCE_REFS:
+            failures.append("EVIDENCE_REFS_TOO_MANY")
+        if len({str(item) for item in refs}) != len(refs):
+            failures.append("EVIDENCE_REFS_NOT_UNIQUE")
+    try:
+        expires_at = value("expires_at")
+        issued_at = value("issued_at")
+        if not isinstance(expires_at, datetime):
+            expires_at = datetime.fromisoformat(str(expires_at))
+        if not isinstance(issued_at, datetime):
+            issued_at = datetime.fromisoformat(str(issued_at))
+        if expires_at > packet.expires_at:
+            failures.append("ASSIGNMENT_EXPIRES_AFTER_PACKET")
+        if issued_at < packet.issued_at:
+            failures.append("ASSIGNMENT_ISSUED_BEFORE_PACKET")
+        if issued_at > expires_at:
+            failures.append("ASSIGNMENT_TIME_RANGE_INVALID")
+        recovery_policy = policy or RepairRecoveryPolicy()
+        if (issued_at - supervisor_time).total_seconds() > recovery_policy.clock_skew_tolerance_seconds:
+            failures.append("CLOCK_SKEW_EXCEEDED")
+        expiry = validate_authority_expiry(expires_at, supervisor_time=supervisor_time)
+        if not expiry["valid"]:
+            failures.append(str(expiry["failure"]))
+    except (TypeError, ValueError):
+        failures.append("ASSIGNMENT_TIME_INVALID")
+    packet_check = verify_recovery_authority_packet(
+        packet,
+        supervisor_time=supervisor_time,
+        target_id=target_id,
+        generation_id=generation_id,
+        code_hash=code_hash,
+        policy_fingerprint=policy_fingerprint,
+        authority_policy_generation=authority_policy_generation,
+        authority_policy_fingerprint=authority_policy_fingerprint,
+        allowed_capabilities=allowed_capabilities,
+        policy=policy,
+    )
+    if not packet_check["valid"]:
+        failures.extend(str(item) for item in packet_check["failures"])
+    return {
+        "valid": not failures,
+        "assignment_id": str(value("assignment_id") or ""),
+        "authority_packet_id": str(value("authority_packet_id") or ""),
+        "expires_at": str(value("expires_at") or ""),
+        "failures": tuple(dict.fromkeys(failures)),
+        "authority_granted": False,
+    }
+
+
+def create_comparison_worker_result(
+    assignment: ComparisonWorkerAssignment,
+    *,
+    worker_id: str,
+    evidence: Mapping[str, Any],
+    status: str = "COMPLETED",
+    observed_at: datetime | None = None,
+) -> ComparisonWorkerResult:
+    """Create bounded, content-addressed evidence for one assignment."""
+
+    if not isinstance(assignment, ComparisonWorkerAssignment):
+        raise TypeError("comparison result requires a ComparisonWorkerAssignment")
+    normalized_worker_id = str(worker_id or "").strip()
+    if not normalized_worker_id or len(normalized_worker_id) > 256:
+        raise ValueError("comparison result worker_id must contain 1..256 characters")
+    normalized_status = str(status or "").strip().upper()
+    if normalized_status not in {"COMPLETED", "FAILED", "INCOMPLETE"}:
+        raise ValueError("comparison result status is unsupported")
+    if not isinstance(evidence, Mapping):
+        raise TypeError("comparison result evidence must be a mapping")
+    result = ComparisonWorkerResult(
+        result_id=uuid4(),
+        assignment_id=assignment.assignment_id,
+        worker_id=normalized_worker_id,
+        status=normalized_status,
+        evidence=dict(evidence),
+        observed_at=observed_at or utcnow(),
+        content_sha256="",
+    )
+    encoded = _comparison_json_bytes(
+        _comparison_result_payload(result),
+        limit=COMPARISON_WORKER_EVIDENCE_MAX_BYTES,
+        label="comparison result evidence",
+    )
+    return replace(result, content_sha256=hashlib.sha256(encoded).hexdigest())
+
+
+def verify_comparison_worker_result(
+    result: ComparisonWorkerResult | Mapping[str, Any],
+    *,
+    assignment: ComparisonWorkerAssignment | Mapping[str, Any],
+    worker_id: str | None = None,
+    supervisor_time: datetime | None = None,
+    policy: RepairRecoveryPolicy | None = None,
+) -> dict[str, Any]:
+    """Verify result structure and identity without treating evidence as authority."""
+
+    failures: list[str] = []
+    payload = _comparison_result_payload(result)
+    supplied_hash = str(
+        result.get("content_sha256", "")
+        if isinstance(result, Mapping)
+        else getattr(result, "content_sha256", "")
+    )
+    try:
+        encoded = _comparison_json_bytes(
+            payload,
+            limit=COMPARISON_WORKER_EVIDENCE_MAX_BYTES,
+            label="comparison result evidence",
+        )
+    except ValueError as exc:
+        failures.append(str(exc))
+        encoded = b""
+    if payload.get("schema_version") != 1:
+        failures.append("UNSUPPORTED_RESULT_SCHEMA")
+    if encoded and hashlib.sha256(encoded).hexdigest() != supplied_hash:
+        failures.append("RESULT_CONTENT_HASH_MISMATCH")
+    assignment_id = assignment.get("assignment_id") if isinstance(assignment, Mapping) else assignment.assignment_id
+    result_assignment_id = result.get("assignment_id") if isinstance(result, Mapping) else result.assignment_id
+    if str(result_assignment_id) != str(assignment_id):
+        failures.append("ASSIGNMENT_ID_MISMATCH")
+    result_worker_id = str(result.get("worker_id") if isinstance(result, Mapping) else result.worker_id)
+    if worker_id is not None and result_worker_id != str(worker_id):
+        failures.append("WORKER_ID_MISMATCH")
+    if not result_worker_id.strip() or len(result_worker_id) > 256:
+        failures.append("WORKER_ID_INVALID")
+    if str(payload.get("status") or "").upper() not in {"COMPLETED", "FAILED", "INCOMPLETE"}:
+        failures.append("RESULT_STATUS_INVALID")
+    evidence = payload.get("evidence")
+    if not isinstance(evidence, Mapping):
+        failures.append("RESULT_EVIDENCE_NOT_MAPPING")
+    if supervisor_time is not None:
+        try:
+            observed_at = result.get("observed_at") if isinstance(result, Mapping) else result.observed_at
+            if not isinstance(observed_at, datetime):
+                observed_at = datetime.fromisoformat(str(observed_at))
+            assignment_expires_at = (
+                assignment.get("expires_at")
+                if isinstance(assignment, Mapping)
+                else assignment.expires_at
+            )
+            if not isinstance(assignment_expires_at, datetime):
+                assignment_expires_at = datetime.fromisoformat(str(assignment_expires_at))
+            assignment_issued_at = (
+                assignment.get("issued_at")
+                if isinstance(assignment, Mapping)
+                else assignment.issued_at
+            )
+            if not isinstance(assignment_issued_at, datetime):
+                assignment_issued_at = datetime.fromisoformat(str(assignment_issued_at))
+            if observed_at < assignment_issued_at:
+                failures.append("RESULT_OBSERVED_BEFORE_ASSIGNMENT")
+            if observed_at > assignment_expires_at:
+                failures.append("RESULT_OBSERVED_AFTER_ASSIGNMENT_EXPIRY")
+            recovery_policy = policy or RepairRecoveryPolicy()
+            if (observed_at - supervisor_time).total_seconds() > recovery_policy.clock_skew_tolerance_seconds:
+                failures.append("CLOCK_SKEW_EXCEEDED")
+        except (TypeError, ValueError):
+            failures.append("RESULT_TIME_INVALID")
+    return {
+        "valid": not failures,
+        "result_id": str(result.get("result_id") if isinstance(result, Mapping) else result.result_id),
+        "assignment_id": str(result_assignment_id),
+        "worker_id": result_worker_id,
+        "status": str(payload.get("status") or ""),
+        "failures": tuple(dict.fromkeys(failures)),
+        "authority_granted": False,
+    }
 
 
 def _packet_payload(packet: RecoveryAuthorityPacket) -> dict[str, Any]:
@@ -1393,9 +1803,39 @@ def worker_failure_recovery_status(
             "content_sha256": bounded(_field(record, "content_sha256", ""), 64),
         }
 
+    def comparison_assignment_summary(record: Any) -> dict[str, Any]:
+        refs = _field(record, "evidence_refs", ()) or ()
+        return {
+            "assignment_id": bounded(_field(record, "assignment_id", ""), 64),
+            "scope": bounded(_field(record, "scope", "")),
+            "target_id": bounded(_field(record, "target_id", "")),
+            "worker_kind": bounded(_field(record, "worker_kind", ""), 64),
+            "authority_packet_id": bounded(
+                _field(record, "authority_packet_id", ""), 64
+            ),
+            "issued_at": timestamp(_field(record, "issued_at")),
+            "expires_at": timestamp(_field(record, "expires_at")),
+            "evidence_ref_count": len(refs) if isinstance(refs, Sequence) else 0,
+            "content_sha256": bounded(_field(record, "content_sha256", ""), 64),
+        }
+
+    def comparison_result_summary(record: Any) -> dict[str, Any]:
+        return {
+            "result_id": bounded(_field(record, "result_id", ""), 64),
+            "assignment_id": bounded(_field(record, "assignment_id", ""), 64),
+            "worker_id": bounded(_field(record, "worker_id", "")),
+            "status": bounded(_field(record, "status", ""), 32),
+            "observed_at": timestamp(_field(record, "observed_at")),
+            "content_sha256": bounded(_field(record, "content_sha256", ""), 64),
+        }
+
     failures = tuple(store.all_worker_failures())
     recoveries = tuple(store.all_worker_failure_recoveries())
     conflicts = tuple(store.all_worker_postmortem_conflicts())
+    assignment_reader = getattr(store, "all_comparison_worker_assignments", None)
+    result_reader = getattr(store, "all_comparison_worker_results", None)
+    assignments = tuple(assignment_reader()) if callable(assignment_reader) else ()
+    results = tuple(result_reader()) if callable(result_reader) else ()
     return {
         "schema_version": WORKER_POSTMORTEM_SCHEMA_VERSION,
         "read_only": True,
@@ -1407,6 +1847,14 @@ def worker_failure_recovery_status(
         "failures": [failure_summary(item) for item in failures[-limit:]],
         "recoveries": [recovery_summary(item) for item in recoveries[-limit:]],
         "conflicts": [conflict_summary(item) for item in conflicts[-limit:]],
+        "comparison_assignment_count": len(assignments),
+        "comparison_result_count": len(results),
+        "comparison_assignments": [
+            comparison_assignment_summary(item) for item in assignments[-limit:]
+        ],
+        "comparison_results": [
+            comparison_result_summary(item) for item in results[-limit:]
+        ],
     }
 
 
