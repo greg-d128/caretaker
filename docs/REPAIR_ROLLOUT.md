@@ -90,6 +90,11 @@ The routing policy is deliberately conservative:
   the candidate is authoritative;
 - a permanent deployment record remains deployed-authoritative even if an old
   candidate percentage is configured.
+- `candidate_mirror_percentage` optionally samples candidate-authoritative
+  canary or active field-repair calls for a deployed comparison. It defaults to
+  `0`, so the additional invocation is disabled unless policy explicitly opts
+  in. Mirror sampling uses a separate deterministic bucket and does not change
+  which implementation is authoritative.
 
 The decision checks that the current policy fingerprint matches the rollout,
 rejects expired or terminal records, and returns a decision hash with the
@@ -101,7 +106,13 @@ still apply normal Repair, Integrity, Guard, isolation, and authority checks.
 the decision and invokes the caller-supplied, already-authorized deployed or
 candidate callable. A sampled shadow call delegates to `shadow_execute()` and
 returns the deployed result; canary and active selections return the candidate
-only when the decision makes it authoritative. It does not mutate a slot,
+only when the decision makes it authoritative. A mirror-selected
+candidate-authoritative call runs the candidate first and returns its result,
+then runs deployed code with an independent input copy as comparison evidence.
+A mismatch or deployed comparison exception is retained as evidence and never
+triggers an automatic switch. If the contract and complete effect evidence do
+not establish safe duplicate execution, the deployed comparison requires a
+verified application-owned isolation adapter. It does not mutate a slot,
 install a repair, grant authority, or choose an isolation-unavailable fallback.
 
 An embedding application may pass a `RepairRolloutCoordinator` together with
@@ -118,8 +129,8 @@ present; raw outputs and exception messages are never included.
 Callers may also supply a `RepairStore` as `execution_store` to retain one
 bounded `RolloutExecutionObservation` per invocation. The record binds the
 rollout, candidate, stage, routing decision hash, policy fingerprint, selected
-implementation, success state, and shadow equivalence without retaining return
-values or exception messages. An optional `execution_id` identifies an
+implementation, success state, shadow equivalence, and bounded mirror outcome
+without retaining return values or exception messages. An optional `execution_id` identifies an
 observation for idempotent re-submission; conflicting reuse is rejected. These
 observations are evidence for
 operator review and future staged decisions only. They do not advance a stage,
@@ -137,7 +148,7 @@ advance a rollout, change routing percentages, activate a FunctionSlot, or
 grant execution authority.
 
 The Caretaker Console's `Rollouts` tab requests this projection and displays the
-current stage, bounded candidate/shadow counts, current worker
+current stage, bounded candidate/shadow/mirror counts, current worker
 acknowledgement counts, and readiness state. An operator can select a rollout
 and request one of the legal next lifecycle stages through the authenticated
 control plane. The form requires a non-empty reason and explicit confirmation;
@@ -153,7 +164,7 @@ incident checks.
 
 ## Policy-governed routing percentage changes
 
-An operator may change the shadow, canary, and active-candidate percentages
+An operator may change the shadow, canary, active-candidate, and candidate-mirror percentages
 only when `allow_operator_routing_changes` is enabled in the rollout policy.
 The policy separately controls whether an increase is allowed through
 `allow_operator_routing_increases`; both settings default to `false`. The

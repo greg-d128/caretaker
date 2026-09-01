@@ -412,11 +412,13 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
         minimum_priority=EvidencePriority.IMPORTANT,
         required_fields=("scope.rollout_id", "scope.routing_scope", "outcome.state"),
         example={
-            "state": "FALLBACK_SUCCEEDED",
-            "implementation": "deployed",
+            "state": "COMPLETED",
+            "implementation": "candidate",
             "candidate_executed": True,
-            "candidate_authoritative": False,
-            "fallback_used": True,
+            "candidate_authoritative": True,
+            "mirror_executed": True,
+            "mirror_deployed_succeeded": True,
+            "mirror_equivalent": False,
         },
     ),
     "REPAIR_CANDIDATE_OBSERVATION": _event_definition(

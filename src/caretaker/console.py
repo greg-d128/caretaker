@@ -1254,6 +1254,10 @@ class CaretakerConsoleApp(App):
                         placeholder="Active candidate %",
                         id="rollout-active-percentage",
                     )
+                    yield Input(
+                        placeholder="Candidate mirror %",
+                        id="rollout-mirror-percentage",
+                    )
                 with Horizontal(id="rollout-advance-actions"):
                     yield Checkbox(
                         "Override unmet readiness",
@@ -1297,7 +1301,7 @@ class CaretakerConsoleApp(App):
                 table = DataTable(id="rollout-table")
                 table.cursor_type = "row"
                 table.add_columns(
-                    "#", "Target", "Stage", "Control", "Release", "Candidate", "Executions", "Candidate results", "Fallbacks", "Shadow", "Workers", "Readiness", "Evidence", "Updated"
+                    "#", "Target", "Stage", "Control", "Release", "Candidate", "Executions", "Candidate results", "Fallbacks", "Shadow", "Mirror", "Workers", "Readiness", "Evidence", "Updated"
                 )
                 yield table
                 yield RichLog(id="rollout-output", wrap=True, markup=False)
@@ -4390,8 +4394,11 @@ class CaretakerConsoleApp(App):
             ("#rollout-shadow-percentage", "shadow_sample_percentage"),
             ("#rollout-canary-percentage", "canary_percentage"),
             ("#rollout-active-percentage", "active_candidate_percentage"),
+            ("#rollout-mirror-percentage", "candidate_mirror_percentage"),
         ):
             value = routing.get(key)
+            if value is None and key == "candidate_mirror_percentage":
+                value = 0
             self.query_one(field_id, Input).value = "" if value is None else str(value)
 
     def _refresh_rollout_advance_controls(self) -> None:
@@ -4620,7 +4627,14 @@ class CaretakerConsoleApp(App):
             ("#rollout-shadow-percentage", "shadow_sample_percentage"),
             ("#rollout-canary-percentage", "canary_percentage"),
             ("#rollout-active-percentage", "active_candidate_percentage"),
+            ("#rollout-mirror-percentage", "candidate_mirror_percentage"),
         ):
+            if key == "candidate_mirror_percentage" and key not in (
+                record.get("routing_policy")
+                if isinstance(record.get("routing_policy"), Mapping)
+                else {}
+            ):
+                continue
             value = self.query_one(field_id, Input).value.strip()
             try:
                 parsed = int(value)
@@ -4734,6 +4748,11 @@ class CaretakerConsoleApp(App):
                 f"{summary.get('shadow_equivalent_count', 0)} eq/"
                 f"{summary.get('shadow_mismatch_count', 0)} diff"
             )
+            mirror_results = (
+                f"{summary.get('mirror_equivalent_count', 0)} eq/"
+                f"{summary.get('mirror_mismatch_count', 0)} diff/"
+                f"{summary.get('mirror_failure_count', 0)} fail"
+            )
             coordination = record.get("worker_coordination")
             if isinstance(coordination, Mapping):
                 worker_results = (
@@ -4762,6 +4781,7 @@ class CaretakerConsoleApp(App):
                 candidate_results,
                 fallback_results,
                 shadow_results,
+                mirror_results,
                 self._compact_log_text(worker_results, limit=20) or "-",
                 self._compact_log_text(readiness_status, limit=16) or "-",
                 self._compact_log_text(evidence_status, limit=20) or "-",

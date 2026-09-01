@@ -149,8 +149,8 @@ All event types share these redaction rules:
 | `RECOVERY_DECISION` | `CRITICAL` | — | `{"state": "PLANNED_ONLY", "action": "ROLLBACK_TO_DEPLOYED_CODE"}` |
 | `REPAIR_ROLLOUT_TRANSITION` | `CRITICAL` | `scope.rollout_id`, `scope.transition_id`, `outcome.state` | `{"rollout_id": "rollout-uuid", "transition_id": "transition-uuid", "state": "validated", "action": "advance"}` |
 | `SHADOW_EXECUTION_DECISION` | `IMPORTANT` | — | `{"state": "COMPLETED", "candidate_authoritative": false, "candidate_succeeded": true, "equivalent": true, "isolation_verified": true}` |
-| `REPAIR_ROLLOUT_ROUTING_DECISION` | `IMPORTANT` | `scope.rollout_id`, `scope.routing_scope`, `outcome.state` | `{"state": "SELECTED", "stage": "canary", "strategy": "canary", "candidate_selected": true, "candidate_authoritative": true}` |
-| `REPAIR_ROLLOUT_EXECUTION_OUTCOME` | `IMPORTANT` | `scope.rollout_id`, `scope.routing_scope`, `outcome.state` | `{"state": "FALLBACK_SUCCEEDED", "implementation": "deployed", "candidate_executed": true, "candidate_authoritative": false, "fallback_used": true}` |
+| `REPAIR_ROLLOUT_ROUTING_DECISION` | `IMPORTANT` | `scope.rollout_id`, `scope.routing_scope`, `outcome.state` | `{"state": "SELECTED", "stage": "canary", "strategy": "canary", "candidate_selected": true, "candidate_authoritative": true, "mirror_selected": true}` |
+| `REPAIR_ROLLOUT_EXECUTION_OUTCOME` | `IMPORTANT` | `scope.rollout_id`, `scope.routing_scope`, `outcome.state` | `{"state": "COMPLETED", "implementation": "candidate", "candidate_executed": true, "candidate_authoritative": true, "mirror_executed": true, "mirror_deployed_succeeded": true, "mirror_equivalent": false}` |
 | `REPAIR_CANDIDATE_OBSERVATION` | `IMPORTANT` | `scope.target_id`, `scope.candidate_id`, `outcome.state` | `{"state": "ACCEPTANCE_OBSERVED", "succeeded": true, "candidate_state": "INITIALLY_VALIDATED", "mode": "canary"}` |
 
 In a supervised run, the application process may submit only a bounded

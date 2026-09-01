@@ -167,6 +167,7 @@ def _engine_slot_and_record(
 
 
 def _execute(ledger: RepairRolloutLedger, record, deployed, candidate, **kwargs):
+    contract = kwargs.pop("contract", _pure_contract())
     return execute_rollout(
         record,
         policy=ledger.policy,
@@ -177,7 +178,7 @@ def _execute(ledger: RepairRolloutLedger, record, deployed, candidate, **kwargs)
         candidate=candidate,
         args=(4,),
         kwargs={},
-        contract=_pure_contract(),
+        contract=contract,
         effect_observation=EffectObservation(complete=True),
         **kwargs,
     )
@@ -215,6 +216,95 @@ def test_execute_rollout_shadow_returns_deployed_result() -> None:
     assert result.candidate_authoritative is False
     assert result.shadow_result is not None
     assert calls == ["deployed", "candidate"]
+
+
+def test_candidate_authoritative_mirror_returns_candidate_and_records_comparison() -> None:
+    ledger = _ledger(canary_percentage=100, candidate_mirror_percentage=100)
+    record = _advance(
+        ledger,
+        _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED),
+        RepairRolloutStage.CANARY,
+    )
+    calls: list[str] = []
+    store = InMemoryRepairStore()
+
+    result = _execute(
+        ledger,
+        record,
+        lambda value: calls.append("deployed") or value,
+        lambda value: calls.append("candidate") or value + 1,
+        execution_store=store,
+    )
+
+    assert result.result == 5
+    assert result.candidate_authoritative is True
+    assert result.decision.mirror_selected is True
+    assert result.mirror_result is not None
+    assert result.mirror_result.candidate_authoritative is True
+    assert result.mirror_result.candidate_result == 5
+    assert result.mirror_result.deployed_result == 4
+    assert result.mirror_result.deployed_succeeded is True
+    assert result.mirror_result.equivalent is False
+    assert calls == ["candidate", "deployed"]
+    observation = result.execution_observation
+    assert observation is not None
+    assert observation.mirror_executed is True
+    assert observation.mirror_deployed_succeeded is True
+    assert observation.mirror_equivalent is False
+    summary = summarize_rollout_executions(
+        record,
+        store.all_rollout_executions(),
+        policy_fingerprint="policy-hash",
+    )
+    assert summary.mirror_count == 1
+    assert summary.mirror_mismatch_count == 1
+
+
+def test_candidate_authoritative_mirror_requires_isolation_for_uncertain_effects() -> None:
+    ledger = _ledger(canary_percentage=100, candidate_mirror_percentage=100)
+    record = _advance(
+        ledger,
+        _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED),
+        RepairRolloutStage.CANARY,
+    )
+    calls: list[str] = []
+
+    with pytest.raises(ShadowExecutionError, match="contract"):
+        _execute(
+            ledger,
+            record,
+            lambda value: calls.append("deployed") or value,
+            lambda value: calls.append("candidate") or value + 1,
+            contract=FunctionExecutionContract(
+                side_effects=SideEffectClass.UNKNOWN,
+                retry_safety=ReplaySafety.UNKNOWN,
+            ),
+        )
+
+    assert calls == []
+
+
+def test_candidate_authoritative_mirror_retains_candidate_when_deployed_comparison_fails() -> None:
+    ledger = _ledger(canary_percentage=100, candidate_mirror_percentage=100)
+    record = _advance(
+        ledger,
+        _advance(ledger, _record(ledger), RepairRolloutStage.VALIDATED),
+        RepairRolloutStage.CANARY,
+    )
+
+    def deployed(value: int) -> int:
+        raise LookupError("comparison failure")
+
+    result = _execute(ledger, record, deployed, lambda value: value + 1)
+
+    assert result.result == 5
+    assert result.candidate_authoritative is True
+    assert result.mirror_result is not None
+    assert result.mirror_result.deployed_succeeded is False
+    assert isinstance(result.mirror_result.deployed_exception, LookupError)
+    assert result.execution_observation is not None
+    assert result.execution_observation.execution_state == "COMPLETED"
+    assert result.execution_observation.mirror_deployed_exception_type == "LookupError"
 
 
 def test_execute_rollout_can_derive_effect_gate_from_behavior_capture() -> None:
@@ -1435,6 +1525,7 @@ def test_operator_routing_percentage_update_is_bound_and_audited() -> None:
                 shadow_sample_percentage=50,
                 canary_percentage=10,
                 active_candidate_percentage=50,
+                candidate_mirror_percentage=10,
             ),
         )
     )
@@ -1446,6 +1537,7 @@ def test_operator_routing_percentage_update_is_bound_and_audited() -> None:
         shadow_sample_percentage=75,
         canary_percentage=25,
         active_candidate_percentage=50,
+        candidate_mirror_percentage=40,
         authority_type=RepairRolloutAuthority.OPERATOR,
         authority_id="operator-1",
         reason="increase after reviewed evidence",
@@ -1457,6 +1549,7 @@ def test_operator_routing_percentage_update_is_bound_and_audited() -> None:
         shadow_sample_percentage=75,
         canary_percentage=25,
         active_candidate_percentage=50,
+        candidate_mirror_percentage=40,
     )
     transition = ledger.transitions(updated.rollout_id)[-1]
     assert transition.action == "routing-update"
@@ -1464,6 +1557,8 @@ def test_operator_routing_percentage_update_is_bound_and_audited() -> None:
     assert transition.to_stage is RepairRolloutStage.VALIDATED
     assert transition.details["prior_routing"]["canary_percentage"] == 10
     assert transition.details["new_routing"]["canary_percentage"] == 25
+    assert transition.details["prior_routing"]["candidate_mirror_percentage"] == 10
+    assert transition.details["new_routing"]["candidate_mirror_percentage"] == 40
 
     shadow = _advance(ledger, updated, RepairRolloutStage.SHADOW)
     decision = _decide(ledger, shadow)

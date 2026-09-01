@@ -993,7 +993,7 @@ Future work may export a signed review bundle containing a unified diff, origina
 
 ## Policy-controlled Repair rollout, mirroring, and shadow execution
 
-**Status: Design clarified; effect-aware contract, evidence gate, deterministic routing decision, registry-aware FunctionSlot invocation bridge, explicit application-owned raw-result callable binding, and conservative pure-only candidate-failure fallback implemented; richer fallback policy, fleet-wide routing, implicit arbitrary-callable replacement, and deployment-owned orchestration remain future work.**
+**Status: In progress in development tree; effect-aware contract, evidence gate, deterministic routing decision, registry-aware FunctionSlot invocation bridge, explicit application-owned raw-result callable binding, conservative pure-only candidate-failure fallback, and policy-controlled candidate-authoritative mirroring implemented; richer fallback policy, staged ramp strategies, fleet-wide routing, implicit arbitrary-callable replacement, and deployment-owned orchestration remain future work.**
 
 Caretaker currently supports candidate probation and a narrow
 `PURE_FUNCTION` differential-execution mode. For explicitly confirmed pure
@@ -1026,6 +1026,20 @@ application-owned isolation adapter when the contract/evidence gate does not
 permit unisolated duplicate execution. This remains an execution primitive,
 not traffic routing or rollout activation.
 
+The complementary `mirrored_execute()` primitive now supports an explicitly
+policy-selected candidate-authoritative comparison. The candidate runs first
+and its result remains authoritative; deployed code receives an independent
+input copy and produces evidence only. The deployed comparison is isolated by a
+verified application-owned adapter whenever the contract and complete effect
+evidence do not establish safe duplicate execution. A deployed comparison
+exception or result mismatch never changes authority or triggers an automatic
+rollback. `candidate_mirror_percentage` defaults to zero, uses a separate
+deterministic bucket, is bound into the rollout policy fingerprint, and can be
+changed only through the existing policy-gated operator routing transition.
+Persisted execution observations and the read-only Rollouts console expose
+mirror attempts, comparison outcomes, and deployed comparison failures without
+retaining return values or exception messages.
+
 The `decide_rollout_routing()` primitive now provides a deterministic,
 scope-aware bucket decision for a single invocation. Shadow, canary, and active
 field-repair stages have separate policy percentages; stale-policy, expired,
@@ -1054,7 +1068,9 @@ transition history, and integrity-checked execution summaries. Stale or
 unavailable summaries remain visibly unresolved and cannot advance authority.
 The Rollouts console displays fallback counts separately from candidate success
 and failure counts, preserving the distinction between deployed fallback and
-candidate acceptance for operators.
+candidate acceptance for operators. It also displays mirror equivalent,
+mismatch, and deployed-comparison-failure counts; these are evidence only and
+do not advance the rollout.
 
 The first supervisor coordination slice is now implemented through
 `RepairRolloutCoordinator`. An authenticated worker can acknowledge the exact

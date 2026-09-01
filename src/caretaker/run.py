@@ -877,6 +877,16 @@ def _handle_rollout_percentage_request(
         percentages[name] = value
 
     record = ledger.get(rollout_id)
+    mirror_value = request.get("candidate_mirror_percentage")
+    if mirror_value is None:
+        existing_routing = record.routing_policy or ledger.policy.routing
+        mirror_value = existing_routing.candidate_mirror_percentage
+    if isinstance(mirror_value, bool) or not isinstance(mirror_value, int):
+        raise ValueError(
+            "repair-rollout-routing-update requires integer candidate_mirror_percentage"
+        )
+    percentages["candidate_mirror_percentage"] = mirror_value
+
     readiness = coordinator.readiness(rollout_id)
     override_readiness = request.get("override_readiness") is True
     updated = ledger.update_routing_percentages(

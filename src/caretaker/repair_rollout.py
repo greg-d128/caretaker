@@ -23,7 +23,13 @@ from uuid import UUID, uuid4
 from .contracts import Comparator
 from .domain import RepairEvent, SideEffectClass
 from .execution import EffectObservation, FunctionExecutionContract
-from .shadow import ShadowExecutionAdapter, ShadowExecutionResult, shadow_execute
+from .shadow import (
+    MirroredExecutionResult,
+    ShadowExecutionAdapter,
+    ShadowExecutionResult,
+    mirrored_execute,
+    shadow_execute,
+)
 
 if TYPE_CHECKING:
     from .observation import ObservationManager
@@ -84,6 +90,7 @@ class RolloutRoutingPolicy:
     shadow_sample_percentage: int = 100
     canary_percentage: int = 0
     active_candidate_percentage: int = 100
+    candidate_mirror_percentage: int = 0
     bucket_count: int = 10_000
 
     def __post_init__(self) -> None:
@@ -91,6 +98,7 @@ class RolloutRoutingPolicy:
             "shadow_sample_percentage",
             "canary_percentage",
             "active_candidate_percentage",
+            "candidate_mirror_percentage",
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 100:
@@ -297,6 +305,9 @@ class RolloutRoutingDecision:
     policy_fingerprint: str
     decision_hash: str
     reason: str
+    mirror_bucket: int | None = None
+    mirror_percentage: int = 0
+    mirror_selected: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,6 +319,7 @@ class RolloutExecutionResult:
     candidate_executed: bool
     candidate_authoritative: bool
     shadow_result: ShadowExecutionResult | None = None
+    mirror_result: MirroredExecutionResult | None = None
     execution_observation: "RolloutExecutionObservation | None" = None
     candidate_succeeded: bool | None = None
     fallback_used: bool = False
@@ -341,6 +353,10 @@ class RolloutExecutionObservation:
     created_at: datetime
     content_hash: str
     fallback_used: bool = False
+    mirror_executed: bool = False
+    mirror_deployed_succeeded: bool | None = None
+    mirror_equivalent: bool | None = None
+    mirror_deployed_exception_type: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -366,6 +382,11 @@ class RolloutExecutionSummary:
     invalid_observation_count: int
     stage_counts: Mapping[str, int]
     evidence_hash: str
+    mirror_count: int = 0
+    mirror_equivalent_count: int = 0
+    mirror_mismatch_count: int = 0
+    mirror_inconclusive_count: int = 0
+    mirror_failure_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -412,6 +433,10 @@ def _execution_observation_payload(
         "decision_hash": observation.decision_hash,
         "policy_fingerprint": observation.policy_fingerprint,
         "fallback_used": observation.fallback_used,
+        "mirror_executed": observation.mirror_executed,
+        "mirror_deployed_succeeded": observation.mirror_deployed_succeeded,
+        "mirror_equivalent": observation.mirror_equivalent,
+        "mirror_deployed_exception_type": observation.mirror_deployed_exception_type,
     }
 
 
@@ -428,6 +453,10 @@ def _legacy_execution_observation_payload(
 
     payload = _execution_observation_payload(observation)
     payload.pop("fallback_used")
+    payload.pop("mirror_executed")
+    payload.pop("mirror_deployed_succeeded")
+    payload.pop("mirror_equivalent")
+    payload.pop("mirror_deployed_exception_type")
     return payload
 
 
@@ -439,6 +468,7 @@ def _valid_execution_observation_content_hash(
         return True
     return (
         not observation.fallback_used
+        and not observation.mirror_executed
         and observation.content_hash
         == _digest(_legacy_execution_observation_payload(observation))
     )
@@ -644,6 +674,7 @@ class RepairRolloutLedger:
         shadow_sample_percentage: int,
         canary_percentage: int,
         active_candidate_percentage: int,
+        candidate_mirror_percentage: int | None = None,
         authority_type: RepairRolloutAuthority,
         authority_id: str,
         reason: str,
@@ -690,6 +721,11 @@ class RepairRolloutLedger:
             shadow_sample_percentage=shadow_sample_percentage,
             canary_percentage=canary_percentage,
             active_candidate_percentage=active_candidate_percentage,
+            candidate_mirror_percentage=(
+                previous_routing.candidate_mirror_percentage
+                if candidate_mirror_percentage is None
+                else candidate_mirror_percentage
+            ),
             bucket_count=previous_routing.bucket_count,
         )
         if new_routing == previous_routing:
@@ -701,11 +737,13 @@ class RepairRolloutLedger:
                     new_routing.shadow_sample_percentage,
                     new_routing.canary_percentage,
                     new_routing.active_candidate_percentage,
+                    new_routing.candidate_mirror_percentage,
                 ),
                 (
                     previous_routing.shadow_sample_percentage,
                     previous_routing.canary_percentage,
                     previous_routing.active_candidate_percentage,
+                    previous_routing.candidate_mirror_percentage,
                 ),
             )
         )
@@ -1682,11 +1720,14 @@ def decide_rollout_routing(
         ).digest()[:8],
         "big",
     ) % routing.bucket_count
+    mirror_bucket: int | None = None
 
     percentage = 0
     candidate_selected = False
     candidate_authoritative = False
     strategy = "deployed"
+    mirror_percentage = 0
+    mirror_selected = False
     reason = "rollout stage keeps the deployed implementation authoritative"
     if record.stage is RepairRolloutStage.SHADOW:
         if not policy.allow_shadow_stage:
@@ -1725,6 +1766,28 @@ def decide_rollout_routing(
         else:
             reason = "permanent deployment record is already authoritative as deployed"
 
+    if candidate_authoritative:
+        mirror_percentage = routing.candidate_mirror_percentage
+        if mirror_percentage:
+            mirror_bucket = int.from_bytes(
+                hashlib.sha256(
+                    b"caretaker.rollout.mirror.bucket\0"
+                    + str(record.rollout_id).encode("ascii")
+                    + b"\0"
+                    + scope.encode("utf-8")
+                    + b"\0"
+                    + routing_key.encode("utf-8")
+                ).digest()[:8],
+                "big",
+            ) % routing.bucket_count
+            mirror_selected = _bucket_selected(
+                mirror_bucket, routing.bucket_count, mirror_percentage
+            )
+            if mirror_selected:
+                reason = f"{reason}; deployed comparison mirror selected"
+        else:
+            reason = f"{reason}; deployed comparison mirror disabled"
+
     implementation = (
         RepairAuthoritativeImplementation.CANDIDATE
         if candidate_authoritative
@@ -1746,6 +1809,9 @@ def decide_rollout_routing(
         "strategy": strategy,
         "policy_fingerprint": policy_fingerprint,
         "reason": reason,
+        "mirror_bucket": mirror_bucket,
+        "mirror_percentage": mirror_percentage,
+        "mirror_selected": mirror_selected,
     }
     decision = RolloutRoutingDecision(
         rollout_id=record.rollout_id,
@@ -1764,6 +1830,9 @@ def decide_rollout_routing(
         policy_fingerprint=policy_fingerprint,
         decision_hash=_digest(evidence),
         reason=reason,
+        mirror_bucket=mirror_bucket,
+        mirror_percentage=mirror_percentage,
+        mirror_selected=mirror_selected,
     )
     if audit_event is not None:
         audit_event(
@@ -1783,11 +1852,14 @@ def decide_rollout_routing(
                 "candidate_selected": candidate_selected,
                 "candidate_authoritative": candidate_authoritative,
                 "authoritative_implementation": implementation.value,
+                "mirror_selected": mirror_selected,
             },
             details={
                 "bucket": bucket,
                 "bucket_count": routing.bucket_count,
                 "configured_percentage": percentage,
+                "mirror_bucket": mirror_bucket,
+                "mirror_percentage": mirror_percentage,
                 "decision_hash": decision.decision_hash,
             },
         )
@@ -2143,6 +2215,7 @@ def _build_execution_observation(
     error: BaseException | None = None,
 ) -> RolloutExecutionObservation:
     shadow = result.shadow_result if result is not None else None
+    mirror = result.mirror_result if result is not None else None
     candidate_executed = (
         result.candidate_executed
         if result is not None
@@ -2151,6 +2224,8 @@ def _build_execution_observation(
     candidate_succeeded = (
         shadow.candidate_succeeded
         if shadow is not None
+        else mirror.candidate_succeeded
+        if mirror is not None
         else (
             result.candidate_succeeded
             if result is not None and result.candidate_succeeded is not None
@@ -2163,6 +2238,14 @@ def _build_execution_observation(
     )
     original_succeeded = shadow.original_succeeded if shadow is not None else None
     equivalent = shadow.equivalent if shadow is not None else None
+    mirror_executed = mirror is not None
+    mirror_deployed_succeeded = mirror.deployed_succeeded if mirror is not None else None
+    mirror_equivalent = mirror.equivalent if mirror is not None else None
+    mirror_deployed_exception_type = (
+        type(mirror.deployed_exception).__name__[:128]
+        if mirror is not None and mirror.deployed_exception is not None
+        else None
+    )
     execution_state = "COMPLETED" if result is not None else "FAILED"
     candidate_authoritative = (
         result.candidate_authoritative
@@ -2198,6 +2281,10 @@ def _build_execution_observation(
         "decision_hash": decision.decision_hash,
         "policy_fingerprint": decision.policy_fingerprint,
         "fallback_used": bool(result.fallback_used) if result is not None else False,
+        "mirror_executed": mirror_executed,
+        "mirror_deployed_succeeded": mirror_deployed_succeeded,
+        "mirror_equivalent": mirror_equivalent,
+        "mirror_deployed_exception_type": mirror_deployed_exception_type,
     }
     content["observation_id"] = str(observation_id)
     return RolloutExecutionObservation(
@@ -2222,6 +2309,10 @@ def _build_execution_observation(
         created_at=_utcnow(),
         content_hash=_digest(content),
         fallback_used=bool(result.fallback_used) if result is not None else False,
+        mirror_executed=mirror_executed,
+        mirror_deployed_succeeded=mirror_deployed_succeeded,
+        mirror_equivalent=mirror_equivalent,
+        mirror_deployed_exception_type=mirror_deployed_exception_type,
     )
 
 
@@ -2264,6 +2355,11 @@ def summarize_rollout_executions(
     shadow_equivalent_count = 0
     shadow_mismatch_count = 0
     shadow_inconclusive_count = 0
+    mirror_count = 0
+    mirror_equivalent_count = 0
+    mirror_mismatch_count = 0
+    mirror_inconclusive_count = 0
+    mirror_failure_count = 0
     fallback_count = 0
     invalid_count = 0
     for raw in observations:
@@ -2305,6 +2401,16 @@ def summarize_rollout_executions(
                 shadow_mismatch_count += 1
             else:
                 shadow_inconclusive_count += 1
+        if observation.mirror_executed:
+            mirror_count += 1
+            if observation.mirror_deployed_succeeded is False:
+                mirror_failure_count += 1
+            if observation.mirror_equivalent is True:
+                mirror_equivalent_count += 1
+            elif observation.mirror_equivalent is False:
+                mirror_mismatch_count += 1
+            else:
+                mirror_inconclusive_count += 1
     summary_payload = {
         "rollout_id": str(record.rollout_id),
         "target_id": record.target_id,
@@ -2321,6 +2427,11 @@ def summarize_rollout_executions(
         "shadow_equivalent_count": shadow_equivalent_count,
         "shadow_mismatch_count": shadow_mismatch_count,
         "shadow_inconclusive_count": shadow_inconclusive_count,
+        "mirror_count": mirror_count,
+        "mirror_equivalent_count": mirror_equivalent_count,
+        "mirror_mismatch_count": mirror_mismatch_count,
+        "mirror_inconclusive_count": mirror_inconclusive_count,
+        "mirror_failure_count": mirror_failure_count,
         "fallback_count": fallback_count,
         "invalid_observation_count": invalid_count,
         "stage_counts": dict(sorted(stage_counts.items())),
@@ -2345,6 +2456,11 @@ def summarize_rollout_executions(
         invalid_observation_count=invalid_count,
         stage_counts=dict(sorted(stage_counts.items())),
         evidence_hash=_digest(summary_payload),
+        mirror_count=mirror_count,
+        mirror_equivalent_count=mirror_equivalent_count,
+        mirror_mismatch_count=mirror_mismatch_count,
+        mirror_inconclusive_count=mirror_inconclusive_count,
+        mirror_failure_count=mirror_failure_count,
     )
 
 
@@ -2353,6 +2469,15 @@ def _valid_execution_observation(observation: RolloutExecutionObservation) -> bo
         observation.execution_state in {"COMPLETED", "FAILED"}
         and (observation.exception_type is None or observation.exception_type.strip() != "")
         and observation.strategy.strip() != ""
+        and (
+            not observation.mirror_executed
+            or (
+                observation.candidate_authoritative
+                and observation.authoritative_implementation
+                is RepairAuthoritativeImplementation.CANDIDATE
+                and observation.mirror_deployed_succeeded is not None
+            )
+        )
     )
 
 
@@ -2391,6 +2516,16 @@ def _coerce_execution_observation(
             created_at=datetime.fromisoformat(str(raw["created_at"])),
             content_hash=str(raw["content_hash"]),
             fallback_used=bool(raw.get("fallback_used", False)),
+            mirror_executed=bool(raw.get("mirror_executed", False)),
+            mirror_deployed_succeeded=_optional_bool(
+                raw.get("mirror_deployed_succeeded")
+            ),
+            mirror_equivalent=_optional_bool(raw.get("mirror_equivalent")),
+            mirror_deployed_exception_type=(
+                str(raw["mirror_deployed_exception_type"])
+                if raw.get("mirror_deployed_exception_type") is not None
+                else None
+            ),
         )
     except (KeyError, TypeError, ValueError):
         return None
@@ -2509,6 +2644,80 @@ def _execute_rollout_decision(
             candidate_authoritative=False,
             shadow_result=shadow,
         )
+    if decision.candidate_authoritative and decision.mirror_selected:
+        mirrored = mirrored_execute(
+            candidate=candidate,
+            deployed=deployed,
+            args=args,
+            kwargs=kwargs,
+            contract=contract,
+            effect_observation=effect_observation,
+            isolation_adapter=isolation_adapter,
+            comparator=comparator,
+        )
+        if not mirrored.candidate_succeeded:
+            candidate_error = mirrored.candidate_exception or RuntimeError(
+                "candidate execution failed without an exception"
+            )
+            if audit_event is not None:
+                _emit_rollout_execution_outcome(
+                    decision,
+                    state="FAILED",
+                    candidate_executed=True,
+                    candidate_authoritative=True,
+                    implementation=RepairAuthoritativeImplementation.CANDIDATE.value,
+                    exception=candidate_error,
+                    audit_event=audit_event,
+                )
+            if failure_action is not RolloutFailureAction.FALLBACK_TO_DEPLOYED:
+                raise candidate_error
+            if contract.side_effects is not SideEffectClass.PURE:
+                raise RepairRolloutExecutionError(
+                    "fallback to deployed code requires a PURE execution contract"
+                ) from candidate_error
+            if (
+                effect_observation is not None
+                and effect_observation.externally_visible_categories
+            ):
+                raise RepairRolloutExecutionError(
+                    "fallback to deployed code is blocked by observed externally visible effects"
+                ) from candidate_error
+            fallback = _invoke_rollout_implementation(
+                decision,
+                implementation=deployed,
+                args=args,
+                kwargs=kwargs,
+                candidate_executed=True,
+                candidate_authoritative=False,
+                implementation_label=RepairAuthoritativeImplementation.DEPLOYED.value,
+                audit_state="FALLBACK_SUCCEEDED",
+                audit_event=audit_event,
+            )
+            return replace(
+                fallback,
+                candidate_authoritative=False,
+                candidate_succeeded=False,
+                fallback_used=True,
+                candidate_failure_type=type(candidate_error).__name__[:128],
+            )
+        if audit_event is not None:
+            _emit_rollout_execution_outcome(
+                decision,
+                state="COMPLETED",
+                candidate_executed=True,
+                candidate_authoritative=True,
+                implementation=RepairAuthoritativeImplementation.CANDIDATE.value,
+                mirror_result=mirrored,
+                audit_event=audit_event,
+            )
+        return RolloutExecutionResult(
+            result=mirrored.result,
+            decision=decision,
+            candidate_executed=True,
+            candidate_authoritative=True,
+            mirror_result=mirrored,
+            candidate_succeeded=True,
+        )
     if decision.candidate_authoritative:
         try:
             return _invoke_rollout_implementation(
@@ -2619,10 +2828,38 @@ def _emit_rollout_execution_outcome(
     implementation: str | None = None,
     audit_event: Callable[..., Any],
     exception: BaseException | None = None,
+    mirror_result: MirroredExecutionResult | None = None,
 ) -> None:
     details: dict[str, Any] = {"decision_hash": decision.decision_hash}
     if exception is not None:
         details["exception_type"] = type(exception).__name__[:128]
+    if mirror_result is not None:
+        details.update(
+            {
+                "mirror_decision_reason": mirror_result.decision_reason[:256],
+                "mirror_isolation_verified": mirror_result.isolation_verified,
+                "mirror_deployed_exception_type": (
+                    type(mirror_result.deployed_exception).__name__[:128]
+                    if mirror_result.deployed_exception is not None
+                    else None
+                ),
+            }
+        )
+    outcome = {
+        "state": state,
+        "implementation": implementation or decision.authoritative_implementation.value,
+        "candidate_executed": candidate_executed,
+        "candidate_authoritative": candidate_authoritative,
+        "fallback_used": state == "FALLBACK_SUCCEEDED",
+        "mirror_executed": mirror_result is not None,
+    }
+    if mirror_result is not None:
+        outcome.update(
+            {
+                "mirror_deployed_succeeded": mirror_result.deployed_succeeded,
+                "mirror_equivalent": mirror_result.equivalent,
+            }
+        )
     audit_event(
         "REPAIR_ROLLOUT_EXECUTION_OUTCOME",
         actor={"type": "caretaker", "id": "rollout-executor"},
@@ -2633,13 +2870,7 @@ def _emit_rollout_execution_outcome(
             "routing_key_digest": decision.routing_key_digest,
         },
         policy={"fingerprint": decision.policy_fingerprint},
-        outcome={
-            "state": state,
-            "implementation": implementation or decision.authoritative_implementation.value,
-            "candidate_executed": candidate_executed,
-            "candidate_authoritative": candidate_authoritative,
-            "fallback_used": state == "FALLBACK_SUCCEEDED",
-        },
+        outcome=outcome,
         details=details,
     )
 
@@ -2680,6 +2911,7 @@ def _routing_policy_payload(routing: RolloutRoutingPolicy) -> dict[str, int]:
         "shadow_sample_percentage": routing.shadow_sample_percentage,
         "canary_percentage": routing.canary_percentage,
         "active_candidate_percentage": routing.active_candidate_percentage,
+        "candidate_mirror_percentage": routing.candidate_mirror_percentage,
         "bucket_count": routing.bucket_count,
     }
 
@@ -2769,6 +3001,7 @@ def _coerce_routing_policy(raw: Any) -> RolloutRoutingPolicy:
             shadow_sample_percentage=raw["shadow_sample_percentage"],
             canary_percentage=raw["canary_percentage"],
             active_candidate_percentage=raw["active_candidate_percentage"],
+            candidate_mirror_percentage=raw.get("candidate_mirror_percentage", 0),
             bucket_count=raw["bucket_count"],
         )
     except (KeyError, TypeError, ValueError) as exc:

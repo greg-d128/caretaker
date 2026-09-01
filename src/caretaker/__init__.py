@@ -308,9 +308,11 @@ from .repair_rollout import (
     summarize_rollout_executions,
 )
 from .shadow import (
+    MirroredExecutionResult,
     ShadowExecutionAdapter,
     ShadowExecutionError,
     ShadowExecutionResult,
+    mirrored_execute,
     shadow_execute,
 )
 from .regression import (
@@ -706,8 +708,10 @@ __all__ = [
     "ShadowEligibility",
     "assess_shadow_eligibility",
     "ShadowExecutionAdapter",
+    "MirroredExecutionResult",
     "ShadowExecutionError",
     "ShadowExecutionResult",
+    "mirrored_execute",
     "shadow_execute",
     "SnapshotStrategy",
     "TimeoutMode",
