@@ -2190,7 +2190,7 @@ audit-context equality before persistence changes.
 
 #### 9. Split consumer interfaces without multiplying physical stores
 
-**Status: Partially implemented in development tree.**
+**Status: Implemented in development tree for the current application scope.**
 
 The store module now exposes typed lifecycle, evidence, worker/recovery, and
 integrity capability views over the existing InMemory and SQLite stores. The
@@ -2202,10 +2202,10 @@ coordinator and may use the root compatibility seam for that orchestration.
 
 `RepairStore` remains the compatibility/root seam and still exposes policy,
 incidents, episodes, candidates, attempts, events, observations, integrity,
-rollouts, workers, comparisons, and recovery. Continue migrating consumers to
-the narrowest view before changing storage ownership. Preserve the InMemory
-seam, SQLite deployment simplicity, existing data, and recovery queries; do
-not multiply physical stores.
+rollouts, workers, comparisons, and recovery. The engine's direct use of the
+root seam is intentional: it is the lifecycle coordinator that coordinates
+those capabilities. Preserve the InMemory seam, SQLite deployment simplicity,
+existing data, and recovery queries; do not multiply physical stores.
 
 #### 10. Move runtime supervision ownership out of logging
 

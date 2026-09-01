@@ -56,7 +56,9 @@ typed projections over the same store; they do not create additional databases,
 change the schema, or provide an authorization boundary. New consumers should
 accept the narrowest capability they require. The observation manager uses the
 evidence capability and internal post-mortem capture uses the post-mortem
-capability; further consumer migration is incremental.
+capability. The engine remains the lifecycle coordinator and may use the root
+compatibility seam; this is the intentional application-scope ownership
+boundary, not an unmigrated leaf consumer.
 
 Archive/compaction work must be an inspectable, resumable operation with a
 dry-run projection, preservation exceptions, and reference validation. No
