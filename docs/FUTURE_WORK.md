@@ -2219,8 +2219,10 @@ method-by-method. Runtime scheduling (`WorkRegistry`) and health monitoring
 (`Watchdog`) now live in the application package, with compatibility
 re-exports from logging. Adaptive aggregation queue binding state now lives in
 the same application-runtime package. Worker admission, health state, control,
-and shutdown internals remain to be extracted. No host-level or
-infrastructure-level authority is added.
+and queue coordination are now application-runtime implementations; a
+compatibility wrapper remains in logging. Control and shutdown internals still
+remain to be extracted. No host-level or infrastructure-level authority is
+added.
 
 `logging/supervisor.py` and `logging/__init__.py` currently include application
 supervision, worker health/authority, adaptive coordination, and recovery

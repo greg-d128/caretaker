@@ -8,6 +8,7 @@ from caretaker.runtime_supervision import (
     AdaptiveAggregationQueueRegistry,
     Watchdog,
     WorkRegistry,
+    WorkerRegistry,
 )
 
 
@@ -42,5 +43,16 @@ def test_runtime_scheduling_and_watchdog_are_owned_outside_logging() -> None:
     assert LoggingWatchdog is Watchdog
 
 
+def test_logging_worker_registry_wraps_application_owned_implementation() -> None:
+    from caretaker.logging import WorkerRegistry as LoggingWorkerRegistry
+
+    assert issubclass(LoggingWorkerRegistry, WorkerRegistry)
+    assert LoggingWorkerRegistry.__module__ == "caretaker.logging.supervisor"
+
+
 def test_runtime_queue_registry_is_owned_outside_logging() -> None:
     assert AdaptiveAggregationQueueRegistry.__module__ == "caretaker.runtime_supervision"
+
+
+def test_runtime_worker_registry_is_owned_outside_logging() -> None:
+    assert WorkerRegistry.__module__ == "caretaker.runtime_supervision"

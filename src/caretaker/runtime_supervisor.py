@@ -16,6 +16,7 @@ from .runtime_supervision import (
     AdaptiveAggregationQueueRegistry,
     Watchdog,
     WorkRegistry,
+    WorkerRegistry,
 )
 
 
@@ -75,4 +76,5 @@ __all__ = [
     "ApplicationRuntimeSupervisor",
     "Watchdog",
     "WorkRegistry",
+    "WorkerRegistry",
 ]

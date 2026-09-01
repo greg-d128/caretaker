@@ -48,14 +48,20 @@ application package. During the compatibility extraction phase it delegates
 to the historical logging supervisor; logging remains an observability
 dependency, and this delegation does not add host-level authority.
 
-The application package owns the runtime `WorkRegistry` and `Watchdog`
-implementations. The logging package re-exports those classes temporarily so
-existing integrations continue to work while worker admission, health state,
+The application package owns the runtime `WorkRegistry`, `WorkerRegistry`, and
+`Watchdog` implementations. The logging package re-exports those classes
+temporarily so existing integrations continue to work while
+worker admission, health state,
 control, queue coordination, and shutdown are extracted in later slices. The
 application package also owns adaptive aggregation queue bindings; logging
 supervision retains only the compatibility-facing orchestration method. Queue
 binding limits and worker identity checks remain application-runtime policy
 behavior; this extraction does not grant authority to a queue or worker.
+
+Worker admission and authority verification are implemented by the application
+runtime registry. A small logging-package compatibility wrapper preserves the
+historical public import and verifier test seam while delegating all lifecycle
+state and checks to that registry.
 
 ## Channels
 
