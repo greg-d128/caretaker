@@ -48,6 +48,9 @@ from .repair_rollout import (
 )
 
 
+REPAIR_STORE_SCHEMA_VERSION = 9
+
+
 class RepairStore(Protocol):
     def record_policy(self, record: PolicySnapshot) -> None: ...
     def record_incident(self, record: Incident) -> None: ...
@@ -572,8 +575,22 @@ class SQLiteRepairStore:
                 "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
             )
             connection.execute(
-                "INSERT OR REPLACE INTO caretaker_store_metadata(key, value) VALUES ('schema_version', '9')"
+                "INSERT OR IGNORE INTO caretaker_store_metadata(key, value) "
+                "VALUES ('schema_version', ?)",
+                (str(REPAIR_STORE_SCHEMA_VERSION),),
             )
+            row = connection.execute(
+                "SELECT value FROM caretaker_store_metadata WHERE key='schema_version'"
+            ).fetchone()
+            try:
+                stored_version = int(row[0]) if row is not None else 0
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Caretaker repair store schema version is invalid") from exc
+            if stored_version != REPAIR_STORE_SCHEMA_VERSION:
+                raise ValueError(
+                    "Unsupported Caretaker repair store schema version "
+                    f"{stored_version}; expected {REPAIR_STORE_SCHEMA_VERSION}"
+                )
             for table in self._TABLES:
                 connection.execute(
                     f"""

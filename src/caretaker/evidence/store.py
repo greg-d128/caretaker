@@ -17,6 +17,9 @@ from uuid import UUID
 from .models import BehaviorEvent, BehaviorWindow, CodeIdentity, RuntimeInspection
 
 
+EVIDENCE_STORE_SCHEMA_VERSION = 1
+
+
 class EvidenceStore(Protocol):
     def record_code_identity(self, record: CodeIdentity) -> None: ...
     def append_behavior_event(self, record: BehaviorEvent) -> None: ...
@@ -165,7 +168,7 @@ class SQLiteEvidenceStore:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
-                INSERT OR REPLACE INTO evidence_metadata(key, value)
+                INSERT OR IGNORE INTO evidence_metadata(key, value)
                 VALUES ('schema_version', '1');
 
                 CREATE TABLE IF NOT EXISTS code_identities (
@@ -300,6 +303,18 @@ class SQLiteEvidenceStore:
                     WHERE significance_score >= 80.0;
                 """
             )
+            row = connection.execute(
+                "SELECT value FROM evidence_metadata WHERE key='schema_version'"
+            ).fetchone()
+            try:
+                stored_version = int(row[0]) if row is not None else 0
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Caretaker evidence store schema version is invalid") from exc
+            if stored_version != EVIDENCE_STORE_SCHEMA_VERSION:
+                raise ValueError(
+                    "Unsupported Caretaker evidence store schema version "
+                    f"{stored_version}; expected {EVIDENCE_STORE_SCHEMA_VERSION}"
+                )
             connection.commit()
 
     @staticmethod
@@ -553,6 +568,14 @@ class SQLiteEvidenceStore:
         with self._lock, closing(self._connect()) as connection:
             rows = connection.execute(sql, parameters).fetchall()
             return tuple(dict(row) for row in rows)
+
+    @property
+    def schema_version(self) -> int:
+        with self._lock, closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT value FROM evidence_metadata WHERE key='schema_version'"
+            ).fetchone()
+        return int(row[0]) if row else 0
 
     def _query_payloads(self, sql: str, parameters: list[Any]) -> tuple[Mapping[str, Any], ...]:
         with self._lock, closing(self._connect()) as connection:
