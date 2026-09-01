@@ -1792,6 +1792,7 @@ class SupervisorAdaptiveAggregationStore:
         maximum_retained_events: int = MAX_RETAINED_EVENTS,
         distribution_z_threshold: float = DEFAULT_DISTRIBUTION_Z_THRESHOLD,
         distribution_minimum_observations: int = DEFAULT_DISTRIBUTION_MINIMUM_OBSERVATIONS,
+        audit_event: Callable[..., Any] | None = None,
     ) -> None:
         if int(maximum_pending) <= 0:
             raise ValueError("maximum_pending must be greater than zero")
@@ -1844,7 +1845,51 @@ class SupervisorAdaptiveAggregationStore:
         self.maximum_retained_events = int(maximum_retained_events)
         self.distribution_z_threshold = float(distribution_z_threshold)
         self.distribution_minimum_observations = int(distribution_minimum_observations)
+        if audit_event is not None and not callable(audit_event):
+            raise TypeError("adaptive aggregation audit_event must be callable")
+        self.audit_event = audit_event
         self._lock = threading.RLock()
+
+    def _emit_revalidation_audit(
+        self,
+        record: Mapping[str, Any],
+        *,
+        duplicate: bool,
+    ) -> str | None:
+        if self.audit_event is None:
+            return None
+        try:
+            from .logging.models import EvidencePriority
+
+            self.audit_event(
+                "ADAPTIVE_BATCH_REVALIDATED",
+                actor={"type": "supervisor"},
+                scope={
+                    "batch_id": str(record.get("batch_id") or ""),
+                    "revalidation_id": str(record.get("revalidation_id") or ""),
+                },
+                policy={
+                    "fingerprint": str(
+                        record.get("requested_policy_fingerprint") or ""
+                    ),
+                },
+                outcome={
+                    "state": str(record.get("status") or "UNKNOWN"),
+                    "authority_granted": False,
+                },
+                details={
+                    "source_policy_fingerprint": record.get(
+                        "source_policy_fingerprint"
+                    ),
+                    "validator_id": record.get("validator_id"),
+                    "duplicate": duplicate,
+                    "aggregate_modified": False,
+                },
+                priority=EvidencePriority.IMPORTANT,
+            )
+        except Exception as exc:
+            return f"{type(exc).__name__}: {exc}"[:256]
+        return None
 
     @staticmethod
     def _batch_path(directory: Path, batch_id: str) -> Path:
@@ -2015,6 +2060,7 @@ class SupervisorAdaptiveAggregationStore:
             paths = [path for path in paths if path.stem in selected_ids]
         paths = paths[:maximum_batches]
         reports: list[dict[str, Any]] = []
+        audit_errors: list[str] = []
         for path in paths:
             try:
                 batch = self._load_batch(path)
@@ -2073,6 +2119,9 @@ class SupervisorAdaptiveAggregationStore:
             if path_out.exists():
                 record = self._load_revalidation_record(path_out)
                 reports.append({**record, "duplicate": True})
+                audit_error = self._emit_revalidation_audit(record, duplicate=True)
+                if audit_error is not None:
+                    audit_errors.append(audit_error)
                 continue
             record = {
                 "revalidation_id": revalidation_id,
@@ -2097,6 +2146,9 @@ class SupervisorAdaptiveAggregationStore:
                 },
             )
             reports.append({**record, "duplicate": False})
+            audit_error = self._emit_revalidation_audit(record, duplicate=False)
+            if audit_error is not None:
+                audit_errors.append(audit_error)
         return {
             "schema_version": ADAPTIVE_BATCH_REVALIDATION_SCHEMA_VERSION,
             "status": "COMPLETED",
@@ -2108,6 +2160,7 @@ class SupervisorAdaptiveAggregationStore:
                 [path for path in self.archive_directory.glob("*.json") if selected_ids is None or path.stem in selected_ids]
             ),
             "reports": reports,
+            "audit_errors": audit_errors[:20],
             "authority_granted": False,
             "aggregate_modified": False,
         }

@@ -294,6 +294,17 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
             "authority_granted": False,
         },
     ),
+    "ADAPTIVE_BATCH_REVALIDATED": _event_definition(
+        description="A retained adaptive worker batch was reviewed against a policy fingerprint.",
+        minimum_priority=EvidencePriority.IMPORTANT,
+        required_fields=("scope.batch_id", "outcome.state"),
+        example={
+            "batch_id": "batch-uuid",
+            "state": "VALIDATED",
+            "aggregate_modified": False,
+            "authority_granted": False,
+        },
+    ),
     "BEHAVIOR_COLLECTION_OUTCOME": _event_definition(
         description="A bounded behavior collection request completed or failed.",
         minimum_priority=EvidencePriority.IMPORTANT,

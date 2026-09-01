@@ -97,7 +97,10 @@ and repeated requests are idempotent. The archived batch, aggregate state, and
 policy/authority stack are never rewritten. A successful `VALIDATED` result is
 review evidence only: it cannot authorize a policy transition, promote a
 repair, or alter worker authority. Validator provisioning and interpretation
-remain deployment-owned.
+remain deployment-owned. When configured, the store emits one bounded
+`ADAPTIVE_BATCH_REVALIDATED` audit event for each new or duplicate result; an
+audit callback failure is returned as bounded `audit_errors` and does not turn
+the durable evidence into an authority action.
 
 When an adaptive wrapper runs inside a supervised application worker, it may
 submit its bounded batch through the supervisor's output-only control socket

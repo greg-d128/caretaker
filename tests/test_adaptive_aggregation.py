@@ -1154,6 +1154,27 @@ def test_archived_batch_revalidation_without_validator_marks_different_policy_un
     assert result["aggregate_modified"] is False
 
 
+def test_archived_batch_revalidation_emits_output_only_audit_event(
+    tmp_path: Path,
+) -> None:
+    events: list[dict[str, object]] = []
+
+    def audit_event(event_type: str, **fields: object) -> None:
+        events.append({"event_type": event_type, **fields})
+
+    store = SupervisorAdaptiveAggregationStore(tmp_path, audit_event=audit_event)
+    batch = _batch(batch_id="00000000-0000-0000-0000-000000000015")
+    store.submit(batch)
+    store.reconcile(**_context())
+    store.revalidate_archived_batches(policy_fingerprint="policy-a")
+
+    event = next(item for item in events if item["event_type"] == "ADAPTIVE_BATCH_REVALIDATED")
+    assert event["scope"]["batch_id"] == batch["batch_id"]
+    assert event["outcome"]["state"] == "MATCHED_POLICY"
+    assert event["outcome"]["authority_granted"] is False
+    assert event["details"]["aggregate_modified"] is False
+
+
 def test_supervisor_creates_context_bound_promotion_and_tracks_worker_acknowledgements(
     tmp_path: Path,
 ):

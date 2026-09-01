@@ -802,7 +802,7 @@ def test_signed_audit_events_reject_a_cross_runtime_signer(tmp_path: Path) -> No
 def test_audit_registry_is_complete_and_exposes_redaction_contract() -> None:
     expected = {
         "AUDIT_STREAM_STARTED", "AUDIT_STREAM_ROTATED", "AUDIT_DELIVERY_STATUS",
-        "AUDIT_DELIVERY_KEY_LIFECYCLE",
+        "AUDIT_DELIVERY_KEY_LIFECYCLE", "ADAPTIVE_BATCH_REVALIDATED",
         "AUDIT_DATA_LOSS", "CONSOLE_INVOCATION_STARTED", "CONSOLE_INVOCATION_ENDED",
             "POLICY_PROPOSED", "POLICY_REVIEWED", "POLICY_APPLIED", "POLICY_REJECTED",
             "POLICY_ACCEPTED", "POLICY_ROLLED_BACK", "ADAPTIVE_POLICY_TRANSITION",
