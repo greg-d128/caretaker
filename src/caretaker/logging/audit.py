@@ -16,7 +16,7 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 from uuid import UUID, uuid4
 
 from .models import EvidencePriority
@@ -80,6 +80,16 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
         description="Audit delivery or local-retention status changed.",
         minimum_priority=EvidencePriority.IMPORTANT,
         example={"sink_id": "monitoring-primary", "state": "DELIVERED"},
+    ),
+    "AUDIT_DELIVERY_KEY_LIFECYCLE": _event_definition(
+        description="Authenticated audit delivery key lifecycle changed.",
+        minimum_priority=EvidencePriority.CRITICAL,
+        required_fields=("scope.key_id", "outcome.state"),
+        example={
+            "key_id": "audit-2026-01",
+            "state": "KEY_REVOKED",
+            "authority_granted": False,
+        },
     ),
     "AUDIT_DATA_LOSS": _event_definition(
         description="Policy-approved audit data loss or sampling was recorded.",
@@ -488,6 +498,7 @@ class AuthenticatedAuditKeyring:
         *,
         active_key_id: str,
         revoked_key_ids: Iterable[str] = (),
+        audit_event: Callable[..., Any] | None = None,
     ) -> None:
         if not isinstance(keys, Mapping) or not keys:
             raise AuditStreamError("authenticated audit keyring requires at least one key")
@@ -496,14 +507,27 @@ class AuthenticatedAuditKeyring:
             self._validate_key_id(key_id)
             _audit_delivery_secret(secret)
             self._keys[str(key_id)] = secret
-        self._revoked = {str(value) for value in revoked_key_ids}
+        self._revoked: set[str] = set()
+        for value in revoked_key_ids:
+            normalized = str(value)
+            self._validate_key_id(normalized)
+            self._revoked.add(normalized)
         if not self._revoked.issubset(self._keys):
             raise AuditStreamError("authenticated audit keyring contains an unknown revoked key")
         self._validate_key_id(active_key_id)
         if active_key_id not in self._keys or active_key_id in self._revoked:
             raise AuditStreamError("authenticated audit keyring active key is unavailable")
         self._active_key_id = str(active_key_id)
+        if audit_event is not None and not callable(audit_event):
+            raise AuditStreamError("authenticated audit lifecycle audit_event must be callable")
+        self._audit_event = audit_event
         self._lock = threading.RLock()
+        self._emit_lifecycle(
+            "KEYRING_INITIALIZED",
+            self._active_key_id,
+            key_count=len(self._keys),
+            revoked_key_count=len(self._revoked),
+        )
 
     @staticmethod
     def _validate_key_id(key_id: str) -> None:
@@ -514,17 +538,31 @@ class AuthenticatedAuditKeyring:
         self._validate_key_id(key_id)
         _audit_delivery_secret(secret)
         with self._lock:
+            prior_active = self._active_key_id
             self._keys[key_id] = secret
             self._revoked.discard(key_id)
             if make_active:
                 self._active_key_id = key_id
+            self._emit_lifecycle(
+                "KEY_ADDED",
+                key_id,
+                prior_active_key_id=prior_active,
+                made_active=make_active,
+                key_count=len(self._keys),
+            )
 
     def set_active(self, key_id: str) -> None:
         with self._lock:
             self._validate_key_id(key_id)
             if key_id not in self._keys or key_id in self._revoked:
                 raise AuditStreamError("authenticated audit key is unavailable")
+            prior_active = self._active_key_id
             self._active_key_id = key_id
+            self._emit_lifecycle(
+                "ACTIVE_KEY_CHANGED",
+                key_id,
+                prior_active_key_id=prior_active,
+            )
 
     def revoke(self, key_id: str) -> None:
         with self._lock:
@@ -534,6 +572,37 @@ class AuthenticatedAuditKeyring:
             if key_id == self._active_key_id:
                 raise AuditStreamError("authenticated audit active key must be rotated before revocation")
             self._revoked.add(key_id)
+            self._emit_lifecycle("KEY_REVOKED", key_id)
+
+    @property
+    def active_key_id(self) -> str:
+        with self._lock:
+            return self._active_key_id
+
+    @property
+    def key_ids(self) -> tuple[str, ...]:
+        with self._lock:
+            return tuple(sorted(self._keys))
+
+    @property
+    def revoked_key_ids(self) -> tuple[str, ...]:
+        with self._lock:
+            return tuple(sorted(self._revoked))
+
+    def _emit_lifecycle(self, state: str, key_id: str, **details: Any) -> None:
+        if self._audit_event is None:
+            return
+        self._audit_event(
+            "AUDIT_DELIVERY_KEY_LIFECYCLE",
+            actor={"type": "deployment"},
+            scope={"key_id": key_id},
+            outcome={"state": state, "authority_granted": False},
+            details={
+                **details,
+                "secret_material_logged": False,
+            },
+            priority=EvidencePriority.CRITICAL,
+        )
 
     def _signing_key(self) -> tuple[str, bytes]:
         with self._lock:

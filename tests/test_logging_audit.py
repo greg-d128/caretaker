@@ -802,6 +802,7 @@ def test_signed_audit_events_reject_a_cross_runtime_signer(tmp_path: Path) -> No
 def test_audit_registry_is_complete_and_exposes_redaction_contract() -> None:
     expected = {
         "AUDIT_STREAM_STARTED", "AUDIT_STREAM_ROTATED", "AUDIT_DELIVERY_STATUS",
+        "AUDIT_DELIVERY_KEY_LIFECYCLE",
         "AUDIT_DATA_LOSS", "CONSOLE_INVOCATION_STARTED", "CONSOLE_INVOCATION_ENDED",
             "POLICY_PROPOSED", "POLICY_REVIEWED", "POLICY_APPLIED", "POLICY_REJECTED",
             "POLICY_ACCEPTED", "POLICY_ROLLED_BACK", "ADAPTIVE_POLICY_TRANSITION",
@@ -827,6 +828,36 @@ def test_audit_registry_is_complete_and_exposes_redaction_contract() -> None:
         assert isinstance(definition["required_fields"], tuple)
         assert isinstance(definition["redaction_rules"], tuple)
         assert definition["example"]
+
+
+def test_audit_keyring_lifecycle_is_critical_and_never_logs_secret_material(
+    tmp_path: Path,
+) -> None:
+    writer = _writer(tmp_path)
+    old_secret = b"old-secret-material" * 2
+    new_secret = b"new-secret-material" * 2
+    keyring = AuthenticatedAuditKeyring(
+        {"audit-old": old_secret},
+        active_key_id="audit-old",
+        audit_event=writer.emit,
+    )
+    keyring.add_key("audit-new", new_secret, make_active=True)
+    keyring.revoke("audit-old")
+    writer.close()
+
+    text = (tmp_path / "caretaker_audit.log").read_text(encoding="utf-8")
+    rows = [json.loads(line) for line in text.splitlines()]
+    lifecycle = [
+        row for row in rows if row["event_type"] == "AUDIT_DELIVERY_KEY_LIFECYCLE"
+    ]
+    assert [row["outcome"]["state"] for row in lifecycle] == [
+        "KEYRING_INITIALIZED",
+        "KEY_ADDED",
+        "KEY_REVOKED",
+    ]
+    assert all(row["priority"] == "CRITICAL" for row in lifecycle)
+    assert "old-secret-material" not in text
+    assert "new-secret-material" not in text
 
 
 def test_registered_audit_events_enforce_priority_and_required_fields(tmp_path: Path) -> None:
