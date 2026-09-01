@@ -11,6 +11,7 @@ import pytest
 from caretaker.logging import (
     AUDIT_EVENT_REGISTRY,
     AuthenticatedAuditDeliverySink,
+    AuthenticatedAuditReplayStore,
     AuditStreamError,
     AuditStreamPolicy,
     AuditStreamWriter,
@@ -150,6 +151,59 @@ def test_authenticated_audit_delivery_rejects_tampering_and_bad_ack() -> None:
     )
     with pytest.raises(AuditStreamError, match="acknowledgement is invalid"):
         sink.deliver(record)
+
+
+def test_authenticated_audit_replay_store_survives_restart_and_is_bounded(tmp_path: Path) -> None:
+    secret = b"s" * 32
+    record = b'{"event_type":"INCIDENT_CAPTURED"}\n'
+    envelope = serialize_authenticated_audit_record(
+        record,
+        secret,
+        sender_id="runtime-1",
+    )
+    store = AuthenticatedAuditReplayStore(tmp_path / "replay.sqlite", maximum_records=1)
+    try:
+        first = store.receive(envelope, secret, sender_id="runtime-1")
+        assert first["acknowledged"] is True
+        assert store.count() == 1
+    finally:
+        store.close()
+
+    reopened = AuthenticatedAuditReplayStore(tmp_path / "replay.sqlite", maximum_records=1)
+    try:
+        duplicate = reopened.receive(envelope, secret, sender_id="runtime-1")
+        assert duplicate["acknowledged"] is True
+        assert reopened.count() == 1
+
+        another = serialize_authenticated_audit_record(
+            b'{"event_type":"WORKER_FAILED"}\n',
+            secret,
+            sender_id="runtime-1",
+        )
+        full = reopened.receive(another, secret, sender_id="runtime-1")
+        assert full["acknowledged"] is False
+        assert reopened.count() == 1
+    finally:
+        reopened.close()
+
+
+def test_authenticated_audit_replay_store_rejects_invalid_sender() -> None:
+    secret = b"s" * 32
+    envelope = serialize_authenticated_audit_record(
+        b'{"event_type":"INCIDENT_CAPTURED"}\n',
+        secret,
+        sender_id="runtime-1",
+    )
+    from tempfile import TemporaryDirectory
+
+    with TemporaryDirectory() as directory:
+        store = AuthenticatedAuditReplayStore(Path(directory) / "replay.sqlite")
+        try:
+            rejected = store.receive(envelope, secret, sender_id="runtime-2")
+            assert rejected["acknowledged"] is False
+            assert store.count() == 0
+        finally:
+            store.close()
 
 
 def test_audit_stream_is_hash_chained_and_recovers_across_restart(tmp_path: Path) -> None:

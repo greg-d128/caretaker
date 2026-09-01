@@ -24,8 +24,8 @@ writer sends the exact redacted, newline-terminated JSON record after local
 persistence, and reports delivery as `ACTIVE`, `DEGRADED`, or `LOCAL_ONLY`.
 `logging.audit.external_delivery_required=true` makes a missing or failed sink
 fail closed after preserving the local record. The adapter has no read or
-command interface; transport authentication, remote retention, replay
-protection, and remote retention remain external responsibilities. When
+command interface; transport authentication, remote retention, and replay
+protection remain external responsibilities. When
 `logging.audit.external_delivery_require_ack=true`, the sink must return an
 acknowledgement mapping with `acknowledged: true` and `record_sha256` equal to
 the SHA-256 digest of the exact record bytes it received. A missing,
@@ -46,6 +46,14 @@ rejects acknowledgements whose signature, delivery ID, or record digest does
 not match. This is an authenticated transport primitive, not a command
 channel, and it does not replace external key management, receiver retention,
 or independent security review.
+
+`AuthenticatedAuditReplayStore` is a bounded SQLite reference receiver for
+this protocol. It stores sender ID, delivery ID, record digest, and receipt
+time—not the audit payload—and survives receiver restart. It returns a
+positive signed acknowledgement for a new or exact duplicate delivery and a
+negative signed acknowledgement when capacity is exhausted or the delivery
+identity conflicts. It does not delete old identities automatically, because
+deletion would reopen a replay window.
 
 Authenticated envelope example (the record body is base64 encoded):
 

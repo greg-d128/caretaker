@@ -8,6 +8,7 @@ import math
 import os
 import random
 import re
+import sqlite3
 import threading
 import time
 import base64
@@ -702,6 +703,114 @@ class AuthenticatedAuditDeliverySink:
 
     def flush(self) -> None:
         self.transport.flush()
+
+
+class AuthenticatedAuditReplayStore:
+    """Durable, bounded receiver-side replay/idempotency store.
+
+    This is a reference receiver boundary for an external integration. It
+    stores only authenticated delivery identity and digest, not audit payloads.
+    Exact retries receive the same positive acknowledgement; a different
+    record cannot reuse an accepted delivery ID. Capacity exhaustion returns a
+    signed negative acknowledgement so the sender retains the record locally.
+    """
+
+    def __init__(self, path: str | Path, *, maximum_records: int = 100_000) -> None:
+        if isinstance(maximum_records, bool) or not isinstance(maximum_records, int):
+            raise AuditStreamError("audit replay maximum_records must be an integer")
+        if maximum_records <= 0:
+            raise AuditStreamError("audit replay maximum_records must be positive")
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.maximum_records = maximum_records
+        self._lock = threading.RLock()
+        self._connection = sqlite3.connect(
+            str(self.path), timeout=5.0, isolation_level=None, check_same_thread=False
+        )
+        self._connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS audit_delivery_replay (
+                sender_id TEXT NOT NULL,
+                delivery_id TEXT NOT NULL,
+                record_sha256 TEXT NOT NULL,
+                received_at TEXT NOT NULL,
+                PRIMARY KEY (sender_id, delivery_id)
+            )
+            """
+        )
+
+    def receive(
+        self,
+        envelope: bytes | bytearray | str | Mapping[str, Any],
+        secret: bytes,
+        *,
+        sender_id: str | None = None,
+    ) -> Mapping[str, Any]:
+        """Verify and remember one envelope, returning a signed acknowledgement."""
+        verification = verify_authenticated_audit_record(
+            envelope,
+            secret,
+            sender_id=sender_id,
+        )
+        if not verification.get("valid"):
+            return {
+                "acknowledged": False,
+                "error": "authenticated audit envelope rejected",
+            }
+        resolved_sender = str(verification["sender_id"])
+        delivery_id = str(verification["delivery_id"])
+        record_sha256 = str(verification["record_sha256"])
+        with self._lock:
+            try:
+                self._connection.execute("BEGIN IMMEDIATE")
+                existing = self._connection.execute(
+                    "SELECT record_sha256 FROM audit_delivery_replay "
+                    "WHERE sender_id = ? AND delivery_id = ?",
+                    (resolved_sender, delivery_id),
+                ).fetchone()
+                if existing is not None:
+                    accepted = str(existing[0]) == record_sha256
+                else:
+                    count = int(
+                        self._connection.execute(
+                            "SELECT COUNT(*) FROM audit_delivery_replay"
+                        ).fetchone()[0]
+                    )
+                    accepted = count < self.maximum_records
+                    if accepted:
+                        self._connection.execute(
+                            "INSERT INTO audit_delivery_replay "
+                            "(sender_id, delivery_id, record_sha256, received_at) "
+                            "VALUES (?, ?, ?, ?)",
+                            (
+                                resolved_sender,
+                                delivery_id,
+                                record_sha256,
+                                datetime.now(timezone.utc).isoformat(),
+                            ),
+                        )
+                self._connection.execute("COMMIT")
+            except sqlite3.Error:
+                self._connection.execute("ROLLBACK")
+                accepted = False
+        return create_authenticated_audit_acknowledgement(
+            delivery_id=delivery_id,
+            record_sha256=record_sha256,
+            secret=secret,
+            acknowledged=accepted,
+        )
+
+    def count(self) -> int:
+        with self._lock:
+            return int(
+                self._connection.execute(
+                    "SELECT COUNT(*) FROM audit_delivery_replay"
+                ).fetchone()[0]
+            )
+
+    def close(self) -> None:
+        with self._lock:
+            self._connection.close()
 
 
 def _audit_manifest_path(path: Path) -> Path:
