@@ -698,7 +698,9 @@ cost evidence in its resource-budget projection, including collection seconds,
 observed and requested calls, sampling density, and average duration. Capture
 responses also retain measured duration in their collection provenance. This
 makes hot or expensive subjects visible to the operator without treating
-telemetry as authority or silently changing automatic-promotion behavior.
+telemetry as authority or silently changing automatic-promotion behavior. The
+Behavior console now displays the aggregate recent collection seconds and
+observed calls alongside queue and backlog state.
 Host-resource-aware and density-aware enforcement remain future work. An
 optional process-scoped RSS boundary now provides a fail-closed
 application-process measurement when configured; host, cgroup, and

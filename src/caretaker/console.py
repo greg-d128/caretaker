@@ -2918,12 +2918,26 @@ class CaretakerConsoleApp(App):
             "signal-priority" if item.get("automatic_prioritize_signals") else "round-robin"
             for item in enabled
         )
+        recent_seconds = sum(
+            float((item.get("resource_budget") or {}).get("recent_collection_seconds") or 0.0)
+            for item in enabled
+        )
+        recent_calls = sum(
+            int((item.get("resource_budget") or {}).get("recent_observed_calls") or 0)
+            for item in enabled
+        )
+        cost_summary = (
+            f"; recent cost {recent_seconds:.3f}s/{recent_calls} calls"
+            if recent_seconds or recent_calls
+            else ""
+        )
         return (
             f"collection queue active {active}/{active_limit}, queued {queued}, pending {pending}/{pending_limit}"
             f" (pressure {pressure:.0%}, {pressure_state.lower()}; budget {'/'.join(budget_states).lower()})"
             f"{'; terminal ' + terminal if terminal else ''}"
             f"{'; backlog ' + ', '.join(f'{status} {backlog_counts[status]}' for status in sorted(backlog_counts)) if backlog_counts else ''}"
             f"; automatic {automatic} ({priority_modes})"
+            f"{cost_summary}"
         )
 
     @staticmethod
