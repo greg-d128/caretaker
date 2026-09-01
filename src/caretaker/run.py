@@ -763,6 +763,8 @@ def _handle_rollout_advance_request(
         policy_fingerprint=policy_fingerprint,
         authority_fingerprint=authority_fingerprint,
         incident_id=incident_id,
+        readiness_status=readiness_status,
+        override_readiness=override_readiness,
     )
     transition = ledger.transitions(rollout_id)[-1]
     return {

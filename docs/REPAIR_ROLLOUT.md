@@ -96,6 +96,16 @@ The routing policy is deliberately conservative:
   in. Mirror sampling uses a separate deterministic bucket and does not change
   which implementation is authoritative.
 
+An application may define a `RolloutRampPolicy` containing ordered
+`RolloutRampStep` values for the shadow, canary, and active stages. When an
+authorized stage transition enters one of those stages, the step's declared
+percentages are applied to the rollout record and included in the transition
+evidence. Omitted percentages retain their previous value. A ramp never
+advances a stage automatically or grants authority; the normal lifecycle and
+readiness checks still apply. If a step increases any percentage, readiness is
+required unless the operator explicitly overrides it, and the override is
+recorded. An empty ramp preserves the existing manual percentage controls.
+
 The decision checks that the current policy fingerprint matches the rollout,
 rejects expired or terminal records, and returns a decision hash with the
 selected implementation. It does not invoke either implementation, activate a

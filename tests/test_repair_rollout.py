@@ -12,6 +12,8 @@ from caretaker import (
     RepairRolloutLedger,
     RepairRolloutPolicy,
     RepairRolloutStage,
+    RolloutRampPolicy,
+    RolloutRampStep,
     SQLiteRepairStore,
 )
 
@@ -157,6 +159,122 @@ def test_staged_rollout_requires_shadow_then_canary_then_active() -> None:
         RepairRolloutStage.CANARY,
         RepairRolloutStage.ACTIVE,
     )
+
+
+def test_policy_defined_ramp_applies_stage_routing_and_records_evidence() -> None:
+    ledger = _ledger(
+        ramp=RolloutRampPolicy(
+            steps=(
+                RolloutRampStep(
+                    RepairRolloutStage.SHADOW,
+                    shadow_sample_percentage=100,
+                    candidate_mirror_percentage=10,
+                ),
+                RolloutRampStep(
+                    RepairRolloutStage.CANARY,
+                    canary_percentage=10,
+                    candidate_mirror_percentage=20,
+                ),
+                RolloutRampStep(
+                    RepairRolloutStage.ACTIVE,
+                    active_candidate_percentage=100,
+                    candidate_mirror_percentage=40,
+                ),
+            )
+        ),
+    )
+    record = _validated(ledger)
+    common = {
+        "authority_type": RepairRolloutAuthority.OPERATOR,
+        "authority_id": "operator-1",
+        "policy_fingerprint": record.policy_fingerprint,
+        "authority_fingerprint": record.authority_fingerprint,
+        "readiness_status": "READY",
+    }
+
+    shadow = ledger.advance(
+        record.rollout_id,
+        to_stage=RepairRolloutStage.SHADOW,
+        reason="begin policy-defined shadow ramp",
+        **common,
+    )
+    assert shadow.routing_policy is not None
+    assert shadow.routing_policy.candidate_mirror_percentage == 10
+    assert shadow.routing_policy.canary_percentage == 0
+    assert ledger.transitions(record.rollout_id)[-1].details["ramp_applied"] is True
+
+    canary = ledger.advance(
+        record.rollout_id,
+        to_stage=RepairRolloutStage.CANARY,
+        reason="begin policy-defined canary ramp",
+        **common,
+    )
+    assert canary.routing_policy is not None
+    assert canary.routing_policy.canary_percentage == 10
+    assert canary.routing_policy.candidate_mirror_percentage == 20
+
+    active = ledger.advance(
+        record.rollout_id,
+        to_stage=RepairRolloutStage.ACTIVE,
+        reason="complete policy-defined ramp",
+        **common,
+    )
+    assert active.routing_policy is not None
+    assert active.routing_policy.active_candidate_percentage == 100
+    assert active.routing_policy.candidate_mirror_percentage == 40
+
+
+def test_policy_defined_ramp_increase_requires_readiness_or_override() -> None:
+    ledger = _ledger(
+        ramp=RolloutRampPolicy(
+            steps=(RolloutRampStep(RepairRolloutStage.CANARY, canary_percentage=25),)
+        )
+    )
+    record = _validated(ledger)
+
+    with pytest.raises(RepairRolloutError, match="staged routing increase"):
+        ledger.advance(
+            record.rollout_id,
+            to_stage=RepairRolloutStage.CANARY,
+            authority_type=RepairRolloutAuthority.OPERATOR,
+            authority_id="operator-1",
+            reason="canary without readiness",
+            policy_fingerprint=record.policy_fingerprint,
+            authority_fingerprint=record.authority_fingerprint,
+            readiness_status="NOT_READY",
+        )
+
+    advanced = ledger.advance(
+        record.rollout_id,
+        to_stage=RepairRolloutStage.CANARY,
+        authority_type=RepairRolloutAuthority.OPERATOR,
+        authority_id="operator-1",
+        reason="operator overrides canary readiness",
+        policy_fingerprint=record.policy_fingerprint,
+        authority_fingerprint=record.authority_fingerprint,
+        readiness_status="NOT_READY",
+        override_readiness=True,
+    )
+    assert advanced.routing_policy is not None
+    assert advanced.routing_policy.canary_percentage == 25
+    assert ledger.transitions(record.rollout_id)[-1].details["readiness_overridden"] is True
+
+
+def test_ramp_policy_rejects_duplicate_or_out_of_order_stages() -> None:
+    with pytest.raises(ValueError, match="more than one step"):
+        RolloutRampPolicy(
+            steps=(
+                RolloutRampStep(RepairRolloutStage.SHADOW, shadow_sample_percentage=10),
+                RolloutRampStep(RepairRolloutStage.SHADOW, shadow_sample_percentage=20),
+            )
+        )
+    with pytest.raises(ValueError, match="ordered"):
+        RolloutRampPolicy(
+            steps=(
+                RolloutRampStep(RepairRolloutStage.CANARY, canary_percentage=10),
+                RolloutRampStep(RepairRolloutStage.SHADOW, shadow_sample_percentage=10),
+            )
+        )
 
 
 def test_disabled_stages_and_invalid_skips_are_rejected() -> None:

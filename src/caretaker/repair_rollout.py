@@ -114,6 +114,96 @@ class RolloutRoutingPolicy:
 
 
 @dataclass(frozen=True, slots=True)
+class RolloutRampStep:
+    """Stage-specific routing values applied when a rollout enters a stage.
+
+    An omitted percentage keeps the prior value.  A step is a policy default
+    for a stage transition, not an automatic stage advancement or authority
+    grant.
+    """
+
+    stage: RepairRolloutStage
+    shadow_sample_percentage: int | None = None
+    canary_percentage: int | None = None
+    active_candidate_percentage: int | None = None
+    candidate_mirror_percentage: int | None = None
+
+    def __post_init__(self) -> None:
+        try:
+            stage = RepairRolloutStage(self.stage)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("rollout.ramp stage is invalid") from exc
+        if stage not in {
+            RepairRolloutStage.SHADOW,
+            RepairRolloutStage.CANARY,
+            RepairRolloutStage.ACTIVE,
+        }:
+            raise ValueError(
+                "rollout.ramp stages must be shadow, canary, or active"
+            )
+        if not any(
+            value is not None
+            for value in (
+                self.shadow_sample_percentage,
+                self.canary_percentage,
+                self.active_candidate_percentage,
+                self.candidate_mirror_percentage,
+            )
+        ):
+            raise ValueError("rollout.ramp step must configure a percentage")
+        for name in (
+            "shadow_sample_percentage",
+            "canary_percentage",
+            "active_candidate_percentage",
+            "candidate_mirror_percentage",
+        ):
+            value = getattr(self, name)
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 100
+            ):
+                raise ValueError(
+                    f"rollout.ramp.{name} must be an integer from 0 through 100 or null"
+                )
+        object.__setattr__(self, "stage", stage)
+
+
+@dataclass(frozen=True, slots=True)
+class RolloutRampPolicy:
+    """Optional policy-defined routing schedule for manual stage advancement."""
+
+    steps: tuple[RolloutRampStep, ...] = ()
+
+    def __post_init__(self) -> None:
+        try:
+            steps = tuple(self.steps)
+        except TypeError as exc:
+            raise ValueError("rollout.ramp.steps must be a sequence") from exc
+        order = {
+            RepairRolloutStage.SHADOW: 0,
+            RepairRolloutStage.CANARY: 1,
+            RepairRolloutStage.ACTIVE: 2,
+        }
+        previous_order = -1
+        seen: set[RepairRolloutStage] = set()
+        for step in steps:
+            if not isinstance(step, RolloutRampStep):
+                raise ValueError("rollout.ramp.steps must contain RolloutRampStep values")
+            if step.stage in seen:
+                raise ValueError(
+                    f"rollout.ramp has more than one step for {step.stage.value}"
+                )
+            if order[step.stage] <= previous_order:
+                raise ValueError("rollout.ramp.steps must be ordered by lifecycle stage")
+            seen.add(step.stage)
+            previous_order = order[step.stage]
+        object.__setattr__(self, "steps", steps)
+
+    def step_for(self, stage: RepairRolloutStage) -> RolloutRampStep | None:
+        stage = RepairRolloutStage(stage)
+        return next((step for step in self.steps if step.stage is stage), None)
+
+
+@dataclass(frozen=True, slots=True)
 class RolloutReadinessRequirements:
     """Optional evidence thresholds for a read-only stage review.
 
@@ -191,6 +281,7 @@ class RepairRolloutPolicy:
     require_readiness_for_routing_increase: bool = True
     candidate_failure_action: RolloutFailureAction = RolloutFailureAction.RAISE
     routing: RolloutRoutingPolicy = field(default_factory=RolloutRoutingPolicy)
+    ramp: RolloutRampPolicy = field(default_factory=RolloutRampPolicy)
     readiness: RolloutReadinessRequirements = field(
         default_factory=RolloutReadinessRequirements
     )
@@ -213,6 +304,8 @@ class RepairRolloutPolicy:
                 raise ValueError(f"rollout.{name} must be a boolean")
         if not isinstance(self.routing, RolloutRoutingPolicy):
             raise ValueError("rollout.routing must be a RolloutRoutingPolicy")
+        if not isinstance(self.ramp, RolloutRampPolicy):
+            raise ValueError("rollout.ramp must be a RolloutRampPolicy")
         if isinstance(self.candidate_failure_action, str):
             try:
                 object.__setattr__(
@@ -602,6 +695,8 @@ class RepairRolloutLedger:
         authority_fingerprint: str,
         validation_evidence_hash: str | None = None,
         incident_id: UUID | None = None,
+        readiness_status: str | None = None,
+        override_readiness: bool = False,
     ) -> RepairRolloutRecord:
         self._require_enabled()
         record = self._get(rollout_id)
@@ -641,6 +736,18 @@ class RepairRolloutLedger:
             raise RepairRolloutError(
                 "revoking an active rollout requires a new incident"
             )
+        previous_routing = record.routing_policy or self.policy.routing
+        ramp_routing = self._routing_for_stage(record, to_stage)
+        if (
+            _routing_increased(previous_routing, ramp_routing)
+            and self.policy.require_readiness_for_routing_increase
+            and str(readiness_status or "").strip().upper()
+            not in {"READY", "NOT_CONFIGURED"}
+            and not override_readiness
+        ):
+            raise RepairRolloutError(
+                "staged routing increase requires ready evidence or an explicit override"
+            )
         now = self._clock()
         updated = replace(
             record,
@@ -652,6 +759,7 @@ class RepairRolloutLedger:
                 else record.authoritative_implementation
             ),
             validation_evidence_hash=validation_evidence_hash or record.validation_evidence_hash,
+            routing_policy=ramp_routing,
         )
         self._records[rollout_id] = updated
         self._persist_record(updated)
@@ -664,6 +772,17 @@ class RepairRolloutLedger:
             authority_id=authority_id,
             incident_id=incident_id,
             reason=reason,
+            details=(
+                {
+                    "ramp_applied": True,
+                    "prior_routing": _routing_policy_payload(previous_routing),
+                    "new_routing": _routing_policy_payload(ramp_routing),
+                    "readiness_status": str(readiness_status or "").strip().upper() or None,
+                    "readiness_overridden": bool(override_readiness),
+                }
+                if ramp_routing != previous_routing
+                else None
+            ),
         )
         return self._records[rollout_id]
 
@@ -1052,6 +1171,39 @@ class RepairRolloutLedger:
             raise RepairRolloutError("adaptive authority cannot advance rollout stages under this policy")
         if authority_type is RepairRolloutAuthority.ADVISORY:
             raise RepairRolloutError("advisory authority cannot advance a rollout")
+
+    def _routing_for_stage(
+        self,
+        record: RepairRolloutRecord,
+        stage: RepairRolloutStage,
+    ) -> RolloutRoutingPolicy:
+        prior = record.routing_policy or self.policy.routing
+        step = self.policy.ramp.step_for(stage)
+        if step is None:
+            return prior
+        return RolloutRoutingPolicy(
+            shadow_sample_percentage=(
+                prior.shadow_sample_percentage
+                if step.shadow_sample_percentage is None
+                else step.shadow_sample_percentage
+            ),
+            canary_percentage=(
+                prior.canary_percentage
+                if step.canary_percentage is None
+                else step.canary_percentage
+            ),
+            active_candidate_percentage=(
+                prior.active_candidate_percentage
+                if step.active_candidate_percentage is None
+                else step.active_candidate_percentage
+            ),
+            candidate_mirror_percentage=(
+                prior.candidate_mirror_percentage
+                if step.candidate_mirror_percentage is None
+                else step.candidate_mirror_percentage
+            ),
+            bucket_count=prior.bucket_count,
+        )
 
     def _check_context(
         self,
@@ -2914,6 +3066,29 @@ def _routing_policy_payload(routing: RolloutRoutingPolicy) -> dict[str, int]:
         "candidate_mirror_percentage": routing.candidate_mirror_percentage,
         "bucket_count": routing.bucket_count,
     }
+
+
+def _routing_increased(
+    previous: RolloutRoutingPolicy,
+    current: RolloutRoutingPolicy,
+) -> bool:
+    return any(
+        new > old
+        for new, old in zip(
+            (
+                current.shadow_sample_percentage,
+                current.canary_percentage,
+                current.active_candidate_percentage,
+                current.candidate_mirror_percentage,
+            ),
+            (
+                previous.shadow_sample_percentage,
+                previous.canary_percentage,
+                previous.active_candidate_percentage,
+                previous.candidate_mirror_percentage,
+            ),
+        )
+    )
 
 
 def _routing_policy_fingerprint(routing: RolloutRoutingPolicy) -> str:
