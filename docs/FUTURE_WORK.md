@@ -853,8 +853,9 @@ an implicit local fallback. The application-local queue adapter is now available
 for bounded canonical JSON handoffs. The supervisor also provides a bounded
 control-cycle helper that drains per-worker queues using registered worker
 identity and reconciles them through the single-writer context gate; failed or
-unauthorized workers are not consumed. Cross-host transport remains future
-work.
+unauthorized workers are not consumed. Applications can register those queue
+bindings with the supervisor for reuse across cycles, while queue creation and
+destruction remain application-owned. Cross-host transport remains future work.
 
 The remaining implementation must explicitly define and enforce whether each
 threshold is process-local, application-wide, or workload/population scoped. It

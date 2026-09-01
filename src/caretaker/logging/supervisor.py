@@ -985,7 +985,116 @@ class CaretakerApplicationSupervisor:
         )
         self.supervisor_health = self.workers.register(WorkerKind.SUPERVISOR, os.getpid())
         self.watchdog = Watchdog(self.workers, on_unhealthy=self._worker_unhealthy)
+        self._adaptive_aggregation_queues: dict[UUID, QueueAdaptiveAggregationStore] = {}
+        self._adaptive_aggregation_queue_lock = threading.RLock()
         self._stop = threading.Event()
+
+    def bind_adaptive_aggregation_queue(
+        self,
+        worker_id: UUID | str,
+        queue_store: QueueAdaptiveAggregationStore,
+    ) -> dict[str, Any]:
+        """Bind one application-owned adaptive queue to a live worker.
+
+        The application owns queue creation and lifetime.  This registry only
+        records which queue belongs to an already registered worker so a later
+        supervisor cycle can derive the worker identity and PID from the live
+        registry.  Replacing a binding requires an explicit unbind first, so
+        queued evidence cannot be silently abandoned.
+        """
+        try:
+            parsed_worker_id = (
+                worker_id if isinstance(worker_id, UUID) else UUID(str(worker_id))
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("adaptive queue binding requires a valid worker ID") from exc
+        if not isinstance(queue_store, QueueAdaptiveAggregationStore):
+            raise TypeError(
+                "adaptive queue binding requires a QueueAdaptiveAggregationStore"
+            )
+        try:
+            worker = self.workers.get(parsed_worker_id)
+        except KeyError as exc:
+            raise PermissionError("adaptive queue binding requires a registered worker") from exc
+        if worker.state not in {
+            WorkerState.STARTING,
+            WorkerState.HEALTHY,
+            WorkerState.DEGRADED,
+        }:
+            raise PermissionError(
+                "adaptive queue binding cannot target a failed or unauthorized worker"
+            )
+        with self._adaptive_aggregation_queue_lock:
+            existing = self._adaptive_aggregation_queues.get(parsed_worker_id)
+            if existing is not None and existing is not queue_store:
+                raise ValueError(
+                    "adaptive queue is already bound; unbind it before replacement"
+                )
+            self._adaptive_aggregation_queues[parsed_worker_id] = queue_store
+        return {
+            "bound": True,
+            "authority_granted": False,
+            "worker_id": str(worker.worker_id),
+            "worker_pid": worker.process_id,
+            "transport": "QUEUE",
+        }
+
+    def unbind_adaptive_aggregation_queue(
+        self,
+        worker_id: UUID | str,
+        *,
+        queue_store: QueueAdaptiveAggregationStore | None = None,
+    ) -> dict[str, Any]:
+        """Remove a queue binding without draining or deleting its evidence."""
+        try:
+            parsed_worker_id = (
+                worker_id if isinstance(worker_id, UUID) else UUID(str(worker_id))
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("adaptive queue unbinding requires a valid worker ID") from exc
+        if queue_store is not None and not isinstance(
+            queue_store, QueueAdaptiveAggregationStore
+        ):
+            raise TypeError(
+                "adaptive queue unbinding requires a QueueAdaptiveAggregationStore"
+            )
+        with self._adaptive_aggregation_queue_lock:
+            existing = self._adaptive_aggregation_queues.get(parsed_worker_id)
+            if existing is None:
+                return {
+                    "unbound": False,
+                    "authority_granted": False,
+                    "worker_id": str(parsed_worker_id),
+                }
+            if queue_store is not None and existing is not queue_store:
+                raise ValueError("adaptive queue unbinding does not match its bound queue")
+            self._adaptive_aggregation_queues.pop(parsed_worker_id)
+        return {
+            "unbound": True,
+            "authority_granted": False,
+            "worker_id": str(parsed_worker_id),
+        }
+
+    def adaptive_aggregation_queue_bindings(self) -> tuple[dict[str, Any], ...]:
+        """Return a bounded read-only projection of application queue bindings."""
+        with self._adaptive_aggregation_queue_lock:
+            bindings = tuple(self._adaptive_aggregation_queues.items())
+        result: list[dict[str, Any]] = []
+        for worker_id, queue_store in bindings[:MAX_ADAPTIVE_QUEUE_WORKERS]:
+            try:
+                worker = self.workers.get(worker_id)
+            except KeyError:
+                continue
+            result.append(
+                {
+                    "worker_id": str(worker_id),
+                    "worker_pid": worker.process_id,
+                    "worker_state": worker.state.name,
+                    "queue": queue_store.status(),
+                    "authority_granted": False,
+                }
+            )
+        return tuple(result)
 
     def start(self) -> None:
         self.workers.heartbeat(self.supervisor_health.worker_id)
@@ -2775,7 +2884,7 @@ class CaretakerApplicationSupervisor:
 
     def reconcile_adaptive_aggregation_queues(
         self,
-        queues: Mapping[UUID | str, QueueAdaptiveAggregationStore],
+        queues: Mapping[UUID | str, QueueAdaptiveAggregationStore] | None = None,
         *,
         aggregation_store: SupervisorAdaptiveAggregationStore,
         current_generations: Mapping[str, str],
@@ -2789,7 +2898,9 @@ class CaretakerApplicationSupervisor:
     ) -> dict[str, Any]:
         """Drain application-owned adaptive queues during one control cycle.
 
-        Each queue is bound to one registered worker.  The supervisor derives
+        Each queue is bound to one registered worker.  The queue map may be
+        supplied for a single call, or omitted to use bindings registered with
+        ``bind_adaptive_aggregation_queue``.  The supervisor derives
         the worker PID from that registration and passes it to
         ``QueueAdaptiveAggregationStore.drain_to``; worker IDs and PIDs inside
         queue batches are never trusted.  The application supplies current
@@ -2805,6 +2916,9 @@ class CaretakerApplicationSupervisor:
             raise TypeError(
                 "adaptive queue reconciliation requires a supervisor aggregation store"
             )
+        if queues is None:
+            with self._adaptive_aggregation_queue_lock:
+                queues = dict(self._adaptive_aggregation_queues)
         if not isinstance(queues, Mapping) or not queues:
             raise ValueError("adaptive queue reconciliation requires at least one worker queue")
         if len(queues) > MAX_ADAPTIVE_QUEUE_WORKERS:

@@ -204,6 +204,25 @@ class QueueAdaptiveAggregationStore:
                 "application queue adaptive observation batch is invalid"
             ) from exc
 
+    def status(self) -> dict[str, Any]:
+        """Return bounded queue transport metadata without claiming authority."""
+        queue_depth: int | None = None
+        qsize = getattr(self.transport.channel, "qsize", None)
+        if callable(qsize):
+            try:
+                observed = qsize()
+                if isinstance(observed, int) and observed >= 0:
+                    queue_depth = observed
+            except (NotImplementedError, OSError, ValueError):
+                pass
+        return {
+            "transport": "QUEUE",
+            "maximum_message_bytes": self.transport.maximum_message_bytes,
+            "queue_depth": queue_depth,
+            "queue_depth_authoritative": False,
+            "authority_granted": False,
+        }
+
     def drain_to(
         self,
         store: "SupervisorAdaptiveAggregationStore",

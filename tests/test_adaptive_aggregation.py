@@ -405,9 +405,13 @@ def test_supervisor_control_cycle_drains_bound_adaptive_worker_queues(tmp_path: 
     )
     queue_store.submit(batch)
     store = SupervisorAdaptiveAggregationStore(tmp_path)
+    binding = supervisor.bind_adaptive_aggregation_queue(worker.worker_id, queue_store)
+    assert binding["bound"] is True
+    assert supervisor.adaptive_aggregation_queue_bindings()[0]["worker_id"] == str(
+        worker.worker_id
+    )
 
     result = supervisor.reconcile_adaptive_aggregation_queues(
-        {worker.worker_id: queue_store},
         aggregation_store=store,
         current_generations={"example.target": "generation-a"},
         policy_fingerprint="policy-a",
@@ -422,6 +426,27 @@ def test_supervisor_control_cycle_drains_bound_adaptive_worker_queues(tmp_path: 
     aggregate = store.list_aggregates()[0]
     assert list(aggregate["workers"]) == [str(worker.worker_id)]
     assert aggregate["workers"][str(worker.worker_id)]["worker_pid"] == 4321
+    unbound = supervisor.unbind_adaptive_aggregation_queue(
+        worker.worker_id,
+        queue_store=queue_store,
+    )
+    assert unbound["unbound"] is True
+    assert supervisor.adaptive_aggregation_queue_bindings() == ()
+
+
+def test_supervisor_queue_binding_cannot_be_replaced_or_unbound_by_other_queue():
+    supervisor = CaretakerApplicationSupervisor(object())
+    worker = supervisor.workers.register(WorkerKind.REPAIR_ANALYZER, 4321)
+    first = QueueAdaptiveAggregationStore(queue.Queue())
+    second = QueueAdaptiveAggregationStore(queue.Queue())
+    supervisor.bind_adaptive_aggregation_queue(worker.worker_id, first)
+
+    with pytest.raises(ValueError, match="already bound"):
+        supervisor.bind_adaptive_aggregation_queue(worker.worker_id, second)
+    with pytest.raises(ValueError, match="does not match"):
+        supervisor.unbind_adaptive_aggregation_queue(worker.worker_id, queue_store=second)
+
+    assert supervisor.unbind_adaptive_aggregation_queue(worker.worker_id)["unbound"] is True
 
 
 def test_supervisor_control_cycle_does_not_drain_failed_worker_queue(tmp_path: Path):

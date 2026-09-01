@@ -67,6 +67,12 @@ single-writer context checks. The caller still supplies current generation,
 policy, and authority context; queue sender metadata is never used as
 identity. Queue failures are returned as bounded per-worker evidence while
 other queues and already-pending ledger batches may still be reconciled.
+Applications may register those queues once with
+`bind_adaptive_aggregation_queue()` and omit the map on later cycles. Binding
+does not take ownership of queue creation or destruction, and replacing a
+binding requires an explicit unbind so queued evidence is not silently
+abandoned. `adaptive_aggregation_queue_bindings()` is a bounded, read-only
+operator projection; unbinding also leaves queued evidence untouched.
 
 `AdaptiveAggregationPolicy.transport` selects `AUTO`, `DIRECT`, `SOCKET`, or
 `QUEUE`. `AUTO` preserves the least-friction behavior (configured supervisor
