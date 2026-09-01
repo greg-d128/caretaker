@@ -2214,8 +2214,11 @@ not multiply physical stores.
 `ApplicationRuntimeSupervisor` now provides the application-runtime ownership
 boundary and `run.py` composes through it. It delegates to the historical
 logging supervisor during the compatibility phase, so the worker, health,
-control, scheduling, and shutdown implementation still needs to be extracted
-method-by-method. No host-level or infrastructure-level authority is added.
+control, and shutdown implementation still needs to be extracted
+method-by-method. Runtime scheduling (`WorkRegistry`) and health monitoring
+(`Watchdog`) now live in the application package, with compatibility
+re-exports from logging. No host-level or infrastructure-level authority is
+added.
 
 `logging/supervisor.py` and `logging/__init__.py` currently include application
 supervision, worker health/authority, adaptive coordination, and recovery

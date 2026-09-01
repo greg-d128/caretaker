@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .logging.supervisor import CaretakerApplicationSupervisor
+from .runtime_supervision import Watchdog, WorkRegistry
 
 
 class ApplicationRuntimeSupervisor:
@@ -65,4 +66,4 @@ class ApplicationRuntimeSupervisor:
         return getattr(self._implementation, name)
 
 
-__all__ = ["ApplicationRuntimeSupervisor"]
+__all__ = ["ApplicationRuntimeSupervisor", "Watchdog", "WorkRegistry"]

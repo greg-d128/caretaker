@@ -48,6 +48,11 @@ application package. During the compatibility extraction phase it delegates
 to the historical logging supervisor; logging remains an observability
 dependency, and this delegation does not add host-level authority.
 
+The application package owns the runtime `WorkRegistry` and `Watchdog`
+implementations. The logging package re-exports those classes temporarily so
+existing integrations continue to work while worker admission, health state,
+control, and shutdown are extracted in later slices.
+
 ## Channels
 
 - `APPLICATION`

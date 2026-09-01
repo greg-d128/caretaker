@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from caretaker import ApplicationRuntimeSupervisor
 from caretaker.logging.supervisor import CaretakerApplicationSupervisor
+from caretaker.logging import Watchdog as LoggingWatchdog
+from caretaker.logging import WorkRegistry as LoggingWorkRegistry
+from caretaker.runtime_supervision import Watchdog, WorkRegistry
 
 
 class _Runtime:
@@ -26,3 +29,10 @@ def test_application_runtime_supervisor_preserves_start_stop_surface() -> None:
         assert supervisor.watchdog is supervisor.implementation.watchdog
     finally:
         supervisor.stop()
+
+
+def test_runtime_scheduling_and_watchdog_are_owned_outside_logging() -> None:
+    assert WorkRegistry.__module__ == "caretaker.runtime_supervision"
+    assert Watchdog.__module__ == "caretaker.runtime_supervision"
+    assert LoggingWorkRegistry is WorkRegistry
+    assert LoggingWatchdog is Watchdog
