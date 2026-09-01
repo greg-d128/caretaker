@@ -308,6 +308,10 @@ class OperatorRuntimeRegistry:
                     "candidate_id": str(version.candidate_id) if version.candidate_id else None,
                     "repair_in_progress": target.slot.state.name == "REPAIRING",
                     "guard_enabled": target.policy.guard.enabled,
+                    "execution_contract": {
+                        "side_effects": target.execution_contract.side_effects.name,
+                        "retry_safety": target.execution_contract.retry_safety.name,
+                    },
                     "observation_level": adaptive.get("level"),
                     "lifecycle_stage": adaptive.get("stage"),
                     "lifecycle_label": adaptive.get("stage_label"),
@@ -329,6 +333,7 @@ class OperatorRuntimeRegistry:
                         "candidate_id": None,
                         "repair_in_progress": False,
                         "guard_enabled": True,
+                        "execution_contract": None,
                         "observation_level": adaptive.get("level"),
                         "lifecycle_stage": adaptive.get("stage"),
                         "lifecycle_label": adaptive.get("stage_label"),

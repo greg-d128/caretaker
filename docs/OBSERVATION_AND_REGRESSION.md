@@ -115,7 +115,9 @@ or exception messages.
 The read-only target/slot snapshot exposes the effective contract as
 `execution_contract.side_effects` and `execution_contract.retry_safety`, so
 operator projections can show the duplicate-execution boundary alongside the
-candidate lifecycle.
+candidate lifecycle. The Console target detail renders these fields as a
+declared contract and reminds the operator that the declaration is not proof:
+observed effects and the active policy still gate retry and shadow execution.
 
 ## Original-authoritative shadow execution
 

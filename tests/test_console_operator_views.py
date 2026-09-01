@@ -169,6 +169,21 @@ def test_overview_presents_slot_role_and_escalation_level():
     }) == "behavior escalation"
 
 
+def test_target_detail_contract_projection_is_conservative() -> None:
+    contract = {
+        "side_effects": "READ_ONLY",
+        "retry_safety": "IDEMPOTENT",
+    }
+    assert CaretakerConsoleApp._execution_contract_lines(contract) == (
+        "[b]Declared execution contract[/b]",
+        "Side effects: READ_ONLY; retry safety: IDEMPOTENT",
+        "This declaration is not proof. Observed effects and the active policy still gate retry and shadow execution.",
+    )
+    assert CaretakerConsoleApp._execution_contract_lines(None)[1].startswith(
+        "Unavailable for this target"
+    )
+
+
 def test_repair_source_extracts_pending_approval_source():
     record = {
         "record_kind": "pending_approval",

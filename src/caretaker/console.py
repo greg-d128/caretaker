@@ -1803,6 +1803,22 @@ class CaretakerConsoleApp(App):
             "DEPENDENCY_BOUNDARY": "dependency",
         }.get(role, role.casefold().replace("_", " ") if role else "-")
 
+    @staticmethod
+    def _execution_contract_lines(value: Any) -> tuple[str, ...]:
+        if not isinstance(value, Mapping):
+            return (
+                "[b]Declared execution contract[/b]",
+                "Unavailable for this target; retry and shadow decisions must "
+                "use the conservative boundary.",
+            )
+        return (
+            "[b]Declared execution contract[/b]",
+            f"Side effects: {value.get('side_effects') or 'UNKNOWN'}; "
+            f"retry safety: {value.get('retry_safety') or 'UNKNOWN'}",
+            "This declaration is not proof. Observed effects and the active "
+            "policy still gate retry and shadow execution.",
+        )
+
     @classmethod
     def _observation_display(cls, value: Any, slot_role: Any = None) -> str:
         level = cls._enum_name(value)
@@ -2781,6 +2797,11 @@ class CaretakerConsoleApp(App):
                 f"Escalation reason: {target_record.get('escalation_reason') or 'none'}\n"
                 "Use the buttons above to inspect evidence or start an investigation."
             )
+            slot = state.get("slot") if isinstance(state, Mapping) else None
+            contract = slot.get("execution_contract") if isinstance(slot, Mapping) else None
+            if not isinstance(contract, Mapping):
+                contract = target_record.get("execution_contract")
+            details.write("\n" + "\n".join(self._execution_contract_lines(contract)))
             details.write("\n[b]Technical state and effective policy[/b]")
             details.write(json.dumps(
                 {"state": state.get("state"), "policy": policy.get("policy")},

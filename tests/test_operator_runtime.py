@@ -44,6 +44,10 @@ def test_operator_registry_exposes_repair_and_guard_targets():
     assert registry.targets()[0]["target_id"] == "test.operator.sample"
     assert registry.targets()[0]["slot_role"] == "TARGET_IMPLEMENTATION"
     assert registry.targets()[0]["observation_level"] is None
+    assert registry.targets()[0]["execution_contract"] == {
+        "side_effects": "UNKNOWN",
+        "retry_safety": "UNKNOWN",
+    }
 
 
 def test_unsupervised_behavior_capture_emits_local_audit_evidence(monkeypatch):
