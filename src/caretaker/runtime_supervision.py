@@ -1835,10 +1835,85 @@ def handle_worker_failure_cohort(
         "authority_granted": False,
     }
 
+
+def handle_expired_worker_cohort(
+    supervisor: Any,
+    workers: Iterable[WorkerHealth],
+    *,
+    supervisor_time: datetime,
+    scope: str,
+    recovery_policy: RepairRecoveryPolicy,
+    recovery_handlers: Mapping[str, Callable[[Mapping[str, Any]], Any]] | None = None,
+    diagnostic_debug: bool | None = None,
+    critical_evidence: bool = False,
+    collect_postmortem: Callable[[WorkerHealth, Mapping[str, Any]], Any] | None = None,
+    require_complete_postmortem: bool = False,
+    minimum_sample_count: int = 30,
+    z_threshold: float = 3.0,
+) -> dict[str, Any]:
+    """Route expired workers through the runtime-owned recovery boundary.
+
+    Only the authoritative supervisor clock may establish expiry. A supplied
+    snapshot must still identify the registered process and be unauthorized;
+    otherwise it cannot be used to initiate recovery. The validated workers
+    are then handed to the normal cohort path, which never grants authority.
+    """
+    if supervisor_time.tzinfo is None or supervisor_time.utcoffset() is None:
+        raise ValueError("expired-worker recovery time must be timezone-aware")
+    if not isinstance(recovery_policy, RepairRecoveryPolicy):
+        raise TypeError("expired-worker recovery requires a RepairRecoveryPolicy")
+    supplied = tuple(workers)
+    if not supplied:
+        raise ValueError("expired-worker recovery requires at least one worker")
+    current_workers: list[WorkerHealth] = []
+    seen: set[UUID] = set()
+    for worker in supplied:
+        if not isinstance(worker, WorkerHealth):
+            raise TypeError("expired-worker recovery requires WorkerHealth snapshots")
+        if worker.worker_id in seen:
+            raise ValueError("expired-worker recovery contains a duplicate worker")
+        seen.add(worker.worker_id)
+        try:
+            current = supervisor.workers.get(worker.worker_id)
+        except KeyError as exc:
+            raise PermissionError(
+                "expired-worker recovery snapshot is no longer registered"
+            ) from exc
+        if current.process_start_id != worker.process_start_id:
+            raise PermissionError(
+                "expired-worker recovery snapshot does not match the live process"
+            )
+        if current.state is not WorkerState.UNAUTHORIZED:
+            raise PermissionError(
+                "expired-worker recovery requires an unauthorized worker"
+            )
+        if (
+            current.authority_packet_expires_at is None
+            or supervisor_time < current.authority_packet_expires_at
+        ):
+            raise PermissionError(
+                "expired-worker recovery requires an authority packet at or before supervisor time"
+            )
+        current_workers.append(current)
+    return handle_worker_failure_cohort(
+        supervisor,
+        current_workers,
+        scope=scope,
+        recovery_policy=recovery_policy,
+        recovery_handlers=recovery_handlers,
+        diagnostic_debug=diagnostic_debug,
+        critical_evidence=critical_evidence,
+        collect_postmortem=collect_postmortem,
+        require_complete_postmortem=require_complete_postmortem,
+        minimum_sample_count=minimum_sample_count,
+        z_threshold=z_threshold,
+    )
+
 __all__ = [
     "AdaptiveAggregationQueueRegistry",
     "ApplicationWorkerLifecycle",
     "capture_worker_failure_evidence",
+    "handle_expired_worker_cohort",
     "handle_worker_failure_cohort",
     "MAX_WORKER_FAILURE_COHORT",
     "Watchdog",

@@ -83,6 +83,11 @@ then invokes the existing reconciliation boundary. Recovery handlers remain
 application-owned; cohort handling never creates replacement authority or
 starts a process by itself.
 
+Expired-worker validation and handoff use the same runtime boundary. The
+authoritative supervisor clock, registered process-start identity, and
+`UNAUTHORIZED` state are checked before an expired worker enters cohort
+recovery; an untrusted or stale snapshot is rejected.
+
 Application monitoring and application-boundary shutdown are also implemented
 in the application-runtime package. The legacy logging supervisor delegates to
 those functions, and the runtime owner exposes them directly while preserving

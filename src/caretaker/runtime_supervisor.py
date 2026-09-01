@@ -19,6 +19,7 @@ from .runtime_supervision import (
     AdaptiveAggregationQueueRegistry,
     ApplicationWorkerLifecycle,
     capture_worker_failure_evidence,
+    handle_expired_worker_cohort,
     handle_worker_failure_cohort,
     Watchdog,
     WorkRegistry,
@@ -126,6 +127,37 @@ class ApplicationRuntimeSupervisor:
         return handle_worker_failure_cohort(
             self._implementation,
             workers,
+            scope=scope,
+            recovery_policy=recovery_policy,
+            recovery_handlers=recovery_handlers,
+            diagnostic_debug=diagnostic_debug,
+            critical_evidence=critical_evidence,
+            collect_postmortem=collect_postmortem,
+            require_complete_postmortem=require_complete_postmortem,
+            minimum_sample_count=minimum_sample_count,
+            z_threshold=z_threshold,
+        )
+
+    def handle_expired_worker_cohort(
+        self,
+        workers: Iterable[Any],
+        *,
+        supervisor_time: datetime,
+        scope: str,
+        recovery_policy: Any,
+        recovery_handlers: Mapping[str, Callable[[Mapping[str, Any]], Any]] | None = None,
+        diagnostic_debug: bool | None = None,
+        critical_evidence: bool = False,
+        collect_postmortem: Callable[[Any, Any], Any] | None = None,
+        require_complete_postmortem: bool = False,
+        minimum_sample_count: int = 30,
+        z_threshold: float = 3.0,
+    ) -> dict[str, Any]:
+        """Handle expired workers through the runtime seam."""
+        return handle_expired_worker_cohort(
+            self._implementation,
+            workers,
+            supervisor_time=supervisor_time,
             scope=scope,
             recovery_policy=recovery_policy,
             recovery_handlers=recovery_handlers,

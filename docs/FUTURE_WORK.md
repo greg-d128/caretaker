@@ -2219,9 +2219,10 @@ method-by-method. Runtime scheduling (`WorkRegistry`) and health monitoring
 (`Watchdog`) now live in the application package, with compatibility
 re-exports from logging. Adaptive aggregation queue binding state now lives in
 the same application-runtime package. Worker admission, health state, control,
-queue coordination, and failed-worker cohort handling are now application-
-runtime implementations; a compatibility wrapper remains in logging. No
-host-level or infrastructure-level authority is added. `ApplicationWorkerLifecycle`
+queue coordination, failed-worker cohort handling, and expired-worker
+validation are now application-runtime implementations; a compatibility
+wrapper remains in logging. No host-level or infrastructure-level authority is
+added. `ApplicationWorkerLifecycle`
 is also application-runtime code, with a logging compatibility re-export;
 process creation and cleanup remain application-owned callbacks. The bounded
 control-cycle implementation now lives in the application package and is
