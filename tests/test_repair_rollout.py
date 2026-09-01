@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 
 from caretaker import (
+    InMemoryRepairStore,
     RepairReleaseKind,
     RepairRolloutAuthority,
     RepairRolloutError,
@@ -61,6 +62,45 @@ def test_disabled_rollout_cannot_create_records() -> None:
 
     with pytest.raises(RepairRolloutError, match="disabled"):
         _proposed(ledger)
+
+
+def test_rollout_milestone_commit_is_idempotent() -> None:
+    store = InMemoryRepairStore()
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(enabled=True),
+        store=store,
+    )
+    record = _proposed(ledger)
+    transition = ledger.transitions(record.rollout_id)[0]
+    event = store.events[-1]
+    before = (len(store.rollouts), len(store.rollout_transitions), len(store.events))
+
+    store.commit_rollout_transition(record, transition, event)
+
+    assert (len(store.rollouts), len(store.rollout_transitions), len(store.events)) == before
+    assert event.details["persistence"]["schema_version"] == 1
+    assert event.details["persistence"]["idempotency_key"] == (
+        f"rollout-transition:{transition.transition_id}"
+    )
+
+
+def test_rollout_milestone_commit_failure_does_not_publish_transition() -> None:
+    class FailingStore(InMemoryRepairStore):
+        def commit_rollout_transition(self, record, transition, event):
+            raise RuntimeError("injected milestone commit failure")
+
+    store = FailingStore()
+    ledger = RepairRolloutLedger(
+        policy=RepairRolloutPolicy(enabled=True),
+        store=store,
+    )
+
+    with pytest.raises(RuntimeError, match="milestone commit failure"):
+        _proposed(ledger)
+
+    rollout_id = next(iter(store.rollouts))
+    assert store.rollout_transitions == {}
+    assert ledger.transitions(rollout_id) == ()
 
 
 def test_proposal_is_non_authoritative_and_advisory_cannot_advance() -> None:

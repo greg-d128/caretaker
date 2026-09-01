@@ -60,6 +60,14 @@ generation, validation, or stale-approval record. These marks make incomplete
 state durable across restart and are idempotent; they remain evidence only and
 do not mutate source records, grant authority, or reactivate a candidate.
 
+Rollout stage changes persist as narrow lifecycle milestones. The rollout
+aggregate, signed/hash-chained transition, and local lifecycle event are
+committed together when the configured store supports the atomic milestone
+operation. The transition ID is the idempotency key; retries with matching
+evidence are no-ops, while conflicting evidence fails closed. This does not
+make independent audit delivery or other evidence families part of the same
+transaction.
+
 The application supervisor's worker-failure boundary emits a bounded failure
 envelope immediately, including in-flight work and queue context. It can record
 an incident and request a callback-owned replacement; if replacement is not

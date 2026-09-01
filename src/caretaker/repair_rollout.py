@@ -44,6 +44,9 @@ class RepairRolloutExecutionError(RepairRolloutError):
     """Raised when a rollout record cannot be bound to a function slot."""
 
 
+_ROLLOUT_MILESTONE_SCHEMA_VERSION = 1
+
+
 class RepairRolloutStage(str, Enum):
     PROPOSED = "proposed"
     VALIDATED = "validated"
@@ -2184,38 +2187,46 @@ class RepairRolloutCoordinator:
             last_transition_id=transition.transition_id,
             transition_count=record.transition_count + 1,
         )
-        self._records[record.rollout_id] = updated
-        self._persist_record(updated)
-        self._transitions[transition.transition_id] = transition
+        event = None
+        if self.store is not None and getattr(self.store, "append_event", None) is not None:
+            event = RepairEvent.create(
+                "repair.rollout.transition",
+                record.target_id,
+                incident_id=incident_id or record.incident_id,
+                candidate_id=record.candidate_id,
+                details={
+                    "rollout_id": str(record.rollout_id),
+                    "transition_id": str(transition.transition_id),
+                    "from_stage": from_stage.value if from_stage else None,
+                    "to_stage": to_stage.value,
+                    "action": action,
+                    "authority_type": authority_type.value,
+                    "authority_id": authority_id,
+                    "policy_fingerprint": record.policy_fingerprint,
+                    "authority_fingerprint": record.authority_fingerprint,
+                    "content_hash": content_hash,
+                    "transition_hash": transition_hash,
+                    "signature_status": signature_status,
+                    "transition_details": _json_safe(details)
+                    if details is not None
+                    else None,
+                    "persistence": {
+                        "schema_version": _ROLLOUT_MILESTONE_SCHEMA_VERSION,
+                        "idempotency_key": f"rollout-transition:{transition.transition_id}",
+                    },
+                },
+            )
         if self.store is not None:
-            self.store.record_rollout_transition(transition)
-            append_event = getattr(self.store, "append_event", None)
-            if append_event is not None:
-                append_event(
-                    RepairEvent.create(
-                        "repair.rollout.transition",
-                        record.target_id,
-                        incident_id=incident_id or record.incident_id,
-                        candidate_id=record.candidate_id,
-                        details={
-                            "rollout_id": str(record.rollout_id),
-                            "transition_id": str(transition.transition_id),
-                            "from_stage": from_stage.value if from_stage else None,
-                            "to_stage": to_stage.value,
-                            "action": action,
-                            "authority_type": authority_type.value,
-                            "authority_id": authority_id,
-                            "policy_fingerprint": record.policy_fingerprint,
-                            "authority_fingerprint": record.authority_fingerprint,
-                            "content_hash": content_hash,
-                            "transition_hash": transition_hash,
-                            "signature_status": signature_status,
-                            "transition_details": _json_safe(details)
-                            if details is not None
-                            else None,
-                        },
-                    )
-                )
+            commit = getattr(self.store, "commit_rollout_transition", None)
+            if commit is not None:
+                commit(updated, transition, event)
+            else:
+                self.store.record_rollout(updated)
+                self.store.record_rollout_transition(transition)
+                if event is not None:
+                    self.store.append_event(event)
+        self._records[record.rollout_id] = updated
+        self._transitions[transition.transition_id] = transition
         if self.audit_event is not None:
             self.audit_event(
                 "REPAIR_ROLLOUT_TRANSITION",

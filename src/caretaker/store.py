@@ -71,6 +71,12 @@ class RepairStore(Protocol):
     def record_rollout(self, record: RepairRolloutRecord) -> None: ...
     def all_rollouts(self) -> tuple[Any, ...]: ...
     def record_rollout_transition(self, record: RepairRolloutTransition) -> None: ...
+    def commit_rollout_transition(
+        self,
+        record: RepairRolloutRecord,
+        transition: RepairRolloutTransition,
+        event: RepairEvent | None,
+    ) -> None: ...
     def all_rollout_transitions(self) -> tuple[Any, ...]: ...
     def record_rollout_worker_acknowledgement(
         self, record: RolloutWorkerAcknowledgement
@@ -238,6 +244,36 @@ class InMemoryRepairStore:
                     "rollout transition ID was already recorded with different evidence"
                 )
             self.rollout_transitions[record.transition_id] = record
+
+    def commit_rollout_transition(
+        self,
+        record: RepairRolloutRecord,
+        transition: RepairRolloutTransition,
+        event: RepairEvent | None,
+    ) -> None:
+        """Atomically persist one rollout milestone in the in-memory seam.
+
+        The transition ID is the idempotency key. Validate every existing
+        record before mutating any collection so a conflicting retry cannot
+        leave a partially updated lifecycle.
+        """
+        with self._lock:
+            existing_transition = self.rollout_transitions.get(transition.transition_id)
+            if existing_transition is not None and existing_transition != transition:
+                raise ValueError(
+                    "rollout transition ID was already recorded with different evidence"
+                )
+            if event is not None:
+                existing_event = next(
+                    (item for item in self.events if item.event_id == event.event_id),
+                    None,
+                )
+                if existing_event is not None and existing_event != event:
+                    raise ValueError("rollout milestone event ID was already recorded with different evidence")
+            self.rollouts[record.rollout_id] = record
+            self.rollout_transitions[transition.transition_id] = transition
+            if event is not None and existing_transition is None:
+                self.events.append(event)
 
     def all_rollout_transitions(self) -> tuple[RepairRolloutTransition, ...]:
         with self._lock:
@@ -674,6 +710,90 @@ class SQLiteRepairStore:
             target_id=record.target_id,
             append=True,
         )
+
+    def commit_rollout_transition(
+        self,
+        record: RepairRolloutRecord,
+        transition: RepairRolloutTransition,
+        event: RepairEvent | None,
+    ) -> None:
+        """Commit aggregate, transition, and local event in one SQLite transaction.
+
+        ``transition_id`` is the idempotency key and the store metadata schema
+        version is included in the milestone event details by the coordinator.
+        Existing matching records make retries no-ops; conflicting evidence
+        fails before any write is committed.
+        """
+        rollout_payload = json.dumps(_jsonable(record), sort_keys=True, separators=(",", ":"))
+        transition_payload = json.dumps(
+            _jsonable(transition), sort_keys=True, separators=(",", ":")
+        )
+        event_payload = (
+            json.dumps(_jsonable(event), sort_keys=True, separators=(",", ":"))
+            if event is not None
+            else None
+        )
+        with self._lock, closing(self._connect()) as connection:
+            existing_rollout = connection.execute(
+                "SELECT payload FROM repair_rollouts WHERE record_id = ?",
+                (str(record.rollout_id),),
+            ).fetchone()
+            existing_transition = connection.execute(
+                "SELECT payload FROM repair_rollout_transitions WHERE record_id = ?",
+                (str(transition.transition_id),),
+            ).fetchone()
+            if existing_transition is not None:
+                if existing_transition[0] != transition_payload:
+                    raise ValueError(
+                        "rollout transition ID was already recorded with different evidence"
+                    )
+                # A matching transition means this idempotency key completed.
+                connection.commit()
+                return
+            if event is not None:
+                existing_event = connection.execute(
+                    "SELECT payload FROM events WHERE record_id = ?",
+                    (str(event.event_id),),
+                ).fetchone()
+                if existing_event is not None and existing_event[0] != event_payload:
+                    raise ValueError(
+                        "rollout milestone event ID was already recorded with different evidence"
+                    )
+            if existing_rollout is None:
+                connection.execute(
+                    "INSERT INTO repair_rollouts(record_id, target_id, created_at, payload) VALUES (?, ?, ?, ?)",
+                    (
+                        str(record.rollout_id),
+                        record.target_id,
+                        _record_time(record).isoformat(),
+                        rollout_payload,
+                    ),
+                )
+            else:
+                connection.execute(
+                    "UPDATE repair_rollouts SET target_id = ?, created_at = ?, payload = ? WHERE record_id = ?",
+                    (record.target_id, _record_time(record).isoformat(), rollout_payload, str(record.rollout_id)),
+                )
+            connection.execute(
+                "INSERT INTO repair_rollout_transitions(record_id, target_id, created_at, payload) VALUES (?, ?, ?, ?)",
+                (
+                    str(transition.transition_id),
+                    transition.target_id,
+                    _record_time(transition).isoformat(),
+                    transition_payload,
+                ),
+            )
+            if event is not None and existing_event is None:
+                connection.execute(
+                    "INSERT INTO events(record_id, target_id, created_at, payload) VALUES (?, ?, ?, ?)",
+                    (
+                        str(event.event_id),
+                        event.target_id,
+                        _record_time(event).isoformat(),
+                        event_payload,
+                    ),
+                )
+            connection.commit()
 
     def all_rollout_transitions(self) -> tuple[Mapping[str, Any], ...]:
         return tuple(self.query_records("repair_rollout_transitions", limit=10000))
