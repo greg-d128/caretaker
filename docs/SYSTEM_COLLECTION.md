@@ -26,9 +26,19 @@ System records live in separate host and per-process trees. They have independen
 
 Sources unavailable to the application account are recorded as unavailable. `/proc/slabinfo`, machine-wide `perf`, or similar privileged interfaces are not silently escalated. A future provider may add process-scoped performance data without changing the collector contract.
 
-## Metrics placeholder
+## Process metrics
 
-`MetricsProvider` and `NullMetricsProvider` establish the integration contract for the user's advanced metrics system. No general metrics collector is implemented in this alpha.
+`ProcessMetricsProvider` is an optional, non-privileged provider for a bounded
+snapshot of one process. It reads process-scoped `/proc/<pid>/stat`,
+`/status`, and optional `/io` values, and treats unavailable optional sources
+as missing samples. `MonitoringStreamWriter.emit_samples()` can publish those
+samples through the same bounded, output-only stream contract used for
+Caretaker overhead metrics. It never escalates privileges and an absent source
+is not evidence that no activity occurred.
+
+Automatic policy-driven metrics correlation remains reserved: enabling
+`logging.metrics.enabled` is still rejected until sampling, retention,
+redaction, and system-cycle correlation semantics are reviewed.
 
 
 ## Process command lines

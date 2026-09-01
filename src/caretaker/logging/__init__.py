@@ -56,6 +56,7 @@ from .metrics import (
     MonitoringStreamPolicy,
     MonitoringStreamWriter,
     NullMetricsProvider,
+    ProcessMetricsProvider,
 )
 from .models import *
 from .policy import *

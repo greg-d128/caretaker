@@ -69,3 +69,21 @@ snapshot when the stream is enabled. It includes write, flush, queue, failure,
 and utilization metrics. Error text is intentionally excluded. The same
 snapshot remains available through the existing read-only console/control
 status response.
+
+## Process metrics
+
+Applications may opt in to `ProcessMetricsProvider` for a bounded snapshot of
+the current Caretaker process. The provider reads process-scoped, non-privileged
+sources and can publish its samples through `MonitoringStreamWriter.emit_samples`:
+
+```python
+provider = ProcessMetricsProvider()
+provider.start(MetricsContext(application_id="payments", process_id=os.getpid()))
+writer.emit_samples(provider.query(window_start, window_end))
+provider.stop()
+```
+
+Unavailable process sources are omitted rather than reported as zero. The
+provider does not automatically enable monitoring, change policy, or create a
+control path. Automatic sampling cadence, retention, redaction, and policy
+correlation remain subject to a future policy review.

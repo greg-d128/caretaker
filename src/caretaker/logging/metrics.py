@@ -5,6 +5,7 @@ import math
 import os
 import re
 import threading
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -101,6 +102,173 @@ class NullMetricsProvider:
 
     def query(self, start: datetime, end: datetime) -> tuple[MetricSample, ...]:
         return ()
+
+
+class ProcessMetricsProvider:
+    """Collect a bounded, non-privileged snapshot for one process.
+
+    The provider reads only process-scoped procfs files and treats unavailable
+    optional sources as absent samples. It never escalates privileges or
+    interprets a missing source as proof that the process had no activity.
+    ``query`` returns a point-in-time snapshot when that instant falls inside
+    the requested interval; historical storage remains the collector's job.
+    """
+
+    provider_name = "process"
+
+    def __init__(
+        self,
+        *,
+        proc_root: str | Path = "/proc",
+        include_io: bool = True,
+    ) -> None:
+        if not isinstance(include_io, bool):
+            raise ValueError("include_io must be a boolean")
+        self.proc_root = Path(proc_root)
+        self.include_io = include_io
+        self._context: MetricsContext | None = None
+        try:
+            self._clock_ticks = int(os.sysconf("SC_CLK_TCK"))
+        except (AttributeError, OSError, ValueError):
+            self._clock_ticks = 100
+        if self._clock_ticks <= 0:
+            self._clock_ticks = 100
+
+    def start(self, context: MetricsContext) -> None:
+        if not isinstance(context, MetricsContext):
+            raise TypeError("metrics context must be a MetricsContext")
+        if isinstance(context.process_id, bool) or not isinstance(context.process_id, int):
+            raise ValueError("metrics context process_id must be an integer")
+        if context.process_id <= 0:
+            raise ValueError("metrics context process_id must be positive")
+        self._context = context
+
+    def stop(self) -> None:
+        self._context = None
+
+    def query(self, start: datetime, end: datetime) -> tuple[MetricSample, ...]:
+        for value, label in ((start, "start"), (end, "end")):
+            if value.tzinfo is None:
+                raise ValueError(f"metrics query {label} must include timezone")
+        if start > end:
+            raise ValueError("metrics query start must not be after end")
+        context = self._context
+        if context is None:
+            return ()
+        occurred_at = datetime.now(timezone.utc)
+        if not start.astimezone(timezone.utc) <= occurred_at <= end.astimezone(timezone.utc):
+            return ()
+        process_root = self.proc_root / str(context.process_id)
+        dimensions = (
+            ("application_id", str(context.application_id)),
+            ("process_id", str(context.process_id)),
+        )
+        samples: list[MetricSample] = []
+        stat_values = self._read_stat(process_root / "stat")
+        if stat_values is not None:
+            user_ticks, system_ticks, thread_count = stat_values
+            samples.extend(
+                (
+                    MetricSample(
+                        "caretaker.process.cpu_user_seconds",
+                        occurred_at,
+                        user_ticks / self._clock_ticks,
+                        "seconds",
+                        dimensions,
+                    ),
+                    MetricSample(
+                        "caretaker.process.cpu_system_seconds",
+                        occurred_at,
+                        system_ticks / self._clock_ticks,
+                        "seconds",
+                        dimensions,
+                    ),
+                    MetricSample(
+                        "caretaker.process.thread_count",
+                        occurred_at,
+                        float(thread_count),
+                        "count",
+                        dimensions,
+                    ),
+                )
+            )
+        status_values = self._read_status(process_root / "status")
+        for name, value, unit in (
+            ("caretaker.process.rss_bytes", status_values.get("VmRSS"), "bytes"),
+            ("caretaker.process.virtual_memory_bytes", status_values.get("VmSize"), "bytes"),
+        ):
+            if value is not None:
+                samples.append(MetricSample(name, occurred_at, float(value), unit, dimensions))
+        if self.include_io:
+            for key, name in (
+                ("read_bytes", "caretaker.process.read_bytes"),
+                ("write_bytes", "caretaker.process.write_bytes"),
+            ):
+                value = self._read_io(process_root / "io", key)
+                if value is not None:
+                    samples.append(MetricSample(name, occurred_at, float(value), "bytes", dimensions))
+        return tuple(samples)
+
+    @staticmethod
+    def _read_stat(path: Path) -> tuple[int, int, int] | None:
+        try:
+            raw = path.read_text(encoding="utf-8")
+            closing = raw.rfind(") ")
+            if closing < 0:
+                return None
+            fields = raw[closing + 2 :].split()
+            if len(fields) <= 17:
+                return None
+            user_ticks = int(fields[11])
+            system_ticks = int(fields[12])
+            thread_count = int(fields[17])
+            if min(user_ticks, system_ticks, thread_count) < 0:
+                return None
+            return user_ticks, system_ticks, thread_count
+        except (OSError, UnicodeError, ValueError):
+            return None
+
+    @staticmethod
+    def _read_status(path: Path) -> dict[str, int]:
+        values: dict[str, int] = {}
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError):
+            return values
+        for line in lines:
+            name, separator, raw = line.partition(":")
+            if not separator:
+                continue
+            fields = raw.strip().split()
+            if not fields:
+                continue
+            try:
+                value = int(fields[0])
+            except ValueError:
+                continue
+            if value < 0:
+                continue
+            if name in {"VmRSS", "VmSize"} and len(fields) >= 2 and fields[1].lower() == "kb":
+                value *= 1024
+            if name in {"VmRSS", "VmSize", "Threads"}:
+                values[name] = value
+        return values
+
+    @staticmethod
+    def _read_io(path: Path, key: str) -> int | None:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError):
+            return None
+        for line in lines:
+            name, separator, raw = line.partition(":")
+            if separator and name.strip() == key:
+                try:
+                    value = int(raw.strip())
+                except ValueError:
+                    return None
+                return value if value >= 0 else None
+        return None
 
 
 class MonitoringStreamWriter:
@@ -266,6 +434,24 @@ class MonitoringStreamWriter:
                 value,
                 unit=units.get(name, "count"),
                 dimensions=dimensions,
+            )
+            if record is not None:
+                records.append(record)
+        return tuple(records)
+
+    def emit_samples(self, samples: Iterable[MetricSample]) -> tuple[dict[str, Any], ...]:
+        """Publish provider samples through the same bounded stream contract."""
+        records: list[dict[str, Any]] = []
+        for sample in samples:
+            if not isinstance(sample, MetricSample):
+                raise MonitoringStreamError("monitoring samples must be MetricSample records")
+            dimensions = dict(sample.dimensions)
+            record = self.emit(
+                sample.name,
+                sample.value,
+                unit=sample.unit,
+                dimensions=dimensions,
+                timestamp=sample.timestamp,
             )
             if record is not None:
                 records.append(record)
