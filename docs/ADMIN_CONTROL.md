@@ -207,6 +207,16 @@ RepairEngine and GuardEngine instances register themselves with a process-local
 operator registry. The supervisor proxies declarative `runtime-*` requests to
 that child socket.
 
+Both the logging and runtime-control Unix sockets use an endpoint-ownership
+sidecar. Startup takes a non-blocking per-endpoint lock and records a bounded
+instance token, PID, and process-start identity. A live owner causes startup to
+fail without unlinking its socket. A stale socket is removed only after the lock
+is acquired and a bounded probe confirms that no listener responds. An
+operator may use the explicit `cleanup_stale_endpoint()` helper for a
+development endpoint; it refuses live owners and non-socket paths. The sidecar
+is diagnostic metadata, not an authority grant, and the normal peer-credential
+and optional signed-request checks remain in force.
+
 The runtime `repair-recovery-apply` command requires an explicit
 `confirm=true` request and records freshly revalidated, interrupted Repair
 decisions in the recovery ledger. It does not rewrite source evidence,

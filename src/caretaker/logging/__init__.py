@@ -41,10 +41,12 @@ from .interrogation import (
 )
 from .ipc import (
     ControlSocketServer,
+    EndpointAlreadyOwnedError,
     HMACControlAuthorizer,
     SocketLogClient,
     SocketLogServer,
     control_request,
+    cleanup_stale_endpoint,
     list_adaptive_transition_requests,
     acknowledge_adaptive_transition,
     accept_adaptive_transition,

@@ -14,10 +14,12 @@ import threading
 import time
 import select
 import secrets
+import errno
+import fcntl
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from .models import AttachmentReference, EvidencePriority, LogEnvelope
 from .records import TLVLogCodec
@@ -39,6 +41,7 @@ _UNIX_SOCKET_PATH_LIMIT = 100
 # 64 KiB; this is only the outer framed request limit.
 _CONTROL_REQUEST_LIMIT = 128 * 1024
 _CONTROL_RESPONSE_LIMIT = 16 * 1024 * 1024
+_ENDPOINT_OWNER_METADATA_LIMIT = 4096
 
 
 def _canonical_control_authorization_payload(request: dict[str, Any]) -> bytes:
@@ -214,6 +217,183 @@ def unix_socket_exists(path: str | Path) -> bool:
     return unix_socket_path(path).exists()
 
 
+class EndpointAlreadyOwnedError(OSError):
+    """Raised when a live process already owns a Caretaker IPC endpoint."""
+
+    def __init__(self, path: Path, owner: dict[str, Any] | None = None) -> None:
+        self.endpoint_path = path
+        self.owner = owner
+        details = ""
+        if owner:
+            details = (
+                f" (pid={owner.get('pid')}, "
+                f"process_start_id={owner.get('process_start_id')})"
+            )
+        super().__init__(
+            errno.EADDRINUSE,
+            f"Caretaker IPC endpoint is already owned: {path}{details}",
+        )
+
+
+class _EndpointOwnership:
+    """Claim one endpoint path without deleting a live listener.
+
+    The sidecar is a per-endpoint lock and diagnostic record.  The lock is the
+    authoritative liveness check; the instance token and process-start ID make
+    the owner inspectable and prevent a PID value from being treated as an
+    identity.  A socket probe also protects startup against listeners created by
+    an older Caretaker version that did not create this sidecar.
+    """
+
+    def __init__(self, path: Path, *, endpoint_kind: str) -> None:
+        self.path = path
+        self.lock_path = Path(f"{path}.owner")
+        self.endpoint_kind = endpoint_kind
+        self.instance_token = secrets.token_urlsafe(24)
+        self.process_start_id = uuid4()
+        self._lock_fd: int | None = None
+        self.stale_endpoint_removed = False
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "endpoint": str(self.path),
+            "endpoint_kind": self.endpoint_kind,
+            "instance_token": self.instance_token,
+            "pid": os.getpid(),
+            "process_start_id": str(self.process_start_id),
+        }
+
+    def acquire(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        flags = os.O_CREAT | os.O_RDWR
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        fd = os.open(self.lock_path, flags, 0o600)
+        self._lock_fd = fd
+        os.chmod(self.lock_path, 0o600)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise EndpointAlreadyOwnedError(
+                    self.path,
+                    self._read_metadata(fd),
+                ) from exc
+            self._write_metadata()
+            self._remove_stale_endpoint()
+        except Exception:
+            self.release()
+            raise
+
+    def release(self) -> None:
+        fd = self._lock_fd
+        if fd is None:
+            return
+        try:
+            self._clear_metadata()
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+            self._lock_fd = None
+
+    def remove_owned_endpoint(self) -> None:
+        if not self.path.exists():
+            return
+        try:
+            metadata = self.path.lstat()
+        except FileNotFoundError:
+            return
+        if not stat.S_ISSOCK(metadata.st_mode):
+            raise FileExistsError(
+                errno.EEXIST,
+                f"Refusing to remove non-socket IPC endpoint path: {self.path}",
+            )
+        self.path.unlink()
+
+    def _remove_stale_endpoint(self) -> None:
+        if not self.path.exists():
+            return
+        try:
+            metadata = self.path.lstat()
+        except FileNotFoundError:
+            return
+        if not stat.S_ISSOCK(metadata.st_mode):
+            raise FileExistsError(
+                errno.EEXIST,
+                f"IPC endpoint path is not a Unix socket: {self.path}",
+            )
+        if self._probe_socket():
+            raise EndpointAlreadyOwnedError(self.path, self._read_metadata())
+        self.path.unlink()
+        self.stale_endpoint_removed = True
+
+    def _probe_socket(self) -> bool:
+        socket_types = [socket.SOCK_STREAM]
+        sequence_packet = getattr(socket, "SOCK_SEQPACKET", None)
+        if sequence_packet is not None:
+            socket_types.append(sequence_packet)
+        for socket_type in socket_types:
+            probe = socket.socket(socket.AF_UNIX, socket_type)
+            probe.settimeout(0.1)
+            try:
+                probe.connect(str(self.path))
+            except OSError as exc:
+                if exc.errno in {
+                    errno.ECONNREFUSED,
+                    errno.ENOENT,
+                    errno.ENOTSOCK,
+                    errno.EPROTOTYPE,
+                    errno.ECONNRESET,
+                }:
+                    continue
+                raise
+            finally:
+                probe.close()
+            return True
+        return False
+
+    def _read_metadata(self, fd: int | None = None) -> dict[str, Any] | None:
+        target = self._lock_fd if fd is None else fd
+        if target is None:
+            return None
+        try:
+            raw = os.pread(target, _ENDPOINT_OWNER_METADATA_LIMIT, 0)
+            value = json.loads(raw.decode("utf-8")) if raw else None
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    def _write_metadata(self) -> None:
+        assert self._lock_fd is not None
+        encoded = json.dumps(self.metadata, sort_keys=True, separators=(",", ":")).encode()
+        os.ftruncate(self._lock_fd, 0)
+        os.pwrite(self._lock_fd, encoded, 0)
+        os.fsync(self._lock_fd)
+
+    def _clear_metadata(self) -> None:
+        if self._lock_fd is not None:
+            os.ftruncate(self._lock_fd, 0)
+
+
+def cleanup_stale_endpoint(path: str | Path) -> bool:
+    """Remove a stale Caretaker Unix socket after an explicit operator check.
+
+    A live endpoint raises :class:`EndpointAlreadyOwnedError`; non-socket paths
+    are never removed.  The return value is true only when a stale socket was
+    actually removed.
+    """
+    ownership = _EndpointOwnership(unix_socket_path(path), endpoint_kind="operator-cleanup")
+    ownership.acquire()
+    try:
+        if ownership.path.exists():
+            ownership.remove_owned_endpoint()
+        return ownership.stale_endpoint_removed
+    finally:
+        ownership.release()
+
+
 def _private_ipc_root() -> Path:
     uid = os.getuid() if hasattr(os, "getuid") else 0
     candidates: list[Path] = []
@@ -341,18 +521,27 @@ class SocketLogServer:
         self._socket: socket.socket | None = None
         self._serving = threading.Event()
         self._serve_done = threading.Event()
+        self._endpoint_ownership = _EndpointOwnership(self.path, endpoint_kind="log")
 
     def start(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.unlink(missing_ok=True)
-        socket_type = getattr(socket, "SOCK_SEQPACKET", socket.SOCK_STREAM)
-        server = socket.socket(socket.AF_UNIX, socket_type)
-        server.bind(str(self.path))
-        os.chmod(self.path, 0o600)
-        server.listen(128)
-        server.settimeout(0.25)
-        self._socket = server
-        self._stream = socket_type == socket.SOCK_STREAM
+        self._endpoint_ownership.acquire()
+        try:
+            socket_type = getattr(socket, "SOCK_SEQPACKET", socket.SOCK_STREAM)
+            server = socket.socket(socket.AF_UNIX, socket_type)
+            try:
+                server.bind(str(self.path))
+                os.chmod(self.path, 0o600)
+                server.listen(128)
+                server.settimeout(0.25)
+            except Exception:
+                server.close()
+                raise
+            self._socket = server
+            self._stream = socket_type == socket.SOCK_STREAM
+        except Exception:
+            self._endpoint_ownership.release()
+            raise
 
     def serve_forever(self) -> None:
         if self._socket is None:
@@ -506,7 +695,8 @@ class SocketLogServer:
         for thread in tuple(self._threads):
             thread.join(timeout=1.0)
         self._threads = [thread for thread in self._threads if thread.is_alive()]
-        self.path.unlink(missing_ok=True)
+        self._endpoint_ownership.remove_owned_endpoint()
+        self._endpoint_ownership.release()
 
 
 
@@ -537,19 +727,28 @@ class ControlSocketServer:
         self._threads: list[threading.Thread] = []
         self._thread_lock = threading.Lock()
         self._client_slots = threading.BoundedSemaphore(32)
+        self._endpoint_ownership = _EndpointOwnership(self.path, endpoint_kind="control")
 
     def start(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.unlink(missing_ok=True)
-        # Control responses can contain evidence bundles and behavior snapshots
-        # larger than the platform's SOCK_SEQPACKET message limit.  A framed
-        # stream keeps those responses reliable without relying on recv timing.
-        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        server.bind(str(self.path))
-        os.chmod(self.path, 0o660)
-        server.listen(16)
-        server.settimeout(0.25)
-        self._socket = server
+        self._endpoint_ownership.acquire()
+        try:
+            # Control responses can contain evidence bundles and behavior snapshots
+            # larger than the platform's SOCK_SEQPACKET message limit.  A framed
+            # stream keeps those responses reliable without relying on recv timing.
+            server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                server.bind(str(self.path))
+                os.chmod(self.path, 0o660)
+                server.listen(16)
+                server.settimeout(0.25)
+            except Exception:
+                server.close()
+                raise
+            self._socket = server
+        except Exception:
+            self._endpoint_ownership.release()
+            raise
 
     def serve_forever(self) -> None:
         if self._socket is None:
@@ -631,7 +830,8 @@ class ControlSocketServer:
             thread.join(timeout=1.0)
         with self._thread_lock:
             self._threads = [thread for thread in self._threads if thread.is_alive()]
-        self.path.unlink(missing_ok=True)
+        self._endpoint_ownership.remove_owned_endpoint()
+        self._endpoint_ownership.release()
 
 
 def control_request(path: str | Path, request: dict[str, Any], *, timeout: float = 5.0) -> dict[str, Any]:

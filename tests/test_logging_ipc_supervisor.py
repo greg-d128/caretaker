@@ -3,12 +3,15 @@ from __future__ import annotations
 import os
 import select
 import signal
+import socket
 import subprocess
 import sys
 import threading
 import time
 from datetime import datetime, timezone
 from uuid import uuid4
+
+import pytest
 
 from caretaker.logging import (
     LogChannel,
@@ -20,6 +23,9 @@ from caretaker.logging import (
     WorkRegistry,
     CaretakerComponent,
     CaretakerApplicationSupervisor,
+    ControlSocketServer,
+    EndpointAlreadyOwnedError,
+    cleanup_stale_endpoint,
 )
 
 
@@ -136,6 +142,99 @@ def test_unix_socket_logging_supports_multiple_emitters(tmp_path):
     thread.join(timeout=2)
     manifest = writer.close()
     assert manifest.record_count == 2
+
+
+@pytest.mark.parametrize("endpoint_kind", ["control", "log"])
+def test_duplicate_ipc_endpoint_startup_fails_without_displacing_owner(
+    tmp_path, endpoint_kind
+):
+    socket_path = tmp_path / f"{endpoint_kind}.sock"
+    writer = None
+    if endpoint_kind == "control":
+        server = ControlSocketServer(
+            socket_path,
+            lambda request, credentials: {"ok": True},
+            allowed_uids={os.getuid()},
+        )
+        duplicate = ControlSocketServer(
+            socket_path,
+            lambda request, credentials: {"ok": True},
+            allowed_uids={os.getuid()},
+        )
+    else:
+        policy = OperatorLoggingPolicy.application_defaults(
+            directory=str(tmp_path), application_id="duplicate"
+        )
+        writer = SegmentWriter(policy, run_id=uuid4(), process_start_id=uuid4())
+        server = SocketLogServer(socket_path, writer, allowed_uids={os.getuid()})
+        duplicate_writer = SegmentWriter(
+            policy, run_id=uuid4(), process_start_id=uuid4()
+        )
+        duplicate = SocketLogServer(
+            socket_path, duplicate_writer, allowed_uids={os.getuid()}
+        )
+    server.start()
+    try:
+        with pytest.raises(EndpointAlreadyOwnedError) as raised:
+            duplicate.start()
+        assert raised.value.owner is not None
+        assert raised.value.owner["pid"] == os.getpid()
+        assert raised.value.owner["process_start_id"]
+        assert raised.value.owner["instance_token"]
+        assert socket_path.exists()
+    finally:
+        server.stop()
+        if writer is not None:
+            writer.close()
+
+
+def test_stale_socket_is_removed_only_after_owner_probe_fails(tmp_path):
+    socket_path = tmp_path / "stale.sock"
+    stale_owner = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    stale_owner.bind(str(socket_path))
+    stale_owner.close()
+
+    server = ControlSocketServer(
+        socket_path,
+        lambda request, credentials: {"ok": True},
+        allowed_uids={os.getuid()},
+    )
+    try:
+        server.start()
+        assert socket_path.exists()
+    finally:
+        server.stop()
+
+
+def test_explicit_stale_endpoint_cleanup_does_not_trust_reused_pid_metadata(tmp_path):
+    socket_path = tmp_path / "stale.sock"
+    stale_owner = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    stale_owner.bind(str(socket_path))
+    stale_owner.close()
+    (tmp_path / "stale.sock.owner").write_text(
+        '{"pid": %d, "process_start_id": "different", "instance_token": "different"}'
+        % os.getpid(),
+        encoding="utf-8",
+    )
+
+    assert cleanup_stale_endpoint(socket_path) is True
+    assert not socket_path.exists()
+
+
+def test_explicit_stale_endpoint_cleanup_rejects_live_owner(tmp_path):
+    socket_path = tmp_path / "live.sock"
+    server = ControlSocketServer(
+        socket_path,
+        lambda request, credentials: {"ok": True},
+        allowed_uids={os.getuid()},
+    )
+    server.start()
+    try:
+        with pytest.raises(EndpointAlreadyOwnedError):
+            cleanup_stale_endpoint(socket_path)
+        assert socket_path.exists()
+    finally:
+        server.stop()
 
 
 def test_work_registry_exposes_active_and_recent_changes():
