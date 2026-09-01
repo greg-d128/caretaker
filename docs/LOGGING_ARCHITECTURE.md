@@ -94,6 +94,11 @@ restart/exhaustion policy, and emits the recovery audit event. Process
 creation, component disablement, and incident persistence callbacks remain
 application-owned and must pass their existing acknowledgement gates.
 
+Failure reconciliation and its idempotent recovery checkpoint are runtime-
+owned. The runtime compares persisted evidence, selects the configured policy
+action, and records pending/executed outcomes; it never treats reconciliation
+as authority and only dispatches explicitly supplied application handlers.
+
 Application monitoring and application-boundary shutdown are also implemented
 in the application-runtime package. The legacy logging supervisor delegates to
 those functions, and the runtime owner exposes them directly while preserving

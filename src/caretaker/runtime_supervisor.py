@@ -22,6 +22,7 @@ from .runtime_supervision import (
     handle_expired_worker_cohort,
     handle_worker_failure,
     handle_worker_failure_cohort,
+    reconcile_worker_failures,
     Watchdog,
     WorkRegistry,
     WorkerRegistry,
@@ -166,6 +167,27 @@ class ApplicationRuntimeSupervisor:
             collect_postmortem=collect_postmortem,
             require_complete_postmortem=require_complete_postmortem,
             reconciliation_scope=reconciliation_scope,
+        )
+
+    def reconcile_worker_failures(
+        self,
+        *,
+        scope: str | None = None,
+        minimum_sample_count: int = 30,
+        z_threshold: float = 3.0,
+        observed_at: datetime | None = None,
+        recovery_policy: Any | None = None,
+        recovery_handlers: Mapping[str, Callable[[Mapping[str, Any]], Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Reconcile worker failures through the runtime seam."""
+        return reconcile_worker_failures(
+            self._implementation,
+            scope=scope,
+            minimum_sample_count=minimum_sample_count,
+            z_threshold=z_threshold,
+            observed_at=observed_at,
+            recovery_policy=recovery_policy,
+            recovery_handlers=recovery_handlers,
         )
 
     def handle_expired_worker_cohort(

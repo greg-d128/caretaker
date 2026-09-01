@@ -38,8 +38,12 @@ from .repair_recovery import (
     deserialize_recovery_authority_packet,
     deserialize_worker_replacement_request,
     create_worker_failure_record,
+    create_worker_failure_recovery_record,
+    dispatch_recovery_action,
     evaluate_worker_acceptance,
+    reconcile_worker_failure_records,
     resolve_worker_failure_scope,
+    select_recovery_action,
     validate_worker_acceptance_policy,
     verify_recovery_authority_packet,
 )
@@ -2011,6 +2015,187 @@ def handle_worker_failure(
         },
     )
     return result
+
+
+def reconcile_worker_failures(
+    supervisor: Any,
+    *,
+    scope: str | None = None,
+    minimum_sample_count: int = 30,
+    z_threshold: float = 3.0,
+    observed_at: datetime | None = None,
+    recovery_policy: RepairRecoveryPolicy | None = None,
+    recovery_handlers: Mapping[str, Callable[[Mapping[str, Any]], Any]] | None = None,
+) -> dict[str, Any]:
+    """Reconcile failures and optionally dispatch policy-owned actions.
+
+    Reconciliation is always performed first. When ``recovery_policy`` is
+    supplied, each scope receives an explicit action decision: a conflict
+    involving critical evidence uses ``critical_evidence_action`` and
+    other failures use ``worker_failure_action``. Any effect still requires
+    an application-owned handler acknowledgement through the existing
+    action gates; evidence reconciliation never grants authority.
+    """
+    if supervisor.failure_store is None:
+        raise RuntimeError("worker failure reconciliation requires a failure store")
+    result = reconcile_worker_failure_records(
+        supervisor.failure_store,
+        scope=scope,
+        minimum_sample_count=minimum_sample_count,
+        z_threshold=z_threshold,
+        observed_at=observed_at,
+    )
+    for reconciliation in result["reconciliations"]:
+        supervisor._audit_worker_postmortem_reconciliation(reconciliation)
+    if recovery_policy is None:
+        return result
+    decisions: list[dict[str, Any]] = []
+    records = tuple(supervisor.failure_store.all_worker_failures())
+
+    def record_envelope(record: Any) -> Mapping[str, Any]:
+        envelope = (
+            getattr(record, "envelope", None)
+            or (record.get("envelope", {}) if isinstance(record, Mapping) else {})
+        )
+        return envelope if isinstance(envelope, Mapping) else {}
+
+    def record_scope(record: Any) -> str:
+        stored = getattr(record, "reconciliation_scope", None) or (
+            record.get("reconciliation_scope") if isinstance(record, Mapping) else ""
+        )
+        return str(stored or resolve_worker_failure_scope(
+            record_envelope(record),
+            failure_id=(
+                getattr(record, "failure_id", None)
+                or (record.get("failure_id") if isinstance(record, Mapping) else "")
+            ),
+        ))
+
+    for reconciliation in result["reconciliations"]:
+        reconciliation_scope = str(reconciliation["scope"])
+        reconciliation_target = str(reconciliation.get("target_id") or "")
+        scoped_records = tuple(
+            record
+            for record in records
+            if record_scope(record) == reconciliation_scope
+            and str(record_envelope(record).get("target_id") or "")
+            == reconciliation_target
+        )
+        critical_conflict = bool(reconciliation.get("conflict")) and any(
+            bool(
+                getattr(record, "critical_evidence", None)
+                or (
+                    record.get("critical_evidence")
+                    if isinstance(record, Mapping)
+                    else False
+                )
+            )
+            for record in scoped_records
+        )
+        action = (
+            recovery_policy.critical_evidence_action
+            if critical_conflict
+            else recovery_policy.worker_failure_action
+        )
+        decision = {
+            "scope": reconciliation_scope,
+            "target_id": reconciliation_target or None,
+            "reconciliation": reconciliation,
+            "critical_evidence_conflict": critical_conflict,
+            "policy_action": select_recovery_action(
+                action,
+                enabled=recovery_policy.enabled,
+            ),
+            "authority_granted": False,
+        }
+        recorder = getattr(supervisor.failure_store, "record_worker_failure_recovery", None)
+        reader = getattr(supervisor.failure_store, "all_worker_failure_recoveries", None)
+        if not callable(recorder) or not callable(reader):
+            decision["action_execution"] = {
+                "status": "CHECKPOINT_NOT_CONFIGURED",
+                "authority_granted": False,
+                "reason": "worker failure recovery checkpoint is unavailable",
+            }
+            supervisor._audit_recovery_decision(decision)
+            decisions.append(decision)
+            continue
+        pending_record = create_worker_failure_recovery_record(
+            decision,
+            action_execution={
+                "status": "PENDING",
+                "authority_granted": False,
+            },
+        )
+        existing = next(
+            (
+                item
+                for item in reader()
+                if str(
+                    getattr(item, "recovery_id", None)
+                    or (
+                        item.get("recovery_id")
+                        if isinstance(item, Mapping)
+                        else ""
+                    )
+                ) == str(pending_record.recovery_id)
+            ),
+            None,
+        )
+        decision["recovery_record_id"] = str(pending_record.recovery_id)
+        if existing is not None:
+            existing_execution = (
+                getattr(existing, "action_execution", None)
+                or (
+                    existing.get("action_execution")
+                    if isinstance(existing, Mapping)
+                    else None
+                )
+            )
+            decision["action_execution"] = dict(existing_execution or {
+                "status": "PENDING",
+                "authority_granted": False,
+            })
+            supervisor._audit_recovery_decision(decision)
+            decisions.append(decision)
+            continue
+        try:
+            recorder(pending_record)
+        except Exception as exc:
+            decision["action_execution"] = {
+                "status": "CHECKPOINT_FAILED",
+                "authority_granted": False,
+                "error": f"{type(exc).__name__}: {exc}"[:256],
+            }
+            supervisor._audit_recovery_decision(decision)
+            decisions.append(decision)
+            continue
+        execution = dispatch_recovery_action(
+            decision,
+            handlers=recovery_handlers,
+        )
+        decision["action_execution"] = execution
+        try:
+            recorder(
+                create_worker_failure_recovery_record(
+                    decision,
+                    action_execution=execution,
+                )
+            )
+        except Exception as exc:
+            decision["action_execution"] = {
+                **execution,
+                "status": "EXECUTED_CHECKPOINT_FAILED"
+                if execution.get("status") == "EXECUTED"
+                else "CHECKPOINT_FAILED_AFTER_DISPATCH",
+                "checkpoint_error": f"{type(exc).__name__}: {exc}"[:256],
+            }
+        supervisor._audit_recovery_decision(decision)
+        decisions.append(decision)
+    return {
+        **result,
+        "recovery_decisions": tuple(decisions),
+        "authority_granted": False,
+    }
 
 
 def handle_worker_failure_cohort(

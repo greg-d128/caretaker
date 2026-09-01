@@ -2227,10 +2227,11 @@ is also application-runtime code, with a logging compatibility re-export;
 process creation and cleanup remain application-owned callbacks. The bounded
 control-cycle implementation now lives in the application package and is
 exposed directly by `ApplicationRuntimeSupervisor`. Application monitoring,
-process-boundary shutdown, failure evidence capture, and single-worker failure
-handling now use application-runtime implementations. Remaining work is to
-extract reconciliation/action-checkpoint orchestration while keeping recovery
-handlers application-owned.
+process-boundary shutdown, failure evidence capture, single-worker failure
+handling, and failure reconciliation/action checkpoints now use
+application-runtime implementations. Recovery handlers remain application-
+owned; remaining work is to extract only the other specialized orchestration
+boundaries without broadening the application authority boundary.
 
 `logging/supervisor.py` and `logging/__init__.py` currently include application
 supervision, worker health/authority, adaptive coordination, and recovery
