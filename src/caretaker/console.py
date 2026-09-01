@@ -327,6 +327,14 @@ class CaretakerConsoleApp(App):
     #adaptive-threshold-proposal-reason { width: 2fr; min-width: 20; margin-left: 1; }
     #adaptive-threshold-proposal-submit Checkbox { margin-left: 1; }
     #adaptive-threshold-proposal-submit Button { width: auto; min-width: 18; margin-left: 1; }
+    #adaptive-repair-handoff-actions {
+        height: 6;
+        padding: 0 1;
+        align-vertical: middle;
+    }
+    #adaptive-repair-handoff-actions Input { width: 1fr; min-width: 20; }
+    #adaptive-repair-handoff-actions Button { width: auto; min-width: 18; margin-left: 1; }
+    #adaptive-repair-handoff-actions Checkbox { margin-left: 1; }
     #adaptive-aggregation-table { height: 1fr; }
     #adaptive-aggregation-policy-status {
         height: auto;
@@ -710,6 +718,7 @@ class CaretakerConsoleApp(App):
         self._adaptive_aggregation_status: dict[str, Any] = {}
         self._adaptive_aggregation_records: list[dict[str, Any]] = []
         self._selected_adaptive_threshold_request_id: str | None = None
+        self._selected_adaptive_repair_request_id: str | None = None
         self._selected_adaptive_transition_request_id: str | None = None
         self._rollout_records: list[dict[str, Any]] = []
         self._rollout_transitions: list[dict[str, Any]] = []
@@ -1010,7 +1019,7 @@ class CaretakerConsoleApp(App):
             with TabPane("Adaptive", id="adaptive"):
                 yield Static(
                     "Supervisor-owned adaptive aggregation and Behavior transition requests. "
-                    "Inspection is read-only; threshold proposals and reviews are advisory, and transition application remains worker- and policy-gated.",
+                    "Inspection is read-only; threshold proposals and reviews are advisory. An operator-reviewed Repair handoff queues the ordinary Repair path and remains subject to all Repair gates.",
                     id="adaptive-aggregation-help",
                 )
                 with Horizontal(id="adaptive-aggregation-toolbar"):
@@ -1083,6 +1092,39 @@ class CaretakerConsoleApp(App):
                         id="adaptive-threshold-accept",
                         disabled=True,
                         variant="primary",
+                    )
+                with Horizontal(id="adaptive-repair-handoff-actions"):
+                    yield Input(
+                        placeholder="Reason for reviewing or handing off selected Repair proposal",
+                        id="adaptive-repair-handoff-reason",
+                        max_length=512,
+                    )
+                    yield Checkbox(
+                        "Confirm Repair review",
+                        id="adaptive-repair-review-confirm",
+                        disabled=True,
+                    )
+                    yield Button(
+                        "Approve Repair handoff",
+                        id="adaptive-repair-review-approve",
+                        disabled=True,
+                    )
+                    yield Button(
+                        "Reject Repair proposal",
+                        id="adaptive-repair-review-reject",
+                        disabled=True,
+                        variant="warning",
+                    )
+                    yield Checkbox(
+                        "Confirm queue",
+                        id="adaptive-repair-promote-confirm",
+                        disabled=True,
+                    )
+                    yield Button(
+                        "Queue Repair evaluation",
+                        id="adaptive-repair-promote",
+                        disabled=True,
+                        variant="warning",
                     )
                 with Vertical(id="adaptive-threshold-proposal-actions"):
                     with Horizontal(id="adaptive-threshold-proposal-fields"):
@@ -2489,7 +2531,23 @@ class CaretakerConsoleApp(App):
                 "#adaptive-aggregation-output",
                 record.get("payload") or record,
             )
-            if record.get("kind") == "THRESHOLD":
+            if record.get("kind") == "REPAIR_PROPOSAL":
+                payload = record.get("payload") or {}
+                context_status = str(payload.get("context_status") or "").upper()
+                self._selected_adaptive_repair_request_id = (
+                    str(payload.get("request_id") or "").strip()
+                    if not context_status.startswith("STALE_")
+                    else None
+                )
+                self._selected_adaptive_threshold_request_id = None
+                self._selected_adaptive_transition_request_id = None
+                reason = self.query_one("#adaptive-repair-handoff-reason", Input)
+                reason.value = ""
+                self._refresh_adaptive_repair_handoff_actions()
+                self._refresh_adaptive_threshold_review_actions()
+                self._refresh_adaptive_threshold_rollback_actions()
+                self._refresh_adaptive_threshold_acceptance_actions()
+            elif record.get("kind") == "THRESHOLD":
                 payload = record.get("payload") or {}
                 review_status = str(payload.get("review_status") or "UNREVIEWED").upper()
                 context_status = str(payload.get("context_status") or "").upper()
@@ -2512,7 +2570,9 @@ class CaretakerConsoleApp(App):
                     ).text = json.dumps(changes, indent=2, sort_keys=True)
                 self._refresh_adaptive_threshold_proposal_actions()
             else:
+                self._selected_adaptive_repair_request_id = None
                 self._selected_adaptive_threshold_request_id = None
+                self._refresh_adaptive_repair_handoff_actions()
                 self._refresh_adaptive_threshold_review_actions()
                 payload = record.get("payload") or {}
                 request_kind = str(payload.get("request_kind") or "")
@@ -3660,6 +3720,10 @@ class CaretakerConsoleApp(App):
             self._refresh_adaptive_threshold_review_actions()
             self._refresh_adaptive_threshold_rollback_actions()
             self._refresh_adaptive_threshold_acceptance_actions()
+        elif event.input.id == "adaptive-repair-handoff-reason":
+            self.query_one("#adaptive-repair-review-confirm", Checkbox).value = False
+            self.query_one("#adaptive-repair-promote-confirm", Checkbox).value = False
+            self._refresh_adaptive_repair_handoff_actions()
         elif event.input.id in {
             "adaptive-threshold-proposal-target",
             "adaptive-threshold-proposal-scope",
@@ -3738,6 +3802,11 @@ class CaretakerConsoleApp(App):
             self._refresh_adaptive_threshold_acceptance_actions()
         elif event.checkbox.id == "adaptive-threshold-proposal-confirm":
             self._refresh_adaptive_threshold_proposal_actions()
+        elif event.checkbox.id in {
+            "adaptive-repair-review-confirm",
+            "adaptive-repair-promote-confirm",
+        }:
+            self._refresh_adaptive_repair_handoff_actions()
         elif event.checkbox.id == "worker-failure-recovery-apply-confirm":
             self._refresh_worker_failure_recovery_actions()
         elif event.checkbox.id in {
@@ -4781,8 +4850,10 @@ class CaretakerConsoleApp(App):
         output = self.query_one("#adaptive-aggregation-output", RichLog)
         output.clear()
         self._selected_adaptive_threshold_request_id = None
+        self._selected_adaptive_repair_request_id = None
         self._selected_adaptive_transition_request_id = None
         self._refresh_adaptive_threshold_review_actions()
+        self._refresh_adaptive_repair_handoff_actions()
         self._refresh_adaptive_threshold_rollback_actions()
         self._refresh_adaptive_threshold_acceptance_actions()
         try:
@@ -4994,6 +5065,11 @@ class CaretakerConsoleApp(App):
                         f"{len(item.get('changes') or {})} fields / "
                         f"{item.get('review_status') or 'UNREVIEWED'}"
                         if row_kind == "THRESHOLD"
+                        else (
+                            f"review={item.get('review_status') or 'UNREVIEWED'} / "
+                            f"handoff={item.get('handoff_status') or 'NOT_REQUESTED'}"
+                        )
+                        if row_kind == "REPAIR_PROPOSAL"
                         else f"{item.get('acknowledgement_count', 0)}/{required_count} acks"
                     )
                     + (
@@ -5023,6 +5099,7 @@ class CaretakerConsoleApp(App):
             f"Policy lineage {len(policy_ledger)} ({min(len(policy_ledger), 100)} shown) | "
             f"Accepted {len(policy_acceptances)} | "
             f"Proposal reviews {sum(1 for item in transitions if isinstance(item, Mapping) and item.get('review_status') not in {None, 'UNREVIEWED'})} | "
+            f"Repair handoffs {len(response.get('repair_handoffs') or ())} | "
             f"Expired {expired} | "
             f"Distribution conflicts {sum(1 for item in rows if item['kind'] == 'CONFLICT')} | "
             "Read-only inspection except separately gated policy application; worker acknowledgements remain explicit"
@@ -5089,6 +5166,53 @@ class CaretakerConsoleApp(App):
             and reason.value.strip()
             and effective
         )
+
+    def _refresh_adaptive_repair_handoff_actions(self) -> None:
+        """Enable explicit review and handoff only for a live Repair proposal."""
+        selected = bool(self._selected_adaptive_repair_request_id)
+        review_confirm = self.query_one("#adaptive-repair-review-confirm", Checkbox)
+        promote_confirm = self.query_one("#adaptive-repair-promote-confirm", Checkbox)
+        reason = self.query_one("#adaptive-repair-handoff-reason", Input)
+        review_confirm.disabled = not selected
+        promote_confirm.disabled = not selected
+        if not selected:
+            review_confirm.value = False
+            promote_confirm.value = False
+        selected_record = next(
+            (
+                item
+                for item in self._adaptive_aggregation_records
+                if item.get("kind") == "REPAIR_PROPOSAL"
+                and str((item.get("payload") or {}).get("request_id") or "")
+                == self._selected_adaptive_repair_request_id
+            ),
+            None,
+        )
+        payload = selected_record.get("payload") if selected_record else {}
+        payload = payload if isinstance(payload, Mapping) else {}
+        review_status = str(payload.get("review_status") or "UNREVIEWED").upper()
+        context_status = str(payload.get("context_status") or "").upper()
+        handoff_status = str(payload.get("handoff_status") or "NOT_REQUESTED").upper()
+        review_enabled = bool(
+            selected
+            and self._application_running is True
+            and review_confirm.value
+            and reason.value.strip()
+            and context_status == "CURRENT"
+            and review_status == "UNREVIEWED"
+        )
+        promote_enabled = bool(
+            selected
+            and self._application_running is True
+            and promote_confirm.value
+            and reason.value.strip()
+            and context_status == "CURRENT"
+            and review_status == "APPROVED_FOR_REPAIR_HANDOFF"
+            and handoff_status == "NOT_REQUESTED"
+        )
+        self.query_one("#adaptive-repair-review-approve", Button).disabled = not review_enabled
+        self.query_one("#adaptive-repair-review-reject", Button).disabled = not review_enabled
+        self.query_one("#adaptive-repair-promote", Button).disabled = not promote_enabled
 
     def _refresh_adaptive_threshold_rollback_actions(self) -> None:
         """Enable rollback only for a live, not-yet-accepted transition."""
@@ -6046,6 +6170,54 @@ class CaretakerConsoleApp(App):
                 self._write_json("#adaptive-aggregation-output", response)
                 return
             if button == "adaptive-aggregation-refresh":
+                await self.refresh_adaptive_aggregation()
+                return
+            if button in {
+                "adaptive-repair-review-approve",
+                "adaptive-repair-review-reject",
+            }:
+                request_id = self._selected_adaptive_repair_request_id
+                if not request_id:
+                    raise ValueError("Select a Repair proposal before reviewing it")
+                if self._application_running is not True:
+                    raise RuntimeError("Repair proposal review requires a live runtime")
+                if not self.query_one("#adaptive-repair-review-confirm", Checkbox).value:
+                    raise ValueError("Confirm the Repair proposal review first")
+                reason = self.query_one("#adaptive-repair-handoff-reason", Input).value.strip()
+                if not reason:
+                    raise ValueError("Repair proposal review requires an operator reason")
+                decision = (
+                    "APPROVE"
+                    if button == "adaptive-repair-review-approve"
+                    else "REJECT"
+                )
+                response = await self._request(
+                    "adaptive-repair-review",
+                    request_id=request_id,
+                    decision=decision,
+                    reason=reason,
+                )
+                self._write_json("#adaptive-aggregation-output", response)
+                await self.refresh_adaptive_aggregation()
+                return
+            if button == "adaptive-repair-promote":
+                request_id = self._selected_adaptive_repair_request_id
+                if not request_id:
+                    raise ValueError("Select a Repair proposal before handing it off")
+                if self._application_running is not True:
+                    raise RuntimeError("Repair handoff requires a live runtime")
+                if not self.query_one("#adaptive-repair-promote-confirm", Checkbox).value:
+                    raise ValueError("Confirm queueing the Repair evaluation first")
+                reason = self.query_one("#adaptive-repair-handoff-reason", Input).value.strip()
+                if not reason:
+                    raise ValueError("Repair handoff requires an operator reason")
+                response = await self._request(
+                    "adaptive-repair-promote",
+                    request_id=request_id,
+                    confirm=True,
+                    reason=reason,
+                )
+                self._write_json("#adaptive-aggregation-output", response)
                 await self.refresh_adaptive_aggregation()
                 return
             if button in {

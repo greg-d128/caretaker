@@ -392,3 +392,18 @@ queue. This is an operator-visibility projection only: selecting or reviewing
 the row does not create a Repair episode, activate a candidate, acknowledge a
 transition, or grant execution authority. The ordinary Repair policy,
 validation, approval, and authority gates remain required.
+
+An authenticated operator may now review a proposal explicitly and, after a
+second confirmation, request an `ADAPTIVE_REPAIR_HANDOFF`. The supervisor
+persists the proposal review and handoff before calling an application-owned
+runtime callback. The callback must explicitly acknowledge that the handoff
+was queued; a missing, rejected, or failed callback is retained as bounded
+outcome evidence and is not retried automatically after restart. The
+application rechecks the target code hash and current authority before
+queueing one handoff for the next decorated call. That call enters the
+ordinary Repair incident path with the retained adaptive evidence as bounded
+metadata, so the configured Repair policy, candidate validation, operator
+approval, and activation/rollout gates still decide what happens. The handoff
+cannot modify policy, create authority, activate a candidate, or claim that an
+external effect was reversed. Duplicate handoffs are idempotent and stale
+code or authority context fails closed.

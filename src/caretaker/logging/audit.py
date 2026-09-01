@@ -305,6 +305,17 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
             "authority_granted": False,
         },
     ),
+    "ADAPTIVE_REPAIR_HANDOFF": _event_definition(
+        description="An operator-reviewed adaptive Repair proposal was reviewed or handed to the ordinary Repair workflow.",
+        minimum_priority=EvidencePriority.CRITICAL,
+        required_fields=("scope.target_id", "outcome.state"),
+        example={
+            "target_id": "demo.target",
+            "state": "DISPATCHED",
+            "automatic_activation": False,
+            "authority_granted": False,
+        },
+    ),
     "ADAPTIVE_AGGREGATION_BACKPRESSURE": _event_definition(
         description="Adaptive worker evidence submission encountered policy-controlled backpressure.",
         minimum_priority=EvidencePriority.CRITICAL,

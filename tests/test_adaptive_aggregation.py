@@ -76,6 +76,80 @@ def _context():
     }
 
 
+def _repair_proposal(store: SupervisorAdaptiveAggregationStore) -> tuple[dict[str, object], dict[str, str]]:
+    """Create a complete supervisor Repair-evidence proposal for handoff tests."""
+    first = _batch(batch_id="00000000-0000-0000-0000-000000000101")
+    second = _batch(
+        batch_id="00000000-0000-0000-0000-000000000102",
+        worker_id="worker-b",
+    )
+    store.submit(first)
+    store.submit(second)
+    reconcile_context = _context()
+    store.reconcile(**reconcile_context)
+    context = {
+        "current_generations": {"example.target": "generation-a"},
+        "policy_fingerprints": {"example.target": "policy-a"},
+        "authority_policy_generation": "7",
+        "authority_policy_fingerprint": "authority-a",
+    }
+    policy = {
+        "exception": {
+            "enabled": True,
+            "occurrences": 2,
+            "window_seconds": 3600,
+            "promote_to": "REPAIR",
+        },
+        "soft_timing": {
+            "enabled": False,
+            "occurrences": 2,
+            "window_seconds": 3600,
+            "promote_to": "BEHAVIOR",
+        },
+        "repair_evidence": {
+            "enabled": True,
+            "minimum_behavior_samples": 1,
+            "minimum_observation_calls": 1,
+            "minimum_duration_seconds": 0,
+            "require_problem_reproduction": True,
+        },
+    }
+    store.evaluate_promotions(
+        **reconcile_context,
+        promotion_policies={"example.target": policy},
+    )
+    transition = next(
+        item
+        for item in store.list_transition_requests()
+        if item["request_kind"] == "ADAPTIVE_PROMOTION"
+    )
+    ack = {
+        "request_id": transition["request_id"],
+        "worker_id": "worker-a",
+        "target_id": transition["target_id"],
+        "generation_id": transition["generation_id"],
+        "code_hash": transition["code_hash"],
+        "monitoring_fingerprint": transition["monitoring_fingerprint"],
+        "policy_fingerprint": transition["policy_fingerprint"],
+        "authority_policy_generation": transition["authority_policy_generation"],
+        "authority_policy_fingerprint": transition["authority_policy_fingerprint"],
+        "applied": True,
+        "observed_level": "BEHAVIOR",
+    }
+    store.acknowledge_transition(ack, peer_pid=101, **context)
+    store.acknowledge_transition({**ack, "worker_id": "worker-b"}, peer_pid=101, **context)
+    store.evaluate_promotions(
+        **reconcile_context,
+        promotion_policies={"example.target": policy},
+    )
+    proposal = next(
+        item
+        for item in store.list_transition_requests()
+        if item["request_kind"] == "ADAPTIVE_REPAIR_PROPOSAL"
+    )
+    return proposal, context
+
+
 def test_fixed_scoped_threshold_activation_targets_only_that_population():
     settings = _adaptive_threshold_policy_settings(
         {"exception.occurrences": 2},
@@ -1669,6 +1743,82 @@ def test_supervisor_creates_context_bound_promotion_and_tracks_worker_acknowledg
     assert proposal["requested_level"] == "REPAIR"
     with pytest.raises(PermissionError, match="Behavior promotion"):
         store.acknowledge_transition(ack | {"request_id": proposal["request_id"]}, peer_pid=101)
+
+
+def test_adaptive_repair_proposal_review_and_handoff_are_context_bound(tmp_path: Path):
+    store = SupervisorAdaptiveAggregationStore(tmp_path)
+    proposal, context = _repair_proposal(store)
+
+    review = store.review_repair_proposal(
+        str(proposal["request_id"]),
+        decision="APPROVE",
+        reviewed_by="uid:1001",
+        reason="operator reviewed the retained application-wide evidence",
+        **context,
+    )
+    assert review["review_status"] == "APPROVED_FOR_REPAIR_HANDOFF"
+    assert review["policy_mutated"] is False
+    assert review["authority_granted"] is False
+
+    dispatched: list[dict[str, object]] = []
+
+    def dispatch(handoff):
+        dispatched.append(dict(handoff))
+        return {"accepted": True, "queued": True}
+
+    handoff = store.create_adaptive_repair_handoff(
+        str(proposal["request_id"]),
+        promoted_by="uid:1001",
+        reason="begin ordinary Repair evaluation under operator authority",
+        dispatch_callback=dispatch,
+        **context,
+    )
+    assert handoff["status"] == "DISPATCHED"
+    assert handoff["outcome"]["accepted"] is True
+    assert handoff["policy_mutated"] is False
+    assert handoff["authority_granted"] is False
+    assert len(dispatched) == 1
+
+    duplicate = store.create_adaptive_repair_handoff(
+        str(proposal["request_id"]),
+        promoted_by="uid:1001",
+        reason="retry must not dispatch twice",
+        dispatch_callback=lambda _: pytest.fail("duplicate handoff was dispatched"),
+        **context,
+    )
+    assert duplicate["duplicate"] is True
+    assert duplicate["status"] == "DISPATCHED"
+    listed = store.list_transition_requests(**context)
+    listed_proposal = next(
+        item
+        for item in listed
+        if item["request_kind"] == "ADAPTIVE_REPAIR_PROPOSAL"
+    )
+    assert listed_proposal["review_status"] == "APPROVED_FOR_REPAIR_HANDOFF"
+    assert listed_proposal["handoff_status"] == "DISPATCHED"
+
+    with pytest.raises(PermissionError, match="STALE_POLICY"):
+        store.create_adaptive_repair_handoff(
+            str(proposal["request_id"]),
+            promoted_by="uid:1001",
+            reason="stale context must fail closed",
+            current_generations=context["current_generations"],
+            policy_fingerprints={"example.target": "policy-b"},
+            authority_policy_generation=context["authority_policy_generation"],
+            authority_policy_fingerprint=context["authority_policy_fingerprint"],
+        )
+
+
+def test_adaptive_repair_proposal_rejects_handoff_without_review(tmp_path: Path):
+    store = SupervisorAdaptiveAggregationStore(tmp_path)
+    proposal, context = _repair_proposal(store)
+    with pytest.raises(PermissionError, match="approved operator review"):
+        store.create_adaptive_repair_handoff(
+            str(proposal["request_id"]),
+            promoted_by="uid:1001",
+            reason="must review first",
+            **context,
+        )
 
 
 def test_aggregated_exception_threshold_waits_for_supervisor_request(tmp_path: Path):

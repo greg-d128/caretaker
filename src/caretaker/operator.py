@@ -660,6 +660,52 @@ class OperatorRuntimeRegistry:
                 return {"ok": True, "promotion": _jsonable(promotion)}
             raise KeyError(f"No eligible Guard target found for {target_id}")
 
+        if command == "adaptive-repair-handoff":
+            handoff = request.get("handoff")
+            if not isinstance(handoff, dict):
+                raise ValueError("adaptive-repair-handoff requires a handoff object")
+            target_id = str(handoff.get("target_id") or "").strip()
+            if not target_id:
+                raise ValueError("adaptive-repair-handoff requires handoff.target_id")
+            # In a supervised child, only the supervisor's previously persisted
+            # pending handoff may cross this runtime boundary.  This prevents a
+            # caller from inventing a proposal or replaying an already-dispatched
+            # handoff through the generic runtime forwarding command.
+            if os.environ.get("CARETAKER_SUPERVISOR_CONTROL_SOCKET"):
+                from .adaptive_aggregation import SupervisorAdaptiveAggregationStore
+
+                proposal_id = str(handoff.get("proposal_request_id") or "").strip()
+                persisted = SupervisorAdaptiveAggregationStore(
+                    os.environ.get("CARETAKER_DATA_DIR", "./caretaker-data")
+                ).list_repair_handoffs(proposal_request_id=proposal_id)
+                matching = next(
+                    (
+                        item
+                        for item in persisted
+                        if str(item.get("handoff_id") or "")
+                        == str(handoff.get("handoff_id") or "")
+                    ),
+                    None,
+                )
+                if matching is None or str(matching.get("status") or "").upper() != "PENDING":
+                    raise PermissionError(
+                        "adaptive Repair handoff is not a persisted pending supervisor request"
+                    )
+                stored_handoff = {
+                    key: value
+                    for key, value in matching.items()
+                    if key not in {"outcome", "status"}
+                }
+                if stored_handoff != handoff:
+                    raise PermissionError(
+                        "adaptive Repair handoff does not match its persisted supervisor request"
+                    )
+            engine = self._repair_engine_for_target(target_id)
+            return {
+                "ok": True,
+                "handoff": engine.queue_adaptive_repair_handoff(handoff),
+            }
+
         if command in {
             "guard-summary",
             "guard-events",

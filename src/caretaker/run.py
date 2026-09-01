@@ -2089,6 +2089,9 @@ def main(argv: list[str] | None = None) -> int:
                         **transition_context_kwargs,
                     )
                 ),
+                "repair_handoffs": list(
+                    adaptive_aggregation_store.list_repair_handoffs()
+                ),
                 "policy_ledger": list(
                     adaptive_aggregation_store.list_policy_transition_ledger()
                 ),
@@ -2332,6 +2335,9 @@ def main(argv: list[str] | None = None) -> int:
                         **transition_context_kwargs,
                     )
                 ),
+                "repair_handoffs": list(
+                    adaptive_aggregation_store.list_repair_handoffs(limit=limit)
+                ),
                 "policy_ledger": list(
                     adaptive_aggregation_store.list_policy_transition_ledger()
                 ),
@@ -2475,6 +2481,155 @@ def main(argv: list[str] | None = None) -> int:
                 priority=EvidencePriority.CRITICAL,
             )
             return {"ok": True, "review": review}
+        if command == "adaptive-repair-review":
+            request_id = str(request.get("request_id") or "").strip()
+            if not request_id:
+                raise ValueError("adaptive-repair-review requires request_id")
+            adaptive_context = current_adaptive_context()
+            if adaptive_context is None:
+                raise PermissionError(
+                    "adaptive Repair review requires current worker context"
+                )
+            current_generations, policy_fingerprints, _, _ = adaptive_context
+            effective_authority = authority.effective
+            proposals = adaptive_aggregation_store.list_transition_requests(
+                request_id=request_id,
+                current_generations=current_generations,
+                policy_fingerprints=policy_fingerprints,
+                authority_policy_generation=str(effective_authority.generation),
+                authority_policy_fingerprint=effective_authority.fingerprint,
+            )
+            if len(proposals) != 1:
+                raise KeyError(f"No adaptive Repair proposal found for {request_id}")
+            proposal = proposals[0]
+            if proposal.get("request_kind") != "ADAPTIVE_REPAIR_PROPOSAL":
+                raise PermissionError("adaptive Repair review requires a Repair proposal")
+            review = adaptive_aggregation_store.review_repair_proposal(
+                request_id,
+                decision=str(request.get("decision") or ""),
+                reviewed_by=f"uid:{credentials[1]}",
+                reason=str(request.get("reason") or ""),
+                current_generations=current_generations,
+                policy_fingerprints=policy_fingerprints,
+                authority_policy_generation=str(effective_authority.generation),
+                authority_policy_fingerprint=effective_authority.fingerprint,
+            )
+            runtime.audit.emit(
+                "ADAPTIVE_REPAIR_HANDOFF",
+                actor={"type": "operator", "id": f"uid:{credentials[1]}"},
+                scope={
+                    "target_id": proposal.get("target_id"),
+                    "aggregation_scope": proposal.get("aggregation_scope"),
+                    "proposal_request_id": request_id,
+                },
+                policy={
+                    "fingerprint": proposal.get("policy_fingerprint"),
+                    "authority_generation": effective_authority.generation,
+                },
+                outcome={
+                    "state": review.get("review_status"),
+                    "authority_granted": False,
+                },
+                details={
+                    "operation": "REVIEW",
+                    "reviewed_by": review.get("reviewed_by"),
+                    "policy_mutated": False,
+                    "authority_granted": False,
+                },
+                priority=EvidencePriority.CRITICAL,
+            )
+            return {"ok": True, "review": review}
+        if command == "adaptive-repair-promote":
+            request_id = str(request.get("request_id") or "").strip()
+            if not request_id:
+                raise ValueError("adaptive-repair-promote requires request_id")
+            if request.get("confirm") is not True:
+                raise PermissionError("adaptive-repair-promote requires confirm=true")
+            reason = str(request.get("reason") or "").strip()
+            if not reason:
+                raise ValueError("adaptive Repair handoff requires an operator reason")
+            adaptive_context = current_adaptive_context()
+            if adaptive_context is None:
+                raise PermissionError(
+                    "adaptive Repair handoff requires current worker context"
+                )
+            current_generations, policy_fingerprints, _, _ = adaptive_context
+            effective_authority = authority.effective
+            proposals = adaptive_aggregation_store.list_transition_requests(
+                request_id=request_id,
+                current_generations=current_generations,
+                policy_fingerprints=policy_fingerprints,
+                authority_policy_generation=str(effective_authority.generation),
+                authority_policy_fingerprint=effective_authority.fingerprint,
+            )
+            if len(proposals) != 1:
+                raise KeyError(f"No adaptive Repair proposal found for {request_id}")
+            proposal = proposals[0]
+            if proposal.get("request_kind") != "ADAPTIVE_REPAIR_PROPOSAL":
+                raise PermissionError("adaptive Repair handoff requires a Repair proposal")
+            if proposal.get("review_status") != "APPROVED_FOR_REPAIR_HANDOFF":
+                raise PermissionError(
+                    "adaptive Repair handoff requires an approved operator review"
+                )
+
+            def dispatch(handoff: Mapping[str, Any]) -> Mapping[str, Any]:
+                if not unix_socket_exists(runtime_control_socket):
+                    raise RuntimeError("application runtime control is unavailable")
+                response = control_request(
+                    runtime_control_socket,
+                    {"command": "adaptive-repair-handoff", "handoff": dict(handoff)},
+                )
+                if not isinstance(response, Mapping) or response.get("ok") is not True:
+                    raise RuntimeError(
+                        str(response.get("error") if isinstance(response, Mapping) else response)
+                    )
+                result = response.get("handoff")
+                return result if isinstance(result, Mapping) else {"accepted": False}
+
+            handoff = adaptive_aggregation_store.create_adaptive_repair_handoff(
+                request_id,
+                promoted_by=f"uid:{credentials[1]}",
+                reason=reason,
+                current_generations=current_generations,
+                policy_fingerprints=policy_fingerprints,
+                authority_policy_generation=str(effective_authority.generation),
+                authority_policy_fingerprint=effective_authority.fingerprint,
+                dispatch_callback=dispatch,
+            )
+            outcome = handoff.get("outcome") if isinstance(handoff, Mapping) else None
+            runtime.audit.emit(
+                "ADAPTIVE_REPAIR_HANDOFF",
+                actor={"type": "operator", "id": f"uid:{credentials[1]}"},
+                scope={
+                    "target_id": proposal.get("target_id"),
+                    "aggregation_scope": proposal.get("aggregation_scope"),
+                    "proposal_request_id": request_id,
+                    "handoff_id": handoff.get("handoff_id"),
+                },
+                policy={
+                    "fingerprint": proposal.get("policy_fingerprint"),
+                    "authority_generation": effective_authority.generation,
+                },
+                outcome={
+                    "state": handoff.get("status") or "PENDING",
+                    "authority_granted": False,
+                },
+                details={
+                    "operation": "PROMOTE_TO_REPAIR_WORKFLOW",
+                    "accepted": outcome.get("accepted") if isinstance(outcome, Mapping) else False,
+                    "policy_mutated": False,
+                    "authority_granted": False,
+                    "automatic_activation": False,
+                },
+                priority=EvidencePriority.CRITICAL,
+            )
+            return {
+                "ok": True,
+                "handoff": handoff,
+                "automatic_activation": False,
+                "policy_mutated": False,
+                "authority_granted": False,
+            }
         if command == "adaptive-threshold-apply":
             request_id = str(request.get("request_id") or "").strip()
             if not request_id:

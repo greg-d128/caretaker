@@ -140,6 +140,7 @@ All event types share these redaction rules:
 | `INCIDENT_COMMUNICATION_REVIEWED` | `CRITICAL` | `scope.communication_id`, `outcome.state` | `{"communication_id": "communication-uuid", "state": "APPROVED", "delivery_authorized": false}` |
 | `ADAPTIVE_AGGREGATION_RECONCILED` | `IMPORTANT` | `scope.aggregation_scope`, `outcome.state` | `{"scope": "application", "state": "RECONCILED", "merged": 3, "rejected": 0, "authority_granted": false}` |
 | `ADAPTIVE_REPAIR_PROPOSAL` | `CRITICAL` | `scope.aggregation_scope`, `outcome.state` | `{"scope": "application", "state": "PROPOSAL_ONLY", "proposal_count": 1, "authority_granted": false}` |
+| `ADAPTIVE_REPAIR_HANDOFF` | `CRITICAL` | `scope.target_id`, `outcome.state` | `{"target_id": "demo.target", "state": "DISPATCHED", "automatic_activation": false, "authority_granted": false}` |
 | `ADAPTIVE_AGGREGATION_BACKPRESSURE` | `CRITICAL` | `scope.target_id`, `outcome.state` | `{"target_id": "demo.target", "state": "INCIDENT_RECORDED", "action": "INCIDENT", "pending_records": 4, "authority_granted": false}` |
 | `ADAPTIVE_BATCH_REVALIDATED` | `IMPORTANT` | `scope.batch_id`, `outcome.state` | `{"batch_id": "batch-uuid", "state": "VALIDATED", "aggregate_modified": false, "authority_granted": false}` |
 | `ADAPTIVE_POLICY_INSTALLATION` | `CRITICAL` | `scope.acceptance_id`, `outcome.state` | `{"acceptance_id": "acceptance-uuid", "installation_id": "installation-uuid", "state": "INSTALLED", "policy_mutated": false, "authority_granted": false}` |

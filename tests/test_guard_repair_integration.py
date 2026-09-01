@@ -121,6 +121,52 @@ def test_guard_can_queue_behavior_repair_for_next_decorated_call() -> None:
     assert target.slot.load().number == 1
 
 
+def test_operator_approved_adaptive_handoff_enters_normal_repair_path_once() -> None:
+    provider = StaticRepairProvider(
+        [
+            CandidateProposal(
+                source="def ordinary(value: int) -> int:\n    return value * 10\n",
+                explanation="Respond to retained adaptive evidence",
+            )
+        ]
+    )
+    engine = RepairEngine(provider=provider)
+    wrapped = repair(policy=_repair_policy(), engine=engine)(ordinary)
+    target = wrapped.__caretaker_target__
+    version = target.slot.load()
+    handoff = {
+        "handoff_id": str(uuid4()),
+        "proposal_request_id": str(uuid4()),
+        "target_id": target.target_id,
+        "generation_id": version.source_hash,
+        "code_hash": version.source_hash,
+        "monitoring_fingerprint": "adaptive-monitoring",
+        "policy_fingerprint": "adaptive-policy",
+        "authority_policy_generation": "0",
+        "authority_policy_fingerprint": "unconfigured",
+        "requested_level": "REPAIR",
+        "promoted_by": "uid:1001",
+        "reason": "operator approved retained application-wide evidence",
+        "policy_mutated": False,
+        "authority_granted": False,
+    }
+
+    queued = engine.queue_adaptive_repair_handoff(handoff)
+    assert queued["accepted"] is True
+    assert queued["authority_granted"] is False
+    duplicate = engine.queue_adaptive_repair_handoff(handoff)
+    assert duplicate["duplicate"] is True
+    assert wrapped(4) == 40
+    assert target.slot.load().number == 1
+    assert len(engine.store.incidents) == 1
+
+    stale = dict(handoff)
+    stale["handoff_id"] = str(uuid4())
+    stale["code_hash"] = "stale-code-hash"
+    with pytest.raises(PermissionError, match="code identity"):
+        engine.queue_adaptive_repair_handoff(stale)
+
+
 def test_guard_control_plane_can_roll_back_active_candidate() -> None:
     guard = GuardEngine(policy=_guard_policy())
     provider = StaticRepairProvider(

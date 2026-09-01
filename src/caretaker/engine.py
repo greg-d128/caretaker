@@ -78,6 +78,9 @@ from .state import (
 )
 from .store import InMemoryRepairStore, RepairStore
 from .telemetry import CorrelatedLogHandler, logger
+
+
+_MAX_CONSUMED_ADAPTIVE_REPAIR_HANDOFFS = 4096
 from .validation import (
     ValidationBackend,
     ValidationBackendRegistry,
@@ -184,6 +187,8 @@ class RepairEngine:
         self._repair_history: dict[tuple[str, str], list[datetime]] = {}
         self._attempt_cache: dict[UUID, RepairAttempt] = {}
         self._pending_guard_deviations: dict[str, tuple[Any, ...]] = {}
+        self._pending_adaptive_repair_handoffs: dict[str, dict[str, Any]] = {}
+        self._consumed_adaptive_repair_handoffs: set[str] = set()
         self._pending_approvals: dict[UUID, PendingRepairApproval] = {}
         self._declared_policies: dict[str, RepairPolicy] = {}
         self._activity_lock = threading.RLock()
@@ -577,6 +582,105 @@ class RepairEngine:
             )
         )
 
+    def queue_adaptive_repair_handoff(
+        self,
+        handoff: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Queue one operator-approved adaptive Repair request for the next call.
+
+        The supervisor handoff is evidence and an explicit operator request,
+        not a candidate or authority packet.  The application rechecks the
+        code identity and current authority before accepting it; the normal
+        Repair engine then performs all policy, validation, approval, and
+        activation checks when the next call supplies runtime state.
+        """
+        if not isinstance(handoff, Mapping):
+            raise ValueError("adaptive Repair handoff must be an object")
+        handoff_id = str(handoff.get("handoff_id") or "").strip()
+        try:
+            handoff_id = str(UUID(handoff_id))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("adaptive Repair handoff requires a valid handoff_id") from exc
+        target_id = str(handoff.get("target_id") or "").strip()
+        if not target_id:
+            raise ValueError("adaptive Repair handoff requires target_id")
+        if str(handoff.get("requested_level") or "").upper() != "REPAIR":
+            raise PermissionError("adaptive Repair handoff must request Repair")
+        if handoff.get("authority_granted") is not False or handoff.get("policy_mutated") is not False:
+            raise PermissionError("adaptive Repair handoff cannot grant authority or mutate policy")
+        proposal_id = str(handoff.get("proposal_request_id") or "").strip()
+        try:
+            proposal_id = str(UUID(proposal_id))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("adaptive Repair handoff requires a valid proposal_request_id") from exc
+        target = self.registry.find(target_id)
+        if target is None:
+            raise KeyError(f"No Repair target found for adaptive handoff {target_id}")
+        expected_code_hash = str(handoff.get("code_hash") or "")
+        if not expected_code_hash or str(target.slot.load().source_hash or "") != expected_code_hash:
+            raise PermissionError("adaptive Repair handoff code identity is stale")
+        authority = get_authority_runtime_context().effective
+        if str(handoff.get("authority_policy_generation") or "") != str(authority.generation):
+            raise PermissionError("adaptive Repair handoff authority generation is stale")
+        if str(handoff.get("authority_policy_fingerprint") or "") != authority.fingerprint:
+            raise PermissionError("adaptive Repair handoff authority fingerprint is stale")
+        normalized = {
+            "handoff_id": handoff_id,
+            "proposal_request_id": proposal_id,
+            "target_id": target_id,
+            "aggregation_scope": handoff.get("aggregation_scope"),
+            "aggregation_target_id": handoff.get("aggregation_target_id"),
+            "generation_id": str(handoff.get("generation_id") or ""),
+            "code_hash": expected_code_hash,
+            "monitoring_fingerprint": str(handoff.get("monitoring_fingerprint") or ""),
+            "policy_fingerprint": str(handoff.get("policy_fingerprint") or ""),
+            "authority_policy_generation": str(handoff.get("authority_policy_generation") or ""),
+            "authority_policy_fingerprint": authority.fingerprint,
+            "promoted_by": str(handoff.get("promoted_by") or "")[:256],
+            "reason": str(handoff.get("reason") or "")[:512],
+        }
+        with self._activity_lock:
+            if handoff_id in self._consumed_adaptive_repair_handoffs:
+                return {
+                    "accepted": True,
+                    "queued": False,
+                    "duplicate": True,
+                    "consumed": True,
+                    "handoff_id": handoff_id,
+                    "proposal_request_id": proposal_id,
+                    "target_id": target_id,
+                    "authority_granted": False,
+                    "policy_mutated": False,
+                }
+            existing = self._pending_adaptive_repair_handoffs.get(handoff_id)
+            if existing is not None and existing != normalized:
+                raise ValueError("adaptive Repair handoff ID was reused with different content")
+            if existing is None:
+                self._pending_adaptive_repair_handoffs[handoff_id] = normalized
+        self.store.append_event(
+            RepairEvent.create(
+                "adaptive.repair_handoff_queued",
+                target_id,
+                details={
+                    "handoff_id": handoff_id,
+                    "proposal_request_id": proposal_id,
+                    "promoted_by": normalized["promoted_by"],
+                    "policy_mutated": False,
+                    "authority_granted": False,
+                },
+            )
+        )
+        return {
+            "accepted": True,
+            "queued": True,
+            "duplicate": existing is not None,
+            "handoff_id": handoff_id,
+            "proposal_request_id": proposal_id,
+            "target_id": target_id,
+            "authority_granted": False,
+            "policy_mutated": False,
+        }
+
     def rollback_candidate(self, candidate_id: UUID, reason: str) -> None:
         for target in self.registry.all():
             current = target.slot.load()
@@ -612,6 +716,65 @@ class RepairEngine:
         call_id: UUID,
         started_at: datetime,
     ) -> RepairResolution | None:
+        adaptive_handoff: dict[str, Any] | None = None
+        adaptive_handoff_id: str | None = None
+        with self._activity_lock:
+            for candidate_id, candidate in self._pending_adaptive_repair_handoffs.items():
+                if candidate.get("target_id") == target.target_id:
+                    adaptive_handoff_id = candidate_id
+                    adaptive_handoff = self._pending_adaptive_repair_handoffs.pop(candidate_id)
+                    if len(self._consumed_adaptive_repair_handoffs) >= _MAX_CONSUMED_ADAPTIVE_REPAIR_HANDOFFS:
+                        self._consumed_adaptive_repair_handoffs.pop()
+                    self._consumed_adaptive_repair_handoffs.add(candidate_id)
+                    break
+        if adaptive_handoff is not None:
+            if str(version.source_hash or "") != str(adaptive_handoff.get("code_hash") or ""):
+                self.store.append_event(
+                    RepairEvent.create(
+                        "adaptive.repair_handoff_stale",
+                        target.target_id,
+                        details={
+                            "handoff_id": adaptive_handoff_id,
+                            "reason": "code identity changed before the handoff was consumed",
+                            "authority_granted": False,
+                        },
+                    )
+                )
+                return None
+            explanation = str(adaptive_handoff.get("reason") or "operator-approved adaptive Repair evidence")
+            failure = OutputValidationEvidence(
+                validator_name="caretaker-adaptive-supervisor",
+                reason=(
+                    "Operator-approved adaptive Repair handoff: "
+                    f"{explanation}"
+                )[:2048],
+                output=value_snapshot(None),
+            )
+            return self._handle(
+                target=target,
+                version=version,
+                function=function,
+                args=args,
+                kwargs=kwargs,
+                call_state=call_state,
+                call_id=call_id,
+                started_at=started_at,
+                elapsed_seconds=0.0,
+                call_attempt=1,
+                trigger=TriggerKind.MANUAL,
+                failure=failure,
+                original_exception=RuntimeError(failure.reason),
+                metadata={
+                    "adaptive_repair_handoff_id": adaptive_handoff_id,
+                    "adaptive_repair_proposal_id": adaptive_handoff.get("proposal_request_id"),
+                    "adaptive_aggregation_scope": adaptive_handoff.get("aggregation_scope"),
+                    "adaptive_evidence_policy_fingerprint": adaptive_handoff.get("policy_fingerprint"),
+                    "adaptive_evidence_generation_id": adaptive_handoff.get("generation_id"),
+                    "adaptive_authority_policy_generation": adaptive_handoff.get(
+                        "authority_policy_generation"
+                    ),
+                },
+            )
         deviations = self._pending_guard_deviations.pop(target.target_id, None)
         if not deviations:
             return None

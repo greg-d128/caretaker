@@ -29,6 +29,7 @@ ADAPTIVE_POLICY_LEDGER_SCHEMA_VERSION = 1
 ADAPTIVE_POLICY_ACCEPTANCE_SCHEMA_VERSION = 1
 ADAPTIVE_POLICY_INSTALLATION_SCHEMA_VERSION = 1
 ADAPTIVE_BATCH_REVALIDATION_SCHEMA_VERSION = 1
+ADAPTIVE_REPAIR_HANDOFF_SCHEMA_VERSION = 1
 MAX_BATCH_TEXT = 256
 MAX_AGGREGATION_SCOPE_TEXT = 256
 MAX_BATCH_EVENTS = 256
@@ -2007,6 +2008,9 @@ class SupervisorAdaptiveAggregationStore:
             self.root / "adaptive" / "aggregation" / "transition-acknowledgements"
         )
         self.proposal_review_directory = self.root / "adaptive" / "aggregation" / "proposal-reviews"
+        self.repair_proposal_review_directory = self.root / "adaptive" / "aggregation" / "repair-proposal-reviews"
+        self.repair_handoff_directory = self.root / "adaptive" / "aggregation" / "repair-handoffs"
+        self.repair_handoff_outcome_directory = self.root / "adaptive" / "aggregation" / "repair-handoff-outcomes"
         self.transition_rollback_directory = self.root / "adaptive" / "aggregation" / "transition-rollbacks"
         self.policy_ledger_directory = self.root / "adaptive" / "policy-ledger"
         self.policy_acceptance_directory = self.root / "adaptive" / "policy-acceptance"
@@ -2022,6 +2026,9 @@ class SupervisorAdaptiveAggregationStore:
             self.transition_directory,
             self.transition_acknowledgement_directory,
             self.proposal_review_directory,
+            self.repair_proposal_review_directory,
+            self.repair_handoff_directory,
+            self.repair_handoff_outcome_directory,
             self.transition_rollback_directory,
             self.policy_ledger_directory,
             self.policy_acceptance_directory,
@@ -2442,6 +2449,15 @@ class SupervisorAdaptiveAggregationStore:
 
     def _proposal_review_path(self, request_id: str) -> Path:
         return self.proposal_review_directory / f"{request_id}.json"
+
+    def _repair_proposal_review_path(self, request_id: str) -> Path:
+        return self.repair_proposal_review_directory / f"{request_id}.json"
+
+    def _repair_handoff_path(self, handoff_id: str) -> Path:
+        return self.repair_handoff_directory / f"{handoff_id}.json"
+
+    def _repair_handoff_outcome_path(self, handoff_id: str) -> Path:
+        return self.repair_handoff_outcome_directory / f"{handoff_id}.json"
 
     def _transition_rollback_path(self, request_id: str) -> Path:
         return self.transition_rollback_directory / f"{request_id}.json"
@@ -3253,6 +3269,75 @@ class SupervisorAdaptiveAggregationStore:
             raise AdaptiveAggregationError("adaptive proposal review hash is invalid")
         return dict(review)
 
+    def _load_repair_proposal_review(self, request_id: str) -> dict[str, Any] | None:
+        path = self._repair_proposal_review_path(request_id)
+        if not path.exists():
+            return None
+        try:
+            envelope = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise AdaptiveAggregationError("adaptive Repair proposal review is unreadable") from exc
+        if not isinstance(envelope, Mapping):
+            raise AdaptiveAggregationError("adaptive Repair proposal review must be an object")
+        if int(envelope.get("schema_version") or 0) != ADAPTIVE_REPAIR_HANDOFF_SCHEMA_VERSION:
+            raise AdaptiveAggregationError("unsupported adaptive Repair proposal review schema")
+        review = envelope.get("review")
+        if not isinstance(review, Mapping):
+            raise AdaptiveAggregationError("adaptive Repair proposal review is missing its review")
+        try:
+            normalized_id = str(UUID(str(review.get("request_id"))))
+        except (TypeError, ValueError) as exc:
+            raise AdaptiveAggregationError("adaptive Repair proposal review ID is invalid") from exc
+        if normalized_id != request_id or path.stem != request_id:
+            raise AdaptiveAggregationError("adaptive Repair proposal review ID does not match its filename")
+        if str(envelope.get("review_sha256") or "") != _content_hash(review):
+            raise AdaptiveAggregationError("adaptive Repair proposal review hash is invalid")
+        return dict(review)
+
+    def _load_repair_handoff(self, path: Path) -> dict[str, Any]:
+        try:
+            envelope = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise AdaptiveAggregationError("adaptive Repair handoff is unreadable") from exc
+        if not isinstance(envelope, Mapping):
+            raise AdaptiveAggregationError("adaptive Repair handoff must be an object")
+        if int(envelope.get("schema_version") or 0) != ADAPTIVE_REPAIR_HANDOFF_SCHEMA_VERSION:
+            raise AdaptiveAggregationError("unsupported adaptive Repair handoff schema")
+        handoff = envelope.get("handoff")
+        if not isinstance(handoff, Mapping):
+            raise AdaptiveAggregationError("adaptive Repair handoff is missing its record")
+        try:
+            handoff_id = str(UUID(str(handoff.get("handoff_id"))))
+            proposal_id = str(UUID(str(handoff.get("proposal_request_id"))))
+        except (TypeError, ValueError) as exc:
+            raise AdaptiveAggregationError("adaptive Repair handoff IDs are invalid") from exc
+        if handoff_id != path.stem or not proposal_id:
+            raise AdaptiveAggregationError("adaptive Repair handoff ID is invalid")
+        if str(envelope.get("handoff_sha256") or "") != _content_hash(handoff):
+            raise AdaptiveAggregationError("adaptive Repair handoff hash is invalid")
+        return dict(handoff)
+
+    def _load_repair_handoff_outcome(self, handoff_id: str) -> dict[str, Any] | None:
+        path = self._repair_handoff_outcome_path(handoff_id)
+        if not path.exists():
+            return None
+        try:
+            envelope = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise AdaptiveAggregationError("adaptive Repair handoff outcome is unreadable") from exc
+        if not isinstance(envelope, Mapping):
+            raise AdaptiveAggregationError("adaptive Repair handoff outcome must be an object")
+        outcome = envelope.get("outcome")
+        if not isinstance(outcome, Mapping):
+            raise AdaptiveAggregationError("adaptive Repair handoff outcome is missing its record")
+        try:
+            normalized_id = str(UUID(str(outcome.get("handoff_id"))))
+        except (TypeError, ValueError) as exc:
+            raise AdaptiveAggregationError("adaptive Repair handoff outcome ID is invalid") from exc
+        if normalized_id != handoff_id or str(envelope.get("outcome_sha256") or "") != _content_hash(outcome):
+            raise AdaptiveAggregationError("adaptive Repair handoff outcome hash is invalid")
+        return dict(outcome)
+
     def _load_transition_rollback(self, request_id: str) -> dict[str, Any] | None:
         path = self._transition_rollback_path(request_id)
         if not path.exists():
@@ -3795,6 +3880,252 @@ class SupervisorAdaptiveAggregationStore:
             "status": "RECORDED",
             "proposal_only": True,
         }
+
+    def review_repair_proposal(
+        self,
+        request_id: str,
+        *,
+        decision: str,
+        reviewed_by: str,
+        reason: str,
+        current_generations: Mapping[str, str],
+        policy_fingerprints: Mapping[str, str],
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Record an operator review before an adaptive Repair handoff.
+
+        This review is deliberately separate from Repair approval.  It only
+        authorizes the supervisor to offer the retained evidence to the
+        application's ordinary Repair trigger path; it never creates a
+        candidate, changes policy, or grants execution authority.
+        """
+        try:
+            normalized_id = str(UUID(str(request_id)))
+        except (TypeError, ValueError) as exc:
+            raise AdaptiveAggregationError("Repair proposal request_id must be a UUID") from exc
+        request = self._load_transition_request(self._transition_path(normalized_id))
+        if request.get("request_kind") != "ADAPTIVE_REPAIR_PROPOSAL":
+            raise PermissionError("only adaptive Repair proposals can be reviewed")
+        if request.get("proposal_only") is not True:
+            raise PermissionError("adaptive Repair proposal is not proposal-only evidence")
+        context_error = self._context_error(
+            request,
+            current_generations=current_generations,
+            policy_fingerprints=policy_fingerprints,
+            policy_fingerprint=None,
+            authority_policy_generation=str(authority_policy_generation),
+            authority_policy_fingerprint=str(authority_policy_fingerprint),
+        )
+        if context_error is not None:
+            raise PermissionError(f"adaptive Repair proposal context is stale: {context_error}")
+        normalized_decision = str(decision).strip().upper()
+        if normalized_decision not in {"APPROVE", "REJECT"}:
+            raise AdaptiveAggregationError("Repair proposal decision must be APPROVE or REJECT")
+        reviewer = _text(reviewed_by, name="reviewed_by", limit=MAX_BATCH_TEXT)
+        review_reason = _text(reason, name="reason", limit=MAX_TRANSITION_REASON)
+        assert reviewer is not None and review_reason is not None
+        review = {
+            "request_id": normalized_id,
+            "request_sha256": _content_hash(request),
+            "review_decision": normalized_decision,
+            "review_status": (
+                "APPROVED_FOR_REPAIR_HANDOFF"
+                if normalized_decision == "APPROVE"
+                else "REJECTED"
+            ),
+            "reviewed_by": reviewer,
+            "reason": review_reason,
+            "reviewed_at": (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat(),
+            "target_id": str(request["target_id"]),
+            "aggregation_scope": request.get("aggregation_scope"),
+            "aggregation_target_id": request.get("aggregation_target_id"),
+            "generation_id": str(request["generation_id"]),
+            "code_hash": str(request["code_hash"]),
+            "monitoring_fingerprint": str(request["monitoring_fingerprint"]),
+            "policy_fingerprint": str(request["policy_fingerprint"]),
+            "authority_policy_generation": str(request["authority_policy_generation"]),
+            "authority_policy_fingerprint": str(request["authority_policy_fingerprint"]),
+            "repair_workflow_requested": False,
+            "policy_mutated": False,
+            "authority_granted": False,
+        }
+        path = self._repair_proposal_review_path(normalized_id)
+        with self._lock:
+            existing = self._load_repair_proposal_review(normalized_id)
+            if existing is not None:
+                comparable_keys = (
+                    "request_id", "request_sha256", "review_decision", "reviewed_by", "reason"
+                )
+                if {key: existing.get(key) for key in comparable_keys} != {
+                    key: review.get(key) for key in comparable_keys
+                }:
+                    raise AdaptiveAggregationError("conflicting adaptive Repair proposal review")
+                return {**existing, "status": "DUPLICATE", "proposal_only": True}
+            _safe_write(
+                path,
+                {
+                    "schema_version": ADAPTIVE_REPAIR_HANDOFF_SCHEMA_VERSION,
+                    "review": review,
+                    "review_sha256": _content_hash(review),
+                },
+            )
+        return {**review, "status": "RECORDED", "proposal_only": True}
+
+    def create_adaptive_repair_handoff(
+        self,
+        proposal_request_id: str,
+        *,
+        promoted_by: str,
+        reason: str,
+        current_generations: Mapping[str, str],
+        policy_fingerprints: Mapping[str, str],
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        dispatch_callback: Callable[[Mapping[str, Any]], Any] | None = None,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Offer an approved proposal to the application's normal Repair path.
+
+        The pending handoff is persisted before an optional application-owned
+        callback runs.  A callback must explicitly acknowledge queueing; its
+        result cannot grant authority or bypass ordinary Repair gates. Pending
+        handoffs are not replayed automatically after restart.
+        """
+        try:
+            normalized_id = str(UUID(str(proposal_request_id)))
+        except (TypeError, ValueError) as exc:
+            raise AdaptiveAggregationError("Repair proposal request_id must be a UUID") from exc
+        request = self._load_transition_request(self._transition_path(normalized_id))
+        if request.get("request_kind") != "ADAPTIVE_REPAIR_PROPOSAL":
+            raise PermissionError("only adaptive Repair proposals can be handed off")
+        if request.get("proposal_only") is not True:
+            raise PermissionError("adaptive Repair proposal is not proposal-only evidence")
+        context_error = self._context_error(
+            request,
+            current_generations=current_generations,
+            policy_fingerprints=policy_fingerprints,
+            policy_fingerprint=None,
+            authority_policy_generation=str(authority_policy_generation),
+            authority_policy_fingerprint=str(authority_policy_fingerprint),
+        )
+        if context_error is not None:
+            raise PermissionError(f"adaptive Repair proposal context is stale: {context_error}")
+        review = self._load_repair_proposal_review(normalized_id)
+        if review is None or review.get("review_status") != "APPROVED_FOR_REPAIR_HANDOFF":
+            raise PermissionError("adaptive Repair proposal requires an approved operator review")
+        if str(review.get("request_sha256") or "") != _content_hash(request):
+            raise PermissionError("adaptive Repair proposal review is bound to different content")
+        actor = _text(promoted_by, name="promoted_by", limit=MAX_BATCH_TEXT)
+        handoff_reason = _text(reason, name="reason", limit=MAX_TRANSITION_REASON)
+        assert actor is not None and handoff_reason is not None
+        with self._lock:
+            for path in sorted(self.repair_handoff_directory.glob("*.json")):
+                existing = self._load_repair_handoff(path)
+                if str(existing.get("proposal_request_id")) == normalized_id:
+                    outcome = self._load_repair_handoff_outcome(str(existing["handoff_id"]))
+                    return {
+                        **existing,
+                        "outcome": outcome,
+                        "status": str(outcome.get("state") if outcome else "PENDING"),
+                        "duplicate": True,
+                    }
+            created_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+            handoff = {
+                "handoff_id": str(uuid4()),
+                "handoff_kind": "ADAPTIVE_REPAIR_HANDOFF",
+                "proposal_request_id": normalized_id,
+                "proposal_sha256": _content_hash(request),
+                "review_sha256": str(review.get("review_sha256") or _content_hash(review)),
+                "target_id": str(request["target_id"]),
+                "aggregation_scope": request.get("aggregation_scope"),
+                "aggregation_target_id": request.get("aggregation_target_id"),
+                "generation_id": str(request["generation_id"]),
+                "code_hash": str(request["code_hash"]),
+                "monitoring_fingerprint": str(request["monitoring_fingerprint"]),
+                "policy_fingerprint": str(request["policy_fingerprint"]),
+                "authority_policy_generation": str(request["authority_policy_generation"]),
+                "authority_policy_fingerprint": str(request["authority_policy_fingerprint"]),
+                "requested_level": "REPAIR",
+                "promoted_by": actor,
+                "reason": handoff_reason,
+                "created_at": created_at.isoformat(),
+                "state": "PENDING",
+                "proposal_only": False,
+                "policy_mutated": False,
+                "authority_granted": False,
+            }
+            _safe_write(
+                self._repair_handoff_path(str(handoff["handoff_id"])),
+                {
+                    "schema_version": ADAPTIVE_REPAIR_HANDOFF_SCHEMA_VERSION,
+                    "handoff": handoff,
+                    "handoff_sha256": _content_hash(handoff),
+                },
+            )
+        if dispatch_callback is None:
+            return {**handoff, "status": "PENDING", "outcome": None, "duplicate": False}
+        try:
+            response = dispatch_callback(handoff)
+            accepted = isinstance(response, Mapping) and response.get("accepted") is True
+            state = "DISPATCHED" if accepted else "REJECTED"
+            detail = {
+                "accepted": accepted,
+                "queued": bool(response.get("queued")) if isinstance(response, Mapping) else False,
+                "target_id": handoff["target_id"],
+            }
+        except Exception as exc:
+            state = "FAILED"
+            detail = {
+                "accepted": False,
+                "queued": False,
+                "target_id": handoff["target_id"],
+                "error": f"{type(exc).__name__}: {str(exc)[:256]}",
+            }
+        outcome = {
+            "handoff_id": handoff["handoff_id"],
+            "proposal_request_id": normalized_id,
+            "state": state,
+            "recorded_at": _utcnow_iso(),
+            **detail,
+            "policy_mutated": False,
+            "authority_granted": False,
+        }
+        _safe_write(
+            self._repair_handoff_outcome_path(str(handoff["handoff_id"])),
+            {
+                "schema_version": ADAPTIVE_REPAIR_HANDOFF_SCHEMA_VERSION,
+                "outcome": outcome,
+                "outcome_sha256": _content_hash(outcome),
+            },
+        )
+        return {**handoff, "status": state, "outcome": outcome, "duplicate": False}
+
+    def list_repair_handoffs(
+        self,
+        *,
+        proposal_request_id: str | None = None,
+        limit: int = 100,
+    ) -> tuple[dict[str, Any], ...]:
+        bounded = max(1, min(int(limit), 500))
+        result: list[dict[str, Any]] = []
+        for path in sorted(self.repair_handoff_directory.glob("*.json"), reverse=True):
+            try:
+                handoff = self._load_repair_handoff(path)
+                if proposal_request_id is not None and str(handoff.get("proposal_request_id")) != str(proposal_request_id):
+                    continue
+                outcome = self._load_repair_handoff_outcome(str(handoff["handoff_id"]))
+                visible = dict(handoff)
+                visible["outcome"] = outcome
+                visible["status"] = str(outcome.get("state") if outcome else "PENDING")
+                result.append(visible)
+            except Exception:
+                continue
+            if len(result) >= bounded:
+                break
+        result.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+        return tuple(result)
 
     def create_threshold_policy_transition(
         self,
@@ -4852,6 +5183,28 @@ class SupervisorAdaptiveAggregationStore:
                         if review is not None
                         else "UNREVIEWED"
                     )
+            if request.get("request_kind") == "ADAPTIVE_REPAIR_PROPOSAL":
+                try:
+                    review = self._load_repair_proposal_review(str(request["request_id"]))
+                except Exception as exc:
+                    visible["review_status"] = "INVALID"
+                    visible["review_error"] = f"{type(exc).__name__}: {exc}"[:256]
+                else:
+                    visible["review"] = review
+                    visible["review_status"] = (
+                        str(review.get("review_status"))
+                        if review is not None
+                        else "UNREVIEWED"
+                    )
+                handoffs = self.list_repair_handoffs(
+                    proposal_request_id=str(request["request_id"]),
+                    limit=1,
+                )
+                if handoffs:
+                    visible["repair_handoff"] = handoffs[0]
+                    visible["handoff_status"] = handoffs[0].get("status")
+                else:
+                    visible["handoff_status"] = "NOT_REQUESTED"
             if request.get("request_kind") == "ADAPTIVE_POLICY_TRANSITION":
                 try:
                     rollback = self._load_transition_rollback(str(request["request_id"]))
@@ -5040,6 +5393,15 @@ class SupervisorAdaptiveAggregationStore:
             ),
             "proposal_reviews": sum(
                 1 for _ in self.proposal_review_directory.glob("*.json")
+            ),
+            "repair_proposal_reviews": sum(
+                1 for _ in self.repair_proposal_review_directory.glob("*.json")
+            ),
+            "repair_handoffs": sum(
+                1 for _ in self.repair_handoff_directory.glob("*.json")
+            ),
+            "repair_handoff_outcomes": sum(
+                1 for _ in self.repair_handoff_outcome_directory.glob("*.json")
             ),
             "transition_rollbacks": sum(
                 1 for _ in self.transition_rollback_directory.glob("*.json")

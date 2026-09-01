@@ -804,7 +804,7 @@ absence claims from incomplete tables.
 
 ## Supervisor-owned multiprocess adaptive aggregation
 
-**Status: In progress in development tree for durable worker-batch aggregation and supervisor-authorized Behavior transition requests; Repair promotion, cross-host transport, and process orchestration remain future work.**
+**Status: In progress in development tree for durable worker-batch aggregation, supervisor-authorized Behavior transition requests, and an operator-gated adaptive Repair handoff; automatic fleet Repair promotion, cross-host transport, and process orchestration remain future work.**
 
 The first implementation slice is documented in
 [`ADAPTIVE_AGGREGATION.md`](ADAPTIVE_AGGREGATION.md). A durable
@@ -865,6 +865,10 @@ workload/population membership, dynamic threshold administration, cross-host
 transport, process lifecycle orchestration, and additional resource-aware
 distribution reconciliation without double-counting the existing single-process lifecycle. The initial
 repair-evidence gate is proposal-only and is implemented in the current slice.
+An operator-reviewed, context-bound handoff can now queue the ordinary
+application Repair path, but cannot activate a candidate or bypass ordinary
+Repair policy and validation gates. Automatic or fleet-wide Repair promotion
+remains future work.
 Retained archived batches can now be revalidated against a later policy
 fingerprint through a bounded deployment-supplied validator; the resulting
 records remain evidence only and do not rewrite aggregates or grant authority.
