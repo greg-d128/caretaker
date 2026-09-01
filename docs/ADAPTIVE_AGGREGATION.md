@@ -51,6 +51,31 @@ scope-unavailable diagnostic evidence. This is application-supplied
 classification, not automatic regime discovery or proof that two populations
 are equivalent.
 
+## Cross-population comparison
+
+The read-only `compare_adaptive_populations()` helper compares separately
+retained aggregate records without merging them. It requires at least two
+distinct population identities and an exact match for target, generation, code,
+monitoring, policy, and authority context. The unscoped population and each
+declared `aggregation_scope` remain separate populations identified by their
+extended target IDs.
+
+The current report compares exception, timing-breach, behavior-sample,
+repair-reproduction, and execution-failure rates using a pooled-proportion
+three-standard-deviation test when both populations meet the configured
+minimum sample count. It also compares mergeable timing-breach duration means
+when sufficient duration samples are present. Missing, invalid, insufficient,
+or mixed-context evidence produces an explicit `INCOMPLETE_EVIDENCE` result;
+material differences produce `DISTRIBUTION_CONFLICT`. A `COMPARABLE` result
+means only that no significant difference was detected in the tested metrics;
+it is not proof that the populations are equivalent.
+
+The report is content-hashed, bounded, and marked `evidence_only` with
+`authority_granted: false`. It cannot change aggregates, policy, Guard,
+Repair, or authority. Resource-distribution comparison, automatic regime
+clustering, population membership discovery, and cross-host analysis remain
+future work.
+
 Reconciliation also writes a bounded per-batch acknowledgement containing the
 batch ID, batch hash, result (`ACCEPTED`, `DUPLICATE`, or `REJECTED`), and
 aggregate key/rejection reason where applicable. This is delivery provenance

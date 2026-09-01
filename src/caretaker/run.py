@@ -25,6 +25,7 @@ from .capsule import IncidentCapsuleStore
 from .capsule_assistance import assist_capsules
 from .adaptive_aggregation import (
     SupervisorAdaptiveAggregationStore,
+    compare_adaptive_populations,
     extended_aggregation_target_id,
     normalize_adaptive_observation_batch,
 )
@@ -1653,6 +1654,31 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 "policy_contexts": policy_contexts,
                 "policy_context_available": policy_context_available,
+            }
+        if command == "adaptive-population-compare":
+            target_value = request.get("target_id")
+            generation_value = request.get("generation_id")
+            target_id = (
+                str(target_value).strip() if target_value is not None else None
+            )
+            generation_id = (
+                str(generation_value).strip()
+                if generation_value is not None
+                else None
+            )
+            limit = max(1, min(int(request.get("limit", 128)), 128))
+            report = compare_adaptive_populations(
+                adaptive_aggregation_store.list_aggregates(limit=limit),
+                target_id=target_id or None,
+                generation_id=generation_id or None,
+                minimum_observations=request.get("minimum_observations", 30),
+                z_threshold=request.get("z_threshold", 3.0),
+            )
+            return {
+                "ok": True,
+                "report": report,
+                "read_only": True,
+                "authority_granted": False,
             }
         if command == "worker-failure-recovery-status":
             store = failure_store_holder.get("store")

@@ -15,6 +15,7 @@ import math
 import os
 import threading
 import time
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
@@ -36,6 +37,9 @@ MAX_TRANSITION_REASON = 512
 MAX_DISTRIBUTION_CONFLICTS = 128
 DEFAULT_DISTRIBUTION_Z_THRESHOLD = 3.0
 DEFAULT_DISTRIBUTION_MINIMUM_OBSERVATIONS = 30
+MAX_POPULATION_AGGREGATES = 128
+MAX_POPULATION_COMPARISONS = 256
+MAX_POPULATION_INCOMPLETE_REASONS = 128
 DEFAULT_TRANSITION_TIMEOUT_SECONDS = 60.0
 MAX_TRANSITION_TIMEOUT_SECONDS = 86_400.0
 MAX_DURATION_SECONDS = 86_400.0
@@ -1030,6 +1034,522 @@ def _merge_duration_statistics(
             if value is not None
         ),
     }
+
+
+_POPULATION_CONTEXT_FIELDS = (
+    "target_id",
+    "generation_id",
+    "code_hash",
+    "monitoring_fingerprint",
+    "policy_fingerprint",
+    "authority_policy_generation",
+    "authority_policy_fingerprint",
+)
+_POPULATION_RATE_METRICS = (
+    ("exception_rate", "exception_count", "total_observations"),
+    ("timing_breach_rate", "timing_breach_count", "total_observations"),
+    ("behavior_sample_rate", "behavior_samples", "behavior_observation_calls"),
+    ("repair_reproduction_rate", "problem_reproductions", "behavior_observation_calls"),
+    ("failure_rate", "failed_executions", "execution_count"),
+)
+
+
+def _population_count(
+    aggregate: Mapping[str, Any],
+    field: str,
+    *,
+    reasons: list[str],
+    aggregate_index: int,
+) -> int | None:
+    value = aggregate.get(field)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        reasons.append(f"aggregate-{aggregate_index}:{field} is not a non-negative integer")
+        return None
+    return value
+
+
+def _population_context(
+    aggregate: Mapping[str, Any],
+    *,
+    aggregate_index: int,
+    reasons: list[str],
+) -> tuple[str, ...] | None:
+    values: list[str] = []
+    for field in _POPULATION_CONTEXT_FIELDS:
+        value = aggregate.get(field)
+        if not isinstance(value, str) or not value.strip() or len(value) > MAX_BATCH_TEXT:
+            reasons.append(f"aggregate-{aggregate_index}:{field} is invalid")
+            return None
+        values.append(value.strip())
+    return tuple(values)
+
+
+def _population_metric_observations(
+    aggregate: Mapping[str, Any],
+    *,
+    count_field: str,
+    denominator_field: str,
+    aggregate_index: int,
+    reasons: list[str],
+) -> tuple[int, int] | None:
+    count = _population_count(
+        aggregate,
+        count_field,
+        reasons=reasons,
+        aggregate_index=aggregate_index,
+    )
+    if denominator_field == "execution_count":
+        successful = _population_count(
+            aggregate,
+            "successful_executions",
+            reasons=reasons,
+            aggregate_index=aggregate_index,
+        )
+        failed = _population_count(
+            aggregate,
+            "failed_executions",
+            reasons=reasons,
+            aggregate_index=aggregate_index,
+        )
+        denominator = (
+            successful + failed
+            if successful is not None and failed is not None
+            else None
+        )
+    else:
+        denominator = _population_count(
+            aggregate,
+            denominator_field,
+            reasons=reasons,
+            aggregate_index=aggregate_index,
+        )
+    if count is None or denominator is None:
+        return None
+    if count > denominator:
+        reasons.append(
+            f"aggregate-{aggregate_index}:{count_field} exceeds {denominator_field}"
+        )
+        return None
+    return count, denominator
+
+
+def _population_z_score(
+    left_rate: float,
+    right_rate: float,
+    left_count: int,
+    right_count: int,
+) -> tuple[float, float]:
+    pooled = (left_count * left_rate + right_count * right_rate) / (
+        left_count + right_count
+    )
+    standard_error = math.sqrt(
+        max(0.0, pooled * (1.0 - pooled))
+        * (1.0 / left_count + 1.0 / right_count)
+    )
+    difference = abs(left_rate - right_rate)
+    if difference == 0.0:
+        return 0.0, standard_error
+    if standard_error <= 0.0:
+        return 1.0e12, standard_error
+    return difference / standard_error, standard_error
+
+
+def _population_duration_observations(
+    aggregate: Mapping[str, Any],
+    *,
+    aggregate_index: int,
+    reasons: list[str],
+) -> tuple[int, float, float] | None:
+    raw = aggregate.get("timing_duration_statistics")
+    if not isinstance(raw, Mapping):
+        reasons.append(
+            f"aggregate-{aggregate_index}:timing_duration_statistics is unavailable"
+        )
+        return None
+    count = raw.get("count")
+    mean = raw.get("mean")
+    m2 = raw.get("m2")
+    if (
+        isinstance(count, bool)
+        or not isinstance(count, int)
+        or count < 0
+        or isinstance(mean, bool)
+        or not isinstance(mean, (int, float))
+        or not math.isfinite(float(mean))
+        or isinstance(m2, bool)
+        or not isinstance(m2, (int, float))
+        or not math.isfinite(float(m2))
+        or float(m2) < 0.0
+    ):
+        reasons.append(f"aggregate-{aggregate_index}:timing duration statistics are invalid")
+        return None
+    return count, float(mean), float(m2)
+
+
+def compare_adaptive_populations(
+    aggregates: Sequence[Mapping[str, Any]],
+    *,
+    target_id: str | None = None,
+    generation_id: str | None = None,
+    minimum_observations: int = DEFAULT_DISTRIBUTION_MINIMUM_OBSERVATIONS,
+    z_threshold: float = DEFAULT_DISTRIBUTION_Z_THRESHOLD,
+) -> dict[str, Any]:
+    """Compare separately retained adaptive populations as evidence only.
+
+    Aggregates are comparable only when their target, generation, code,
+    monitoring, policy, and authority contexts match exactly.  The function
+    never merges aggregate state and never makes a policy, Guard, Repair, or
+    authority decision.  A non-conflicting result is statistical evidence for
+    the sampled populations, not proof that they are equivalent.
+    """
+    if isinstance(aggregates, (str, bytes, Mapping)) or not isinstance(
+        aggregates, Sequence
+    ):
+        raise TypeError("aggregates must be a sequence of mappings")
+    if len(aggregates) > MAX_POPULATION_AGGREGATES:
+        raise ValueError(
+            f"aggregates cannot contain more than {MAX_POPULATION_AGGREGATES} items"
+        )
+    aggregate_values = tuple(aggregates)
+    if isinstance(minimum_observations, bool) or not isinstance(minimum_observations, int):
+        raise ValueError("minimum_observations must be an integer")
+    if minimum_observations < 2:
+        raise ValueError("minimum_observations must be at least 2")
+    try:
+        threshold = float(z_threshold)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("z_threshold must be a finite positive number") from exc
+    if not math.isfinite(threshold) or threshold <= 0.0:
+        raise ValueError("z_threshold must be a finite positive number")
+    if target_id is not None and (
+        not isinstance(target_id, str)
+        or not target_id.strip()
+        or len(target_id.strip()) > MAX_BATCH_TEXT
+    ):
+        raise ValueError(
+            f"target_id must be a non-empty string of at most {MAX_BATCH_TEXT} characters"
+        )
+    if generation_id is not None and (
+        not isinstance(generation_id, str)
+        or not generation_id.strip()
+        or len(generation_id.strip()) > MAX_BATCH_TEXT
+    ):
+        raise ValueError(
+            f"generation_id must be a non-empty string of at most {MAX_BATCH_TEXT} characters"
+        )
+
+    reasons: list[str] = []
+    population_rows: list[dict[str, Any]] = []
+    contexts: list[tuple[str, ...]] = []
+    population_keys: set[str] = set()
+    for index, aggregate in enumerate(aggregate_values):
+        if not isinstance(aggregate, Mapping):
+            reasons.append(f"aggregate-{index}:value is not a mapping")
+            continue
+        aggregate_target = aggregate.get("target_id")
+        aggregate_generation = aggregate.get("generation_id")
+        if target_id is not None and aggregate_target != target_id.strip():
+            continue
+        if generation_id is not None and aggregate_generation != generation_id.strip():
+            continue
+        context = _population_context(
+            aggregate,
+            aggregate_index=index,
+            reasons=reasons,
+        )
+        if context is None:
+            continue
+        scope = aggregate.get("aggregation_scope")
+        if scope is not None and (
+            not isinstance(scope, str)
+            or not scope.strip()
+            or len(scope.strip()) > MAX_AGGREGATION_SCOPE_TEXT
+        ):
+            reasons.append(f"aggregate-{index}:aggregation_scope is invalid")
+            continue
+        normalized_scope = scope.strip() if isinstance(scope, str) else None
+        try:
+            expected_target = extended_aggregation_target_id(
+                context[0], normalized_scope
+            )
+        except (AdaptiveAggregationError, TypeError, ValueError):
+            reasons.append(f"aggregate-{index}:aggregation identity is invalid")
+            continue
+        if aggregate.get("aggregation_target_id") != expected_target:
+            reasons.append(f"aggregate-{index}:aggregation_target_id is inconsistent")
+            continue
+        if expected_target in population_keys:
+            reasons.append(f"duplicate population identity: {expected_target}")
+            continue
+        total_observations = _population_count(
+            aggregate,
+            "total_observations",
+            reasons=reasons,
+            aggregate_index=index,
+        )
+        if total_observations is None:
+            continue
+        population_keys.add(expected_target)
+        contexts.append(context)
+        execution_count = (
+            _population_count(
+                aggregate,
+                "successful_executions",
+                reasons=reasons,
+                aggregate_index=index,
+            )
+            or 0
+        ) + (
+            _population_count(
+                aggregate,
+                "failed_executions",
+                reasons=reasons,
+                aggregate_index=index,
+            )
+            or 0
+        )
+        population_rows.append({
+            "population_id": expected_target,
+            "target_id": context[0],
+            "aggregation_scope": normalized_scope,
+            "aggregation_target_id": expected_target,
+            "total_observations": total_observations,
+            "execution_count": execution_count,
+            "worker_count": len(aggregate.get("workers") or {})
+            if isinstance(aggregate.get("workers") or {}, Mapping)
+            else 0,
+            "first_observed_at": (
+                aggregate.get("first_observed_at")[:MAX_BATCH_TEXT]
+                if isinstance(aggregate.get("first_observed_at"), str)
+                else None
+            ),
+            "last_observed_at": (
+                aggregate.get("last_observed_at")[:MAX_BATCH_TEXT]
+                if isinstance(aggregate.get("last_observed_at"), str)
+                else None
+            ),
+            "aggregate": aggregate,
+            "aggregate_index": index,
+        })
+
+    population_rows.sort(key=lambda item: str(item["population_id"]))
+    context = contexts[0] if contexts else None
+    if contexts and any(item != context for item in contexts[1:]):
+        reasons.append("selected populations have different comparison contexts")
+    public_populations = [
+        {
+            key: value
+            for key, value in population.items()
+            if key not in {"aggregate", "aggregate_index"}
+        }
+        for population in population_rows
+    ]
+    comparisons: list[dict[str, Any]] = []
+    incomplete_metrics: list[dict[str, Any]] = []
+    if len(population_rows) >= 2 and not any(
+        reason == "selected populations have different comparison contexts"
+        for reason in reasons
+    ):
+        for left_index, left in enumerate(population_rows[:-1]):
+            for right in population_rows[left_index + 1 :]:
+                left_aggregate = left["aggregate"]
+                right_aggregate = right["aggregate"]
+                for metric, count_field, denominator_field in _POPULATION_RATE_METRICS:
+                    left_reasons: list[str] = []
+                    right_reasons: list[str] = []
+                    left_values = _population_metric_observations(
+                        left_aggregate,
+                        count_field=count_field,
+                        denominator_field=denominator_field,
+                        aggregate_index=left["aggregate_index"],
+                        reasons=left_reasons,
+                    )
+                    right_values = _population_metric_observations(
+                        right_aggregate,
+                        count_field=count_field,
+                        denominator_field=denominator_field,
+                        aggregate_index=right["aggregate_index"],
+                        reasons=right_reasons,
+                    )
+                    if (
+                        left_values is None
+                        or right_values is None
+                        or left_values[1] < minimum_observations
+                        or right_values[1] < minimum_observations
+                    ):
+                        reason = (
+                            "invalid counts"
+                            if left_reasons or right_reasons
+                            else f"both populations need at least {minimum_observations} observations"
+                        )
+                        incomplete_metrics.append({
+                            "population_a": left["population_id"],
+                            "population_b": right["population_id"],
+                            "metric": metric,
+                            "reason": reason,
+                        })
+                        continue
+                    left_count, left_denominator = left_values
+                    right_count, right_denominator = right_values
+                    left_rate = left_count / left_denominator
+                    right_rate = right_count / right_denominator
+                    z_score, standard_error = _population_z_score(
+                        left_rate,
+                        right_rate,
+                        left_denominator,
+                        right_denominator,
+                    )
+                    comparisons.append({
+                        "population_a": left["population_id"],
+                        "population_b": right["population_id"],
+                        "metric": metric,
+                        "method": "pooled_proportion_z_test",
+                        "population_a_count": left_count,
+                        "population_b_count": right_count,
+                        "population_a_observations": left_denominator,
+                        "population_b_observations": right_denominator,
+                        "population_a_rate": left_rate,
+                        "population_b_rate": right_rate,
+                        "standard_error": standard_error,
+                        "z_score": z_score,
+                        "z_threshold": threshold,
+                        "conflict": z_score > threshold,
+                    })
+                left_duration_reasons: list[str] = []
+                right_duration_reasons: list[str] = []
+                left_duration = _population_duration_observations(
+                    left_aggregate,
+                    aggregate_index=left["aggregate_index"],
+                    reasons=left_duration_reasons,
+                )
+                right_duration = _population_duration_observations(
+                    right_aggregate,
+                    aggregate_index=right["aggregate_index"],
+                    reasons=right_duration_reasons,
+                )
+                if (
+                    left_duration is None
+                    or right_duration is None
+                    or left_duration[0] < minimum_observations
+                    or right_duration[0] < minimum_observations
+                ):
+                    incomplete_metrics.append({
+                        "population_a": left["population_id"],
+                        "population_b": right["population_id"],
+                        "metric": "timing_duration_seconds",
+                        "reason": (
+                            "invalid timing duration statistics"
+                            if left_duration_reasons or right_duration_reasons
+                            else f"both populations need at least {minimum_observations} duration observations"
+                        ),
+                    })
+                else:
+                    left_count, left_mean, left_m2 = left_duration
+                    right_count, right_mean, right_m2 = right_duration
+                    left_variance = left_m2 / (left_count - 1) if left_count > 1 else 0.0
+                    right_variance = right_m2 / (right_count - 1) if right_count > 1 else 0.0
+                    standard_error = math.sqrt(
+                        left_variance / left_count + right_variance / right_count
+                    )
+                    difference = abs(left_mean - right_mean)
+                    if difference == 0.0:
+                        z_score = 0.0
+                    elif standard_error <= 0.0:
+                        z_score = 1.0e12
+                    else:
+                        z_score = difference / standard_error
+                    comparisons.append({
+                        "population_a": left["population_id"],
+                        "population_b": right["population_id"],
+                        "metric": "timing_duration_seconds",
+                        "method": "welch_mean_z_test",
+                        "population_a_mean": left_mean,
+                        "population_b_mean": right_mean,
+                        "population_a_standard_deviation": left_variance**0.5,
+                        "population_b_standard_deviation": right_variance**0.5,
+                        "population_a_observations": left_count,
+                        "population_b_observations": right_count,
+                        "standard_error": standard_error,
+                        "z_score": z_score,
+                        "z_threshold": threshold,
+                        "conflict": z_score > threshold,
+                    })
+    conflict_count = sum(1 for item in comparisons if item.get("conflict"))
+    if len(comparisons) > MAX_POPULATION_COMPARISONS:
+        comparisons = comparisons[:MAX_POPULATION_COMPARISONS]
+        reasons.append("comparison output reached its bounded limit")
+    incomplete_metrics = incomplete_metrics[:MAX_POPULATION_INCOMPLETE_REASONS]
+    unique_reasons = list(dict.fromkeys(reasons))[:MAX_POPULATION_INCOMPLETE_REASONS]
+    if len(population_rows) < 2:
+        status = "INCOMPLETE_EVIDENCE"
+        if not unique_reasons:
+            unique_reasons.append("at least two distinct populations are required")
+    elif any(
+        reason == "selected populations have different comparison contexts"
+        for reason in unique_reasons
+    ):
+        status = "INCOMPLETE_EVIDENCE"
+    elif not comparisons:
+        status = "INCOMPLETE_EVIDENCE"
+        if not unique_reasons:
+            unique_reasons.append("no metrics have sufficient comparable evidence")
+    else:
+        status = "DISTRIBUTION_CONFLICT" if conflict_count else "COMPARABLE"
+    report: dict[str, Any] = {
+        "schema_version": ADAPTIVE_AGGREGATION_SCHEMA_VERSION,
+        "report_kind": "ADAPTIVE_POPULATION_COMPARISON",
+        "status": status,
+        "target_id": context[0] if context else target_id,
+        "generation_id": context[1] if context else generation_id,
+        "comparison_context": (
+            {
+                field: context[index]
+                for index, field in enumerate(_POPULATION_CONTEXT_FIELDS)
+            }
+            if context and not any(
+                reason == "selected populations have different comparison contexts"
+                for reason in unique_reasons
+            )
+            else None
+        ),
+        "population_count": len(public_populations),
+        "populations": public_populations,
+        "comparisons": comparisons,
+        "conflict_count": conflict_count,
+        "incomplete_metrics": incomplete_metrics,
+        "reasons": unique_reasons,
+        "minimum_observations": minimum_observations,
+        "z_threshold": threshold,
+        "comparison_truncated": "comparison output reached its bounded limit" in unique_reasons,
+        "evidence_only": True,
+        "authority_granted": False,
+    }
+    report["content_sha256"] = _content_hash(report)
+    return report
+
+
+def verify_adaptive_population_comparison_report(
+    report: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Verify the content hash of an evidence-only population comparison."""
+    if not isinstance(report, Mapping):
+        return {"valid": False, "status": "MALFORMED", "reason": "report is not an object"}
+    if report.get("report_kind") != "ADAPTIVE_POPULATION_COMPARISON":
+        return {"valid": False, "status": "INVALID", "reason": "unexpected report kind"}
+    if report.get("evidence_only") is not True or report.get("authority_granted") is not False:
+        return {
+            "valid": False,
+            "status": "INVALID",
+            "reason": "report authority markers are invalid",
+        }
+    stored = report.get("content_sha256")
+    if not isinstance(stored, str) or len(stored) != 64:
+        return {"valid": False, "status": "INVALID", "reason": "content hash is missing"}
+    payload = dict(report)
+    payload.pop("content_sha256", None)
+    if _content_hash(payload) != stored:
+        return {"valid": False, "status": "INVALID", "reason": "content hash is invalid"}
+    return {"valid": True, "status": "VERIFIED", "content_sha256": stored}
 
 
 def _promotion_policy(value: Any, *, name: str) -> dict[str, Any]:

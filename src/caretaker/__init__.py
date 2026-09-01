@@ -37,9 +37,11 @@ from .adaptive_aggregation import (
     AdaptiveObservationBatcher,
     RemoteAdaptiveAggregationStore,
     SupervisorAdaptiveAggregationStore,
+    compare_adaptive_populations,
     extended_aggregation_target_id,
     normalize_adaptive_observation_batch,
     verify_adaptive_policy_acceptance_signature,
+    verify_adaptive_population_comparison_report,
     verify_adaptive_policy_transition_signature,
 )
 from .behavior import observed_return_shape

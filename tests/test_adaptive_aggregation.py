@@ -12,7 +12,9 @@ from caretaker.adaptive_aggregation import (
     AdaptiveObservationBatcher,
     RemoteAdaptiveAggregationStore,
     SupervisorAdaptiveAggregationStore,
+    compare_adaptive_populations,
     extended_aggregation_target_id,
+    verify_adaptive_population_comparison_report,
 )
 from caretaker.run import (
     _emit_adaptive_aggregation_audit,
@@ -70,6 +72,123 @@ def _context():
         "authority_policy_generation": "7",
         "authority_policy_fingerprint": "authority-a",
     }
+
+
+def _population_aggregate(
+    scope: str,
+    *,
+    total_observations: int = 40,
+    exception_count: int = 4,
+    code_hash: str = "code-a",
+) -> dict[str, object]:
+    target_id = "example.target"
+    aggregation_target_id = extended_aggregation_target_id(target_id, scope)
+    return {
+        "schema_version": 1,
+        "aggregate_key": aggregation_target_id,
+        "target_id": target_id,
+        "aggregation_scope": scope,
+        "aggregation_target_id": aggregation_target_id,
+        "generation_id": "generation-a",
+        "code_hash": code_hash,
+        "monitoring_fingerprint": "monitoring-a",
+        "policy_fingerprint": "policy-a",
+        "authority_policy_generation": "7",
+        "authority_policy_fingerprint": "authority-a",
+        "first_observed_at": "2026-08-30T12:00:00+00:00",
+        "last_observed_at": "2026-08-30T12:01:00+00:00",
+        "total_observations": total_observations,
+        "exception_count": exception_count,
+        "timing_breach_count": 2,
+        "behavior_observation_calls": total_observations,
+        "behavior_samples": 20,
+        "repair_evidence_samples": 10,
+        "problem_reproductions": 2,
+        "successful_executions": total_observations - 2,
+        "failed_executions": 2,
+        "timing_duration_statistics": {
+            "count": total_observations,
+            "mean": 1.0,
+            "m2": 4.0,
+            "minimum": 0.5,
+            "maximum": 1.5,
+        },
+        "workers": {"worker-a": {"observations": total_observations}},
+    }
+
+
+def test_cross_population_comparison_retains_scopes_and_is_evidence_only() -> None:
+    left = _population_aggregate("cluster:blue")
+    right = _population_aggregate("cluster:red")
+
+    report = compare_adaptive_populations([left, right])
+
+    assert report["status"] == "COMPARABLE"
+    assert report["authority_granted"] is False
+    assert report["evidence_only"] is True
+    assert {item["aggregation_scope"] for item in report["populations"]} == {
+        "cluster:blue",
+        "cluster:red",
+    }
+    assert report["conflict_count"] == 0
+    assert report["content_sha256"]
+    assert verify_adaptive_population_comparison_report(report)["valid"] is True
+    assert left["aggregation_scope"] == "cluster:blue"
+    assert right["aggregation_scope"] == "cluster:red"
+
+
+def test_cross_population_comparison_reports_three_sigma_conflict() -> None:
+    left = _population_aggregate("cluster:blue", exception_count=0)
+    right = _population_aggregate("cluster:red", exception_count=40)
+
+    report = compare_adaptive_populations([left, right])
+
+    assert report["status"] == "DISTRIBUTION_CONFLICT"
+    exception_conflicts = [
+        item for item in report["comparisons"]
+        if item["metric"] == "exception_rate" and item["conflict"]
+    ]
+    assert exception_conflicts
+    assert exception_conflicts[0]["z_score"] > 3.0
+    assert report["authority_granted"] is False
+
+
+def test_cross_population_comparison_fails_closed_for_insufficient_evidence() -> None:
+    report = compare_adaptive_populations([
+        _population_aggregate("cluster:blue", total_observations=2, exception_count=0),
+        _population_aggregate("cluster:red", total_observations=2, exception_count=1),
+    ])
+
+    assert report["status"] == "INCOMPLETE_EVIDENCE"
+    assert report["comparisons"] == []
+    assert report["incomplete_metrics"]
+    assert report["authority_granted"] is False
+
+
+def test_cross_population_comparison_rejects_mixed_contexts() -> None:
+    left = _population_aggregate("cluster:blue")
+    right = _population_aggregate("cluster:red", code_hash="code-b")
+
+    report = compare_adaptive_populations([left, right])
+
+    assert report["status"] == "INCOMPLETE_EVIDENCE"
+    assert report["comparisons"] == []
+    assert "selected populations have different comparison contexts" in report["reasons"]
+    assert report["comparison_context"] is None
+
+
+def test_cross_population_comparison_hash_detects_tampering() -> None:
+    report = compare_adaptive_populations([
+        _population_aggregate("cluster:blue"),
+        _population_aggregate("cluster:red"),
+    ])
+    tampered = dict(report)
+    tampered["status"] = "DISTRIBUTION_CONFLICT"
+
+    verification = verify_adaptive_population_comparison_report(tampered)
+
+    assert verification["valid"] is False
+    assert verification["status"] == "INVALID"
 
 
 def test_remote_adaptive_store_submits_bounded_batch_to_supervisor(monkeypatch):

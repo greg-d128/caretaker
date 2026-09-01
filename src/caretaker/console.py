@@ -284,6 +284,18 @@ class CaretakerConsoleApp(App):
         align-vertical: middle;
     }
     #adaptive-aggregation-toolbar Button { width: auto; min-width: 12; }
+    #adaptive-population-comparison-actions {
+        height: 4;
+        padding: 0 1;
+        align-vertical: middle;
+    }
+    #adaptive-population-comparison-actions Input { width: 1fr; min-width: 20; margin-right: 1; }
+    #adaptive-population-comparison-actions Button { width: auto; min-width: 18; }
+    #adaptive-population-comparison-status {
+        height: auto;
+        padding: 0 2;
+        color: $text-muted;
+    }
     #adaptive-threshold-review-actions {
         height: 6;
         padding: 0 1;
@@ -1003,6 +1015,19 @@ class CaretakerConsoleApp(App):
                 )
                 with Horizontal(id="adaptive-aggregation-toolbar"):
                     yield Button("Refresh", id="adaptive-aggregation-refresh", variant="primary")
+                with Horizontal(id="adaptive-population-comparison-actions"):
+                    yield Input(
+                        placeholder="Target id (optional; exact context)",
+                        id="adaptive-population-target",
+                    )
+                    yield Input(
+                        placeholder="Generation id (optional; exact context)",
+                        id="adaptive-population-generation",
+                    )
+                    yield Button(
+                        "Compare populations",
+                        id="adaptive-population-compare",
+                    )
                 with Horizontal(id="adaptive-threshold-review-actions"):
                     yield Input(
                         placeholder="Reason for reviewing or applying selected threshold proposal",
@@ -1093,6 +1118,10 @@ class CaretakerConsoleApp(App):
                 yield Static(
                     "Active adaptive policy thresholds unavailable",
                     id="adaptive-aggregation-policy-status",
+                )
+                yield Static(
+                    "Population comparison not run",
+                    id="adaptive-population-comparison-status",
                 )
                 table = DataTable(id="adaptive-aggregation-table")
                 table.cursor_type = "row"
@@ -5795,6 +5824,31 @@ class CaretakerConsoleApp(App):
                     incident_id=self._context_incident,
                 )
                 await self.refresh_adaptive_aggregation()
+                self._write_json("#adaptive-aggregation-output", response)
+                return
+            if button == "adaptive-population-compare":
+                target = self.query_one(
+                    "#adaptive-population-target", Input
+                ).value.strip()
+                generation = self.query_one(
+                    "#adaptive-population-generation", Input
+                ).value.strip()
+                response = await self._request(
+                    "adaptive-population-compare",
+                    target_id=target or None,
+                    generation_id=generation or None,
+                    limit=128,
+                )
+                report = response.get("report") if isinstance(response, Mapping) else None
+                if isinstance(report, Mapping):
+                    self.query_one(
+                        "#adaptive-population-comparison-status", Static
+                    ).update(
+                        f"Population comparison: {report.get('status', 'UNKNOWN')} | "
+                        f"{report.get('population_count', 0)} populations | "
+                        f"{len(report.get('comparisons') or ())} comparisons | "
+                        f"{report.get('conflict_count', 0)} conflicts | read-only evidence"
+                    )
                 self._write_json("#adaptive-aggregation-output", response)
                 return
             if button == "adaptive-aggregation-refresh":

@@ -132,6 +132,15 @@ required workers have acknowledged a transition and it is `APPLIED`, rollback
 through this operation is rejected; a later correction requires a new incident
 and its own approval path.
 
+The read-only `adaptive-population-compare` command compares the separately
+retained adaptive aggregates for an optional target and generation. It requires
+matching code, monitoring, policy, and authority context, and returns a
+bounded, content-hashed `ADAPTIVE_POPULATION_COMPARISON` report. Separate
+scopes are never merged. The report may identify `COMPARABLE`,
+`DISTRIBUTION_CONFLICT`, or `INCOMPLETE_EVIDENCE`, but it cannot change an
+aggregate, policy, Guard baseline, Repair state, or authority. The Adaptive
+console exposes the same operation as **Compare populations**.
+
 Replacement probation and acceptance counters are policy resolved. The default
 guideline is 1,000 successful executions for each stage with no permitted
 failures; a target-specific override may explicitly change those counters.

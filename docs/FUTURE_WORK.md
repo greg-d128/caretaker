@@ -578,7 +578,7 @@ reference a sealed snapshot that satisfies the required signing policy.
 
 ### Randomized behavioral-regime snapshots
 
-**Status: Implemented in development tree for opt-in randomized epoch boundaries; regime clustering and cross-population analysis remain future work.**
+**Status: Implemented in development tree for opt-in randomized epoch boundaries and bounded read-only cross-population comparison; regime clustering and automatic population discovery remain future work.**
 
 An optional collection mode now creates randomized, non-overlapping behavior
 snapshot boundaries within an otherwise unchanged code and monitoring generation.
@@ -612,10 +612,14 @@ The mode should:
 
 The current choice is policy-selectable reproducibility: a configured seed gives
 deterministic boundary selection for controlled experiments, while the default
-unset seed uses a system random source and stores only commitments. Regime
+unset seed uses a system random source and stores only commitments. A bounded,
+read-only comparison helper now compares explicitly retained populations when
+their code, generation, monitoring, policy, and authority contexts match; it
+does not discover membership, cluster regimes, or merge baselines. Regime
 clustering, rare-regime preservation beyond bounded epoch partitioning, and
-cross-process population analysis remain future design work. Randomized epochs
-are evidence only and cannot automatically become an accepted Guard baseline.
+cross-process or cross-host population analysis remain future design work.
+Randomized epochs and population comparisons are evidence only and cannot
+automatically become an accepted Guard baseline.
 
 ## Operator-directed and coverage-complete behavior collection
 
