@@ -115,6 +115,25 @@ transport authentication or replay protection. See
 [`LOGGING_RECORD_FORMAT.md`](LOGGING_RECORD_FORMAT.md) for the proposed envelope
 and event registry.
 
+## Monitoring stream
+
+The optional monitoring stream is configured separately from the audit stream:
+
+```toml
+[logging.monitoring]
+enabled = false
+file_name = "caretaker_monitoring.log"
+dialect = "json_lines"
+maximum_record_bytes = 4096
+```
+
+When enabled, `LoggingRuntime.overhead_status()` publishes bounded numeric
+logging-path metrics to the output-only stream. The supported dialects are
+`json_lines`, `datadog`, `splunk_hec`, and `new_relic`; they are local
+serialization formats, not network integrations. See
+[`MONITORING_STREAM.md`](MONITORING_STREAM.md) for the record contract and
+external collector responsibilities.
+
 Audit event mappings are redacted again inside `AuditStreamWriter` before their
 canonical content hash or runtime signature is calculated. The writer uses the
 active logging redaction policy supplied by `LoggingRuntime`; a directly

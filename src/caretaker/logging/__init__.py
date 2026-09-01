@@ -47,7 +47,16 @@ from .ipc import (
     unix_socket_path,
 )
 from .masking import MaskFunction, MaskingResult, apply_mask, mask_card_number
-from .metrics import MetricSample, MetricsContext, MetricsProvider, NullMetricsProvider
+from .metrics import (
+    MetricSample,
+    MetricsContext,
+    MetricsProvider,
+    MonitoringDialect,
+    MonitoringStreamError,
+    MonitoringStreamPolicy,
+    MonitoringStreamWriter,
+    NullMetricsProvider,
+)
 from .models import *
 from .policy import *
 from .records import RecordFormatError, TLVLogCodec

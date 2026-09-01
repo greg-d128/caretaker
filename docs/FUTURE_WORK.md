@@ -1491,7 +1491,15 @@ Until this exists, restart is a rollback to deployed application code, not conti
 
 ## Other system evidence and metrics work
 
-**Status: General future work.**
+**Status: Implemented in development tree for the policy-disabled-by-default,
+bounded output-only monitoring stream and its JSON Lines, Datadog, Splunk HEC,
+and New Relic serialization dialects; advanced system collection remains future
+work.**
+
+The existing bounded Caretaker logging-overhead snapshot can now be published
+to the optional monitoring stream. The stream is telemetry only and cannot be
+read as a command, policy, approval, or authority channel. See
+[`MONITORING_STREAM.md`](MONITORING_STREAM.md).
 
 - Integrate the advanced lightweight system-metrics provider through `MetricsProvider`.
 - Add specialized parsers for collected `/proc` and `/sys` bodies.

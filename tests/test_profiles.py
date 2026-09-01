@@ -173,6 +173,7 @@ def test_policy_surface_two_requires_review_of_adaptive_instrumentation() -> Non
         "logging.communication-llm-tailoring",
         "repair.rollout-authority",
         "guard.return-novelty",
+        "logging.monitoring-stream",
     ]
 
 def test_policy_surface_reports_capabilities_added_after_profile(monkeypatch) -> None:

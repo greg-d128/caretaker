@@ -221,6 +221,15 @@ POLICY_CAPABILITIES: tuple[PolicyCapability, ...] = (
             "guard.deviations.minimum_new_return_observations",
         ),
     ),
+    PolicyCapability(
+        "logging.monitoring-stream",
+        10,
+        "0.6.1",
+        "Output-only monitoring stream",
+        "Controls the optional bounded metric stream and its external-monitoring serialization dialects.",
+        "Review metric disclosure, record bounds, local file permissions, dialect compatibility, and the fact that the stream cannot act as a command or authority channel.",
+        ("logging.monitoring.",),
+    ),
 )
 
 CURRENT_POLICY_SURFACE_VERSION = max(

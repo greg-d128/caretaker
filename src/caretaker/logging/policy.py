@@ -37,6 +37,7 @@ from .models import (
     RuntimeRecordIntegrityMode,
     WorkerFailureAction,
 )
+from .metrics import MonitoringDialect, MonitoringStreamPolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -309,6 +310,7 @@ class OperatorLoggingPolicy:
     interrogation: InterrogationPolicy = field(default_factory=InterrogationPolicy)
     baseline: LoggingBaselinePolicy = field(default_factory=LoggingBaselinePolicy)
     metrics: MetricsBinding = field(default_factory=MetricsBinding)
+    monitoring: MonitoringStreamPolicy = field(default_factory=MonitoringStreamPolicy)
     storage_emergency: StorageEmergencyPolicy = field(default_factory=StorageEmergencyPolicy)
     attachments: AttachmentPolicy = field(default_factory=AttachmentPolicy)
     capsules: IncidentCapsulePolicy = field(default_factory=IncidentCapsulePolicy)
@@ -422,6 +424,31 @@ def validate_operator_logging_policy(policy: OperatorLoggingPolicy) -> None:
         errors.append("logging.baseline automatic baseline policy is reserved; Guard behavior snapshots are the implemented baseline mechanism")
     if policy.metrics.enabled:
         errors.append("logging.metrics provider correlation is reserved; no metrics provider adapter is implemented")
+    if not isinstance(policy.monitoring, MonitoringStreamPolicy):
+        errors.append("logging.monitoring must be a MonitoringStreamPolicy")
+    else:
+        monitoring_name = (
+            Path(policy.monitoring.file_name)
+            if isinstance(policy.monitoring.file_name, str)
+            else None
+        )
+        if (
+            monitoring_name is None
+            or monitoring_name.is_absolute()
+            or ".." in monitoring_name.parts
+            or not policy.monitoring.file_name.strip()
+        ):
+            errors.append(
+                "logging.monitoring.file_name must be a non-empty path below logging.directory"
+            )
+        if (
+            isinstance(policy.monitoring.maximum_record_bytes, bool)
+            or not isinstance(policy.monitoring.maximum_record_bytes, int)
+            or not 512 <= policy.monitoring.maximum_record_bytes <= 65_536
+        ):
+            errors.append(
+                "logging.monitoring.maximum_record_bytes must be between 512 and 65536"
+            )
     try:
         validate_incident_capsule_policy(policy.capsules)
     except ValueError as exc:
@@ -636,6 +663,7 @@ def load_operator_policy(path: str | Path) -> tuple[OperatorLoggingPolicy, Loggi
     interrogation_data = dict(log.get("interrogation", {}))
     baseline_data = dict(log.get("baseline", {}))
     metrics_data = dict(log.get("metrics", {}))
+    monitoring_data = dict(log.get("monitoring", {}))
     emergency_data = dict(log.get("storage_emergency", {}))
     attachment_data = dict(log.get("attachments", {}))
     capsule_data = dict(log.get("capsules", {}))
@@ -694,6 +722,10 @@ def load_operator_policy(path: str | Path) -> tuple[OperatorLoggingPolicy, Loggi
         interrogation=InterrogationPolicy(**interrogation_data),
         baseline=LoggingBaselinePolicy(**baseline_data),
         metrics=MetricsBinding(**metrics_data),
+        monitoring=MonitoringStreamPolicy(**{
+            **monitoring_data,
+            **_enum_if_present(MonitoringDialect, monitoring_data, "dialect"),
+        }),
         storage_emergency=StorageEmergencyPolicy(**{
             **emergency_data,
             **_enum_if_present(EmergencyAction, emergency_data, "pressure_action"),

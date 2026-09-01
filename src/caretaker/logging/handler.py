@@ -31,6 +31,7 @@ from .policy import (
     OperatorPolicyWatcher,
 )
 from .segments import SegmentWriter
+from .metrics import MonitoringStreamWriter
 
 
 class LogSink(Protocol):
@@ -105,6 +106,13 @@ class LoggingRuntime:
             redaction_policy=policy.redaction,
             external_sink=external_audit_sink,
         )
+        self.monitoring = MonitoringStreamWriter(
+            policy.monitoring,
+            directory=policy.directory,
+            application_id=policy.application_id,
+            run_id=self.run_id,
+            process_start_id=self.process_start_id,
+        )
         self.sink = BufferedSegmentSink(self.writer, policy)
         self._sequence = 0
         self._lock = threading.RLock()
@@ -137,6 +145,7 @@ class LoggingRuntime:
         warnings_out.extend(
             self.audit.update_policy(active.audit, redaction_policy=active.redaction)
         )
+        warnings_out.extend(self.monitoring.update_policy(active.monitoring))
         self.attachments.update_policy(active.attachments)
         return tuple(warnings_out)
 
@@ -481,14 +490,17 @@ class LoggingRuntime:
     def flush(self) -> None:
         self.sink.flush()
         self.audit.flush()
+        self.monitoring.flush()
 
     def overhead_status(self) -> dict[str, Any]:
         """Return bounded Caretaker logging-path overhead evidence."""
-        return {
+        status = {
             "schema_version": 1,
             "scope": "caretaker_logging",
             **self.sink.overhead_status(),
         }
+        self.monitoring.emit_overhead(status)
+        return status
 
     def close(self) -> None:
         if self._closed:
@@ -513,6 +525,7 @@ class LoggingRuntime:
         )
         self.sink.close(attachment_manifest_hash=attachment_manifest_hash)
         self.audit.close()
+        self.monitoring.close()
         self._closed = True
 
 

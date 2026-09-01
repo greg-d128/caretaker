@@ -25,7 +25,7 @@ from .system import policy as system_policy
 
 POLICY_SEMANTICS_REVIEW_GENERATION = 25
 # Updated only after the policy truthfulness suite reviews every changed field.
-REVIEWED_POLICY_SURFACE_HASH = "5fa5481eefcc161d2377417c670e72158c339e7a7aa40271261f5c0cc5fdcb06"
+REVIEWED_POLICY_SURFACE_HASH = "5e547117273e3998bfc7e512375f1829e10426234c22a5dc57b6d52c9ea831f4"
 
 
 RESERVED_SETTINGS: dict[str, str] = {
