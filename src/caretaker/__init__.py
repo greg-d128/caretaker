@@ -4,6 +4,7 @@ from .acceptance import AcceptanceCriteria
 from .adaptive import (
     AcceptanceState,
     AdaptiveAggregationPolicy,
+    AggregationScopeResolver,
     AdaptiveLifecycleStage,
     AdaptiveInstrumentationState,
     DEFAULT_DEPENDENCY_POLICY,
@@ -426,6 +427,7 @@ __all__ = [
     "validate_lightweight_policy",
     "AdaptiveAggregationError",
     "AdaptiveAggregationPolicy",
+    "AggregationScopeResolver",
     "AdaptiveAggregationBackpressureAction",
     "AdaptiveObservationBatcher",
     "RemoteAdaptiveAggregationStore",

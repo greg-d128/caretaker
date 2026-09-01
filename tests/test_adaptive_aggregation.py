@@ -310,6 +310,48 @@ def test_adaptive_backpressure_retain_preserves_pending_evidence() -> None:
     assert batcher.status()["dropped_records"] == 0
 
 
+def test_adaptive_rebind_retain_preserves_pending_old_context() -> None:
+    store = _BackpressureStore(fail_count=1)
+    batcher = _backpressure_batcher(
+        store,
+        AdaptiveAggregationBackpressureAction.RETAIN,
+    )
+    batcher.flush_after_observations = 10
+
+    batcher.record(behavior_samples=1)
+    result = batcher.rebind(
+        target_id="example.target",
+        aggregation_scope="cluster:blue",
+        generation_id="generation-a",
+        code_hash="code-a",
+        monitoring_fingerprint="monitoring-a",
+        policy_fingerprint="policy-a",
+        authority_policy_generation="7",
+        authority_policy_fingerprint="authority-a",
+    )
+
+    assert result is not None
+    assert result["status"] == "DEFERRED"
+    assert batcher.status()["pending_records"] == 1
+    assert batcher.status()["aggregation_scope"] is None
+
+    result = batcher.rebind(
+        target_id="example.target",
+        aggregation_scope="cluster:blue",
+        generation_id="generation-a",
+        code_hash="code-a",
+        monitoring_fingerprint="monitoring-a",
+        policy_fingerprint="policy-a",
+        authority_policy_generation="7",
+        authority_policy_fingerprint="authority-a",
+    )
+
+    assert result is not None
+    assert result["status"] == "QUEUED"
+    assert batcher.status()["pending_records"] == 0
+    assert batcher.status()["aggregation_scope"] == "cluster:blue"
+
+
 def test_adaptive_backpressure_drop_discards_only_the_failed_batch() -> None:
     batcher = _backpressure_batcher(
         _BackpressureStore(fail_count=1),
@@ -1289,6 +1331,98 @@ def test_enabled_adaptive_policy_emits_live_controller_counters(tmp_path: Path):
     aggregate = store.list_aggregates()[0]
     assert aggregate["behavior_observation_calls"] == 1
     assert aggregate["successful_executions"] == 1
+
+
+def test_application_scope_resolver_keeps_population_batches_separate(tmp_path: Path):
+    policy = LightweightPolicy(
+        initial_level=InstrumentationLevel.BEHAVIOR,
+        sampling=BehaviorSamplingPolicy(
+            enabled=True,
+            lightweight_every_calls=0,
+            behavior_every_calls=1,
+            randomize_initial_offset=False,
+        ),
+        demotion=InstrumentationDemotionPolicy(enabled=False),
+        aggregation=AdaptiveAggregationPolicy(
+            enabled=True,
+            flush_after_observations=1,
+            flush_interval_seconds=0,
+        ),
+    )
+
+    @lightweight(
+        policy=policy,
+        target_id="aggregation.scoped",
+        state_directory=tmp_path / "adaptive",
+        aggregation_scope_resolver=lambda args, kwargs: f"cluster:{args[0]}",
+    )
+    def observed(cluster: str) -> str:
+        return cluster
+
+    assert observed("blue") == "blue"
+    assert observed("red") == "red"
+    controller = observed.__caretaker_adaptive__
+    controller._aggregation_batcher.flush()
+    store = SupervisorAdaptiveAggregationStore(tmp_path)
+    status = controller.aggregation_status()
+    context = {
+        "current_generations": {
+            extended_aggregation_target_id("aggregation.scoped", "cluster:blue"):
+            controller.code_hash,
+            extended_aggregation_target_id("aggregation.scoped", "cluster:red"):
+            controller.code_hash,
+        },
+        "policy_fingerprints": {
+            extended_aggregation_target_id("aggregation.scoped", "cluster:blue"):
+            status["policy_fingerprint"],
+            extended_aggregation_target_id("aggregation.scoped", "cluster:red"):
+            status["policy_fingerprint"],
+        },
+        "authority_policy_generation": status["authority_policy_generation"],
+        "authority_policy_fingerprint": status["authority_policy_fingerprint"],
+    }
+
+    assert store.reconcile(**context)["merged"] == 4
+    aggregates = store.list_aggregates()
+    assert {
+        (item["target_id"], item["aggregation_scope"])
+        for item in aggregates
+    } == {
+        ("aggregation.scoped", "cluster:blue"),
+        ("aggregation.scoped", "cluster:red"),
+    }
+
+
+def test_application_scope_resolver_failure_suppresses_only_scope_evidence(
+    tmp_path: Path,
+):
+    policy = LightweightPolicy(
+        initial_level=InstrumentationLevel.BEHAVIOR,
+        aggregation=AdaptiveAggregationPolicy(
+            enabled=True,
+            flush_after_observations=1,
+            flush_interval_seconds=0,
+        ),
+    )
+
+    def failing_scope(args, kwargs):
+        raise RuntimeError("scope unavailable")
+
+    @lightweight(
+        policy=policy,
+        target_id="aggregation.scope-failure",
+        state_directory=tmp_path / "adaptive",
+        aggregation_scope_resolver=failing_scope,
+    )
+    def observed(value: int) -> int:
+        return value + 1
+
+    assert observed(1) == 2
+    controller = observed.__caretaker_adaptive__
+    assert controller.state.recent_diagnostics[-1]["kind"] == (
+        "aggregation-scope-unavailable"
+    )
+    assert controller._aggregation_batcher.status()["pending_records"] == 0
 
 
 def test_adaptive_aggregation_audit_projection_is_bounded_and_non_authoritative():

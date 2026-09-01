@@ -328,6 +328,15 @@ class AdaptiveObservationBatcher:
         """Flush the old generation/policy episode before changing its context."""
         with self._lock:
             result = self._flush_locked()
+            if isinstance(result, Mapping) and result.get("status") in {
+                "ERROR",
+                "DEFERRED",
+            }:
+                # RETAIN (and a failed REDUCE retry) must not discard the old
+                # context or pending records merely because a generation or
+                # population boundary was reached. The caller can retry the
+                # rebind after the submission path recovers.
+                return result
             next_context: dict[str, str | None] = {}
             for name in self._context:
                 value = context[name]

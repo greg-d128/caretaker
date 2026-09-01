@@ -42,6 +42,15 @@ grant authority, or reapply anything after restart.
 detection, behavior sampling, evidence-gated promotion, and independently controlled
 demotion. The signed authority namespace is `lightweight.*`.
 
+`AdaptiveAggregationPolicy.aggregation_scope` defines a fixed known population.
+When population membership is available only from application call arguments,
+an application may additionally provide `aggregation_scope_resolver` to
+`lightweight()`. The resolver only partitions evidence into the extended
+target identity; it cannot change policy, authority, thresholds, or Repair
+state. Its output is validated and a resolver failure records no aggregation
+evidence for that invocation rather than attributing the call to an arbitrary
+population.
+
 Signal policies include exception and soft-timing thresholds. Their `promote_to` field
 expresses the desired terminal capability. `promote_to=REPAIR` is repair eligibility,
 not permission to skip observation. The complete repaired-function lifecycle is

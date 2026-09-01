@@ -9,6 +9,7 @@ and long-term acceptance criteria analogous to repaired-function acceptance.
 """
 
 import functools
+import contextvars
 import hashlib
 import inspect
 import importlib
@@ -38,13 +39,21 @@ from .adaptive_aggregation import (
     AdaptiveObservationBatcher,
     RemoteAdaptiveAggregationStore,
     SupervisorAdaptiveAggregationStore,
+    extended_aggregation_target_id,
 )
 from .domain import CandidateState
 from .runtime import set_runtime_context
 
 F = TypeVar("F", bound=Callable[..., Any])
+AggregationScopeResolver = Callable[
+    [tuple[Any, ...], Mapping[str, Any]], str | None
+]
 _DEPENDENCY_BINDING = object()
 _DEPENDENCY_RUNTIME = threading.local()
+_AGGREGATION_SCOPE_UNSET = object()
+_AGGREGATION_SCOPE_CONTEXT: contextvars.ContextVar[
+    tuple[str | None, bool] | None
+] = contextvars.ContextVar("caretaker_aggregation_scope", default=None)
 _STATE_CHECKPOINT_CALLS = 100
 _STATE_CHECKPOINT_SECONDS = 30.0
 _ADAPTIVE_WORKER_ID = f"{os.getpid()}-{uuid4().hex}"
@@ -443,6 +452,7 @@ class _AdaptiveController:
         behavior_binding: Any,
         state_directory: str | Path | None,
         allow_repair_promotion: bool,
+        aggregation_scope_resolver: AggregationScopeResolver | None,
     ) -> None:
         self.function = function
         self.target_id = target_id
@@ -451,6 +461,11 @@ class _AdaptiveController:
         self.engine = engine
         self.behavior_binding = behavior_binding
         self.allow_repair_promotion = allow_repair_promotion
+        if aggregation_scope_resolver is not None and not callable(
+            aggregation_scope_resolver
+        ):
+            raise ValueError("aggregation_scope_resolver must be callable")
+        self.aggregation_scope_resolver = aggregation_scope_resolver
         self.code_hash = _function_hash(function)
         self._code_object = getattr(function, "__code__", None)
         self._state_directory = state_directory
@@ -504,11 +519,15 @@ class _AdaptiveController:
 
         if dependency_boundary:
             _DEPENDENCY_RUNTIME.depth = dependency_depth + 1
+        aggregation_scope_token = None
         try:
             with self._lock:
                 self._refresh_generation_if_needed()
                 self._refresh_policy_if_needed()
                 self._sync_repair_lifecycle()
+                aggregation_scope_token = self._set_aggregation_scope_context(
+                    args, kwargs
+                )
                 level = self.state.level
                 stage = self.state.stage
                 sample_behavior = self._advance_sampling_counter(level)
@@ -559,6 +578,8 @@ class _AdaptiveController:
                 if not transitioned_during_call:
                     self._observe_acceptance(success=(not failed and not timing_breach))
         finally:
+            if aggregation_scope_token is not None:
+                _AGGREGATION_SCOPE_CONTEXT.reset(aggregation_scope_token)
             if dependency_boundary:
                 _DEPENDENCY_RUNTIME.depth = dependency_depth
 
@@ -1419,10 +1440,18 @@ class _AdaptiveController:
             return Path(os.environ.get("CARETAKER_DATA_DIR", "./caretaker-data"))
         return Path(self._state_directory).parent
 
-    def _aggregation_context(self) -> dict[str, str | None]:
+    def _aggregation_context(
+        self,
+        aggregation_scope: str | None | object = _AGGREGATION_SCOPE_UNSET,
+    ) -> dict[str, str | None]:
+        scope = (
+            self.policy.aggregation.aggregation_scope
+            if aggregation_scope is _AGGREGATION_SCOPE_UNSET
+            else aggregation_scope
+        )
         return {
             "target_id": self.target_id,
-            "aggregation_scope": self.policy.aggregation.aggregation_scope,
+            "aggregation_scope": scope if isinstance(scope, str) else None,
             # Code identity is the current adaptive generation identity. A code
             # change causes a new hash and therefore a new supervisor aggregate.
             "generation_id": self.code_hash,
@@ -1432,6 +1461,38 @@ class _AdaptiveController:
             "authority_policy_generation": str(_authority_context().effective.generation),
             "authority_policy_fingerprint": self._authority_fingerprint or "",
         }
+
+    def _set_aggregation_scope_context(
+        self,
+        args: tuple[Any, ...],
+        kwargs: Mapping[str, Any],
+    ) -> Any:
+        """Bind one call's optional population scope to its evidence records.
+
+        Scope resolution is application-owned classification evidence. A
+        resolver failure therefore suppresses aggregation for this invocation
+        rather than changing the wrapped function's result or attributing the
+        call to an unsafe population.
+        """
+        resolver = self.aggregation_scope_resolver
+        if resolver is None:
+            return None
+        try:
+            raw_scope = resolver(tuple(args), dict(kwargs))
+            if raw_scope is not None and not isinstance(raw_scope, str):
+                raise ValueError("aggregation scope resolver must return a string or None")
+            scope = raw_scope.strip() if raw_scope is not None else None
+            extended_aggregation_target_id(self.target_id, scope)
+        except Exception as exc:
+            self._diagnostic(
+                {
+                    "timestamp": utcnow_iso(),
+                    "kind": "aggregation-scope-unavailable",
+                    "error_type": type(exc).__name__,
+                }
+            )
+            return _AGGREGATION_SCOPE_CONTEXT.set((None, False))
+        return _AGGREGATION_SCOPE_CONTEXT.set((scope, True))
 
     def _configure_aggregation_batcher(self) -> None:
         if not self.policy.aggregation.enabled:
@@ -1530,6 +1591,20 @@ class _AdaptiveController:
         batcher = self._aggregation_batcher
         if batcher is None:
             return
+        scope_context = _AGGREGATION_SCOPE_CONTEXT.get()
+        if self.aggregation_scope_resolver is not None:
+            if scope_context is None:
+                scope, available = self.policy.aggregation.aggregation_scope, True
+            else:
+                scope, available = scope_context
+            if not available:
+                return
+            current_scope = batcher.context.get("aggregation_scope")
+            if current_scope != scope:
+                try:
+                    batcher.rebind(**self._aggregation_context(scope))
+                except Exception:
+                    return
         try:
             batcher.record(**increments)
         except Exception:
@@ -1754,6 +1829,7 @@ def lightweight(
     behavior_binding: Any | None = None,
     state_directory: str | Path | None = None,
     allow_repair_promotion: bool = True,
+    aggregation_scope_resolver: AggregationScopeResolver | None = None,
 ) -> Callable[[F], F]: ...
 
 
@@ -1767,6 +1843,7 @@ def lightweight(
     behavior_binding: Any | None = None,
     state_directory: str | Path | None = None,
     allow_repair_promotion: bool = True,
+    aggregation_scope_resolver: AggregationScopeResolver | None = None,
 ) -> F | Callable[[F], F]:
     """Start with low-cost threshold monitoring and promote only when policy requires it."""
 
@@ -1789,6 +1866,7 @@ def lightweight(
             behavior_binding=selected_binding,
             state_directory=state_directory,
             allow_repair_promotion=allow_repair_promotion,
+            aggregation_scope_resolver=aggregation_scope_resolver,
         )
 
         @functools.wraps(original)

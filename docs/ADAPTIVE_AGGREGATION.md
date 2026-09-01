@@ -39,6 +39,18 @@ current; scoped and unscoped batches therefore cannot merge accidentally. The
 durable aggregate retains both the original target and the scope for operator
 display. The scope does not grant authority or alter Repair policy.
 
+Applications that can classify population membership from a call may provide
+an explicit `aggregation_scope_resolver` to `lightweight()`. The resolver
+receives bounded `(args, kwargs)` and returns a non-empty scope string or
+`None` for the unscoped population. Caretaker validates the resulting extended
+target identity and flushes the current worker batch before switching scopes,
+so observations from different populations cannot be merged accidentally. A
+resolver exception or invalid result suppresses aggregation for that call only;
+the wrapped application call continues normally and the controller records
+scope-unavailable diagnostic evidence. This is application-supplied
+classification, not automatic regime discovery or proof that two populations
+are equivalent.
+
 Reconciliation also writes a bounded per-batch acknowledgement containing the
 batch ID, batch hash, result (`ACCEPTED`, `DUPLICATE`, or `REJECTED`), and
 aggregate key/rejection reason where applicable. This is delivery provenance
