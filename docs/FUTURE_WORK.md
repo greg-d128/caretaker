@@ -937,8 +937,13 @@ work.
 Transition deadlines are now policy-defined and stale-worker identities are
 reported fail-closed. The supervisor cycle now explicitly reconciles expired
 authority packets even when a worker is silent, marks the worker
-`UNAUTHORIZED`, and emits an idempotent expiry audit event. Automatic
-replacement or unauthorized-worker process orchestration remains future work.
+`UNAUTHORIZED`, and emits an idempotent expiry audit event. It also exposes a
+dedicated application-owned `on_expired_workers` control-cycle hook with the
+newly unauthorized worker snapshots and authoritative supervisor time. The
+hook is a deliberate handoff for policy-selected replacement or reconciliation;
+it does not spawn processes, grant replacement authority, or automatically
+stop the application. Automatic replacement or unauthorized-worker process
+orchestration remains future work.
 
 Recovery action dispatch now has application-owned adapters for incident
 creation and application shutdown. Both effects remain outside Caretaker's
