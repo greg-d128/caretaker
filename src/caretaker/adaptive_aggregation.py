@@ -166,6 +166,7 @@ class AdaptiveObservationBatcher:
             AdaptiveAggregationBackpressureAction.RETAIN
         ),
         backpressure_incident_callback: Callable[[Mapping[str, Any]], Any] | None = None,
+        backpressure_audit_callback: Callable[..., Any] | None = None,
     ) -> None:
         if not 0 < int(flush_after_observations) <= MAX_BATCH_COUNTER:
             raise ValueError(
@@ -181,6 +182,10 @@ class AdaptiveObservationBatcher:
             backpressure_incident_callback
         ):
             raise ValueError("backpressure_incident_callback must be callable")
+        if backpressure_audit_callback is not None and not callable(
+            backpressure_audit_callback
+        ):
+            raise ValueError("backpressure_audit_callback must be callable")
         extended_aggregation_target_id(str(target_id), aggregation_scope)
         self.store = store
         self.worker_id = str(worker_id)
@@ -189,6 +194,7 @@ class AdaptiveObservationBatcher:
         self.flush_interval_seconds = float(flush_interval_seconds)
         self.backpressure_action = backpressure_action
         self.backpressure_incident_callback = backpressure_incident_callback
+        self.backpressure_audit_callback = backpressure_audit_callback
         self._lock = threading.RLock()
         self._sequence = 0
         self._records = 0
@@ -204,6 +210,8 @@ class AdaptiveObservationBatcher:
         self._last_error: str | None = None
         self._dropped_records = 0
         self._backpressure_incident_id: str | None = None
+        self._backpressure_audit_emitted = False
+        self._last_audit_error: str | None = None
         self._context = {
             "target_id": str(target_id),
             "aggregation_scope": (
@@ -396,6 +404,8 @@ class AdaptiveObservationBatcher:
                 "backpressure_action": self.backpressure_action.name,
                 "backpressure_incident_recorded": self._backpressure_incident_id is not None,
                 "backpressure_incident_id": self._backpressure_incident_id,
+                "backpressure_audit_emitted": self._backpressure_audit_emitted,
+                "last_audit_error": self._last_audit_error,
             }
 
     def set_backpressure_action(
@@ -447,6 +457,69 @@ class AdaptiveObservationBatcher:
         self._resource_samples_truncated = {}
         self._last_flush_monotonic = time.monotonic()
         self._backpressure_incident_id = None
+        self._backpressure_audit_emitted = False
+        self._last_audit_error = None
+
+    def _emit_backpressure_audit_locked(
+        self,
+        batch: Mapping[str, Any],
+        outcome: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Send one bounded, output-only audit envelope for this episode."""
+        if self._backpressure_audit_emitted:
+            outcome["audit_status"] = "ALREADY_EMITTED"
+            return outcome
+        callback = self.backpressure_audit_callback
+        if callback is None:
+            outcome["audit_status"] = "NOT_CONFIGURED"
+            return outcome
+        status = str(outcome.get("status") or "UNKNOWN")[:64]
+        try:
+            callback(
+                "ADAPTIVE_AGGREGATION_BACKPRESSURE",
+                actor={
+                    "type": "caretaker",
+                    "id": f"adaptive-worker:{self.worker_id}"[:256],
+                },
+                scope={
+                    "target_id": self._context["target_id"],
+                    "aggregation_scope": self._context["aggregation_scope"],
+                    "generation_id": self._context["generation_id"],
+                    "batch_id": str(batch["batch_id"]),
+                },
+                policy={
+                    "fingerprint": self._context["policy_fingerprint"],
+                    "authority_generation": self._context[
+                        "authority_policy_generation"
+                    ],
+                    "authority_fingerprint": self._context[
+                        "authority_policy_fingerprint"
+                    ],
+                },
+                outcome={
+                    "state": status,
+                    "incident_recorded": status
+                    in {"INCIDENT_RECORDED", "INCIDENT_ALREADY_RECORDED"},
+                    "authority_granted": False,
+                },
+                details={
+                    "action": self.backpressure_action.name,
+                    "pending_records": self._records,
+                    "sequence_start": batch["sequence_start"],
+                    "sequence_end": batch["sequence_end"],
+                    "incident_id": outcome.get("incident_id"),
+                    "error": self._last_error,
+                    "authority_granted": False,
+                },
+            )
+        except Exception as exc:
+            self._last_audit_error = f"{type(exc).__name__}: {exc}"[:256]
+            outcome["audit_status"] = "FAILED"
+            outcome["audit_error"] = self._last_audit_error
+            return outcome
+        self._backpressure_audit_emitted = True
+        outcome["audit_status"] = "EMITTED"
+        return outcome
 
     def _record_backpressure_incident_locked(
         self,
@@ -460,22 +533,22 @@ class AdaptiveObservationBatcher:
         policy, Repair, or data-loss decision.
         """
         if self._backpressure_incident_id is not None:
-            return {
+            return self._emit_backpressure_audit_locked(batch, {
                 "status": "INCIDENT_ALREADY_RECORDED",
                 "accepted": True,
                 "incident_id": self._backpressure_incident_id,
                 "pending_records": self._records,
                 "error": self._last_error,
-            }
+            })
         callback = self.backpressure_incident_callback
         if callback is None:
-            return {
+            return self._emit_backpressure_audit_locked(batch, {
                 "status": "INCIDENT_UNAVAILABLE",
                 "accepted": False,
                 "reason": "no application-owned incident callback is configured",
                 "pending_records": self._records,
                 "error": self._last_error,
-            }
+            })
         payload = {
             "event": "adaptive-aggregation-backpressure",
             "action": AdaptiveAggregationBackpressureAction.INCIDENT.name,
@@ -498,47 +571,47 @@ class AdaptiveObservationBatcher:
         try:
             response = callback(payload)
         except Exception as exc:
-            return {
+            return self._emit_backpressure_audit_locked(batch, {
                 "status": "INCIDENT_FAILED",
                 "accepted": False,
                 "reason": f"{type(exc).__name__}: {exc}"[:256],
                 "pending_records": self._records,
                 "error": self._last_error,
-            }
+            })
         if not isinstance(response, Mapping) or response.get("accepted") is not True:
-            return {
+            return self._emit_backpressure_audit_locked(batch, {
                 "status": "INCIDENT_REJECTED",
                 "accepted": False,
                 "reason": "application-owned incident callback did not accept the incident",
                 "pending_records": self._records,
                 "error": self._last_error,
-            }
+            })
         incident_id = response.get("incident_id")
         if incident_id is None:
-            return {
+            return self._emit_backpressure_audit_locked(batch, {
                 "status": "INCIDENT_REJECTED",
                 "accepted": False,
                 "reason": "application-owned incident callback returned no incident_id",
                 "pending_records": self._records,
                 "error": self._last_error,
-            }
+            })
         incident_id = str(incident_id).strip()
         if not incident_id or len(incident_id) > MAX_BACKPRESSURE_INCIDENT_ID:
-            return {
+            return self._emit_backpressure_audit_locked(batch, {
                 "status": "INCIDENT_REJECTED",
                 "accepted": False,
                 "reason": "application-owned incident callback returned an invalid incident_id",
                 "pending_records": self._records,
                 "error": self._last_error,
-            }
+            })
         self._backpressure_incident_id = incident_id
-        return {
+        return self._emit_backpressure_audit_locked(batch, {
             "status": "INCIDENT_RECORDED",
             "accepted": True,
             "incident_id": incident_id,
             "pending_records": self._records,
             "error": self._last_error,
-        }
+        })
 
     def _flush_locked(self) -> dict[str, Any] | None:
         if self._records <= 0:

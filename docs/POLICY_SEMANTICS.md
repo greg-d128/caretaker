@@ -124,4 +124,6 @@ authority. `INCIDENT` requires an application-owned
 `backpressure_incident_callback` and retains the pending batch after reporting
 the bounded incident context. A callback must explicitly return an accepted
 incident identifier; callback absence, rejection, or failure is reported and
-does not discard the evidence.
+does not discard the evidence. An optional
+`backpressure_audit_callback` receives a bounded output-only audit envelope;
+the callback is not a command channel and cannot grant authority.

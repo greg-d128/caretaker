@@ -186,8 +186,13 @@ as recorded. A notification is deduplicated for the pending batch episode, and
 the batch remains pending until a later submission succeeds. Missing, rejected,
 or failing callbacks produce explicit outcomes and retain the evidence.
 All four actions are evidence handling only and cannot change application
-results, policy, or authority. Parallel stores and transport-level throttling
-remain future integrations.
+results, policy, or authority. When configured, the batcher also sends one
+bounded `ADAPTIVE_AGGREGATION_BACKPRESSURE` envelope to an application-owned
+output-only audit callback for the pending episode. The adapter that persists
+`caretaker_audit.log` must assign the event's critical priority and preserve
+the usual hash-chain and delivery policy; callback failure is exposed in the
+batcher status and cannot change application behavior. Parallel stores and
+transport-level throttling remain future integrations.
 
 The supervisor can also persist a delayed `ADAPTIVE_THRESHOLD_PROPOSAL` for a
 bounded set of threshold fields. The proposal records the requested changes,

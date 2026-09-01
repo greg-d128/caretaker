@@ -454,6 +454,7 @@ class _AdaptiveController:
         allow_repair_promotion: bool,
         aggregation_scope_resolver: AggregationScopeResolver | None,
         backpressure_incident_callback: Callable[[Mapping[str, Any]], Any] | None,
+        backpressure_audit_callback: Callable[..., Any] | None,
     ) -> None:
         self.function = function
         self.target_id = target_id
@@ -472,6 +473,11 @@ class _AdaptiveController:
         ):
             raise ValueError("backpressure_incident_callback must be callable")
         self.backpressure_incident_callback = backpressure_incident_callback
+        if backpressure_audit_callback is not None and not callable(
+            backpressure_audit_callback
+        ):
+            raise ValueError("backpressure_audit_callback must be callable")
+        self.backpressure_audit_callback = backpressure_audit_callback
         self.code_hash = _function_hash(function)
         self._code_object = getattr(function, "__code__", None)
         self._state_directory = state_directory
@@ -1519,6 +1525,7 @@ class _AdaptiveController:
             flush_interval_seconds=self.policy.aggregation.flush_interval_seconds,
             backpressure_action=self.policy.aggregation.backpressure_action,
             backpressure_incident_callback=self.backpressure_incident_callback,
+            backpressure_audit_callback=self.backpressure_audit_callback,
             **context,
         )
 
@@ -1838,6 +1845,7 @@ def lightweight(
     allow_repair_promotion: bool = True,
     aggregation_scope_resolver: AggregationScopeResolver | None = None,
     backpressure_incident_callback: Callable[[Mapping[str, Any]], Any] | None = None,
+    backpressure_audit_callback: Callable[..., Any] | None = None,
 ) -> Callable[[F], F]: ...
 
 
@@ -1853,6 +1861,7 @@ def lightweight(
     allow_repair_promotion: bool = True,
     aggregation_scope_resolver: AggregationScopeResolver | None = None,
     backpressure_incident_callback: Callable[[Mapping[str, Any]], Any] | None = None,
+    backpressure_audit_callback: Callable[..., Any] | None = None,
 ) -> F | Callable[[F], F]:
     """Start with low-cost threshold monitoring and promote only when policy requires it."""
 
@@ -1877,6 +1886,7 @@ def lightweight(
             allow_repair_promotion=allow_repair_promotion,
             aggregation_scope_resolver=aggregation_scope_resolver,
             backpressure_incident_callback=backpressure_incident_callback,
+            backpressure_audit_callback=backpressure_audit_callback,
         )
 
         @functools.wraps(original)

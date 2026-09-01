@@ -294,6 +294,18 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
             "authority_granted": False,
         },
     ),
+    "ADAPTIVE_AGGREGATION_BACKPRESSURE": _event_definition(
+        description="Adaptive worker evidence submission encountered policy-controlled backpressure.",
+        minimum_priority=EvidencePriority.CRITICAL,
+        required_fields=("scope.target_id", "outcome.state"),
+        example={
+            "target_id": "demo.target",
+            "state": "INCIDENT_RECORDED",
+            "action": "INCIDENT",
+            "pending_records": 4,
+            "authority_granted": False,
+        },
+    ),
     "ADAPTIVE_BATCH_REVALIDATED": _event_definition(
         description="A retained adaptive worker batch was reviewed against a policy fingerprint.",
         minimum_priority=EvidencePriority.IMPORTANT,

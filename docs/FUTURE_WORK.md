@@ -852,8 +852,10 @@ Worker submission loss is now policy controlled locally: `RETAIN` is the
 least-loss default, while `DROP` and `REDUCE` are explicit bounded choices;
 `INCIDENT` can now call an application-owned bounded incident callback while
 retaining the failed batch. Callback acceptance is explicit and notifications
-are deduplicated for the pending episode. Parallel stores and transport-level
-throttling remain future integrations.
+are deduplicated for the pending episode. When configured, the same episode
+also emits a bounded `ADAPTIVE_AGGREGATION_BACKPRESSURE` envelope through an
+application-owned output-only audit callback. Parallel stores and
+transport-level throttling remain future integrations.
 The supervisor also records delayed, context-bound threshold proposals as
 proposal-only evidence. An authenticated control-plane operation now applies
 an approved, effective proposal through a target-scoped runtime authority

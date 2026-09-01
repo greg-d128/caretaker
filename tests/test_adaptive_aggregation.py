@@ -517,10 +517,14 @@ def test_adaptive_backpressure_reduce_retries_without_detail_samples() -> None:
 def test_adaptive_backpressure_incident_notifies_once_and_retains_evidence() -> None:
     store = _BackpressureStore(fail_count=2)
     notifications: list[dict[str, object]] = []
+    audit_events: list[tuple[str, dict[str, object]]] = []
 
     def notify(payload):
         notifications.append(dict(payload))
         return {"accepted": True, "incident_id": "incident-123"}
+
+    def audit(event_type, **fields):
+        audit_events.append((event_type, dict(fields)))
 
     batcher = AdaptiveObservationBatcher(
         store,
@@ -537,6 +541,7 @@ def test_adaptive_backpressure_incident_notifies_once_and_retains_evidence() -> 
         flush_interval_seconds=0,
         backpressure_action=AdaptiveAggregationBackpressureAction.INCIDENT,
         backpressure_incident_callback=notify,
+        backpressure_audit_callback=audit,
     )
 
     first = batcher.record(
@@ -556,11 +561,17 @@ def test_adaptive_backpressure_incident_notifies_once_and_retains_evidence() -> 
     assert "timing_events" not in notifications[0]
     assert "duration_samples" not in notifications[0]
     assert "resource_samples" not in notifications[0]
+    assert len(audit_events) == 1
+    assert audit_events[0][0] == "ADAPTIVE_AGGREGATION_BACKPRESSURE"
+    assert audit_events[0][1]["outcome"]["state"] == "INCIDENT_RECORDED"
+    assert audit_events[0][1]["outcome"]["authority_granted"] is False
+    assert audit_events[0][1]["scope"]["target_id"] == "example.target"
 
     second = batcher.flush()
     assert second is not None
     assert second["status"] == "INCIDENT_ALREADY_RECORDED"
     assert len(notifications) == 1
+    assert len(audit_events) == 1
     assert batcher.status()["pending_records"] == 1
 
     queued = batcher.flush()
@@ -616,6 +627,42 @@ def test_adaptive_backpressure_incident_callback_failure_retains_evidence(callba
     assert batcher.status()["pending_records"] == 1
 
 
+def test_adaptive_backpressure_audit_callback_failure_is_explicit_and_non_authoritative() -> None:
+    def notify(_payload):
+        return {"accepted": True, "incident_id": "incident-123"}
+
+    def audit(_event_type, **_fields):
+        raise RuntimeError("audit sink unavailable")
+
+    batcher = AdaptiveObservationBatcher(
+        _BackpressureStore(fail_count=1),
+        worker_id="worker-a",
+        worker_pid=101,
+        target_id="example.target",
+        generation_id="generation-a",
+        code_hash="code-a",
+        monitoring_fingerprint="monitoring-a",
+        policy_fingerprint="policy-a",
+        authority_policy_generation="7",
+        authority_policy_fingerprint="authority-a",
+        flush_after_observations=1,
+        flush_interval_seconds=0,
+        backpressure_action=AdaptiveAggregationBackpressureAction.INCIDENT,
+        backpressure_incident_callback=notify,
+        backpressure_audit_callback=audit,
+    )
+
+    result = batcher.record(behavior_samples=1)
+
+    assert result is not None
+    assert result["status"] == "INCIDENT_RECORDED"
+    assert result["audit_status"] == "FAILED"
+    assert batcher.status()["pending_records"] == 1
+    assert batcher.status()["last_audit_error"] == (
+        "RuntimeError: audit sink unavailable"
+    )
+
+
 def test_lightweight_policy_accepts_adaptive_incident_backpressure_action() -> None:
     validate_lightweight_policy(
         LightweightPolicy(
@@ -630,6 +677,11 @@ def test_lightweight_forwards_adaptive_backpressure_incident_callback(tmp_path: 
     def notify(_payload):
         return {"accepted": True, "incident_id": "incident-123"}
 
+    audit_events: list[tuple[str, dict[str, object]]] = []
+
+    def audit(event_type, **fields):
+        audit_events.append((event_type, dict(fields)))
+
     @lightweight(
         policy=LightweightPolicy(
             aggregation=AdaptiveAggregationPolicy(
@@ -640,6 +692,7 @@ def test_lightweight_forwards_adaptive_backpressure_incident_callback(tmp_path: 
         target_id="example.adaptive.callback",
         state_directory=tmp_path,
         backpressure_incident_callback=notify,
+        backpressure_audit_callback=audit,
     )
     def sample() -> str:
         return "ok"
@@ -647,6 +700,7 @@ def test_lightweight_forwards_adaptive_backpressure_incident_callback(tmp_path: 
     batcher = sample.__caretaker_adaptive__._aggregation_batcher
     assert batcher is not None
     assert batcher.backpressure_incident_callback is notify
+    assert batcher.backpressure_audit_callback is audit
 
 
 def test_lightweight_policy_rejects_unknown_adaptive_backpressure_action() -> None:
