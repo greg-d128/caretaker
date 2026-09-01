@@ -5,7 +5,7 @@ import json
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from collections import OrderedDict, defaultdict, deque
 from collections.abc import Callable, Mapping
@@ -32,6 +32,7 @@ from ..evidence.models import (
     InspectionKind,
     ResourceIdentity,
     RuntimeInspection,
+    utcnow,
 )
 from ..evidence.store import EvidenceStore, InMemoryEvidenceStore
 from ..execution import (
@@ -1009,6 +1010,8 @@ class GuardEngine(GuardFacade):
             "automatic_promotion": self.policy.snapshots.collection_auto_promote,
             "automatic_max_promoted": self.policy.snapshots.collection_auto_max_promoted,
             "automatic_max_waiting": self.policy.snapshots.collection_auto_max_waiting,
+            "automatic_prioritize_signals": self.policy.snapshots.collection_auto_prioritize_signals,
+            "automatic_stale_after_seconds": self.policy.snapshots.collection_auto_stale_after_seconds,
             **scheduler.status(),
         }
 
@@ -1032,6 +1035,9 @@ class GuardEngine(GuardFacade):
             if str(item.get("status") or "") in {"QUEUED", "ACTIVE", "FAILED", "EXPIRED", "CANCELLED"}
         }
         items: list[dict[str, Any]] = []
+        prioritize_signals = self.policy.snapshots.collection_auto_prioritize_signals
+        stale_after = float(self.policy.snapshots.collection_auto_stale_after_seconds)
+        now = utcnow()
         with self._lock:
             target_ids = tuple(sorted(self._targets))
         for target_id in target_ids:
@@ -1059,6 +1065,33 @@ class GuardEngine(GuardFacade):
                 or 0
             )
             request = requests.get(("function", target_id))
+            priority = 0
+            priority_reasons: list[str] = []
+            snapshot_age_seconds: float | None = None
+            if summary is not None:
+                created_at = str(summary.get("created_at") or "")
+                try:
+                    created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                    if created.tzinfo is not None:
+                        snapshot_age_seconds = max(0.0, (now - created.astimezone(timezone.utc)).total_seconds())
+                except (TypeError, ValueError, OverflowError):
+                    snapshot_age_seconds = None
+            if prioritize_signals:
+                if snapshot_age_seconds is not None and snapshot_age_seconds >= stale_after:
+                    priority = max(priority, 100)
+                    priority_reasons.append("stale_snapshot")
+                current_identity = identity
+                current_code_hash = code_hash
+                suspicious = any(
+                    deviation.subject.module_name == current_identity.module_name
+                    and deviation.subject.qualified_name == current_identity.qualified_name
+                    and (deviation.subject.source_hash or deviation.subject.bytecode_hash) == current_code_hash
+                    and deviation.significance_score >= self.policy.deviations.significance_threshold
+                    for deviation in self.recent_deviations(target_id, limit=20)
+                )
+                if suspicious:
+                    priority = max(priority, 200)
+                    priority_reasons.append("recent_significant_deviation")
             if request is not None and request.get("status") in {"QUEUED", "ACTIVE"}:
                 status = "queued" if request["status"] == "QUEUED" else "actively_collecting"
                 reason = f"operator request is {str(request['status']).lower()}"
@@ -1069,8 +1102,15 @@ class GuardEngine(GuardFacade):
                 status = "deferred"
                 reason = str(request.get("error") or "operator cancelled collection")
             elif summary is not None and snapshot_calls > 0:
-                status = "sufficiently_covered"
-                reason = "verified snapshot covers the current code and monitoring generation"
+                if "recent_significant_deviation" in priority_reasons:
+                    status = "suspicious"
+                    reason = "current generation has a recent significant Guard deviation"
+                elif "stale_snapshot" in priority_reasons:
+                    status = "stale"
+                    reason = f"verified snapshot is older than {stale_after:g} seconds"
+                else:
+                    status = "sufficiently_covered"
+                    reason = "verified snapshot covers the current code and monitoring generation"
             elif active_calls > 0:
                 status = "actively_collecting"
                 reason = "current generation has completed calls but no useful verified snapshot"
@@ -1088,6 +1128,9 @@ class GuardEngine(GuardFacade):
                     "snapshot_calls": snapshot_calls,
                     "snapshot_id": (summary or {}).get("snapshot_id"),
                     "request_id": (request or {}).get("request_id"),
+                    "priority": priority,
+                    "priority_reasons": priority_reasons,
+                    "snapshot_age_seconds": snapshot_age_seconds,
                 }
             )
         bounded = items[: max(1, min(int(limit), 500))]
@@ -1196,8 +1239,12 @@ class GuardEngine(GuardFacade):
         if waiting_available:
             waiting_items = [
                 item for item in backlog.get("items", ())
-                if item.get("status") == "armed_waiting"
+                if item.get("status") in {"armed_waiting", "stale", "suspicious"}
             ]
+            priorities = {
+                str(item.get("target_id") or ""): int(item.get("priority") or 0)
+                for item in waiting_items
+            }
             selected_targets = set(
                 self.behavior_collection_scheduler.select_fair_automatic_subjects(
                     (
@@ -1205,6 +1252,7 @@ class GuardEngine(GuardFacade):
                         for item in waiting_items
                     ),
                     limit=waiting_available,
+                    priorities=priorities,
                 )
             )
             for item in waiting_items:
@@ -1246,6 +1294,8 @@ class GuardEngine(GuardFacade):
             "waiting_automatic": waiting_after,
             "maximum_automatic": snapshots.collection_auto_max_promoted,
             "maximum_automatic_waiting": snapshots.collection_auto_max_waiting,
+            "prioritize_signals": snapshots.collection_auto_prioritize_signals,
+            "stale_after_seconds": snapshots.collection_auto_stale_after_seconds,
             "backlog_counts": dict(backlog.get("counts") or {}),
         }
 

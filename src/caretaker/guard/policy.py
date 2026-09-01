@@ -99,6 +99,10 @@ class BehaviorSnapshotPolicy:
     collection_auto_promote: bool = False
     collection_auto_max_promoted: int = 1
     collection_auto_max_waiting: int = 4
+    # Optional prioritization for automatic evidence collection. Disabled by
+    # default to preserve least-friction round-robin behavior.
+    collection_auto_prioritize_signals: bool = False
+    collection_auto_stale_after_seconds: float = 86_400.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -350,6 +354,15 @@ def validate_guard_policy(policy: GuardPolicy) -> None:
         errors.append("snapshots.collection_auto_max_promoted must be greater than zero")
     if snapshots.collection_auto_max_waiting <= 0:
         errors.append("snapshots.collection_auto_max_waiting must be greater than zero")
+    if not isinstance(snapshots.collection_auto_prioritize_signals, bool):
+        errors.append("snapshots.collection_auto_prioritize_signals must be a boolean")
+    if (
+        isinstance(snapshots.collection_auto_stale_after_seconds, bool)
+        or not isinstance(snapshots.collection_auto_stale_after_seconds, (int, float))
+        or not math.isfinite(float(snapshots.collection_auto_stale_after_seconds))
+        or snapshots.collection_auto_stale_after_seconds <= 0
+    ):
+        errors.append("snapshots.collection_auto_stale_after_seconds must be greater than zero")
     if policy.retention.raw_event_seconds is not None:
         errors.append("retention.raw_event_seconds is reserved; durable time-based raw-event pruning is not implemented")
     if policy.retention.aggregate_seconds is not None:

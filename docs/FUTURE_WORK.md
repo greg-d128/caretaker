@@ -630,7 +630,10 @@ operator scheduler provides a durable bounded queue, active/pending limits,
 priority/deadline ordering, restart recovery, cancellation state, and explicit
 backpressure. Read-only generation-aware coverage-backlog discovery and console
 visibility are now implemented; opt-in bounded automatic backlog promotion is
-implemented. A bounded logging-path overhead snapshot is also available through the
+implemented. An opt-in signal-priority mode now schedules stale snapshots and
+recent significant same-generation Guard deviations before ordinary backlog
+entries, while retaining round-robin fairness within each priority tier. A
+bounded logging-path overhead snapshot is also available through the
 supervisor status response and the console, including queue, drop, and flush
 wall-clock measurements; application-wide measured overhead budgets remain
 future work. Automatic promotion now separates bounded no-call waiting targets from
@@ -672,8 +675,8 @@ snapshot is now represented in a bounded, read-only coverage backlog. When
 bounded number of adaptive `armed_waiting` targets rather than promoting all
 functions at startup. The console distinguishes queued, armed/waiting, actively
 collecting, sufficiently covered, deferred, and failed collection states and
-explains why a subject is in that state; stale/suspicious prioritization,
-measured resource budgets remain future work; explicit operator requests
+explains why a subject is in that state; measured resource budgets remain future
+work; explicit operator requests
 continue to use their priority/deadline ordering.
 
 The scheduler now provides an initial measured-cost boundary: optional soft and

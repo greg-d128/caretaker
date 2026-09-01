@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,6 +10,7 @@ from caretaker.behavior import (
     BehaviorCollectionBudgetExceeded,
     BehaviorCollectionQueueFull,
     BehaviorCollectionScheduler,
+    behavior_generation_id,
 )
 from caretaker.guard.engine import GuardEngine
 from caretaker.guard.policy import BehaviorSnapshotPolicy, GuardBinding, GuardPolicy
@@ -48,6 +50,26 @@ def test_scheduler_orders_operator_requests_by_priority_then_deadline(tmp_path: 
     assert claimed["request_id"] == high["request_id"]
     scheduler.complete(claimed["request_id"], outcome="CAPTURED", observed_calls=10)
     assert scheduler.claim_next()["request_id"] == low["request_id"]
+
+
+def test_scheduler_prioritizes_signal_subjects_within_fair_tiers(tmp_path: Path) -> None:
+    scheduler = BehaviorCollectionScheduler(tmp_path)
+
+    assert scheduler.select_fair_automatic_subjects(
+        ("ordinary", "signal-a", "signal-b"),
+        limit=1,
+        priorities={"signal-a": 200, "signal-b": 200},
+    ) == ("signal-a",)
+    assert scheduler.select_fair_automatic_subjects(
+        ("ordinary", "signal-a", "signal-b"),
+        limit=1,
+        priorities={"signal-a": 200, "signal-b": 200},
+    ) == ("signal-b",)
+    assert scheduler.select_fair_automatic_subjects(
+        ("ordinary", "signal-a", "signal-b"),
+        limit=1,
+        priorities={"ordinary": 0, "signal-a": 200, "signal-b": 200},
+    ) == ("signal-a",)
 
 
 def test_scheduler_applies_queue_backpressure_and_supports_cancellation(tmp_path: Path) -> None:
@@ -667,3 +689,58 @@ def test_guard_backlog_reports_waiting_and_queued_current_generations(
     queued = guard.behavior_collection_backlog()
     assert queued["counts"] == {"queued": 1}
     assert queued["items"][0]["request_id"] == request["request_id"]
+
+
+def test_guard_backlog_marks_stale_and_suspicious_generations_for_opt_in_priority(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("CARETAKER_DATA_DIR", str(tmp_path))
+    guard = GuardEngine(
+        policy=GuardPolicy(
+            snapshots=BehaviorSnapshotPolicy(
+                collection_auto_prioritize_signals=True,
+                collection_auto_stale_after_seconds=60.0,
+            )
+        )
+    )
+
+    def sample(value: int) -> int:
+        return value
+
+    guard.register_target("example.priority", sample, GuardBinding(enabled=True), periodic=False)
+    identity = guard._targets["example.priority"].identity
+    subject_key = "function:example.priority"
+    code_hash = identity.source_hash or identity.bytecode_hash
+    generation_id = behavior_generation_id(
+        subject_key=subject_key,
+        code_hash=code_hash,
+        monitoring_fingerprint=guard.monitoring_fingerprint("example.priority"),
+    )
+    old = datetime.now(timezone.utc) - timedelta(hours=2)
+    summary = {
+        "subject_key": subject_key,
+        "generation_id": generation_id,
+        "created_at": old.isoformat(),
+        "verified": True,
+        "profile": {"call_count": 10, "coverage_call_count": 10},
+        "snapshot_id": "snapshot-priority",
+    }
+    monkeypatch.setattr(
+        guard.behavior_snapshot_store,
+        "list_summaries",
+        lambda *, limit=500: (summary,),
+    )
+    monkeypatch.setattr(
+        guard,
+        "recent_deviations",
+        lambda target_id, *, limit=20: (
+            SimpleNamespace(subject=identity, significance_score=90.0),
+        ),
+    )
+
+    backlog = guard.behavior_collection_backlog()
+    item = backlog["items"][0]
+    assert item["status"] == "suspicious"
+    assert item["priority"] == 200
+    assert item["priority_reasons"] == ["stale_snapshot", "recent_significant_deviation"]
+    assert item["snapshot_age_seconds"] >= 60.0

@@ -1591,11 +1591,14 @@ class BehaviorCollectionScheduler:
         subjects: Iterable[str],
         *,
         limit: int,
+        priorities: Mapping[str, int] | None = None,
     ) -> tuple[str, ...]:
         """Select automatic subjects with a restart-safe round-robin cursor.
 
         Automatic promotion is opt-in and bounded separately from explicit
-        operator requests. The cursor is scheduling metadata only; it cannot
+        operator requests. When priorities are supplied, higher-priority
+        subjects are selected first and round-robin fairness is retained within
+        each priority tier. The cursor is scheduling metadata only; it cannot
         authorize collection or change a target's policy.
         """
         bounded_limit = max(0, int(limit))
@@ -1621,6 +1624,8 @@ class BehaviorCollectionScheduler:
                 last_subject = None
             start = normalized.index(last_subject) + 1 if last_subject in normalized else 0
             rotated = normalized[start:] + normalized[:start]
+            if priorities:
+                rotated.sort(key=lambda subject: -int(priorities.get(subject, 0)))
             selected = tuple(rotated[:bounded_limit])
             self._write(
                 self.automatic_cursor_path,
