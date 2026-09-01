@@ -20,6 +20,7 @@ from .runtime_supervision import (
     ApplicationWorkerLifecycle,
     accept_comparison_worker_result,
     build_authorized_restart_callback,
+    bounded_diagnostic_value,
     build_incident_action_handler,
     build_replacement_action_handler,
     build_shutdown_action_handler,
@@ -36,6 +37,8 @@ from .runtime_supervision import (
     issue_comparison_worker_assignment,
     join_worker_evidence_reconciliations,
     reconcile_worker_failures,
+    worker_failure_envelope,
+    diagnostic_debug_enabled,
     reconcile_comparison_worker_reports,
     reconcile_adaptive_aggregation_queues,
     Watchdog,
@@ -125,6 +128,21 @@ class ApplicationRuntimeSupervisor:
             require_complete_postmortem=require_complete_postmortem,
             reconciliation_scope=reconciliation_scope,
         )
+
+    @staticmethod
+    def diagnostic_debug_enabled() -> bool:
+        """Return whether controlled diagnostic detail is enabled."""
+        return diagnostic_debug_enabled()
+
+    @staticmethod
+    def bounded_diagnostic_value(value: Any, *, depth: int = 0) -> Any:
+        """Return bounded JSON-shaped diagnostic detail."""
+        return bounded_diagnostic_value(value, depth=depth)
+
+    @staticmethod
+    def worker_failure_envelope(worker: Any, *, diagnostic_debug: bool | None = None) -> dict[str, Any]:
+        """Build a bounded worker failure envelope through the runtime seam."""
+        return worker_failure_envelope(worker, diagnostic_debug=diagnostic_debug)
 
     def handle_worker_failure_cohort(
         self,

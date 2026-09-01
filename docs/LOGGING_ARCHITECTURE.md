@@ -125,6 +125,10 @@ Incident and shutdown recovery adapters are runtime-owned wiring boundaries.
 They validate callback acknowledgements and preserve application ownership of
 incident persistence and process-group shutdown effects.
 
+Worker failure envelope construction and diagnostic-size limiting are runtime-
+owned evidence primitives. The logging package retains only compatibility
+delegates, so diagnostic detail remains bounded and non-authorizing.
+
 Application monitoring and application-boundary shutdown are also implemented
 in the application-runtime package. The legacy logging supervisor delegates to
 those functions, and the runtime owner exposes them directly while preserving

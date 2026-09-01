@@ -2239,6 +2239,7 @@ and authority/replacement packet handoffs now use it as well.
 Adaptive aggregation queue reconciliation now uses the same runtime owner.
 Incident and shutdown recovery adapter construction now uses the runtime
 owner while preserving application-owned effects.
+Bounded worker failure envelope and diagnostic construction is runtime-owned.
 
 `logging/supervisor.py` and `logging/__init__.py` currently include application
 supervision, worker health/authority, adaptive coordination, and recovery

@@ -1828,6 +1828,103 @@ def stop_runtime_supervisor(supervisor: Any) -> None:
         details={"application_pid": supervisor.application_pid},
     )
     supervisor.runtime.close()
+def diagnostic_debug_enabled() -> bool:
+    """Return whether controlled diagnostic detail is explicitly enabled."""
+    return os.environ.get("CARETAKER_DIAGNOSTIC_DEBUG", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def bounded_diagnostic_value(value: Any, *, depth: int = 0) -> Any:
+    """Keep worker-supplied diagnostic context finite and JSON-shaped."""
+    if depth >= 4:
+        return "<depth-limit>"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return value[:512]
+    if isinstance(value, Mapping):
+        return {
+            str(key)[:128]: bounded_diagnostic_value(
+                item, depth=depth + 1
+            )
+            for key, item in list(value.items())[:64]
+        }
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [
+            bounded_diagnostic_value(
+                item, depth=depth + 1
+            )
+            for item in list(value)[:64]
+        ]
+    return str(value)[:512]
+
+@staticmethod
+
+def worker_failure_envelope(
+    worker: WorkerHealth,
+    *,
+    diagnostic_debug: bool | None = None,
+) -> dict[str, Any]:
+    """Return bounded evidence needed to reconcile one failed worker.
+
+    Standard envelopes retain worker identity, queue counters, active work
+    IDs, authority context, and the failure fingerprint. The explicit
+    ``CARETAKER_DIAGNOSTIC_DEBUG`` setting (or the argument used by tests
+    and embedding applications) additionally includes worker-supplied
+    milestone, partial-queue, and policy-state context. Diagnostic detail
+    is evidence only and cannot authorize recovery.
+    """
+    include_diagnostic = (
+        diagnostic_debug_enabled()
+        if diagnostic_debug is None
+        else diagnostic_debug
+    )
+    envelope = {
+        "detail_level": "DIAGNOSTIC" if include_diagnostic else "STANDARD",
+        "worker_id": str(worker.worker_id),
+        "worker_kind": worker.worker_kind.name,
+        "process_id": worker.process_id,
+        "process_start_id": str(worker.process_start_id),
+        "state": worker.state.name,
+        "current_work_ids": [str(item) for item in worker.current_work_ids],
+        "queue_depth": worker.queue_depth,
+        "last_completed_sequence": worker.last_completed_sequence,
+        "restart_count": worker.restart_count,
+        "last_error_fingerprint": worker.last_error_fingerprint,
+        "target_id": worker.target_id,
+        "acceptance_state": worker.acceptance_state.name,
+        "acceptance_successful_executions": worker.acceptance_successful_executions,
+        "acceptance_failed_executions": worker.acceptance_failed_executions,
+        "generation_id": worker.generation_id,
+        "code_hash": worker.code_hash,
+        "policy_fingerprint": worker.policy_fingerprint,
+        "authority_packet_id": (
+            str(worker.authority_packet_id)
+            if worker.authority_packet_id is not None
+            else None
+        ),
+        "authority_packet_expires_at": (
+            worker.authority_packet_expires_at.isoformat()
+            if worker.authority_packet_expires_at is not None
+            else None
+        ),
+        "replaced_worker_id": (
+            str(worker.replaced_worker_id)
+            if worker.replaced_worker_id is not None
+            else None
+        ),
+        "transaction_state": "ROLLED_BACK",
+    }
+    if include_diagnostic:
+        envelope["diagnostic_context"] = (
+            bounded_diagnostic_value(
+                worker.diagnostic_context
+            )
+        )
+    return envelope
+
+
 def capture_worker_failure_evidence_internal(
     supervisor: Any,
     worker: WorkerHealth,
@@ -3552,8 +3649,10 @@ __all__ = [
     "build_incident_action_handler",
     "build_replacement_action_handler",
     "build_shutdown_action_handler",
+    "bounded_diagnostic_value",
     "capture_worker_failure_evidence",
     "compare_comparison_worker_result",
+    "diagnostic_debug_enabled",
     "handle_expired_worker_cohort",
     "handle_worker_acceptance_observation",
     "handle_worker_authority_packet",
@@ -3575,4 +3674,5 @@ __all__ = [
     "run_supervisor_control_cycle",
     "stop_application",
     "stop_runtime_supervisor",
+    "worker_failure_envelope",
 ]

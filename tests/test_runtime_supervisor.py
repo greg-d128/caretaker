@@ -97,6 +97,9 @@ def test_runtime_boundary_functions_are_application_owned() -> None:
         build_incident_action_handler,
         build_replacement_action_handler,
         build_shutdown_action_handler,
+        diagnostic_debug_enabled,
+        bounded_diagnostic_value,
+        worker_failure_envelope,
         stop_application,
         stop_runtime_supervisor,
     )
@@ -121,6 +124,9 @@ def test_runtime_boundary_functions_are_application_owned() -> None:
     assert build_incident_action_handler.__module__ == "caretaker.runtime_supervision"
     assert build_replacement_action_handler.__module__ == "caretaker.runtime_supervision"
     assert build_shutdown_action_handler.__module__ == "caretaker.runtime_supervision"
+    assert diagnostic_debug_enabled.__module__ == "caretaker.runtime_supervision"
+    assert bounded_diagnostic_value.__module__ == "caretaker.runtime_supervision"
+    assert worker_failure_envelope.__module__ == "caretaker.runtime_supervision"
     assert handle_worker_failure_cohort.__module__ == "caretaker.runtime_supervision"
     assert stop_application.__module__ == "caretaker.runtime_supervision"
     assert stop_runtime_supervisor.__module__ == "caretaker.runtime_supervision"

@@ -71,6 +71,7 @@ from ..runtime_supervision import (
     WorkerRegistry as ApplicationWorkerRegistry,
     capture_worker_failure_evidence as runtime_capture_worker_failure_evidence,
     capture_worker_failure_evidence_internal,
+    diagnostic_debug_enabled as runtime_diagnostic_debug_enabled,
     handle_expired_worker_cohort as runtime_handle_expired_worker_cohort,
     handle_worker_acceptance_observation as runtime_handle_worker_acceptance_observation,
     handle_worker_authority_packet as runtime_handle_worker_authority_packet,
@@ -83,6 +84,7 @@ from ..runtime_supervision import (
     build_incident_action_handler as runtime_build_incident_action_handler,
     build_replacement_action_handler as runtime_build_replacement_action_handler,
     build_shutdown_action_handler as runtime_build_shutdown_action_handler,
+    bounded_diagnostic_value as runtime_bounded_diagnostic_value,
     accept_comparison_worker_result as runtime_accept_comparison_worker_result,
     compare_comparison_worker_result as runtime_compare_comparison_worker_result,
     issue_comparison_worker_assignment as runtime_issue_comparison_worker_assignment,
@@ -90,6 +92,7 @@ from ..runtime_supervision import (
     reconcile_comparison_worker_reports as runtime_reconcile_comparison_worker_reports,
     reconcile_adaptive_aggregation_queues as runtime_reconcile_adaptive_aggregation_queues,
     reconcile_worker_failures as runtime_reconcile_worker_failures,
+    worker_failure_envelope as runtime_worker_failure_envelope,
     MAX_WORKER_FAILURE_COHORT,
     monitor_application,
     run_supervisor_control_cycle,
@@ -209,9 +212,7 @@ class CaretakerApplicationSupervisor:
     @staticmethod
     def _diagnostic_debug_enabled() -> bool:
         """Return whether controlled diagnostic detail is explicitly enabled."""
-        return os.environ.get("CARETAKER_DIAGNOSTIC_DEBUG", "").strip().lower() in {
-            "1", "true", "yes", "on",
-        }
+        return runtime_diagnostic_debug_enabled()
 
     def _audit_event(
         self,
@@ -311,27 +312,7 @@ class CaretakerApplicationSupervisor:
     @staticmethod
     def _bounded_diagnostic_value(value: Any, *, depth: int = 0) -> Any:
         """Keep worker-supplied diagnostic context finite and JSON-shaped."""
-        if depth >= 4:
-            return "<depth-limit>"
-        if value is None or isinstance(value, (bool, int, float)):
-            return value
-        if isinstance(value, str):
-            return value[:512]
-        if isinstance(value, Mapping):
-            return {
-                str(key)[:128]: CaretakerApplicationSupervisor._bounded_diagnostic_value(
-                    item, depth=depth + 1
-                )
-                for key, item in list(value.items())[:64]
-            }
-        if isinstance(value, (list, tuple, set, frozenset)):
-            return [
-                CaretakerApplicationSupervisor._bounded_diagnostic_value(
-                    item, depth=depth + 1
-                )
-                for item in list(value)[:64]
-            ]
-        return str(value)[:512]
+        return runtime_bounded_diagnostic_value(value, depth=depth)
 
     @staticmethod
     def worker_failure_envelope(
@@ -348,54 +329,10 @@ class CaretakerApplicationSupervisor:
         milestone, partial-queue, and policy-state context. Diagnostic detail
         is evidence only and cannot authorize recovery.
         """
-        include_diagnostic = (
-            CaretakerApplicationSupervisor._diagnostic_debug_enabled()
-            if diagnostic_debug is None
-            else diagnostic_debug
+        return runtime_worker_failure_envelope(
+            worker,
+            diagnostic_debug=diagnostic_debug,
         )
-        envelope = {
-            "detail_level": "DIAGNOSTIC" if include_diagnostic else "STANDARD",
-            "worker_id": str(worker.worker_id),
-            "worker_kind": worker.worker_kind.name,
-            "process_id": worker.process_id,
-            "process_start_id": str(worker.process_start_id),
-            "state": worker.state.name,
-            "current_work_ids": [str(item) for item in worker.current_work_ids],
-            "queue_depth": worker.queue_depth,
-            "last_completed_sequence": worker.last_completed_sequence,
-            "restart_count": worker.restart_count,
-            "last_error_fingerprint": worker.last_error_fingerprint,
-            "target_id": worker.target_id,
-            "acceptance_state": worker.acceptance_state.name,
-            "acceptance_successful_executions": worker.acceptance_successful_executions,
-            "acceptance_failed_executions": worker.acceptance_failed_executions,
-            "generation_id": worker.generation_id,
-            "code_hash": worker.code_hash,
-            "policy_fingerprint": worker.policy_fingerprint,
-            "authority_packet_id": (
-                str(worker.authority_packet_id)
-                if worker.authority_packet_id is not None
-                else None
-            ),
-            "authority_packet_expires_at": (
-                worker.authority_packet_expires_at.isoformat()
-                if worker.authority_packet_expires_at is not None
-                else None
-            ),
-            "replaced_worker_id": (
-                str(worker.replaced_worker_id)
-                if worker.replaced_worker_id is not None
-                else None
-            ),
-            "transaction_state": "ROLLED_BACK",
-        }
-        if include_diagnostic:
-            envelope["diagnostic_context"] = (
-                CaretakerApplicationSupervisor._bounded_diagnostic_value(
-                    worker.diagnostic_context
-                )
-            )
-        return envelope
 
     def _capture_worker_failure_evidence(
         self,
