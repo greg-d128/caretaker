@@ -443,6 +443,18 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
             "mode": "canary",
         },
     ),
+    "REPAIR_RETENTION_ARCHIVE": _event_definition(
+        description="A Repair retention archive was created, resumed, or verified.",
+        minimum_priority=EvidencePriority.IMPORTANT,
+        required_fields=("scope.archive_plan_sha256", "outcome.state"),
+        example={
+            "state": "COMPLETED",
+            "archived_records": 12,
+            "remaining_records": 0,
+            "source_deleted": False,
+            "authority_granted": False,
+        },
+    ),
 })
 
 

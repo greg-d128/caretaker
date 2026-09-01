@@ -75,5 +75,7 @@ an integrity-checked `.partial.jsonl` sidecar that can be resumed with the same
 plan. `SQLiteRepairStore.retention_archive_status()` verifies a completed
 archive and reports its plan fingerprint, record count, and families without
 touching the source store. The archive rechecks each source row before copying
-and never deletes source records. Family-owned compaction and resumable
-deletion remain future work.
+and never deletes source records. Both archive and verification operations can
+emit the registered `REPAIR_RETENTION_ARCHIVE` audit event through the
+application's output-only audit callback. Family-owned compaction and
+resumable deletion remain future work.

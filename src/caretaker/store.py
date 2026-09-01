@@ -14,7 +14,7 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from threading import RLock
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 from uuid import UUID
 
 from .integrity.models import IntegrityIncident, IntegrityVerification
@@ -1304,6 +1304,7 @@ class SQLiteRepairStore:
         *,
         archive_path: str | Path,
         maximum_records: int = 1000,
+        audit_event: Callable[..., Any] | None = None,
     ) -> Mapping[str, Any]:
         """Copy a complete dry-run plan into a resumable compressed archive.
 
@@ -1317,6 +1318,8 @@ class SQLiteRepairStore:
 
         if not isinstance(plan, Mapping):
             raise TypeError("retention plan must be a mapping")
+        if audit_event is not None and not callable(audit_event):
+            raise TypeError("retention audit_event must be callable")
         if plan.get("schema_version") != REPAIR_RETENTION_PLAN_SCHEMA_VERSION:
             raise ValueError("unsupported Caretaker retention plan schema version")
         if plan.get("store_schema_version") != REPAIR_STORE_SCHEMA_VERSION:
@@ -1388,7 +1391,7 @@ class SQLiteRepairStore:
                 raise ValueError("existing retention archive belongs to a different plan")
             if summary["record_keys"] != candidate_keys:
                 raise ValueError("existing retention archive does not match the retention plan")
-            return {
+            return _finish_retention_result({
                 "schema_version": REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION,
                 "archive_path": str(destination),
                 "partial": False,
@@ -1397,7 +1400,7 @@ class SQLiteRepairStore:
                 "archived_records": summary["record_count"],
                 "remaining_records": 0,
                 "resumed_records": summary["record_count"],
-            }
+            }, audit_event, state="ALREADY_COMPLETE")
 
         header = {
             "kind": "retention_archive_header",
@@ -1482,7 +1485,7 @@ class SQLiteRepairStore:
 
         remaining = len(normalized_candidates) - len(existing)
         if remaining:
-            return {
+            return _finish_retention_result({
                 "schema_version": REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION,
                 "archive_path": str(destination),
                 "partial_path": str(partial),
@@ -1492,7 +1495,7 @@ class SQLiteRepairStore:
                 "archived_records": len(existing),
                 "remaining_records": remaining,
                 "resumed_records": len(existing) - len(new_records),
-            }
+            }, audit_event, state="PARTIAL")
 
         records_digest = hashlib.sha256()
         with partial.open("rb") as stream:
@@ -1518,7 +1521,7 @@ class SQLiteRepairStore:
         temporary.chmod(0o600)
         os.replace(temporary, destination)
         partial.unlink()
-        return {
+        return _finish_retention_result({
             "schema_version": REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION,
             "archive_path": str(destination),
             "partial": False,
@@ -1527,24 +1530,28 @@ class SQLiteRepairStore:
             "archived_records": len(existing),
             "remaining_records": 0,
             "resumed_records": len(existing) - len(new_records),
-        }
+        }, audit_event, state="COMPLETED")
 
     def retention_archive_status(
         self,
         archive_path: str | Path,
+        *,
+        audit_event: Callable[..., Any] | None = None,
     ) -> Mapping[str, Any]:
         """Verify and summarize a completed Repair retention archive."""
 
+        if audit_event is not None and not callable(audit_event):
+            raise TypeError("retention audit_event must be callable")
         destination = Path(archive_path)
         summary = _read_retention_archive(destination)
-        return {
+        return _finish_retention_result({
             "schema_version": REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION,
             "archive_path": str(destination),
             "complete": True,
             "plan_sha256": summary["plan_sha256"],
             "record_count": summary["record_count"],
             "record_families": sorted({family for family, _ in summary["record_keys"]}),
-        }
+        }, audit_event, state="VERIFIED")
 
     def query_records(
         self,
@@ -1583,6 +1590,38 @@ def _canonical_json_bytes(value: Any) -> bytes:
         ensure_ascii=False,
         allow_nan=False,
     ).encode("utf-8")
+
+
+def _finish_retention_result(
+    result: dict[str, Any],
+    audit_event: Callable[..., Any] | None,
+    *,
+    state: str,
+) -> dict[str, Any]:
+    if audit_event is None:
+        return result
+    try:
+        audit_event(
+            "REPAIR_RETENTION_ARCHIVE",
+            actor={"type": "system", "id": "repair-store"},
+            scope={
+                "archive_plan_sha256": str(result.get("plan_sha256", ""))[:128],
+            },
+            policy={},
+            outcome={
+                "state": state,
+                "authority_granted": False,
+            },
+            details={
+                "archived_records": min(int(result.get("archived_records", result.get("record_count", 0))), 1000000),
+                "remaining_records": min(int(result.get("remaining_records", 0)), 1000000),
+                "source_deleted": False,
+                "archive_verified": state == "VERIFIED",
+            },
+        )
+    except Exception as exc:  # pragma: no cover - callback boundary is deployment-owned
+        result["audit_error"] = f"{type(exc).__name__}: retention audit callback failed"
+    return result
 
 
 def _read_retention_partial(

@@ -92,8 +92,13 @@ def test_retention_archive_is_compressed_idempotent_and_does_not_delete(tmp_path
         families=("candidates",),
     )
     archive_path = tmp_path / "archives" / "repair.jsonl.gz"
+    audit_events: list[tuple[str, dict]] = []
 
-    result = store.retention_archive(plan, archive_path=archive_path)
+    result = store.retention_archive(
+        plan,
+        archive_path=archive_path,
+        audit_event=lambda event_type, **fields: audit_events.append((event_type, fields)),
+    )
 
     assert result["complete"] is True
     assert result["partial"] is False
@@ -106,10 +111,20 @@ def test_retention_archive_is_compressed_idempotent_and_does_not_delete(tmp_path
     assert lines[1]["payload"] == {"kind": "derived"}
     assert lines[-1]["kind"] == "retention_archive_footer"
     assert store.query_records("candidates", limit=100)[0]["kind"] == "derived"
-    status = store.retention_archive_status(archive_path)
+    status = store.retention_archive_status(
+        archive_path,
+        audit_event=lambda event_type, **fields: audit_events.append((event_type, fields)),
+    )
     assert status["complete"] is True
     assert status["record_count"] == 1
     assert status["record_families"] == ["candidates"]
+    assert [event[0] for event in audit_events] == [
+        "REPAIR_RETENTION_ARCHIVE",
+        "REPAIR_RETENTION_ARCHIVE",
+    ]
+    assert audit_events[0][1]["outcome"]["state"] == "COMPLETED"
+    assert audit_events[1][1]["outcome"]["state"] == "VERIFIED"
+    assert audit_events[0][1]["outcome"]["authority_granted"] is False
 
     repeated = store.retention_archive(plan, archive_path=archive_path)
     assert repeated["complete"] is True

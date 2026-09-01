@@ -826,6 +826,7 @@ def test_audit_registry_is_complete_and_exposes_redaction_contract() -> None:
         "SHADOW_EXECUTION_DECISION", "REPAIR_ROLLOUT_ROUTING_DECISION",
         "REPAIR_ROLLOUT_EXECUTION_OUTCOME",
         "REPAIR_CANDIDATE_OBSERVATION",
+        "REPAIR_RETENTION_ARCHIVE",
     }
     assert set(AUDIT_EVENT_REGISTRY) == expected
     for definition in AUDIT_EVENT_REGISTRY.values():

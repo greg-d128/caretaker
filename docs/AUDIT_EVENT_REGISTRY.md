@@ -152,6 +152,7 @@ All event types share these redaction rules:
 | `REPAIR_ROLLOUT_ROUTING_DECISION` | `IMPORTANT` | `scope.rollout_id`, `scope.routing_scope`, `outcome.state` | `{"state": "SELECTED", "stage": "canary", "strategy": "canary", "candidate_selected": true, "candidate_authoritative": true, "mirror_selected": true}` |
 | `REPAIR_ROLLOUT_EXECUTION_OUTCOME` | `IMPORTANT` | `scope.rollout_id`, `scope.routing_scope`, `outcome.state` | `{"state": "COMPLETED", "implementation": "candidate", "candidate_executed": true, "candidate_authoritative": true, "mirror_executed": true, "mirror_deployed_succeeded": true, "mirror_equivalent": false}` |
 | `REPAIR_CANDIDATE_OBSERVATION` | `IMPORTANT` | `scope.target_id`, `scope.candidate_id`, `outcome.state` | `{"state": "ACCEPTANCE_OBSERVED", "succeeded": true, "candidate_state": "INITIALLY_VALIDATED", "mode": "canary"}` |
+| `REPAIR_RETENTION_ARCHIVE` | `IMPORTANT` | `scope.archive_plan_sha256`, `outcome.state` | `{"state": "COMPLETED", "archived_records": 12, "remaining_records": 0, "source_deleted": false, "authority_granted": false}` |
 
 In a supervised run, the application process may submit only a bounded
 `VALIDATION_DECISION` through the supervisor control socket. The supervisor

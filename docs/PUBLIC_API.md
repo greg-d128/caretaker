@@ -51,8 +51,9 @@ surface:
   `SQLiteRepairStore.retention_archive()` and
   `SQLiteRepairStore.retention_archive_status()` for bounded,
   preservation-aware Repair-store retention planning, archive-only execution,
-  and archive verification. These operations do not delete source records or
-  provide an authorization boundary;
+  and archive verification. They can emit an output-only
+  `REPAIR_RETENTION_ARCHIVE` audit event, do not delete source records, and do
+  not provide an authorization boundary;
 - rollout, recovery, worker authority/acceptance, comparison-worker evidence,
   post-mortem, and packet transport types and helpers;
 - integrity verification, signed publication monitoring, isolated replay, and

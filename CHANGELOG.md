@@ -23,8 +23,8 @@
   candidates and preserves incident-linked, signed, and audit evidence.
 - Add a resumable, archive-only Repair-store retention operation with canonical
   JSONL records, gzip compression, stale-plan rechecks, atomic completion, and
-  read-only archive verification; source deletion and compaction remain
-  deferred.
+  read-only archive verification, with optional `REPAIR_RETENTION_ARCHIVE`
+  audit events; source deletion and compaction remain deferred.
 
 ## 0.6.1
 
