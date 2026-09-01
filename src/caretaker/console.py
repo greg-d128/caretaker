@@ -4775,17 +4775,40 @@ class CaretakerConsoleApp(App):
         self._adaptive_aggregation_status = dict(response)
         policy_contexts = response.get("policy_contexts")
         policy_contexts = policy_contexts if isinstance(policy_contexts, (list, tuple)) else ()
+        display_contexts: list[Mapping[str, Any]] = []
+        seen_contexts: set[tuple[str, str, str]] = set()
+        for raw_context in policy_contexts:
+            if not isinstance(raw_context, Mapping):
+                continue
+            candidates: list[Mapping[str, Any]] = [raw_context]
+            nested_contexts = raw_context.get("scope_contexts")
+            if isinstance(nested_contexts, (list, tuple)):
+                for nested_context in nested_contexts:
+                    if not isinstance(nested_context, Mapping):
+                        continue
+                    merged_context = dict(raw_context)
+                    merged_context.update(nested_context)
+                    merged_context.pop("scope_contexts", None)
+                    candidates.append(merged_context)
+            for context in candidates:
+                context_key = (
+                    str(context.get("aggregation_target_id") or context.get("target_id") or ""),
+                    str(context.get("aggregation_scope") or ""),
+                    str(context.get("policy_fingerprint") or ""),
+                )
+                if context_key in seen_contexts:
+                    continue
+                seen_contexts.add(context_key)
+                display_contexts.append(context)
         if not response.get("policy_context_available"):
             policy_lines = [
                 "Active adaptive policy thresholds unavailable: runtime context is not connected."
             ]
-        elif not policy_contexts:
+        elif not display_contexts:
             policy_lines = ["Active adaptive policy thresholds: no enabled adaptive contexts."]
         else:
             policy_lines = ["Active adaptive policy thresholds"]
-            for context in policy_contexts:
-                if not isinstance(context, Mapping):
-                    continue
+            for context in display_contexts:
                 target = context.get("aggregation_target_id") or context.get("target_id") or "-"
                 scope = context.get("aggregation_scope")
                 if scope and "::aggregation-scope::" not in str(target):

@@ -1924,6 +1924,58 @@ def test_console_displays_policy_lineage_as_read_only_history(tmp_path):
     asyncio.run(exercise())
 
 
+def test_console_displays_resolver_population_policy_contexts(tmp_path):
+    app = CaretakerConsoleApp(None, tmp_path)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(180, 55)):
+            async def request(command: str, **payload):
+                assert command == "adaptive-aggregation-status"
+                return {
+                    "ok": True,
+                    "aggregates": [],
+                    "transitions": [],
+                    "policy_context_available": True,
+                    "policy_contexts": [{
+                        "target_id": "app:charge",
+                        "aggregation_scope_mode": "RESOLVER",
+                        "policy_fingerprint": "base-policy",
+                        "promotion_policy": {
+                            "exception": {
+                                "enabled": True,
+                                "occurrences": 3,
+                                "window_seconds": 30,
+                            },
+                        },
+                        "scope_contexts": [{
+                            "aggregation_target_id": "app:charge::aggregation-scope::blue",
+                            "aggregation_scope": "cluster:blue",
+                            "aggregation_scope_mode": "RESOLVER",
+                            "policy_fingerprint": "blue-policy",
+                            "promotion_policy": {
+                                "exception": {
+                                    "enabled": True,
+                                    "occurrences": 2,
+                                    "window_seconds": 15,
+                                },
+                            },
+                        }],
+                    }],
+                }
+
+            app._request = request  # type: ignore[method-assign]
+            await app.refresh_adaptive_aggregation()
+
+            policy_status = str(
+                app.query_one("#adaptive-aggregation-policy-status", Static).render()
+            )
+            assert "scope=RESOLVER" in policy_status
+            assert "app:charge::aggregation-scope::blue" in policy_status
+            assert "exception=2 in 15s" in policy_status
+
+    asyncio.run(exercise())
+
+
 def test_console_surfaces_adaptive_repair_proposal_as_read_only_attention(tmp_path):
     app = CaretakerConsoleApp(None, tmp_path)
 

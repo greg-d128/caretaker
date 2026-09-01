@@ -370,6 +370,12 @@ record. The tab does not expose transition-acknowledgement controls. It does
 expose application of a selected approved proposal through the separately
 gated control-plane operation; the console does not bypass its review, timing,
 provenance, authority, or worker acknowledgement requirements.
+When a resolver-backed target reports observed population contexts, the console
+also expands the bounded nested contexts and displays each population's exact
+extended target identity, resolver mode, policy fingerprint, and local
+exception/soft-timing thresholds. This is a read-only projection; expanding the
+view does not create a policy setting, acknowledge a worker, or grant
+population-specific Repair authority.
 The same table includes bounded immutable policy-lineage rows for pending,
 applied, failed, and rolled-back transitions. Their detail view includes the
 policy IDs, fingerprints, authority metadata, effective time, and affected
