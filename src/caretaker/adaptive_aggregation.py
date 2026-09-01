@@ -23,6 +23,12 @@ from pathlib import Path
 from typing import Any, Mapping
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
+from .transport import (
+    APPLICATION_TRANSPORT_MAX_DRAIN_MESSAGES,
+    ApplicationLocalQueueTransport,
+    ApplicationTransportError,
+)
+
 
 ADAPTIVE_AGGREGATION_SCHEMA_VERSION = 1
 ADAPTIVE_POLICY_LEDGER_SCHEMA_VERSION = 1
@@ -138,6 +144,93 @@ class RemoteAdaptiveAggregationStore:
                 "supervisor returned an invalid adaptive aggregation acknowledgement"
             )
         return dict(result)
+
+
+class QueueAdaptiveAggregationStore:
+    """Submit adaptive batches through an application-owned local queue.
+
+    This adapter is useful when the embedding application already has a
+    bounded ``queue.Queue`` or ``multiprocessing.Queue`` between workers and
+    its supervisor.  It puts canonical bytes on the queue and returns a
+    delivery acknowledgement only; the supervisor must call ``receive`` and
+    submit the resulting batch to ``SupervisorAdaptiveAggregationStore``.
+    Queue transport does not authenticate a sender and never grants authority.
+    """
+
+    def __init__(
+        self,
+        channel: Any | ApplicationLocalQueueTransport,
+        *,
+        maximum_message_bytes: int = 128 * 1024,
+    ) -> None:
+        self.transport = (
+            channel
+            if isinstance(channel, ApplicationLocalQueueTransport)
+            else ApplicationLocalQueueTransport(
+                channel,
+                maximum_message_bytes=maximum_message_bytes,
+            )
+        )
+
+    def submit(self, batch: Mapping[str, Any]) -> dict[str, Any]:
+        normalized = normalize_adaptive_observation_batch(batch)
+        try:
+            delivery = self.transport.send("adaptive-observation-batch", normalized)
+        except ApplicationTransportError as exc:
+            raise AdaptiveAggregationError(str(exc)) from exc
+        return {
+            "status": "QUEUED",
+            "batch_id": str(normalized["batch_id"]),
+            "transport": "QUEUE",
+            "message_id": delivery["message_id"],
+        }
+
+    def receive(self, *, timeout: float = 0.0) -> dict[str, Any] | None:
+        """Receive and validate one batch for supervisor-side submission."""
+        try:
+            message = self.transport.receive(timeout=timeout)
+        except ApplicationTransportError as exc:
+            raise AdaptiveAggregationError(str(exc)) from exc
+        if message is None:
+            return None
+        if message["message_type"] != "adaptive-observation-batch":
+            raise AdaptiveAggregationError(
+                "application queue message is not an adaptive observation batch"
+            )
+        try:
+            return normalize_adaptive_observation_batch(message["payload"])
+        except (TypeError, ValueError) as exc:
+            raise AdaptiveAggregationError(
+                "application queue adaptive observation batch is invalid"
+            ) from exc
+
+    def drain_to(
+        self,
+        store: "SupervisorAdaptiveAggregationStore",
+        *,
+        limit: int = APPLICATION_TRANSPORT_MAX_DRAIN_MESSAGES,
+    ) -> tuple[dict[str, Any], ...]:
+        """Forward a bounded queue slice into the supervisor ledger.
+
+        The caller is responsible for invoking this method from the
+        supervisor context and for supplying the normal authoritative context
+        during the later reconciliation step.  Queue receipt itself does not
+        merge, promote, or authorize any batch.
+        """
+        if not hasattr(store, "submit") or not callable(store.submit):
+            raise TypeError("queue adaptive aggregation drain requires a store")
+        if not 1 <= int(limit) <= APPLICATION_TRANSPORT_MAX_DRAIN_MESSAGES:
+            raise ValueError(
+                "queue adaptive aggregation drain limit must be between 1 and "
+                f"{APPLICATION_TRANSPORT_MAX_DRAIN_MESSAGES}"
+            )
+        results: list[dict[str, Any]] = []
+        for _ in range(int(limit)):
+            batch = self.receive()
+            if batch is None:
+                break
+            results.append(dict(store.submit(batch)))
+        return tuple(results)
 
 
 class AdaptiveObservationBatcher:

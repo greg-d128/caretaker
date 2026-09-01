@@ -49,6 +49,7 @@ so the hot path is an integer increment and comparison rather than a clock looku
 ```python
 from caretaker import (
     AdaptiveAggregationPolicy,
+    AdaptiveAggregationTransport,
     BehaviorSamplingPolicy,
     ExceptionPromotionPolicy,
     InstrumentationDemotionPolicy,
@@ -104,6 +105,11 @@ policy = LightweightPolicy(
 def lookup(...):
     ...
 ```
+
+For an application-owned local queue, select `transport=AdaptiveAggregationTransport.QUEUE`
+and pass the queue as `aggregation_transport` to `lightweight()`. The queue
+path is bounded and non-blocking; the supervisor must receive the batch and
+submit it through its normal live-context validation before reconciliation.
 
 When enabled, adaptive workers write bounded pending batches under the configured
 Caretaker data directory. The supervisor is the only component that merges those

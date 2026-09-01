@@ -143,3 +143,13 @@ the callback is not a command channel and cannot grant authority. When
 Caretaker logging is configured, its enabled audit emitter supplies the
 default callback; an explicit callback still takes precedence. An unconfigured
 or disabled audit stream leaves the adaptive path least-friction and local.
+
+`AdaptiveAggregationPolicy.transport` selects the delivery boundary for
+supervisor-owned batches: `AUTO` (the least-friction default), `DIRECT`,
+`SOCKET`, or application-owned `QUEUE`. `SOCKET` requires the configured
+supervisor control socket, while `QUEUE` requires the queue binding supplied to
+`lightweight(aggregation_transport=...)`; neither mode silently falls back when
+its required binding is absent. Queue messages are bounded, canonical,
+integrity-checked evidence only. Queue access and sender-PID provenance do not
+authenticate a worker or grant authority; the supervisor must still validate
+the batch against live context before reconciliation.

@@ -4,6 +4,7 @@ from .acceptance import AcceptanceCriteria
 from .adaptive import (
     AcceptanceState,
     AdaptiveAggregationPolicy,
+    AdaptiveAggregationTransport,
     AggregationScopeResolver,
     AdaptiveLifecycleStage,
     AdaptiveInstrumentationState,
@@ -35,6 +36,7 @@ from .adaptive_aggregation import (
     AdaptiveAggregationBackpressureAction,
     AdaptiveAggregationError,
     AdaptiveObservationBatcher,
+    QueueAdaptiveAggregationStore,
     RemoteAdaptiveAggregationStore,
     SupervisorAdaptiveAggregationStore,
     compare_adaptive_populations,
@@ -225,6 +227,7 @@ from .policy import (
     validate_policy,
 )
 from .postmortem import ExceptionHookManager, PostMortemRecorder
+from .transport import ApplicationLocalQueueTransport, ApplicationTransportError
 from .provider import CandidateProposal, OllamaRepairProvider, StaticRepairProvider
 from .repair_recovery import (
     ComparisonWorkerAssignment,
@@ -445,9 +448,13 @@ __all__ = [
     "validate_lightweight_policy",
     "AdaptiveAggregationError",
     "AdaptiveAggregationPolicy",
+    "AdaptiveAggregationTransport",
     "AggregationScopeResolver",
     "AdaptiveAggregationBackpressureAction",
     "AdaptiveObservationBatcher",
+    "QueueAdaptiveAggregationStore",
+    "ApplicationLocalQueueTransport",
+    "ApplicationTransportError",
     "RemoteAdaptiveAggregationStore",
     "adaptive_aggregation_status",
     "SupervisorAdaptiveAggregationStore",

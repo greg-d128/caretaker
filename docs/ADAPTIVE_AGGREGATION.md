@@ -39,6 +39,30 @@ current; scoped and unscoped batches therefore cannot merge accidentally. The
 durable aggregate retains both the original target and the scope for operator
 display. The scope does not grant authority or alter Repair policy.
 
+## Application-local queue transport
+
+The optional `QueueAdaptiveAggregationStore` can deliver a worker batch through
+an application-owned `queue.Queue` or `multiprocessing.Queue`. It uses the
+shared `ApplicationLocalQueueTransport` envelope, which carries canonical JSON
+bytes, a message ID, payload hash, content hash, and sender PID provenance.
+Messages are bounded and submitted without blocking; a full queue is returned
+to the existing policy-controlled backpressure path.
+
+Queue receipt is separate from supervisor aggregation. The supervisor-side
+application calls `receive()` or bounded `drain_to()` and then submits each
+validated batch to `SupervisorAdaptiveAggregationStore`, followed by the same
+authoritative reconciliation context used by the socket path. Queue contents
+are untrusted evidence: the sender PID is not authentication, queue access
+does not grant worker or Repair authority, and there is no implicit fallback to
+the local ledger when queue delivery fails.
+
+`AdaptiveAggregationPolicy.transport` selects `AUTO`, `DIRECT`, `SOCKET`, or
+`QUEUE`. `AUTO` preserves the least-friction behavior (configured supervisor
+socket when present, otherwise the local ledger); `SOCKET` and `QUEUE` fail
+closed when their required application binding is absent. Cross-host transport,
+independent supervisor coordination, and durable replay across supervisor
+restarts remain outside this application-local adapter.
+
 Applications that can classify population membership from a call may provide
 an explicit `aggregation_scope_resolver` to `lightweight()`. The resolver
 receives bounded `(args, kwargs)` and returns a non-empty scope string or

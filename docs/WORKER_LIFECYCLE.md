@@ -44,8 +44,12 @@ The transport path still does not create an OS process, choose a deployment
 transport, or grant authority by itself. The application owns process
 creation and must wire the handler with authoritative current context; packet
 verification and registry admission remain the gates that record a worker as
-authorized. Shared-memory, queue, cross-host authentication, and durable
-cross-restart replay state remain future transport work.
+authorized. The bounded `ApplicationLocalQueueTransport` can carry the packet
+envelope through an application-owned queue as canonical bytes, but queue
+access and the reported sender PID are not authentication. The application
+must bind receipt to the live worker context before admission. Cross-host
+authentication, durable cross-restart replay state, and process lifecycle
+orchestration remain future work.
 
 The replacement handler provides the corresponding application-owned launch
 boundary. `spawn_worker(request)` receives the immutable replacement request

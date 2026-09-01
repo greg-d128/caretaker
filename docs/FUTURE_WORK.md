@@ -804,7 +804,7 @@ absence claims from incomplete tables.
 
 ## Supervisor-owned multiprocess adaptive aggregation
 
-**Status: In progress in development tree for durable worker-batch aggregation, supervisor-authorized Behavior transition requests, and an operator-gated adaptive Repair handoff; automatic fleet Repair promotion, cross-host transport, and process orchestration remain future work.**
+**Status: In progress in development tree for durable worker-batch aggregation, supervisor-authorized Behavior transition requests, an operator-gated adaptive Repair handoff, and an application-local bounded queue transport; automatic fleet Repair promotion, cross-host transport, and process orchestration remain future work.**
 
 The first implementation slice is documented in
 [`ADAPTIVE_AGGREGATION.md`](ADAPTIVE_AGGREGATION.md). A durable
@@ -849,7 +849,8 @@ output-only supervisor control socket. The supervisor re-normalizes each batch
 and binds its worker PID to the authenticated Unix peer PID before writing the
 same single-writer ledger. Unsupervised runs retain the direct local-ledger
 default; an unavailable configured socket is a submission failure rather than
-an implicit local fallback. Cross-host transport remains future work.
+an implicit local fallback. The application-local queue adapter is now available
+for bounded canonical JSON handoffs; cross-host transport remains future work.
 
 The remaining implementation must explicitly define and enforce whether each
 threshold is process-local, application-wide, or workload/population scoped. It
@@ -1350,8 +1351,11 @@ transport codec now carries and verifies packet integrity across an
 application-owned transport. The local supervisor control socket also
 provides process-bound register/refresh handoffs with an application-supplied
 live context and bounded in-memory replay protection. Cross-host
-authentication, shared-memory/queue adapters, durable replay state, and
-multiprocess lifecycle orchestration remain future work.
+authentication, durable replay state, and multiprocess lifecycle orchestration
+remain future work. A bounded application-owned queue envelope is now available
+for local packet handoffs, but queue access and sender PID are provenance rather
+than authentication; the application must bind receipt to the live worker
+context before admission.
 
 The application worker registry now supports packet-aware admission and marks
 an admitted worker unauthorized when its packet expires; restarting it clears

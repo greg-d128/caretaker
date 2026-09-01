@@ -51,6 +51,16 @@ state. Its output is validated and a resolver failure records no aggregation
 evidence for that invocation rather than attributing the call to an arbitrary
 population.
 
+`AdaptiveAggregationPolicy.transport` controls how enabled workers deliver
+bounded batches. `AUTO` preserves the least-friction default: use the
+supervisor control socket when configured, otherwise write the local ledger.
+`DIRECT` forces the local ledger, `SOCKET` requires the supervisor socket, and
+`QUEUE` requires an application-owned `queue.Queue` or
+`multiprocessing.Queue` passed as `aggregation_transport` to `lightweight()`.
+Queue delivery is non-blocking and follows `backpressure_action` when full;
+queue messages remain untrusted evidence and require the supervisor's normal
+context validation before aggregation.
+
 Signal policies include exception and soft-timing thresholds. Their `promote_to` field
 expresses the desired terminal capability. `promote_to=REPAIR` is repair eligibility,
 not permission to skip observation. The complete repaired-function lifecycle is

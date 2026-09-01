@@ -38,6 +38,7 @@ from .acceptance import AcceptanceCriteria, long_term_accepted, short_term_accep
 from .adaptive_aggregation import (
     AdaptiveAggregationBackpressureAction,
     AdaptiveObservationBatcher,
+    QueueAdaptiveAggregationStore,
     RemoteAdaptiveAggregationStore,
     SupervisorAdaptiveAggregationStore,
     extended_aggregation_target_id,
@@ -219,6 +220,15 @@ class InstrumentationDemotionPolicy(AcceptanceCriteria):
     stepwise: bool = True
 
 
+class AdaptiveAggregationTransport(Enum):
+    """Policy-selected delivery path for supervisor-owned adaptive evidence."""
+
+    AUTO = "AUTO"
+    DIRECT = "DIRECT"
+    SOCKET = "SOCKET"
+    QUEUE = "QUEUE"
+
+
 @dataclass(frozen=True, slots=True)
 class AdaptiveAggregationPolicy:
     """Optional worker batching for supervisor-owned adaptive evidence."""
@@ -227,6 +237,7 @@ class AdaptiveAggregationPolicy:
     flush_after_observations: int = 64
     flush_interval_seconds: float = 5.0
     aggregation_scope: str | None = None
+    transport: AdaptiveAggregationTransport = AdaptiveAggregationTransport.AUTO
     transition_timeout_seconds: float = 60.0
     backpressure_action: AdaptiveAggregationBackpressureAction = (
         AdaptiveAggregationBackpressureAction.RETAIN
@@ -460,6 +471,10 @@ def validate_lightweight_policy(policy: LightweightPolicy) -> None:
         errors.append("aggregation.flush_after_observations must be between 1 and 1000")
     if aggregation.flush_interval_seconds < 0:
         errors.append("aggregation.flush_interval_seconds cannot be negative")
+    if not isinstance(aggregation.transport, AdaptiveAggregationTransport):
+        errors.append(
+            "aggregation.transport must be AUTO, DIRECT, SOCKET, or QUEUE"
+        )
     if not 0 < aggregation.transition_timeout_seconds <= 86_400:
         errors.append(
             "aggregation.transition_timeout_seconds must be greater than zero "
@@ -496,6 +511,7 @@ class _AdaptiveController:
         state_directory: str | Path | None,
         allow_repair_promotion: bool,
         aggregation_scope_resolver: AggregationScopeResolver | None,
+        aggregation_transport: Any | None,
         backpressure_incident_callback: Callable[[Mapping[str, Any]], Any] | None,
         backpressure_audit_callback: Callable[..., Any] | None,
     ) -> None:
@@ -511,6 +527,7 @@ class _AdaptiveController:
         ):
             raise ValueError("aggregation_scope_resolver must be callable")
         self.aggregation_scope_resolver = aggregation_scope_resolver
+        self.aggregation_transport = aggregation_transport
         if backpressure_incident_callback is not None and not callable(
             backpressure_incident_callback
         ):
@@ -1725,11 +1742,26 @@ class _AdaptiveController:
             return
         context = self._aggregation_context()
         supervisor_socket = os.environ.get("CARETAKER_SUPERVISOR_CONTROL_SOCKET")
-        aggregation_store = (
-            RemoteAdaptiveAggregationStore(supervisor_socket)
-            if supervisor_socket
-            else SupervisorAdaptiveAggregationStore(self._aggregation_root())
-        )
+        transport_mode = self.policy.aggregation.transport
+        if transport_mode is AdaptiveAggregationTransport.QUEUE:
+            if self.aggregation_transport is None:
+                raise ValueError(
+                    "aggregation transport QUEUE requires an application-owned queue"
+                )
+            aggregation_store = QueueAdaptiveAggregationStore(self.aggregation_transport)
+        elif transport_mode is AdaptiveAggregationTransport.SOCKET:
+            if not supervisor_socket:
+                raise ValueError(
+                    "aggregation transport SOCKET requires "
+                    "CARETAKER_SUPERVISOR_CONTROL_SOCKET"
+                )
+            aggregation_store = RemoteAdaptiveAggregationStore(supervisor_socket)
+        elif transport_mode is AdaptiveAggregationTransport.DIRECT:
+            aggregation_store = SupervisorAdaptiveAggregationStore(self._aggregation_root())
+        elif supervisor_socket:
+            aggregation_store = RemoteAdaptiveAggregationStore(supervisor_socket)
+        else:
+            aggregation_store = SupervisorAdaptiveAggregationStore(self._aggregation_root())
         incident_callback = self.backpressure_incident_callback
         if incident_callback is None:
             incident_callback = _configured_logging_incident_callback()
@@ -1788,6 +1820,7 @@ class _AdaptiveController:
                 "require_problem_reproduction": policy.repair_evidence.require_problem_reproduction,
             },
             "transition_timeout_seconds": policy.aggregation.transition_timeout_seconds,
+            "transport": policy.aggregation.transport.name,
             "backpressure_action": policy.aggregation.backpressure_action.name,
             "allow_persistent_acceptance": policy.aggregation.allow_persistent_acceptance,
         }
@@ -1838,6 +1871,7 @@ class _AdaptiveController:
                 "promotion_policy": promotion_policy,
                 "scope_contexts": scope_contexts,
                 "transition_timeout_seconds": self.policy.aggregation.transition_timeout_seconds,
+                "transport": self.policy.aggregation.transport.name,
                 "backpressure_action": self.policy.aggregation.backpressure_action.name,
                 "allow_persistent_acceptance": self.policy.aggregation.allow_persistent_acceptance,
             }
@@ -1846,6 +1880,8 @@ class _AdaptiveController:
             "transport": (
                 "SUPERVISOR_CONTROL_SOCKET"
                 if isinstance(batcher.store, RemoteAdaptiveAggregationStore)
+                else "QUEUE"
+                if isinstance(batcher.store, QueueAdaptiveAggregationStore)
                 else "LOCAL_LEDGER"
             ),
             **batcher.status(),
@@ -2142,6 +2178,7 @@ def lightweight(
     state_directory: str | Path | None = None,
     allow_repair_promotion: bool = True,
     aggregation_scope_resolver: AggregationScopeResolver | None = None,
+    aggregation_transport: Any | None = None,
     backpressure_incident_callback: Callable[[Mapping[str, Any]], Any] | None = None,
     backpressure_audit_callback: Callable[..., Any] | None = None,
 ) -> Callable[[F], F]: ...
@@ -2158,6 +2195,7 @@ def lightweight(
     state_directory: str | Path | None = None,
     allow_repair_promotion: bool = True,
     aggregation_scope_resolver: AggregationScopeResolver | None = None,
+    aggregation_transport: Any | None = None,
     backpressure_incident_callback: Callable[[Mapping[str, Any]], Any] | None = None,
     backpressure_audit_callback: Callable[..., Any] | None = None,
 ) -> F | Callable[[F], F]:
@@ -2183,6 +2221,7 @@ def lightweight(
             state_directory=state_directory,
             allow_repair_promotion=allow_repair_promotion,
             aggregation_scope_resolver=aggregation_scope_resolver,
+            aggregation_transport=aggregation_transport,
             backpressure_incident_callback=backpressure_incident_callback,
             backpressure_audit_callback=backpressure_audit_callback,
         )

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
+import queue
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -10,10 +12,12 @@ from caretaker.adaptive_aggregation import (
     AdaptiveAggregationBackpressureAction,
     AdaptiveAggregationError,
     AdaptiveObservationBatcher,
+    QueueAdaptiveAggregationStore,
     RemoteAdaptiveAggregationStore,
     SupervisorAdaptiveAggregationStore,
     compare_adaptive_populations,
     extended_aggregation_target_id,
+    normalize_adaptive_observation_batch,
     verify_adaptive_population_comparison_report,
 )
 from caretaker.run import (
@@ -23,6 +27,7 @@ from caretaker.run import (
 )
 from caretaker.adaptive import (
     AdaptiveAggregationPolicy,
+    AdaptiveAggregationTransport,
     BehaviorSamplingPolicy,
     ExceptionPromotionPolicy,
     InstrumentationDemotionPolicy,
@@ -2306,3 +2311,118 @@ def test_adaptive_aggregation_audit_projection_is_bounded_and_non_authoritative(
         "promotion_requests_created": 1,
         "authority_granted": False,
     }
+
+
+def test_application_queue_transport_round_trips_and_hashes_messages() -> None:
+    from caretaker.transport import (
+        ApplicationLocalQueueTransport,
+        ApplicationTransportError,
+    )
+
+    channel = queue.Queue(maxsize=1)
+    transport = ApplicationLocalQueueTransport(channel)
+    sent = transport.send("evidence", {"value": 3})
+    message = transport.receive()
+
+    assert message is not None
+    assert message["message_id"] == sent["message_id"]
+    assert message["payload"] == {"value": 3}
+    assert message["content_sha256"] == sent["content_sha256"]
+
+    transport.send("evidence", {"value": 4})
+    with pytest.raises(ApplicationTransportError, match="queue is full"):
+        transport.send("evidence", {"value": 5})
+
+
+def test_application_queue_transport_rejects_tampered_or_non_bytes_messages() -> None:
+    from caretaker.transport import ApplicationLocalQueueTransport, ApplicationTransportError
+
+    channel = queue.Queue()
+    transport = ApplicationLocalQueueTransport(channel)
+    transport.send("evidence", {"value": 3})
+    raw = channel.get_nowait()
+    envelope = json.loads(raw)
+    envelope["payload"]["value"] = 4
+    channel.put_nowait(json.dumps(envelope).encode())
+    with pytest.raises(ApplicationTransportError, match="payload hash is invalid"):
+        transport.receive()
+
+    channel.put_nowait({"not": "bytes"})
+    with pytest.raises(ApplicationTransportError, match="message must be bytes"):
+        transport.receive()
+
+
+def test_application_queue_transport_supports_application_multiprocessing_queue() -> None:
+    from caretaker.transport import ApplicationLocalQueueTransport
+
+    channel = multiprocessing.Queue(maxsize=1)
+    try:
+        transport = ApplicationLocalQueueTransport(channel)
+        transport.send("evidence", {"value": 3})
+        message = transport.receive(timeout=1.0)
+        assert message is not None
+        assert message["payload"] == {"value": 3}
+    finally:
+        channel.close()
+        channel.join_thread()
+
+
+def test_queue_adaptive_store_preserves_batch_integrity_and_supervisor_ownership(tmp_path: Path) -> None:
+    channel = queue.Queue()
+    queued = QueueAdaptiveAggregationStore(channel)
+    batch = _batch(batch_id="00000000-0000-0000-0000-0000000000f1")
+
+    result = queued.submit(batch)
+    received = queued.receive()
+
+    assert result["status"] == "QUEUED"
+    assert result["transport"] == "QUEUE"
+    assert received == normalize_adaptive_observation_batch(batch)
+
+    supervisor_store = SupervisorAdaptiveAggregationStore(tmp_path)
+    queued.submit(batch)
+    drained = queued.drain_to(supervisor_store)
+    assert drained == ({"status": "QUEUED", "batch_id": batch["batch_id"]},)
+    assert supervisor_store.status()["pending"] == 1
+
+
+def test_queue_transport_is_selected_only_when_policy_allows_it(tmp_path: Path) -> None:
+    channel = queue.Queue()
+    policy = LightweightPolicy(
+        aggregation=AdaptiveAggregationPolicy(
+            enabled=True,
+            transport=AdaptiveAggregationTransport.QUEUE,
+        )
+    )
+
+    @lightweight(
+        policy=policy,
+        target_id="aggregation.queue-policy",
+        state_directory=tmp_path / "adaptive",
+        aggregation_transport=channel,
+    )
+    def observed(value: int) -> int:
+        return value + 1
+
+    controller = observed.__caretaker_adaptive__
+    assert controller.aggregation_status()["transport"] == "QUEUE"
+    assert controller.aggregation_status()["enabled"] is True
+
+    invalid = LightweightPolicy(
+        aggregation=AdaptiveAggregationPolicy(enabled=True, transport="QUEUE")
+    )
+    with pytest.raises(ValueError, match="aggregation.transport"):
+        validate_lightweight_policy(invalid)
+
+    missing_binding = LightweightPolicy(
+        aggregation=AdaptiveAggregationPolicy(
+            enabled=True,
+            transport=AdaptiveAggregationTransport.QUEUE,
+        )
+    )
+    with pytest.raises(ValueError, match="requires an application-owned queue"):
+        lightweight(
+            policy=missing_binding,
+            target_id="aggregation.queue-policy-missing",
+            state_directory=tmp_path / "adaptive-missing",
+        )(observed.__wrapped__)
