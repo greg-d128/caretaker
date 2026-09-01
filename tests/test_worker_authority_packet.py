@@ -709,6 +709,40 @@ def test_supervisor_cycle_rejects_naive_authority_expiry_time() -> None:
         registry.reconcile_authority_expiry(datetime(2026, 8, 30, 12, 0))
 
 
+def test_supervisor_control_cycle_invokes_application_hook_with_authoritative_time() -> None:
+    supervisor = supervisor_module.CaretakerApplicationSupervisor(object())
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    observed = []
+
+    result = supervisor.run_control_cycle(
+        supervisor_time=supervisor_time,
+        on_cycle=lambda current_time: observed.append(current_time) or {"drained": 2},
+    )
+
+    assert result["ok"] is True
+    assert result["authority_granted"] is False
+    assert result["supervisor_time"] == supervisor_time.isoformat()
+    assert observed == [supervisor_time]
+    assert result["cycle_callback"] == {
+        "status": "COMPLETED",
+        "result": {"drained": 2},
+        "authority_granted": False,
+    }
+
+
+def test_supervisor_control_cycle_retains_callback_failure_as_bounded_evidence() -> None:
+    supervisor = supervisor_module.CaretakerApplicationSupervisor(object())
+    result = supervisor.run_control_cycle(
+        supervisor_time=datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc),
+        on_cycle=lambda _current_time: (_ for _ in ()).throw(RuntimeError("cycle failed")),
+    )
+
+    assert result["ok"] is False
+    assert result["cycle_callback"]["status"] == "FAILED"
+    assert result["cycle_callback"]["error"] == "RuntimeError: cycle failed"
+    assert result["cycle_callback"]["authority_granted"] is False
+
+
 def test_live_worker_can_refresh_packet_without_resetting_acceptance_state() -> None:
     registry = WorkerRegistry()
     supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)

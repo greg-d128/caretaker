@@ -3057,11 +3057,72 @@ class CaretakerApplicationSupervisor:
             result["promotions"] = promotions
         return result
 
-    def monitor_application(self, *, interval_seconds: float = 1.0) -> None:
+    def run_control_cycle(
+        self,
+        *,
+        supervisor_time: datetime | None = None,
+        on_cycle: Callable[[datetime], Any] | None = None,
+    ) -> dict[str, Any]:
+        """Run one bounded supervisor cycle and an application-owned hook.
+
+        The supervisor first reconciles authority expiry and refreshes its own
+        heartbeat, then invokes ``on_cycle`` with the authoritative cycle
+        timestamp.  The callback is the embedding application's integration
+        point for work such as draining registered adaptive queues; it does
+        not receive or create authority from this method.  Callback failures
+        are returned as bounded evidence so the embedding application can
+        apply its own policy without silently treating the cycle as successful.
+        """
+        if on_cycle is not None and not callable(on_cycle):
+            raise TypeError("supervisor control-cycle callback must be callable")
+        now = supervisor_time or datetime.now(timezone.utc)
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("supervisor control-cycle time must be timezone-aware")
+        expired = self.workers.reconcile_authority_expiry(now)
+        self.workers.heartbeat(
+            self.supervisor_health.worker_id,
+            supervisor_time=now,
+        )
+        result: dict[str, Any] = {
+            "ok": True,
+            "authority_granted": False,
+            "supervisor_time": now.isoformat(),
+            "expired_worker_ids": [str(worker.worker_id) for worker in expired],
+            "cycle_callback": {"status": "NOT_CONFIGURED"},
+            "application_alive": (
+                _pid_alive(self.application_pid)
+                if self.application_pid is not None
+                else None
+            ),
+        }
+        if on_cycle is not None:
+            try:
+                callback_result = on_cycle(now)
+            except Exception as exc:
+                result["ok"] = False
+                result["cycle_callback"] = {
+                    "status": "FAILED",
+                    "error": f"{type(exc).__name__}: {exc}"[:256],
+                    "authority_granted": False,
+                }
+            else:
+                result["cycle_callback"] = {
+                    "status": "COMPLETED",
+                    "result": callback_result,
+                    "authority_granted": False,
+                }
+        return result
+
+    def monitor_application(
+        self,
+        *,
+        interval_seconds: float = 1.0,
+        on_cycle: Callable[[datetime], Any] | None = None,
+    ) -> None:
+        """Monitor the application and invoke an optional cycle callback."""
         while not self._stop.wait(interval_seconds):
-            self.workers.reconcile_authority_expiry(datetime.now(timezone.utc))
-            self.workers.heartbeat(self.supervisor_health.worker_id)
-            if self.application_pid is not None and not _pid_alive(self.application_pid):
+            cycle = self.run_control_cycle(on_cycle=on_cycle)
+            if cycle["application_alive"] is False:
                 self.stop()
                 return
 
