@@ -78,7 +78,13 @@ from .state import (
     exception_evidence,
     value_snapshot,
 )
-from .store import InMemoryRepairStore, RepairStore, evidence_store_view, lifecycle_store_view
+from .store import (
+    InMemoryRepairStore,
+    RepairStore,
+    evidence_store_view,
+    lifecycle_store_view,
+    worker_recovery_store_view,
+)
 from .telemetry import CorrelatedLogHandler, logger
 
 
@@ -151,6 +157,7 @@ class RepairEngine:
         self.store = store or InMemoryRepairStore()
         self.lifecycle_store = lifecycle_store_view(self.store)
         self.evidence_store = evidence_store_view(self.store)
+        self.worker_recovery_store = worker_recovery_store_view(self.store)
         if validation_backend is not None and validation_backends is not None:
             raise ValueError("specify validation_backend or validation_backends, not both")
         configured_backends = (
@@ -302,7 +309,7 @@ class RepairEngine:
                 if context is not None:
                     live_context_by_target[target_id] = context
         return build_repair_recovery_plan(
-            self.store,
+            self.worker_recovery_store,
             target_id=target_id,
             policy=policy,
             live_context_by_target=live_context_by_target,
@@ -343,7 +350,7 @@ class RepairEngine:
                 if context is not None:
                     live_context_by_target[target_id] = context
         return apply_repair_recovery_plan(
-            self.store,
+            self.worker_recovery_store,
             plan,
             handlers=handlers,
             live_context_by_target=live_context_by_target,

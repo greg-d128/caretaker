@@ -2194,7 +2194,8 @@ audit-context equality before persistence changes.
 
 The store module now exposes typed lifecycle, evidence, worker/recovery, and
 integrity capability views over the existing InMemory and SQLite stores. The
-observation manager consumes the evidence view, while the physical stores,
+observation manager consumes the evidence view and the engine's recovery
+operations consume the worker/recovery view, while the physical stores,
 schema, and recovery queries remain unchanged. Migrating the remaining
 consumers and tightening ownership boundaries is still pending.
 
