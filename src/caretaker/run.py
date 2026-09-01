@@ -201,6 +201,59 @@ def _emit_incident_replay_audit(
     )
 
 
+def _emit_adaptive_aggregation_audit(
+    runtime: Any,
+    result: Mapping[str, Any],
+    *,
+    actor_type: str = "supervisor",
+    actor_id: str = "application-supervisor",
+) -> None:
+    """Record meaningful supervisor aggregation activity as audit evidence."""
+    if not isinstance(result, Mapping):
+        return
+    promotions = result.get("promotions")
+    promotion_count = (
+        int(promotions.get("created") or 0)
+        if isinstance(promotions, Mapping)
+        else 0
+    )
+    counts = {
+        name: int(result.get(name) or 0)
+        for name in ("merged", "duplicates", "rejected", "conflicts", "conflict_reports")
+    }
+    errors = result.get("errors")
+    error_count = len(errors) if isinstance(errors, list) else 0
+    if not any((*counts.values(), promotion_count, error_count, int(result.get("pending") or 0))):
+        return
+    audit = getattr(runtime, "audit", None)
+    emit = getattr(audit, "emit", None)
+    if not callable(emit):
+        return
+    state = "RECONCILED" if not counts["rejected"] and not error_count else "PARTIAL"
+    effective = getattr(runtime, "effective", None)
+    emit(
+        "ADAPTIVE_AGGREGATION_RECONCILED",
+        actor={"type": str(actor_type)[:32], "id": str(actor_id)[:128]},
+        scope={"aggregation_scope": "application"},
+        policy={
+            "fingerprint": getattr(effective, "fingerprint", None),
+            "generation": getattr(effective, "generation", None),
+        },
+        outcome={
+            "state": state,
+            "authority_granted": False,
+        },
+        details={
+            **counts,
+            "error_count": error_count,
+            "promotion_requests_created": promotion_count,
+            "pending": int(result.get("pending") or 0),
+            "authority_granted": False,
+        },
+        priority=EvidencePriority.IMPORTANT,
+    )
+
+
 def _handle_console_invocation_event(
     runtime: Any,
     request: Mapping[str, Any],
@@ -1182,7 +1235,12 @@ def main(argv: list[str] | None = None) -> int:
             promotion_policies.pop(aggregation_target, None)
         return current_generations, policy_fingerprints, promotion_policies
 
-    def reconcile_adaptive_aggregation(*, maximum: int = 100) -> dict[str, Any] | None:
+    def reconcile_adaptive_aggregation(
+        *,
+        maximum: int = 100,
+        actor_type: str = "supervisor",
+        actor_id: str = "application-supervisor",
+    ) -> dict[str, Any] | None:
         """Reconcile worker evidence using supervisor-owned authority context."""
         context = current_adaptive_context()
         if context is None:
@@ -1203,6 +1261,12 @@ def main(argv: list[str] | None = None) -> int:
             authority_policy_fingerprint=effective_authority.fingerprint,
             promotion_policies=promotion_policies,
             maximum=maximum,
+        )
+        _emit_adaptive_aggregation_audit(
+            runtime,
+            result,
+            actor_type=actor_type,
+            actor_id=actor_id,
         )
         return result
 
@@ -1515,7 +1579,9 @@ def main(argv: list[str] | None = None) -> int:
             return {"ok": True, "available": True, **projection}
         if command == "adaptive-aggregation-reconcile":
             result = reconcile_adaptive_aggregation(
-                maximum=max(1, min(int(request.get("maximum", 100)), 1000))
+                maximum=max(1, min(int(request.get("maximum", 100)), 1000)),
+                actor_type="operator",
+                actor_id=f"uid:{credentials[1]}",
             )
             return {"ok": True, "result": result}
         if command == "adaptive-transition-list":

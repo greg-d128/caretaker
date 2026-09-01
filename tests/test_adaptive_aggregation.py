@@ -14,7 +14,10 @@ from caretaker.adaptive_aggregation import (
     SupervisorAdaptiveAggregationStore,
     extended_aggregation_target_id,
 )
-from caretaker.run import _handle_adaptive_observation_submission
+from caretaker.run import (
+    _emit_adaptive_aggregation_audit,
+    _handle_adaptive_observation_submission,
+)
 from caretaker.adaptive import (
     AdaptiveAggregationPolicy,
     BehaviorSamplingPolicy,
@@ -1286,3 +1289,49 @@ def test_enabled_adaptive_policy_emits_live_controller_counters(tmp_path: Path):
     aggregate = store.list_aggregates()[0]
     assert aggregate["behavior_observation_calls"] == 1
     assert aggregate["successful_executions"] == 1
+
+
+def test_adaptive_aggregation_audit_projection_is_bounded_and_non_authoritative():
+    class Audit:
+        def __init__(self) -> None:
+            self.events = []
+
+        def emit(self, event_type, **fields):
+            self.events.append((event_type, fields))
+
+    class Runtime:
+        def __init__(self) -> None:
+            self.audit = Audit()
+            self.effective = type("Effective", (), {
+                "generation": 4,
+                "fingerprint": "policy-fingerprint",
+            })()
+
+    runtime = Runtime()
+    _emit_adaptive_aggregation_audit(
+        runtime,
+        {
+            "merged": 2,
+            "duplicates": 1,
+            "rejected": 0,
+            "conflicts": 1,
+            "conflict_reports": 1,
+            "errors": [],
+            "pending": 3,
+            "promotions": {"created": 1},
+        },
+        actor_type="operator",
+        actor_id="uid:1001",
+    )
+
+    assert len(runtime.audit.events) == 1
+    event_type, fields = runtime.audit.events[0]
+    assert event_type == "ADAPTIVE_AGGREGATION_RECONCILED"
+    assert fields["actor"] == {"type": "operator", "id": "uid:1001"}
+    assert fields["scope"] == {"aggregation_scope": "application"}
+    assert fields["outcome"] == {
+        "state": "RECONCILED",
+        "authority_granted": False,
+    }
+    assert fields["details"]["merged"] == 2
+    assert fields["details"]["promotion_requests_created"] == 1

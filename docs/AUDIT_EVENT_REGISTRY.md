@@ -87,6 +87,7 @@ All event types share these redaction rules:
 | `SUPERVISOR_STATE_CHANGED` | `CRITICAL` | — | `{"state": "CONTROL_PLANE_LOST", "reason": "heartbeat_timeout"}` |
 | `INCIDENT_CAPTURED` | `IMPORTANT` | — | `{"incident_id": "incident-uuid", "capture_level": "STANDARD"}` |
 | `INCIDENT_REPLAY_OUTCOME` | `IMPORTANT` | `scope.replay_scope`, `outcome.state` | `{"scope": "all", "state": "PARTIAL", "fixture_count": 4, "completed_count": 3, "capsule_modified": false, "authority_granted": false}` |
+| `ADAPTIVE_AGGREGATION_RECONCILED` | `IMPORTANT` | `scope.aggregation_scope`, `outcome.state` | `{"scope": "application", "state": "RECONCILED", "merged": 3, "rejected": 0, "authority_granted": false}` |
 | `VALIDATION_DECISION` | `IMPORTANT` | — | `{"state": "ELIGIBLE", "validation_id": "validation-uuid"}` |
 | `RECOVERY_DECISION` | `CRITICAL` | — | `{"state": "PLANNED_ONLY", "action": "ROLLBACK_TO_DEPLOYED_CODE"}` |
 | `REPAIR_ROLLOUT_TRANSITION` | `CRITICAL` | `scope.rollout_id`, `scope.transition_id`, `outcome.state` | `{"rollout_id": "rollout-uuid", "transition_id": "transition-uuid", "state": "validated", "action": "advance"}` |

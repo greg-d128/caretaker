@@ -233,6 +233,18 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
             "authority_granted": False,
         },
     ),
+    "ADAPTIVE_AGGREGATION_RECONCILED": _event_definition(
+        description="The supervisor reconciled a bounded batch of adaptive worker evidence.",
+        minimum_priority=EvidencePriority.IMPORTANT,
+        required_fields=("scope.aggregation_scope", "outcome.state"),
+        example={
+            "scope": "application",
+            "state": "RECONCILED",
+            "merged": 3,
+            "rejected": 0,
+            "authority_granted": False,
+        },
+    ),
     "VALIDATION_DECISION": _event_definition(
         description="A validation result or gate decision was recorded.",
         minimum_priority=EvidencePriority.IMPORTANT,
