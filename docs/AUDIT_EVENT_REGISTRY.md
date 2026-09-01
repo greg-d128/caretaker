@@ -31,8 +31,35 @@ acknowledgement mapping with `acknowledged: true` and `record_sha256` equal to
 the SHA-256 digest of the exact record bytes it received. A missing,
 malformed, or mismatched acknowledgement is treated as a failed delivery and
 the locally persisted record remains in the retry queue. The record digest is
-the sink-side idempotency key; this contract does not itself provide transport
-authentication or replay protection.
+the sink-side idempotency key; this basic contract does not itself provide
+transport authentication or replay protection.
+
+For an application that has a shared secret with its external receiver,
+`AuthenticatedAuditDeliverySink` wraps an output-only transport with the
+optional `serialize_authenticated_audit_record()` contract. It sends a bounded
+JSON envelope containing the exact record bytes, SHA-256 digest, deterministic
+delivery ID (the same digest), sender ID, and an HMAC-SHA256 signature. The
+receiver can validate it with `verify_authenticated_audit_record()` and should
+retain delivery IDs so exact retries are idempotent. Its response must be
+created with `create_authenticated_audit_acknowledgement()`; the adapter
+rejects acknowledgements whose signature, delivery ID, or record digest does
+not match. This is an authenticated transport primitive, not a command
+channel, and it does not replace external key management, receiver retention,
+or independent security review.
+
+Authenticated envelope example (the record body is base64 encoded):
+
+```json
+{
+  "algorithm": "HMAC-SHA256",
+  "delivery_id": "record-sha256",
+  "record_base64": "eyJldmVudF90eXBlIjoi...",
+  "record_sha256": "record-sha256",
+  "schema_version": 1,
+  "sender_id": "runtime-1",
+  "signature": "hmac-sha256-hex"
+}
+```
 Failed deliveries are retained in a bounded local store-and-forward queue and
 retried in order during writer startup, flush, and the next retained event.
 `external_delivery_max_pending_records` and

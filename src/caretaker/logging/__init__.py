@@ -1,12 +1,17 @@
 from .acceptance import WorkerAcceptanceStore, WorkerAcceptanceStoreError
 from .audit import (
     AuditDeliverySink,
+    AuthenticatedAuditDeliverySink,
     AUDIT_EVENT_REGISTRY,
     AUDIT_DELIVERY_QUEUE_SCHEMA_VERSION,
     AUDIT_SCHEMA_VERSION,
     AuditStreamError,
     AuditStreamWriter,
     audit_event_definition,
+    create_authenticated_audit_acknowledgement,
+    serialize_authenticated_audit_record,
+    verify_authenticated_audit_acknowledgement,
+    verify_authenticated_audit_record,
     verify_audit_stream,
 )
 from .attachments import AttachmentStore

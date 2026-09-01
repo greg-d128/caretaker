@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import binascii
 import hashlib
+import hmac
 import json
 import math
 import os
@@ -28,6 +29,8 @@ from .signing import (
 
 AUDIT_SCHEMA_VERSION = 1
 AUDIT_DELIVERY_QUEUE_SCHEMA_VERSION = 1
+AUDIT_DELIVERY_AUTH_SCHEMA_VERSION = 1
+AUDIT_DELIVERY_AUTH_MAX_BYTES = 64 * 1024
 AUDIT_SEGMENT_MANIFEST_SCHEMA_VERSION = 1
 _EVENT_TYPE = re.compile(r"^[A-Z][A-Z0-9_]{2,63}$")
 _SEGMENT_FILE = re.compile(r"^.+\.segment-(\d{20})$")
@@ -415,6 +418,290 @@ def _copy_mapping(value: Mapping[str, Any] | None) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise AuditStreamError("Audit fields must be mappings")
     return {str(key): item for key, item in value.items()}
+
+
+def _audit_delivery_secret(secret: bytes) -> None:
+    if not isinstance(secret, bytes) or len(secret) < 32:
+        raise AuditStreamError(
+            "authenticated audit delivery secret must contain at least 32 bytes"
+        )
+
+
+def _audit_delivery_auth_payload(
+    *,
+    sender_id: str,
+    delivery_id: str,
+    record_sha256: str,
+    record_base64: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": AUDIT_DELIVERY_AUTH_SCHEMA_VERSION,
+        "algorithm": "HMAC-SHA256",
+        "sender_id": sender_id,
+        "delivery_id": delivery_id,
+        "record_sha256": record_sha256,
+        "record_base64": record_base64,
+    }
+
+
+def serialize_authenticated_audit_record(
+    record: bytes,
+    secret: bytes,
+    *,
+    sender_id: str,
+) -> bytes:
+    """Create a signed, replay-identifiable audit delivery envelope.
+
+    The local record remains the exact payload being authenticated. The
+    deterministic delivery ID is its digest, allowing a receiving system to
+    acknowledge a retry idempotently while rejecting a different record.
+    """
+    _audit_delivery_secret(secret)
+    if not isinstance(record, bytes) or not record.endswith(b"\n"):
+        raise AuditStreamError("authenticated audit record must be newline terminated bytes")
+    if len(record) > AUDIT_DELIVERY_AUTH_MAX_BYTES:
+        raise AuditStreamError(
+            f"authenticated audit record exceeds {AUDIT_DELIVERY_AUTH_MAX_BYTES} bytes"
+        )
+    if not isinstance(sender_id, str) or not sender_id.strip() or len(sender_id) > 128:
+        raise AuditStreamError("authenticated audit sender_id is invalid")
+    sender_id = sender_id.strip()
+    record_sha256 = hashlib.sha256(record).hexdigest()
+    record_base64 = base64.b64encode(record).decode("ascii")
+    payload = _audit_delivery_auth_payload(
+        sender_id=sender_id,
+        delivery_id=record_sha256,
+        record_sha256=record_sha256,
+        record_base64=record_base64,
+    )
+    envelope = {
+        **payload,
+        "signature": hmac.new(secret, _canonical(payload), hashlib.sha256).hexdigest(),
+    }
+    encoded = _canonical(envelope)
+    if len(encoded) > AUDIT_DELIVERY_AUTH_MAX_BYTES:
+        raise AuditStreamError(
+            f"authenticated audit envelope exceeds {AUDIT_DELIVERY_AUTH_MAX_BYTES} bytes"
+        )
+    return encoded
+
+
+def verify_authenticated_audit_record(
+    value: bytes | bytearray | str | Mapping[str, Any],
+    secret: bytes,
+    *,
+    sender_id: str | None = None,
+) -> dict[str, Any]:
+    """Verify an authenticated audit envelope without executing its record."""
+    _audit_delivery_secret(secret)
+    failures: list[str] = []
+    try:
+        if isinstance(value, Mapping):
+            encoded = _canonical(value)
+        elif isinstance(value, (bytes, bytearray)):
+            encoded = bytes(value)
+        elif isinstance(value, str):
+            encoded = value.encode("utf-8")
+        else:
+            raise ValueError("transport value is not JSON data")
+        if len(encoded) > AUDIT_DELIVERY_AUTH_MAX_BYTES:
+            raise ValueError("authenticated audit envelope exceeds size bound")
+        envelope = json.loads(encoded.decode("utf-8"))
+        if not isinstance(envelope, Mapping):
+            raise ValueError("authenticated audit envelope must be an object")
+        expected_fields = {
+            "schema_version",
+            "algorithm",
+            "sender_id",
+            "delivery_id",
+            "record_sha256",
+            "record_base64",
+            "signature",
+        }
+        if set(envelope) != expected_fields:
+            raise ValueError("authenticated audit envelope fields are invalid")
+        if envelope["schema_version"] != AUDIT_DELIVERY_AUTH_SCHEMA_VERSION:
+            raise ValueError("unsupported authenticated audit envelope schema")
+        if envelope["algorithm"] != "HMAC-SHA256":
+            raise ValueError("unsupported authenticated audit envelope algorithm")
+        envelope_sender = envelope["sender_id"]
+        if not isinstance(envelope_sender, str) or not envelope_sender.strip():
+            raise ValueError("authenticated audit sender_id is invalid")
+        if sender_id is not None and envelope_sender != sender_id:
+            raise ValueError("authenticated audit sender_id does not match")
+        delivery_id = envelope["delivery_id"]
+        record_sha256 = envelope["record_sha256"]
+        signature = envelope["signature"]
+        record_base64 = envelope["record_base64"]
+        if (
+            not isinstance(delivery_id, str)
+            or len(delivery_id) != 64
+            or not isinstance(record_sha256, str)
+            or len(record_sha256) != 64
+            or delivery_id != record_sha256
+            or not isinstance(record_base64, str)
+            or not isinstance(signature, str)
+            or len(signature) != 64
+        ):
+            raise ValueError("authenticated audit envelope identifiers are invalid")
+        try:
+            record = base64.b64decode(record_base64, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise ValueError("authenticated audit record encoding is invalid") from exc
+        if not record.endswith(b"\n"):
+            raise ValueError("authenticated audit record is not newline terminated")
+        if len(record) > AUDIT_DELIVERY_AUTH_MAX_BYTES:
+            raise ValueError("authenticated audit record exceeds size bound")
+        if hashlib.sha256(record).hexdigest() != record_sha256:
+            raise ValueError("authenticated audit record hash does not match")
+        payload = _audit_delivery_auth_payload(
+            sender_id=envelope_sender,
+            delivery_id=delivery_id,
+            record_sha256=record_sha256,
+            record_base64=record_base64,
+        )
+        expected_signature = hmac.new(secret, _canonical(payload), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected_signature):
+            raise ValueError("authenticated audit envelope signature is invalid")
+        return {
+            "valid": True,
+            "sender_id": envelope_sender,
+            "delivery_id": delivery_id,
+            "record_sha256": record_sha256,
+            "record": record,
+            "failures": (),
+        }
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        failures.append(str(exc))
+    return {"valid": False, "failures": tuple(failures)}
+
+
+def _authenticated_audit_ack_payload(
+    *,
+    delivery_id: str,
+    record_sha256: str,
+    acknowledged: bool,
+) -> dict[str, Any]:
+    return {
+        "schema_version": AUDIT_DELIVERY_AUTH_SCHEMA_VERSION,
+        "algorithm": "HMAC-SHA256",
+        "delivery_id": delivery_id,
+        "record_sha256": record_sha256,
+        "acknowledged": acknowledged,
+    }
+
+
+def create_authenticated_audit_acknowledgement(
+    *,
+    delivery_id: str,
+    record_sha256: str,
+    secret: bytes,
+    acknowledged: bool = True,
+) -> dict[str, Any]:
+    """Create a receiver acknowledgement bound to one signed delivery."""
+    _audit_delivery_secret(secret)
+    payload = _authenticated_audit_ack_payload(
+        delivery_id=delivery_id,
+        record_sha256=record_sha256,
+        acknowledged=acknowledged,
+    )
+    return {
+        **payload,
+        "ack_signature": hmac.new(secret, _canonical(payload), hashlib.sha256).hexdigest(),
+    }
+
+
+def verify_authenticated_audit_acknowledgement(
+    acknowledgement: Mapping[str, Any],
+    secret: bytes,
+    *,
+    delivery_id: str,
+    record_sha256: str,
+) -> bool:
+    """Verify an acknowledgement's authenticity and exact delivery binding."""
+    try:
+        _audit_delivery_secret(secret)
+        if not isinstance(acknowledgement, Mapping):
+            return False
+        expected_fields = {
+            "schema_version",
+            "algorithm",
+            "delivery_id",
+            "record_sha256",
+            "acknowledged",
+            "ack_signature",
+        }
+        if set(acknowledgement) != expected_fields:
+            return False
+        payload = _authenticated_audit_ack_payload(
+            delivery_id=delivery_id,
+            record_sha256=record_sha256,
+            acknowledged=acknowledgement["acknowledged"],
+        )
+        if (
+            acknowledgement["schema_version"] != AUDIT_DELIVERY_AUTH_SCHEMA_VERSION
+            or acknowledgement["algorithm"] != "HMAC-SHA256"
+            or acknowledgement["delivery_id"] != delivery_id
+            or acknowledgement["record_sha256"] != record_sha256
+            or acknowledgement["acknowledged"] is not True
+            or not isinstance(acknowledgement["ack_signature"], str)
+        ):
+            return False
+        expected = hmac.new(secret, _canonical(payload), hashlib.sha256).hexdigest()
+        return hmac.compare_digest(acknowledgement["ack_signature"], expected)
+    except (AuditStreamError, TypeError, ValueError):
+        return False
+
+
+class AuthenticatedAuditDeliverySink:
+    """Wrap an output-only sink with signed delivery and acknowledgements.
+
+    The wrapped transport must accept the authenticated envelope and return a
+    signed acknowledgement created by ``create_authenticated_audit_acknowledgement``.
+    Receivers should retain delivery IDs (the record digest) and treat exact
+    retries as idempotent; this adapter never turns the stream into a command
+    channel.
+    """
+
+    def __init__(
+        self,
+        transport: AuditDeliverySink,
+        secret: bytes,
+        *,
+        sender_id: str,
+        sink_id: str | None = None,
+    ) -> None:
+        _audit_delivery_secret(secret)
+        if not callable(getattr(transport, "deliver", None)) or not callable(
+            getattr(transport, "flush", None)
+        ):
+            raise AuditStreamError("authenticated audit transport is not an output-only sink")
+        if not isinstance(sender_id, str) or not sender_id.strip() or len(sender_id) > 128:
+            raise AuditStreamError("authenticated audit sender_id is invalid")
+        self.transport = transport
+        self.secret = secret
+        self.sender_id = sender_id.strip()
+        self.sink_id = str(sink_id or getattr(transport, "sink_id", "authenticated-audit"))[:128]
+
+    def deliver(self, record: bytes) -> Mapping[str, Any]:
+        envelope = serialize_authenticated_audit_record(
+            record,
+            self.secret,
+            sender_id=self.sender_id,
+        )
+        receipt = self.transport.deliver(envelope)
+        record_sha256 = hashlib.sha256(record).hexdigest()
+        if not verify_authenticated_audit_acknowledgement(
+            receipt if isinstance(receipt, Mapping) else {},
+            self.secret,
+            delivery_id=record_sha256,
+            record_sha256=record_sha256,
+        ):
+            raise AuditStreamError("authenticated audit acknowledgement is invalid")
+        return {"acknowledged": True, "record_sha256": record_sha256}
+
+    def flush(self) -> None:
+        self.transport.flush()
 
 
 def _audit_manifest_path(path: Path) -> Path:

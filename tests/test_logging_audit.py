@@ -10,10 +10,14 @@ import pytest
 
 from caretaker.logging import (
     AUDIT_EVENT_REGISTRY,
+    AuthenticatedAuditDeliverySink,
     AuditStreamError,
     AuditStreamPolicy,
     AuditStreamWriter,
     EvidencePriority,
+    create_authenticated_audit_acknowledgement,
+    serialize_authenticated_audit_record,
+    verify_authenticated_audit_record,
     verify_audit_stream,
 )
 from caretaker.logging.policy import RedactionPolicy
@@ -69,9 +73,83 @@ class ToggleAuditSink(RecordingAuditSink):
         super().deliver(record)
 
 
+class AuthenticatedRecordingTransport:
+    sink_id = "authenticated-monitoring-test"
+
+    def __init__(self, secret: bytes) -> None:
+        self.secret = secret
+        self.envelopes: list[bytes] = []
+
+    def deliver(self, envelope: bytes) -> dict[str, object]:
+        self.envelopes.append(bytes(envelope))
+        verified = verify_authenticated_audit_record(
+            envelope,
+            self.secret,
+            sender_id="runtime-1",
+        )
+        assert verified["valid"] is True
+        return create_authenticated_audit_acknowledgement(
+            delivery_id=str(verified["delivery_id"]),
+            record_sha256=str(verified["record_sha256"]),
+            secret=self.secret,
+        )
+
+    def flush(self) -> None:
+        return None
+
+
 def _writer(path: Path, **changes):
     policy = AuditStreamPolicy(**changes)
     return AuditStreamWriter(policy, directory=path, run_id=uuid4(), process_start_id=uuid4())
+
+
+def test_authenticated_audit_delivery_binds_record_and_acknowledgement() -> None:
+    secret = b"s" * 32
+    record = b'{"event_type":"INCIDENT_CAPTURED"}\n'
+    encoded = serialize_authenticated_audit_record(
+        record,
+        secret,
+        sender_id="runtime-1",
+    )
+    verified = verify_authenticated_audit_record(encoded, secret, sender_id="runtime-1")
+    assert verified["valid"] is True
+    assert verified["record"] == record
+    assert verified["delivery_id"] == verified["record_sha256"]
+
+    transport = AuthenticatedRecordingTransport(secret)
+    sink = AuthenticatedAuditDeliverySink(
+        transport,
+        secret,
+        sender_id="runtime-1",
+    )
+    receipt = sink.deliver(record)
+    assert receipt == {
+        "acknowledged": True,
+        "record_sha256": hashlib.sha256(record).hexdigest(),
+    }
+    assert len(transport.envelopes) == 1
+
+
+def test_authenticated_audit_delivery_rejects_tampering_and_bad_ack() -> None:
+    secret = b"s" * 32
+    record = b'{"event_type":"INCIDENT_CAPTURED"}\n'
+    envelope = json.loads(
+        serialize_authenticated_audit_record(record, secret, sender_id="runtime-1")
+    )
+    envelope["record_base64"] = "eyJldmVudF90eXBlIjoiVEFNTUVSRUQifQo="
+    assert verify_authenticated_audit_record(envelope, secret)["valid"] is False
+
+    class BadTransport(AuthenticatedRecordingTransport):
+        def deliver(self, envelope: bytes) -> dict[str, object]:
+            return {"acknowledged": True}
+
+    sink = AuthenticatedAuditDeliverySink(
+        BadTransport(secret),
+        secret,
+        sender_id="runtime-1",
+    )
+    with pytest.raises(AuditStreamError, match="acknowledgement is invalid"):
+        sink.deliver(record)
 
 
 def test_audit_stream_is_hash_chained_and_recovers_across_restart(tmp_path: Path) -> None:
