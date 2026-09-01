@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from caretaker.logging import (
+    ApplicationWorkerLifecycle,
     CaretakerApplicationSupervisor,
     WorkerFailureAction,
     WorkerKind,
@@ -308,6 +309,136 @@ def test_authorized_restart_callback_admits_replacement_before_reporting_restart
     assert replacement.authority_packet_id == packet.packet_id
     assert replacement.restart_count == 1
     assert len(spawned) == 1
+
+
+def test_application_worker_lifecycle_admits_initial_worker_after_packet_check() -> None:
+    runtime = FakeRuntime()
+    supervisor = CaretakerApplicationSupervisor(runtime)
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    packet = create_recovery_authority_packet(
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        capabilities=("observe",),
+        supervisor_time=supervisor_time,
+    )
+    launched = []
+    lifecycle = ApplicationWorkerLifecycle(
+        supervisor,
+        spawn_worker=lambda request: launched.append(request) or {
+            "started": True,
+            "pid": 5678,
+        },
+    )
+
+    result = lifecycle.start_authorized_worker(
+        WorkerKind.REPAIR_ANALYZER,
+        packet,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+    )
+
+    assert result["accepted"] is True
+    assert result["status"] == "ADMITTED"
+    assert result["authority_packet_verified"] is True
+    assert launched == [packet]
+    admitted = supervisor.workers.get(UUID(str(result["worker_id"])))
+    assert admitted.process_id == 5678
+    assert admitted.authority_packet_id == packet.packet_id
+
+
+def test_application_worker_lifecycle_rejects_invalid_packet_before_spawn() -> None:
+    runtime = FakeRuntime()
+    supervisor = CaretakerApplicationSupervisor(runtime)
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    packet = create_recovery_authority_packet(
+        target_id="app:other",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        capabilities=("observe",),
+        supervisor_time=supervisor_time,
+    )
+    launched = []
+    lifecycle = ApplicationWorkerLifecycle(
+        supervisor,
+        spawn_worker=lambda request: launched.append(request) or {"started": True, "pid": 5678},
+    )
+
+    result = lifecycle.start_authorized_worker(
+        WorkerKind.REPAIR_ANALYZER,
+        packet,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+    )
+
+    assert result["accepted"] is False
+    assert result["status"] == "AUTHORITY_PACKET_REJECTED"
+    assert launched == []
+
+
+def test_application_worker_lifecycle_cleans_up_unadmitted_initial_worker(
+    monkeypatch,
+) -> None:
+    runtime = FakeRuntime()
+    supervisor = CaretakerApplicationSupervisor(runtime)
+    supervisor_time = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    packet = create_recovery_authority_packet(
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        capabilities=("observe",),
+        supervisor_time=supervisor_time,
+    )
+    stopped = []
+
+    def reject_admission(*args, **kwargs):
+        raise PermissionError("simulated admission race")
+
+    monkeypatch.setattr(supervisor.workers, "register_authorized", reject_admission)
+    lifecycle = ApplicationWorkerLifecycle(
+        supervisor,
+        spawn_worker=lambda _request: {"started": True, "pid": 5678},
+        stop_worker=lambda pid: stopped.append(pid) or {"accepted": True},
+    )
+
+    result = lifecycle.start_authorized_worker(
+        WorkerKind.REPAIR_ANALYZER,
+        packet,
+        supervisor_time=supervisor_time,
+        target_id="app:charge",
+        generation_id="generation-7",
+        code_hash="code-hash",
+        policy_fingerprint="policy-hash",
+        authority_policy_generation="authority-8",
+        authority_policy_fingerprint="authority-hash",
+        allowed_capabilities={"observe"},
+    )
+
+    assert result["accepted"] is False
+    assert result["status"] == "ADMISSION_FAILED"
+    assert result["process_cleanup"]["status"] == "STOPPED"
+    assert stopped == [5678]
 
 
 def test_worker_failure_scope_uses_transaction_or_incident_and_does_not_use_target_alone() -> None:

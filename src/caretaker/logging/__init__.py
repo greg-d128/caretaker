@@ -80,5 +80,6 @@ from .signing import (
     verify_signed_artifact,
 )
 from .supervisor import CaretakerApplicationSupervisor, Watchdog, WorkRegistry, WorkerRegistry
+from .supervisor import ApplicationWorkerLifecycle
 
 __all__ = [name for name in globals() if not name.startswith("_")]

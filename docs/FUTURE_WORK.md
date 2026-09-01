@@ -1294,8 +1294,10 @@ cleanup callback when a process starts but packet admission fails, and reports
 missing or rejected cleanup explicitly rather than treating the process as a
 successful replacement. Direct process spawning, cross-process replacement
 packet distribution, and general policy-specific incident/shutdown
-orchestration remain future work. The supervised writer, event-server, control-server, and
-system-collector failure paths now create an initial Incident Capsule
+orchestration remain future work. The `ApplicationWorkerLifecycle` adapter now
+connects application-owned initial launch and replacement callbacks to the
+same packet, acceptance, and cleanup gates. The supervised writer, event-server,
+control-server, and system-collector failure paths now create an initial Incident Capsule
 immediately through the application-owned callback; process spawning remains a
 deployment-specific future capability.
 Workers may now provide bounded diagnostic context with heartbeat or

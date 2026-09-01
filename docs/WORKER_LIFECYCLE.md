@@ -50,6 +50,19 @@ missing or rejected cleanup callback is explicit failure evidence; it is never
 treated as successful replacement. Caretaker does not terminate operating
 system processes itself.
 
+`ApplicationWorkerLifecycle` packages this initial-worker path with the
+existing replacement handler. `start_authorized_worker()` verifies the full
+packet and live context before asking the application to launch, then admits
+the returned process through `WorkerRegistry.register_authorized()`. If a
+configured acceptance policy marks the worker failed, it is cleaned up the
+same way as any other unadmitted process; when no acceptance policy is
+configured, the worker may remain `UNTRACKED` because packet authority and
+acceptance tracking are separate concerns. `build_replacement_handler()`
+uses the same supervisor gates and callback pair for failed-worker recovery.
+This is an application-scoped coordination adapter, not a process manager:
+deployment code still owns command construction, environment, transport
+startup, waiting, and process termination.
+
 Replacement workers use the existing `WorkerReplacementRequest` as a second
 bounded local handoff. `serialize_worker_replacement_request()` includes the
 failed-worker identity, worker kind, issuance time, reason, and nested

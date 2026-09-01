@@ -335,6 +335,7 @@ from .store import InMemoryRepairStore, SQLiteRepairStore
 from .telemetry import CorrelatedLogHandler
 from .logging import (
     AuditDeliverySink,
+    ApplicationWorkerLifecycle,
     AuthenticatedAuditDeliverySink,
     AuthenticatedAuditKeyring,
     AuthenticatedAuditReplayStore,
@@ -493,6 +494,7 @@ __all__ = [
     "LogInterrogator",
     "LogSink",
     "AuditDeliverySink",
+    "ApplicationWorkerLifecycle",
     "AuthenticatedAuditDeliverySink",
     "AuthenticatedAuditKeyring",
     "AuthenticatedAuditReplayStore",

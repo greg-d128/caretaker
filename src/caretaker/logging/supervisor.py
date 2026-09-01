@@ -2629,6 +2629,211 @@ class CaretakerApplicationSupervisor:
         self.runtime.close()
 
 
+class ApplicationWorkerLifecycle:
+    """Connect application-owned process callbacks to worker admission.
+
+    Caretaker remains the controller and verifier: ``spawn_worker`` creates a
+    process in the embedding application, while this adapter admits it only
+    after packet verification. The callback receives a
+    ``RecoveryAuthorityPacket`` for an initial worker and a
+    ``WorkerReplacementRequest`` for a replacement. Caretaker never creates
+    or terminates an operating-system process.
+    """
+
+    def __init__(
+        self,
+        supervisor: CaretakerApplicationSupervisor,
+        *,
+        spawn_worker: Callable[[RecoveryAuthorityPacket | WorkerReplacementRequest], Any],
+        stop_worker: Callable[[int], Any] | None = None,
+    ) -> None:
+        if not callable(spawn_worker):
+            raise TypeError("worker lifecycle requires a spawn_worker callback")
+        if stop_worker is not None and not callable(stop_worker):
+            raise TypeError("worker lifecycle stop_worker must be callable")
+        self.supervisor = supervisor
+        self.spawn_worker = spawn_worker
+        self.stop_worker = stop_worker
+
+    def _cleanup_started_process(self, pid: int) -> dict[str, Any]:
+        if self.stop_worker is None:
+            return {
+                "status": "REQUIRED",
+                "accepted": False,
+                "reason": "application-owned process cleanup callback is not configured",
+            }
+        try:
+            result = self.stop_worker(pid)
+        except Exception as exc:
+            return {
+                "status": "FAILED",
+                "accepted": False,
+                "reason": f"{type(exc).__name__}: {exc}"[:256],
+            }
+        accepted = bool(
+            result
+            if not isinstance(result, Mapping)
+            else result.get("accepted") or result.get("stopped")
+        )
+        return {
+            "status": "STOPPED" if accepted else "REJECTED",
+            "accepted": accepted,
+            "result": dict(result) if isinstance(result, Mapping) else result,
+        }
+
+    def start_authorized_worker(
+        self,
+        kind: WorkerKind,
+        packet: RecoveryAuthorityPacket,
+        *,
+        supervisor_time: datetime,
+        target_id: str,
+        generation_id: str,
+        code_hash: str,
+        policy_fingerprint: str,
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        allowed_capabilities: set[str] | frozenset[str] = frozenset(),
+        policy: RepairRecoveryPolicy | None = None,
+        acceptance_policy: WorkerAcceptancePolicy | None = None,
+    ) -> dict[str, Any]:
+        """Start and admit one worker, cleaning up an unadmitted process."""
+        try:
+            verification = verify_recovery_authority_packet(
+                packet,
+                supervisor_time=supervisor_time,
+                target_id=target_id,
+                generation_id=generation_id,
+                code_hash=code_hash,
+                policy_fingerprint=policy_fingerprint,
+                authority_policy_generation=authority_policy_generation,
+                authority_policy_fingerprint=authority_policy_fingerprint,
+                allowed_capabilities=allowed_capabilities,
+                policy=policy,
+            )
+        except Exception as exc:
+            return {
+                "accepted": False,
+                "authority_granted": False,
+                "status": "AUTHORITY_PACKET_REJECTED",
+                "reason": f"{type(exc).__name__}: {exc}"[:256],
+            }
+        if not verification.get("valid"):
+            return {
+                "accepted": False,
+                "authority_granted": False,
+                "status": "AUTHORITY_PACKET_REJECTED",
+                "reason": "; ".join(str(item) for item in verification.get("failures", ()))[:256],
+            }
+
+        pid: int | None = None
+        try:
+            started = self.spawn_worker(packet)
+            if not isinstance(started, Mapping) or not bool(started.get("started")):
+                return {
+                    "accepted": False,
+                    "authority_granted": False,
+                    "status": "PROCESS_NOT_STARTED",
+                    "reason": "application did not start worker",
+                }
+            candidate_pid = started.get("pid")
+            if isinstance(candidate_pid, bool) or not isinstance(candidate_pid, int) or candidate_pid <= 0:
+                return {
+                    "accepted": False,
+                    "authority_granted": False,
+                    "status": "PROCESS_ID_INVALID",
+                    "reason": "application did not return a valid worker pid",
+                }
+            pid = candidate_pid
+            worker = self.supervisor.workers.register_authorized(
+                kind,
+                pid,
+                packet,
+                supervisor_time=supervisor_time,
+                target_id=target_id,
+                generation_id=generation_id,
+                code_hash=code_hash,
+                policy_fingerprint=policy_fingerprint,
+                authority_policy_generation=authority_policy_generation,
+                authority_policy_fingerprint=authority_policy_fingerprint,
+                allowed_capabilities=allowed_capabilities,
+                policy=policy,
+                acceptance_policy=acceptance_policy,
+            )
+        except Exception as exc:
+            result = {
+                "accepted": False,
+                "authority_granted": False,
+                "status": "ADMISSION_FAILED",
+                "reason": f"{type(exc).__name__}: {exc}"[:256],
+            }
+            if pid is not None:
+                result["process_cleanup"] = self._cleanup_started_process(pid)
+            return result
+
+        allowed_acceptance_states = {
+            WorkerAcceptanceState.PROBATION,
+            WorkerAcceptanceState.ACCEPTED,
+        }
+        if policy is None and acceptance_policy is None:
+            allowed_acceptance_states.add(WorkerAcceptanceState.UNTRACKED)
+        if worker.acceptance_state not in allowed_acceptance_states:
+            return {
+                "accepted": False,
+                "authority_granted": False,
+                "status": "ACCEPTANCE_FAILED",
+                "worker_id": str(worker.worker_id),
+                "acceptance_state": worker.acceptance_state.name,
+                "process_cleanup": self._cleanup_started_process(pid),
+            }
+        return {
+            "accepted": True,
+            "authority_granted": False,
+            "status": "ADMITTED",
+            "worker_id": str(worker.worker_id),
+            "pid": pid,
+            "process_start_id": str(worker.process_start_id),
+            "authority_packet_id": str(packet.packet_id),
+            "authority_packet_verified": True,
+            "authority_packet_expires_at": packet.expires_at.isoformat(),
+            "acceptance_state": worker.acceptance_state.name,
+        }
+
+    def build_replacement_handler(
+        self,
+        *,
+        failed_worker_id: UUID,
+        packet: RecoveryAuthorityPacket,
+        supervisor_time: datetime,
+        target_id: str,
+        generation_id: str,
+        code_hash: str,
+        policy_fingerprint: str,
+        authority_policy_generation: str,
+        authority_policy_fingerprint: str,
+        allowed_capabilities: set[str] | frozenset[str] = frozenset(),
+        policy: RepairRecoveryPolicy | None = None,
+        acceptance_policy: WorkerAcceptancePolicy | None = None,
+    ) -> Callable[[Mapping[str, Any]], dict[str, Any]]:
+        """Build a replacement handler using the same lifecycle callbacks."""
+        return self.supervisor.build_replacement_action_handler(
+            failed_worker_id=failed_worker_id,
+            packet=packet,
+            supervisor_time=supervisor_time,
+            target_id=target_id,
+            generation_id=generation_id,
+            code_hash=code_hash,
+            policy_fingerprint=policy_fingerprint,
+            authority_policy_generation=authority_policy_generation,
+            authority_policy_fingerprint=authority_policy_fingerprint,
+            spawn_worker=self.spawn_worker,
+            stop_worker=self.stop_worker,
+            allowed_capabilities=allowed_capabilities,
+            policy=policy,
+            acceptance_policy=acceptance_policy,
+        )
+
+
 def _pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
