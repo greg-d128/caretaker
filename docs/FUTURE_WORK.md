@@ -578,8 +578,9 @@ reference a sealed snapshot that satisfies the required signing policy.
 
 ### Periodic behavior comparison
 
-**Status: Implemented in development tree for bounded, same-generation
-comparison during periodic function inspection.**
+**Status: Implemented in development tree for bounded same-generation
+comparison and opt-in behavior-triggered generation rollover during periodic
+function inspection.**
 
 When enabled by `PeriodicInspectionPolicy.compare_behavior`, Guard compares
 the accepted baseline with current generation-bound statistics. The result is
@@ -588,9 +589,13 @@ path for newly observed resource capabilities, event kinds, repeated return
 novelty, or additional failures. Count growth and timing differences alone do
 not rotate a generation or change the accepted baseline. Incompatible or
 insufficient captures remain explicitly visible and are never treated as
-unchanged. Automatic generation rotation from behavior-only drift, dynamic
-threshold administration, and richer distribution-shift analysis remain future
-work.
+unchanged. When `PeriodicInspectionPolicy.rotate_generation_on_behavior_change`
+is enabled, a verified same-code behavior change seals the prior active evidence
+and starts a new behavior revision. The rollover preserves the old evidence,
+does not accept a baseline, and does not grant Repair or policy authority. The
+new revision must collect fresh evidence before it can be compared or accepted.
+Dynamic threshold administration and richer distribution-shift analysis remain
+future work.
 
 ### Randomized behavioral-regime snapshots
 

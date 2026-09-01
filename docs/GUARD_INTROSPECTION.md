@@ -74,6 +74,15 @@ modifies policy, grants authority, or proves that an unobserved side effect did
 not occur. A `changed` result is routed through the normal policy-selected
 Guard signal path; operators may leave the setting disabled (the default).
 
+For deployments that want behavior change to begin a fresh compatibility
+generation, `PeriodicInspectionPolicy.rotate_generation_on_behavior_change`
+can be enabled alongside `compare_behavior`. A verified same-code change then
+seals the prior active statistics, records its generation as the predecessor,
+and starts a new revision with empty counters. The prior evidence remains
+available for materialization and review; the new revision must collect fresh
+evidence before it can be compared or accepted. This setting does not accept a
+baseline, activate Repair, change policy, or grant authority.
+
 ## Event-driven inspection
 
 Immediate inspection may be triggered by:

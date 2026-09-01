@@ -1644,8 +1644,29 @@ class GuardEngine(GuardFacade):
     def _on_inspection(self, inspection: RuntimeInspection) -> None:
         target_id = self._inspection_target_id(inspection)
         behavior_comparison = None
+        generation_rotation = None
         if target_id is not None and self._periodic_behavior_enabled(target_id, inspection):
             behavior_comparison = self._compare_periodic_behavior(target_id, inspection)
+            if (
+                isinstance(behavior_comparison, Mapping)
+                and behavior_comparison.get("state") == "changed"
+                and self._periodic_behavior_rotation_enabled(target_id, inspection)
+                and self.behavior_statistics is not None
+            ):
+                generation_rotation = self.behavior_statistics.rotate_generation(
+                    target_id,
+                    reason="periodic behavior comparison detected a same-code change",
+                )
+                if generation_rotation is not None:
+                    behavior_comparison = {
+                        **behavior_comparison,
+                        "generation_rotated": True,
+                        "previous_generation_id": generation_rotation[
+                            "previous_generation_id"
+                        ],
+                        "new_generation_id": generation_rotation["generation_id"],
+                        "behavior_revision": generation_rotation["behavior_revision"],
+                    }
             inspection = replace(inspection, behavior_comparison=behavior_comparison)
             # RuntimeInspector records before invoking this callback. Replace
             # that record so SQLite and in-memory consumers see the comparison
@@ -1689,6 +1710,22 @@ class GuardEngine(GuardFacade):
         return any(
             target.periodic.enabled
             and target.periodic.compare_behavior
+            and self._module_policy_matches(
+                target.module_pattern, inspection.subject.module_name
+            )
+            for target in self.policy.targets
+        )
+
+    def _periodic_behavior_rotation_enabled(
+        self, target_id: str, inspection: RuntimeInspection
+    ) -> bool:
+        binding = self._targets.get(target_id)
+        if binding is None or inspection.function_state_summary is None:
+            return False
+        return any(
+            target.periodic.enabled
+            and target.periodic.compare_behavior
+            and target.periodic.rotate_generation_on_behavior_change
             and self._module_policy_matches(
                 target.module_pattern, inspection.subject.module_name
             )
@@ -1749,7 +1786,9 @@ class GuardEngine(GuardFacade):
         """Compare current same-generation statistics with accepted evidence.
 
         This method intentionally produces evidence only. It never accepts a
-        baseline, rotates a generation, changes policy, or grants authority.
+        baseline, changes policy, or grants authority. An enabled caller may
+        rotate the statistics generation after this comparison returns a
+        verified same-code behavior change.
         """
         unavailable = {
             "state": "unavailable",
@@ -1778,11 +1817,13 @@ class GuardEngine(GuardFacade):
         expected_code_hash = binding.identity.source_hash or binding.identity.bytecode_hash
         expected_monitoring = self.monitoring_fingerprint(target_id)
         schema_version = max(1, int(capture.get("statistics_schema_version") or 1))
+        behavior_revision = max(0, int(capture.get("behavior_revision") or 0))
         expected_generation = behavior_generation_id(
             subject_key=f"function:{target_id}",
             code_hash=expected_code_hash,
             monitoring_fingerprint=expected_monitoring,
             statistics_schema_version=schema_version,
+            behavior_revision=behavior_revision,
         )
         context = {
             "target_id": target_id,
@@ -1791,6 +1832,7 @@ class GuardEngine(GuardFacade):
             "code_hash": observed_code_hash,
             "monitoring_fingerprint": observed_monitoring,
             "observed_calls": observed_calls,
+            "behavior_revision": behavior_revision,
         }
         if (
             str(capture.get("subject_key") or "") != f"function:{target_id}"
@@ -1806,6 +1848,13 @@ class GuardEngine(GuardFacade):
                 "expected_generation_id": expected_generation,
                 "expected_code_hash": expected_code_hash,
                 "expected_monitoring_fingerprint": expected_monitoring,
+            }
+        if behavior_revision > 0:
+            return {
+                **unavailable,
+                "state": "insufficient-evidence",
+                "reason": "behavior-generation-awaiting-baseline",
+                **context,
             }
         if observed_calls <= 0:
             return {

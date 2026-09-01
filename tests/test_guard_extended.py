@@ -352,6 +352,100 @@ def test_periodic_behavior_comparison_records_change_as_evidence(tmp_path, monke
     assert guard.control_plane.signals[-1].target_id == target_id
 
 
+def test_periodic_behavior_change_can_start_a_new_generation(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CARETAKER_DATA_DIR", str(tmp_path))
+    base = _guard_policy()
+    policy = replace(
+        base,
+        aggregation=AggregationPolicy(
+            close_after_events=100,
+            close_after_calls=100,
+            close_after_seconds=999,
+        ),
+        targets=(
+            GuardTargetPolicy(
+                module_pattern="tests.guard_targets",
+                periodic=PeriodicInspectionPolicy(
+                    compare_behavior=True,
+                    rotate_generation_on_behavior_change=True,
+                ),
+            ),
+        ),
+    )
+    guard = GuardEngine(policy=policy)
+    target_id = "tests.guard_targets:failing"
+    guard.register_target(
+        target_id,
+        failing,
+        replace(_repair_policy().guard, observe_network=True),
+        periodic=False,
+    )
+
+    for _ in range(2):
+        call_id = uuid4()
+        guard.before_call(target_id, failing, call_id, candidate_id=None)
+        guard.after_call(
+            target_id,
+            failing,
+            call_id,
+            candidate_id=None,
+            succeeded=True,
+            elapsed_seconds=0.001,
+            result=1,
+        )
+    guard.close_target_window(target_id)
+    guard.accept_baseline(target_id)
+    before = guard.behavior_statistics.current_capture(target_id)
+    assert before is not None
+    before_generation = before["generation_id"]
+
+    guard.record_event(_event(target_id, "new.example:443"))
+    call_id = uuid4()
+    guard.before_call(target_id, failing, call_id, candidate_id=None)
+    guard.after_call(
+        target_id,
+        failing,
+        call_id,
+        candidate_id=None,
+        succeeded=True,
+        elapsed_seconds=0.001,
+        result=1,
+    )
+    inspection = guard.inspector.inspect_function(failing)
+    guard._on_inspection(inspection)
+
+    comparison = guard.store.inspections[inspection.inspection_id].behavior_comparison
+    after = guard.behavior_statistics.current_capture(target_id)
+    assert comparison is not None
+    assert comparison["state"] == "changed"
+    assert comparison["generation_rotated"] is True
+    assert comparison["previous_generation_id"] == before_generation
+    assert comparison["new_generation_id"] == after["generation_id"]
+    assert comparison["behavior_revision"] == 1
+    assert after["behavior_revision"] == 1
+    assert after["code_hash"] == before["code_hash"]
+    assert after["profile"]["call_count"] == 0
+    assert guard.behavior_statistics.pending_count() >= 1
+
+    next_call_id = uuid4()
+    guard.before_call(target_id, failing, next_call_id, candidate_id=None)
+    guard.after_call(
+        target_id,
+        failing,
+        next_call_id,
+        candidate_id=None,
+        succeeded=True,
+        elapsed_seconds=0.001,
+        result=1,
+    )
+    next_inspection = guard.inspector.inspect_function(failing)
+    guard._on_inspection(next_inspection)
+    next_comparison = guard.store.inspections[next_inspection.inspection_id].behavior_comparison
+    assert next_comparison["state"] == "insufficient-evidence"
+    assert next_comparison["reason"] == "behavior-generation-awaiting-baseline"
+    assert next_comparison["generation_rotated"] is False
+
+
 def test_guard_operational_event_cache_is_bounded(monkeypatch) -> None:
     import caretaker.guard.engine as guard_engine_module
 

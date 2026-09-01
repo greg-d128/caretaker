@@ -67,8 +67,10 @@ Defaults for these features are intentionally inactive/unset. Their presence in 
 `GuardTargetPolicy.periodic.compare_behavior` is now an executable opt-in. It
 compares current same-generation statistics with an accepted baseline during
 periodic function inspection and emits only bounded evidence and, when a
-change is found, the normal policy-governed Guard signal. It does not accept a
-baseline, rotate a generation, change policy, or grant authority. Missing,
+change is found, the normal policy-governed Guard signal. The separate
+`rotate_generation_on_behavior_change` opt-in seals the prior statistics and
+starts a fresh behavior revision after a verified same-code change. Neither
+setting accepts a baseline, changes policy, or grants authority. Missing,
 stale, or incompatible evidence is reported explicitly rather than classified
 as unchanged.
 

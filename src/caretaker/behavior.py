@@ -312,9 +312,13 @@ def snapshot_payload(
     )
     generation_id = str(
         capture.get("generation_id")
-        or hashlib.sha256(
-            f"{subject_key}\0{code_hash or ''}\0{monitoring_fingerprint or ''}\0{statistics_schema_version}".encode("utf-8")
-        ).hexdigest()
+        or behavior_generation_id(
+            subject_key=subject_key,
+            code_hash=code_hash,
+            monitoring_fingerprint=monitoring_fingerprint,
+            statistics_schema_version=statistics_schema_version,
+            behavior_revision=int(capture.get("behavior_revision") or 0),
+        )
     )
     return {
         "schema_version": SCHEMA_VERSION,
@@ -336,6 +340,9 @@ def snapshot_payload(
         "monitoring_fingerprint": monitoring_fingerprint,
         "monitoring_configuration": dict(capture.get("monitoring_configuration") or {}),
         "statistics_schema_version": statistics_schema_version,
+        "behavior_revision": int(capture.get("behavior_revision") or 0),
+        "generation_reason": capture.get("generation_reason"),
+        "previous_generation_id": capture.get("previous_generation_id"),
         "seal_reason": capture.get("seal_reason"),
         "environment_fingerprint": capture.get("environment_fingerprint"),
         "workload_label": capture.get("workload_label"),
@@ -1406,9 +1413,12 @@ def behavior_generation_id(
     code_hash: str | None,
     monitoring_fingerprint: str | None,
     statistics_schema_version: int = STATISTICS_SCHEMA_VERSION,
+    behavior_revision: int = 0,
 ) -> str:
+    revision = max(0, int(behavior_revision))
+    revision_suffix = f"\0{revision}" if revision else ""
     return hashlib.sha256(
-        f"{subject_key}\0{code_hash or ''}\0{monitoring_fingerprint or ''}\0{statistics_schema_version}".encode("utf-8")
+        f"{subject_key}\0{code_hash or ''}\0{monitoring_fingerprint or ''}\0{statistics_schema_version}{revision_suffix}".encode("utf-8")
     ).hexdigest()
 
 
@@ -2397,12 +2407,17 @@ class BehaviorStatisticsRepository:
         monitoring_fingerprint: str,
         epoch_sequence: int = 1,
         first_sample_sequence: int = 1,
+        behavior_revision: int = 0,
+        generation_reason: str | None = None,
+        previous_generation_id: str | None = None,
     ) -> dict[str, Any]:
         subject_key = f"function:{target_id}"
+        behavior_revision = max(0, int(behavior_revision))
         generation = behavior_generation_id(
             subject_key=subject_key,
             code_hash=code_hash,
             monitoring_fingerprint=monitoring_fingerprint,
+            behavior_revision=behavior_revision,
         )
         now = utcnow().isoformat()
         epoch_boundary = self._epoch_boundary(epoch_sequence)
@@ -2417,6 +2432,9 @@ class BehaviorStatisticsRepository:
             "monitoring_configuration": dict(monitoring_configuration),
             "monitoring_fingerprint": monitoring_fingerprint,
             "generation_id": generation,
+            "behavior_revision": behavior_revision,
+            "generation_reason": generation_reason,
+            "previous_generation_id": previous_generation_id,
             "environment_fingerprint": self.environment_fingerprint,
             "workload_label": self.workload_label,
             "created_at": now,
@@ -2618,6 +2636,9 @@ class BehaviorStatisticsRepository:
             "monitoring_fingerprint": state.get("monitoring_fingerprint"),
             "statistics_schema_version": int(state.get("statistics_schema_version") or STATISTICS_SCHEMA_VERSION),
             "generation_id": state.get("generation_id"),
+            "behavior_revision": int(state.get("behavior_revision") or 0),
+            "generation_reason": state.get("generation_reason"),
+            "previous_generation_id": state.get("previous_generation_id"),
             "observation_started_at": state.get("created_at"),
             "observation_ended_at": state.get("last_updated_at"),
             "epoch_id": state.get("epoch_id"),
@@ -2672,12 +2693,20 @@ class BehaviorStatisticsRepository:
                 code_hash = state.get("code_hash")
                 code_hash_kind = str(state.get("code_hash_kind") or code_hash_kind)
                 subject = dict(state.get("subject") or subject)
+            behavior_revision = max(0, int(state.get("behavior_revision") or 0)) if state else 0
+            context_changed = state is not None and (
+                state.get("code_hash") != code_hash
+                or state.get("monitoring_fingerprint") != monitoring_fp
+            )
             expected_generation = behavior_generation_id(
                 subject_key=f"function:{target_id}",
                 code_hash=code_hash,
                 monitoring_fingerprint=monitoring_fp,
+                behavior_revision=behavior_revision,
             )
-            if state is not None and state.get("generation_id") != expected_generation:
+            if state is not None and (
+                context_changed or state.get("generation_id") != expected_generation
+            ):
                 self._queue(state, reason="code-or-monitoring-configuration-changed")
                 old_path = self._active_path(target_id)
                 old_path.unlink(missing_ok=True)
@@ -2825,6 +2854,9 @@ class BehaviorStatisticsRepository:
                         monitoring_fingerprint=monitoring_fp,
                         epoch_sequence=int(state.get("epoch_sequence") or 1) + 1,
                         first_sample_sequence=int(state.get("next_sample_sequence") or 1),
+                        behavior_revision=int(state.get("behavior_revision") or 0),
+                        generation_reason=state.get("generation_reason"),
+                        previous_generation_id=state.get("previous_generation_id"),
                     )
                     self._active[target_id] = state
                     self._checkpoint(state)
@@ -2837,6 +2869,51 @@ class BehaviorStatisticsRepository:
             if state is None:
                 return None
             return self._capture(state, reason="active")
+
+    def rotate_generation(self, target_id: str, *, reason: str) -> dict[str, Any] | None:
+        """Seal evidence and start a new generation without changing authority.
+
+        A behavior-driven generation change keeps the same code and monitoring
+        context but gives subsequent observations a distinct compatibility key.
+        The prior active evidence is queued before the fresh generation starts;
+        no baseline, policy, or Repair state is changed by this operation.
+        """
+        normalized_reason = str(reason or "").strip()[:256]
+        if not normalized_reason:
+            raise ValueError("behavior generation rotation requires a reason")
+        with self._lock:
+            state = self._load_active(target_id)
+            if state is None:
+                return None
+            if int(state.get("sample_count") or 0) <= 0:
+                return None
+            previous_generation_id = str(state.get("generation_id") or "")
+            previous_revision = max(0, int(state.get("behavior_revision") or 0))
+            queued = self._queue(state, reason=normalized_reason)
+            next_revision = previous_revision + 1
+            successor = self._new_state(
+                target_id=str(state["target_id"]),
+                subject=dict(state["subject"]),
+                code_hash=state.get("code_hash"),
+                code_hash_kind=str(state.get("code_hash_kind") or "unknown"),
+                monitoring_configuration=dict(state.get("monitoring_configuration") or {}),
+                monitoring_fingerprint=str(state.get("monitoring_fingerprint") or ""),
+                behavior_revision=next_revision,
+                generation_reason=normalized_reason,
+                previous_generation_id=previous_generation_id,
+            )
+            self._active[target_id] = successor
+            self._checkpoint(successor)
+            return {
+                "rotated": True,
+                "target_id": str(target_id),
+                "previous_generation_id": previous_generation_id,
+                "generation_id": str(successor["generation_id"]),
+                "behavior_revision": next_revision,
+                "reason": normalized_reason,
+                "queued": queued is not None,
+                "authority_granted": False,
+            }
 
     def cut_capture(self, target_id: str, *, reason: str = "operator-epoch-cut") -> dict[str, Any] | None:
         """Atomically close one target epoch and begin a disjoint successor."""
@@ -2854,6 +2931,9 @@ class BehaviorStatisticsRepository:
                 monitoring_fingerprint=str(state.get("monitoring_fingerprint") or ""),
                 epoch_sequence=int(state.get("epoch_sequence") or 1) + 1,
                 first_sample_sequence=int(state.get("next_sample_sequence") or 1),
+                behavior_revision=int(state.get("behavior_revision") or 0),
+                generation_reason=state.get("generation_reason"),
+                previous_generation_id=state.get("previous_generation_id"),
             )
             self._active[target_id] = successor
             self._checkpoint(successor)
@@ -2927,6 +3007,9 @@ class BehaviorStatisticsRepository:
                     monitoring_fingerprint=str(state.get("monitoring_fingerprint") or ""),
                     epoch_sequence=int(state.get("epoch_sequence") or 1) + 1,
                     first_sample_sequence=int(state.get("next_sample_sequence") or 1),
+                    behavior_revision=int(state.get("behavior_revision") or 0),
+                    generation_reason=state.get("generation_reason"),
+                    previous_generation_id=state.get("previous_generation_id"),
                 )
                 self._active[target_id] = successor
                 self._checkpoint(successor)

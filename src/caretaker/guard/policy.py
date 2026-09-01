@@ -157,6 +157,7 @@ class PeriodicInspectionPolicy:
     verify_source_hash: bool = True
     verify_runtime_fingerprints: bool = True
     compare_behavior: bool = False
+    rotate_generation_on_behavior_change: bool = False
     escalate_on_change: bool = True
 
 
@@ -385,6 +386,10 @@ def validate_guard_policy(policy: GuardPolicy) -> None:
             errors.append(f"{prefix}.periodic.verify_source_hash=False is unsupported; identity inspection always verifies source identity")
         if not periodic.verify_runtime_fingerprints:
             errors.append(f"{prefix}.periodic.verify_runtime_fingerprints=False is unsupported; runtime fingerprints are always verified")
+        if not isinstance(periodic.rotate_generation_on_behavior_change, bool):
+            errors.append(
+                f"{prefix}.periodic.rotate_generation_on_behavior_change must be a boolean"
+            )
         if not periodic.escalate_on_change:
             errors.append(f"{prefix}.periodic.escalate_on_change=False is unsupported; detected integrity changes remain signal-producing")
 
