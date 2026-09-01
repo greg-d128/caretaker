@@ -137,6 +137,12 @@ _ADAPTIVE_BACKPRESSURE_AUDIT_DETAIL_FIELDS = frozenset({
     "action", "pending_records", "sequence_start", "sequence_end",
     "incident_id", "error", "authority_granted",
 })
+_ADAPTIVE_BACKPRESSURE_INCIDENT_FIELDS = frozenset({
+    "event", "action", "batch_id", "target_id", "aggregation_scope",
+    "generation_id", "policy_fingerprint", "authority_policy_generation",
+    "authority_policy_fingerprint", "pending_records", "sequence_start",
+    "sequence_end", "error",
+})
 
 
 def _emit_adaptive_policy_transition_audit(
@@ -906,6 +912,7 @@ def _bounded_validation_audit_fields(
     *,
     allowed: frozenset[str],
     label: str,
+    allow_none: bool = False,
 ) -> dict[str, Any]:
     """Validate the scalar, allow-listed shape accepted from an application worker."""
     if not isinstance(value, Mapping):
@@ -918,7 +925,9 @@ def _bounded_validation_audit_fields(
     bounded: dict[str, Any] = {}
     for key, item in value.items():
         name = str(key)
-        if isinstance(item, str):
+        if item is None and allow_none:
+            bounded[name] = None
+        elif isinstance(item, str):
             if len(item) > 512:
                 raise ValueError(f"{label}.{name} is too long")
             bounded[name] = item
@@ -1041,21 +1050,25 @@ def _handle_adaptive_backpressure_audit_submission(
         request.get("scope"),
         allowed=_ADAPTIVE_BACKPRESSURE_AUDIT_SCOPE_FIELDS,
         label="adaptive backpressure audit scope",
+        allow_none=True,
     )
     worker_policy = _bounded_validation_audit_fields(
         request.get("policy"),
         allowed=_ADAPTIVE_BACKPRESSURE_AUDIT_POLICY_FIELDS,
         label="adaptive backpressure audit policy",
+        allow_none=True,
     )
     outcome = _bounded_validation_audit_fields(
         request.get("outcome"),
         allowed=_ADAPTIVE_BACKPRESSURE_AUDIT_OUTCOME_FIELDS,
         label="adaptive backpressure audit outcome",
+        allow_none=True,
     )
     details = _bounded_validation_audit_fields(
         request.get("details"),
         allowed=_ADAPTIVE_BACKPRESSURE_AUDIT_DETAIL_FIELDS,
         label="adaptive backpressure audit details",
+        allow_none=True,
     )
     if not isinstance(scope.get("target_id"), str) or not scope["target_id"]:
         raise ValueError("adaptive backpressure audit scope requires target_id")
@@ -1130,6 +1143,135 @@ def _handle_adaptive_backpressure_audit_submission(
         "recorded": audit_event is not None,
         "event_id": audit_event.get("event_id") if audit_event else None,
         "stream_sequence": audit_event.get("stream_sequence") if audit_event else None,
+    }
+
+
+def _handle_adaptive_backpressure_incident_submission(
+    runtime: Any,
+    capsule_store: IncidentCapsuleStore,
+    incident_by_batch: dict[str, dict[str, str]],
+    request: Mapping[str, Any],
+    credentials: tuple[int, int, int],
+    child: Any,
+) -> dict[str, Any]:
+    """Capture one policy-requested backpressure incident from the app child."""
+    if child is None or child.poll() is not None:
+        raise PermissionError("application worker is not running")
+    if credentials[0] != child.pid:
+        raise PermissionError(
+            "adaptive backpressure incident is not from the application worker"
+        )
+    context = _bounded_validation_audit_fields(
+        request.get("context"),
+        allowed=_ADAPTIVE_BACKPRESSURE_INCIDENT_FIELDS,
+        label="adaptive backpressure incident context",
+        allow_none=True,
+    )
+    if context.get("event") != "adaptive-aggregation-backpressure":
+        raise ValueError(
+            "adaptive backpressure incident context has an invalid event"
+        )
+    if context.get("action") != "INCIDENT":
+        raise ValueError(
+            "adaptive backpressure incident context has an invalid action"
+        )
+    for field in ("target_id", "batch_id", "generation_id", "policy_fingerprint"):
+        if not isinstance(context.get(field), str) or not context[field]:
+            raise ValueError(
+                f"adaptive backpressure incident context requires {field}"
+            )
+    for field in ("pending_records", "sequence_start", "sequence_end"):
+        value = context.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(
+                f"adaptive backpressure incident context requires non-negative {field}"
+            )
+    if context["sequence_end"] < context["sequence_start"]:
+        raise ValueError(
+            "adaptive backpressure incident context sequence range is invalid"
+        )
+    batch_id = context["batch_id"]
+    existing = incident_by_batch.get(batch_id)
+    if existing is not None:
+        if (
+            existing["target_id"] != context["target_id"]
+            or existing["generation_id"] != context["generation_id"]
+            or existing.get("policy_fingerprint", context["policy_fingerprint"])
+            != context["policy_fingerprint"]
+        ):
+            raise ValueError(
+                "adaptive backpressure batch_id was reused for a different context"
+            )
+        return {
+            "ok": True,
+            "accepted": True,
+            "incident_id": existing["incident_id"],
+            "capsule_id": existing["capsule_id"],
+            "incident_recorded": True,
+            "idempotent": True,
+        }
+    if len(incident_by_batch) >= 1024:
+        raise RuntimeError("adaptive backpressure incident idempotency bound is exhausted")
+
+    incident_id = uuid4()
+    capsule = capsule_store.create_placeholder(
+        incident_id,
+        run_id=runtime.run_id,
+        policy_fingerprint=runtime.snapshot.content_hash,
+        incident_state={
+            "trigger": "adaptive_aggregation_backpressure",
+            "incident_id": str(incident_id),
+            "transaction_state": "OBSERVATION_ONLY",
+            "backpressure": context,
+        },
+    )
+    capsule_payload = capsule.get("capsule")
+    if not isinstance(capsule_payload, Mapping):
+        raise RuntimeError("adaptive backpressure incident capsule is malformed")
+    capsule_id = str(capsule_payload.get("capsule_id") or "").strip()
+    if not capsule_id:
+        raise RuntimeError("adaptive backpressure incident capsule has no id")
+    incident_by_batch[batch_id] = {
+        "incident_id": str(incident_id),
+        "capsule_id": capsule_id,
+        "target_id": context["target_id"],
+        "generation_id": context["generation_id"],
+        "policy_fingerprint": context["policy_fingerprint"],
+    }
+    audit_event = runtime.audit.emit(
+        "INCIDENT_CAPTURED",
+        actor={
+            "type": "worker",
+            "id": f"pid:{credentials[0]}",
+            "uid": credentials[1],
+        },
+        scope={
+            "target_id": context["target_id"],
+            "incident_id": str(incident_id),
+            "batch_id": batch_id,
+        },
+        policy={
+            "policy_id": str(runtime.snapshot.snapshot_id),
+            "fingerprint": runtime.snapshot.content_hash,
+            "authority_generation": runtime.effective.generation,
+        },
+        outcome={"state": "CAPTURED", "authority_granted": False},
+        details={
+            "capture_level": "MINIMAL",
+            "trigger": "adaptive_aggregation_backpressure",
+            "capsule_id": capsule_id,
+            "authority_granted": False,
+        },
+        priority=EvidencePriority.IMPORTANT,
+    )
+    return {
+        "ok": True,
+        "accepted": True,
+        "incident_id": str(incident_id),
+        "capsule_id": capsule_id,
+        "incident_recorded": True,
+        "audit_recorded": audit_event is not None,
+        "idempotent": False,
     }
 
 
@@ -1440,6 +1582,7 @@ def main(argv: list[str] | None = None) -> int:
     authority_lease_holder = {
         str(lease.lease_id): lease for lease in authority.effective.runtime_leases
     }
+    adaptive_incident_by_batch: dict[str, dict[str, str]] = {}
 
     def deployment_fingerprint() -> str | None:
         layer = next(
@@ -1704,6 +1847,15 @@ def main(argv: list[str] | None = None) -> int:
         if command == "audit-adaptive-backpressure":
             return _handle_adaptive_backpressure_audit_submission(
                 runtime,
+                request,
+                credentials,
+                child_holder.get("child"),
+            )
+        if command == "adaptive-backpressure-incident":
+            return _handle_adaptive_backpressure_incident_submission(
+                runtime,
+                capsule_store,
+                adaptive_incident_by_batch,
                 request,
                 credentials,
                 child_holder.get("child"),

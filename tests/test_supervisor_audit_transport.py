@@ -5,13 +5,20 @@ from uuid import uuid4
 
 import pytest
 
-from caretaker.logging import AuditStreamError, EvidencePriority, RemoteAuditStream
+from caretaker.capsule import IncidentCapsuleStore
+from caretaker.logging import (
+    AuditStreamError,
+    EvidencePriority,
+    RemoteAuditStream,
+    RemoteIncidentCapture,
+)
 from caretaker.console_identity import ConsoleIdentityStore
 from caretaker.run import (
     _handle_console_invocation_event,
     _handle_console_identity_request,
     _emit_behavior_collection_audit,
     _handle_adaptive_backpressure_audit_submission,
+    _handle_adaptive_backpressure_incident_submission,
     _handle_validation_audit_submission,
 )
 
@@ -96,6 +103,7 @@ class _Audit:
 def _runtime(audit: _Audit):
     return SimpleNamespace(
         audit=audit,
+        run_id=uuid4(),
         snapshot=SimpleNamespace(snapshot_id=uuid4(), content_hash="sha256:audit-policy"),
         effective=SimpleNamespace(generation=9),
     )
@@ -226,6 +234,89 @@ def test_supervisor_rejects_non_application_peer_for_backpressure_audit():
         )
 
 
+def test_supervisor_captures_backpressure_incident_and_deduplicates_retry(tmp_path):
+    audit = _Audit()
+    runtime = _runtime(audit)
+    capsule_store = IncidentCapsuleStore(tmp_path)
+    incident_by_batch: dict[str, dict[str, str]] = {}
+    request = {
+        "command": "adaptive-backpressure-incident",
+        "context": {
+            "event": "adaptive-aggregation-backpressure",
+            "action": "INCIDENT",
+            "batch_id": "batch-1",
+            "target_id": "demo.target",
+            "aggregation_scope": None,
+            "generation_id": "generation-1",
+            "policy_fingerprint": "sha256:worker-policy",
+            "authority_policy_generation": 4,
+            "authority_policy_fingerprint": "sha256:worker-authority",
+            "pending_records": 4,
+            "sequence_start": 10,
+            "sequence_end": 13,
+            "error": None,
+        },
+    }
+    peer = SimpleNamespace(pid=4321, poll=lambda: None)
+
+    first = _handle_adaptive_backpressure_incident_submission(
+        runtime, capsule_store, incident_by_batch, request, (4321, 1000, 1000), peer
+    )
+    second = _handle_adaptive_backpressure_incident_submission(
+        runtime, capsule_store, incident_by_batch, request, (4321, 1000, 1000), peer
+    )
+
+    assert first["accepted"] is True
+    assert first["incident_recorded"] is True
+    assert first["idempotent"] is False
+    assert second["incident_id"] == first["incident_id"]
+    assert second["capsule_id"] == first["capsule_id"]
+    assert second["idempotent"] is True
+    assert len(capsule_store.list_summaries()) == 1
+    envelope = capsule_store.load(first["capsule_id"])
+    assert envelope["capsule"]["incident_state"]["trigger"] == (
+        "adaptive_aggregation_backpressure"
+    )
+    assert [call["event_type"] for call in audit.calls] == [
+        "INCIDENT_CAPTURED"
+    ]
+    assert audit.calls[0]["outcome"]["authority_granted"] is False
+
+
+def test_supervisor_rejects_backpressure_incident_context_reuse():
+    incident_by_batch = {
+        "batch-1": {
+            "incident_id": "incident-1",
+            "capsule_id": "capsule-1",
+            "target_id": "demo.target",
+            "generation_id": "generation-1",
+            "policy_fingerprint": "sha256:worker-policy",
+        }
+    }
+    request = {
+        "context": {
+            "event": "adaptive-aggregation-backpressure",
+            "action": "INCIDENT",
+            "batch_id": "batch-1",
+            "target_id": "other.target",
+            "generation_id": "generation-1",
+            "policy_fingerprint": "sha256:worker-policy",
+            "pending_records": 1,
+            "sequence_start": 1,
+            "sequence_end": 1,
+        }
+    }
+    with pytest.raises(ValueError, match="reused"):
+        _handle_adaptive_backpressure_incident_submission(
+            _runtime(_Audit()),
+            IncidentCapsuleStore("/tmp/caretaker-test-no-write"),
+            incident_by_batch,
+            request,
+            (4321, 1000, 1000),
+            SimpleNamespace(pid=4321, poll=lambda: None),
+        )
+
+
 def test_behavior_collection_audit_is_bounded_and_authority_free():
     audit = _Audit()
     runtime = _runtime(audit)
@@ -323,6 +414,35 @@ def test_remote_audit_stream_only_allows_allow_listed_worker_events(monkeypatch)
     assert calls[1][1]["priority"] == EvidencePriority.CRITICAL.name
     with pytest.raises(AuditStreamError, match="only VALIDATION_DECISION or ADAPTIVE_AGGREGATION_BACKPRESSURE"):
         stream.emit("POLICY_APPLIED", priority=EvidencePriority.CRITICAL)
+
+
+def test_remote_incident_capture_is_output_only_and_bounded(monkeypatch):
+    calls = []
+
+    def fake_control_request(path, request, *, timeout):
+        calls.append((path, request, timeout))
+        return {
+            "ok": True,
+            "accepted": True,
+            "incident_id": "incident-1",
+            "capsule_id": "capsule-1",
+        }
+
+    monkeypatch.setattr("caretaker.logging.ipc.control_request", fake_control_request)
+    capture = RemoteIncidentCapture("/tmp/caretaker-control.sock")
+    assert capture({"event": "adaptive-aggregation-backpressure"}) == {
+        "accepted": True,
+        "incident_id": "incident-1",
+        "capsule_id": "capsule-1",
+    }
+    assert calls[0][1] == {
+        "command": "adaptive-backpressure-incident",
+        "context": {"event": "adaptive-aggregation-backpressure"},
+    }
+
+
+def test_remote_incident_capture_without_socket_is_disabled():
+    assert RemoteIncidentCapture(None)({"event": "adaptive-aggregation-backpressure"}) is None
 
 
 def test_console_invocation_events_are_process_owned_and_authority_free():

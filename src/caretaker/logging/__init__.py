@@ -24,6 +24,7 @@ from .handler import (
     LoggingRuntime,
     LogSink,
     RemoteAuditStream,
+    RemoteIncidentCapture,
     RemoteLoggingRuntime,
     configure,
     configure_from_operator_policy,

@@ -89,6 +89,22 @@ def _configured_logging_audit_callback() -> Callable[..., Any] | None:
         return None
 
 
+def _configured_logging_incident_callback() -> Callable[..., Any] | None:
+    """Return the active supervised incident-capture callback, when present."""
+    try:
+        from .logging.handler import get_runtime
+
+        logging_runtime = get_runtime()
+        callback = getattr(logging_runtime, "incident_capture", None)
+        if not callable(callback):
+            return None
+        if hasattr(callback, "socket_path") and not getattr(callback, "socket_path"):
+            return None
+        return callback
+    except Exception:
+        return None
+
+
 def utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -1542,6 +1558,9 @@ class _AdaptiveController:
             if supervisor_socket
             else SupervisorAdaptiveAggregationStore(self._aggregation_root())
         )
+        incident_callback = self.backpressure_incident_callback
+        if incident_callback is None:
+            incident_callback = _configured_logging_incident_callback()
         audit_callback = self.backpressure_audit_callback
         if audit_callback is None:
             audit_callback = _configured_logging_audit_callback()
@@ -1552,7 +1571,7 @@ class _AdaptiveController:
             flush_after_observations=self.policy.aggregation.flush_after_observations,
             flush_interval_seconds=self.policy.aggregation.flush_interval_seconds,
             backpressure_action=self.policy.aggregation.backpressure_action,
-            backpressure_incident_callback=self.backpressure_incident_callback,
+            backpressure_incident_callback=incident_callback,
             backpressure_audit_callback=audit_callback,
             **context,
         )

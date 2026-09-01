@@ -861,7 +861,14 @@ replaces the policy envelope with current supervisor context, and forces
 critical priority. When no explicit callback is supplied, the active enabled
 logging audit emitter is used automatically; an unconfigured or disabled audit
 stream leaves the path local and least-friction. Parallel stores and
-transport-level throttling remain future integrations.
+transport-level throttling remain future integrations. In a supervised run,
+the configured logging runtime now supplies a default output-only incident
+callback when no explicit callback is present. The supervisor validates that
+request, creates a minimal observation-only Incident Capsule, and records
+the important `INCIDENT_CAPTURED` event; disabled capsule capture and
+unsupervised runs retain
+the least-friction unavailable behavior. This does not replace
+deployment-specific incident lifecycle integration.
 The supervisor also records delayed, context-bound threshold proposals as
 proposal-only evidence. An authenticated control-plane operation now applies
 an approved, effective proposal through a target-scoped runtime authority

@@ -31,6 +31,7 @@ from caretaker.adaptive import (
     validate_lightweight_policy,
 )
 from caretaker.authority import get_authority_runtime_context
+from caretaker.logging import RemoteIncidentCapture
 
 
 def _batch(*, batch_id: str, worker_id: str = "worker-a", generation_id: str = "generation-a"):
@@ -734,6 +735,81 @@ def test_lightweight_uses_active_logging_audit_by_default(
     batcher = wrapped.__caretaker_adaptive__._aggregation_batcher
     assert batcher is not None
     assert batcher.backpressure_audit_callback is audit
+
+
+def test_lightweight_uses_supervised_incident_capture_by_default(
+    monkeypatch, tmp_path: Path
+) -> None:
+    capture = RemoteIncidentCapture("/tmp/caretaker-control.sock")
+    monkeypatch.setattr(
+        "caretaker.logging.handler.get_runtime",
+        lambda: type("_Runtime", (), {"incident_capture": capture})(),
+    )
+    wrapped = lightweight(
+        policy=LightweightPolicy(
+            aggregation=AdaptiveAggregationPolicy(
+                enabled=True,
+                backpressure_action=AdaptiveAggregationBackpressureAction.INCIDENT,
+            )
+        ),
+        target_id="example.adaptive.default-incident",
+        state_directory=tmp_path,
+    )(lambda: "ok")
+
+    batcher = wrapped.__caretaker_adaptive__._aggregation_batcher
+    assert batcher is not None
+    assert batcher.backpressure_incident_callback is capture
+
+
+def test_lightweight_explicit_backpressure_incident_callback_wins(
+    monkeypatch, tmp_path: Path
+) -> None:
+    explicit = lambda *_args, **_kwargs: None
+    active = RemoteIncidentCapture("/tmp/caretaker-control.sock")
+    monkeypatch.setattr(
+        "caretaker.logging.handler.get_runtime",
+        lambda: type("_Runtime", (), {"incident_capture": active})(),
+    )
+    wrapped = lightweight(
+        policy=LightweightPolicy(
+            aggregation=AdaptiveAggregationPolicy(
+                enabled=True,
+                backpressure_action=AdaptiveAggregationBackpressureAction.INCIDENT,
+            )
+        ),
+        target_id="example.adaptive.explicit-incident",
+        state_directory=tmp_path,
+        backpressure_incident_callback=explicit,
+    )(lambda: "ok")
+
+    batcher = wrapped.__caretaker_adaptive__._aggregation_batcher
+    assert batcher is not None
+    assert batcher.backpressure_incident_callback is explicit
+
+
+def test_lightweight_does_not_enable_incident_capture_without_supervisor(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "caretaker.logging.handler.get_runtime",
+        lambda: type(
+            "_Runtime", (), {"incident_capture": RemoteIncidentCapture(None)}
+        )(),
+    )
+    wrapped = lightweight(
+        policy=LightweightPolicy(
+            aggregation=AdaptiveAggregationPolicy(
+                enabled=True,
+                backpressure_action=AdaptiveAggregationBackpressureAction.INCIDENT,
+            )
+        ),
+        target_id="example.adaptive.no-incident-capture",
+        state_directory=tmp_path,
+    )(lambda: "ok")
+
+    batcher = wrapped.__caretaker_adaptive__._aggregation_batcher
+    assert batcher is not None
+    assert batcher.backpressure_incident_callback is None
 
 
 def test_lightweight_explicit_backpressure_audit_callback_wins(

@@ -200,6 +200,17 @@ priority. The path is output-only and rejects unknown or nested fields and
 any authority-granting claim. Parallel stores and transport-level throttling
 remain future integrations.
 
+In a supervised run, when no explicit incident callback is supplied, the
+configured logging runtime provides a `RemoteIncidentCapture` callback. It
+sends only the bounded incident context through the authenticated control
+socket. The supervisor binds the request to the live application PID, creates
+a minimal Incident Capsule placeholder, emits the important
+`INCIDENT_CAPTURED` audit event, and returns the capsule and incident IDs. The
+capsule remains observation-only and grants no authority. If Incident Capsule
+capture is disabled by policy, or the run is unsupervised or has no configured
+supervisor socket, no implicit incident capture is enabled and the existing
+explicit-callback/unavailable behavior remains in effect.
+
 The supervisor can also persist a delayed `ADAPTIVE_THRESHOLD_PROPOSAL` for a
 bounded set of threshold fields. The proposal records the requested changes,
 requester, reason, effective time, expiry, and full context binding. It is

@@ -120,11 +120,16 @@ The aggregation policy also includes `backpressure_action`, which defaults to
 `RETAIN` for least-loss behavior and may be set to `DROP`, `REDUCE`, or
 `INCIDENT`. These choices control only bounded worker evidence handling when
 submission is unavailable; they do not change application results, policy, or
-authority. `INCIDENT` requires an application-owned
+authority. `INCIDENT` uses an application-owned
 `backpressure_incident_callback` and retains the pending batch after reporting
 the bounded incident context. A callback must explicitly return an accepted
 incident identifier; callback absence, rejection, or failure is reported and
-does not discard the evidence. An optional
+does not discard the evidence. In a supervised run, the configured logging
+runtime supplies this callback by default: the supervisor validates the
+output-only request, creates a minimal Incident Capsule, and records an
+important `INCIDENT_CAPTURED` audit event. This implicit path is unavailable
+when capsule capture is disabled or no supervisor control socket is active;
+an explicit callback still takes precedence. An optional
 `backpressure_audit_callback` receives a bounded output-only audit envelope;
 the callback is not a command channel and cannot grant authority. When
 Caretaker logging is configured, its enabled audit emitter supplies the

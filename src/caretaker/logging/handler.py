@@ -686,6 +686,49 @@ class RemoteAuditStream:
         return {"event_id": event_id, "stream_sequence": stream_sequence}
 
 
+class RemoteIncidentCapture:
+    """Output-only callback for creating a bounded supervised incident."""
+
+    def __init__(self, socket_path: str | Path | None, *, timeout: float = 5.0) -> None:
+        self.socket_path = str(socket_path) if socket_path else None
+        self.timeout = timeout
+
+    def __call__(self, context: Mapping[str, Any]) -> dict[str, Any] | None:
+        if not self.socket_path:
+            return None
+        if not isinstance(context, Mapping):
+            raise AuditStreamError("supervised incident context must be an object")
+        from .ipc import control_request
+
+        try:
+            response = control_request(
+                self.socket_path,
+                {"command": "adaptive-backpressure-incident", "context": dict(context)},
+                timeout=self.timeout,
+            )
+        except OSError as exc:
+            raise AuditStreamError(
+                "supervisor incident capture transport is unavailable"
+            ) from exc
+        if not isinstance(response, Mapping) or response.get("ok") is not True:
+            error = (
+                response.get("error", "supervisor rejected incident capture")
+                if isinstance(response, Mapping)
+                else "invalid supervisor incident capture response"
+            )
+            raise AuditStreamError(str(error)[:2048])
+        if response.get("accepted") is not True:
+            raise AuditStreamError("supervisor did not accept incident capture")
+        incident_id = response.get("incident_id")
+        if not isinstance(incident_id, str) or not incident_id:
+            raise AuditStreamError("supervisor returned an invalid incident id")
+        return {
+            "accepted": True,
+            "incident_id": incident_id,
+            "capsule_id": response.get("capsule_id"),
+        }
+
+
 
 def json_bytes(value: Any) -> bytes:
     import json
@@ -771,6 +814,9 @@ class RemoteLoggingRuntime:
         self._lock = threading.RLock()
         self.client = SocketLogClient(socket_path, codec=__import__("caretaker.logging.records", fromlist=["TLVLogCodec"]).TLVLogCodec(maximum_record_bytes=policy.codec.maximum_record_bytes))
         self.audit = RemoteAuditStream(
+            os.environ.get("CARETAKER_SUPERVISOR_CONTROL_SOCKET")
+        )
+        self.incident_capture = RemoteIncidentCapture(
             os.environ.get("CARETAKER_SUPERVISOR_CONTROL_SOCKET")
         )
         self.supervised = True
