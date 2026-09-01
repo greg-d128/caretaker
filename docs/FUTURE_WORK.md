@@ -2135,9 +2135,9 @@ Do not add a universal transaction-everything framework.
 
 #### 6. Define durable schema, migration, and retention contracts
 
-**Status: Contract and bounded Repair-store dry-run projection implemented in
-development tree; family-specific migration and archive/compaction operations
-remain future work.**
+**Status: Contract, bounded Repair-store dry-run projection, and resumable
+archive-only operation implemented in development tree; family-specific
+migration, compaction, and deletion operations remain future work.**
 
 **Locations:** store schema metadata, domain records, capsule/evidence/
 integrity loaders, `repair_recovery.py`, and logging/attachment retention.

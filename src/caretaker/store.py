@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from .adaptive import lightweight_dependency
 import dataclasses
+import gzip
+import hashlib
 import json
+import os
 import sqlite3
 from contextlib import closing
 from collections import defaultdict, deque
@@ -50,6 +53,7 @@ from .repair_rollout import (
 
 REPAIR_STORE_SCHEMA_VERSION = 9
 REPAIR_RETENTION_PLAN_SCHEMA_VERSION = 1
+REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION = 1
 
 _RETENTION_PROTECTED_TABLES = frozenset({
     "incidents",
@@ -1294,6 +1298,226 @@ class SQLiteRepairStore:
             "preserved_records": preserved,
         }
 
+    def retention_archive(
+        self,
+        plan: Mapping[str, Any],
+        *,
+        archive_path: str | Path,
+        maximum_records: int = 1000,
+    ) -> Mapping[str, Any]:
+        """Copy a complete dry-run plan into a resumable compressed archive.
+
+        The source store is never changed.  A plan must be complete and is
+        rechecked against the current rows before each record is copied.  The
+        uncompressed ``.partial.jsonl`` sidecar is deliberately retained while
+        work is incomplete, so an interrupted call can resume without
+        duplicating records.  A final archive is created with an atomic rename.
+        Deletion and compaction are separate, policy-owned operations.
+        """
+
+        if not isinstance(plan, Mapping):
+            raise TypeError("retention plan must be a mapping")
+        if plan.get("schema_version") != REPAIR_RETENTION_PLAN_SCHEMA_VERSION:
+            raise ValueError("unsupported Caretaker retention plan schema version")
+        if plan.get("store_schema_version") != REPAIR_STORE_SCHEMA_VERSION:
+            raise ValueError("retention plan targets an unsupported store schema version")
+        if plan.get("truncated"):
+            raise ValueError("a truncated retention plan cannot be archived")
+        if (
+            isinstance(maximum_records, bool)
+            or not isinstance(maximum_records, int)
+            or maximum_records <= 0
+        ):
+            raise ValueError("maximum_records must be a positive integer")
+        try:
+            cutoff = datetime.fromisoformat(str(plan["older_than"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("retention plan cutoff is invalid") from exc
+        if cutoff.tzinfo is None or cutoff.utcoffset() is None:
+            raise ValueError("retention plan cutoff must be timezone-aware")
+        candidates = plan.get("candidate_records")
+        if isinstance(candidates, (str, bytes)) or not isinstance(candidates, Sequence):
+            raise ValueError("retention plan candidates must be a sequence")
+        normalized_candidates: list[dict[str, Any]] = []
+        candidate_keys: set[tuple[str, str]] = set()
+        for item in candidates:
+            if not isinstance(item, Mapping):
+                raise ValueError("retention plan candidate is not a mapping")
+            family = item.get("family")
+            record_id = item.get("record_id")
+            if not isinstance(family, str) or family not in self._TABLES:
+                raise ValueError("retention plan contains an unknown family")
+            if not isinstance(record_id, str) or not record_id:
+                raise ValueError("retention plan contains an invalid record ID")
+            key = (family, record_id)
+            if key in candidate_keys:
+                raise ValueError("retention plan contains a duplicate record")
+            candidate_keys.add(key)
+            normalized_candidates.append({
+                "family": family,
+                "record_id": record_id,
+                "target_id": item.get("target_id"),
+                "created_at": item.get("created_at"),
+            })
+
+        destination = Path(archive_path)
+        if destination.resolve() == self.path.resolve():
+            raise ValueError("retention archive cannot overwrite the repair store")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        partial = destination.with_name(destination.name + ".partial.jsonl")
+        plan_sha256 = hashlib.sha256(
+            _canonical_json_bytes({
+                "schema_version": plan["schema_version"],
+                "store_schema_version": plan["store_schema_version"],
+                "older_than": plan["older_than"],
+                "families": plan.get("families", []),
+                "candidate_records": normalized_candidates,
+            })
+        ).hexdigest()
+
+        if destination.exists():
+            summary = _read_retention_archive(destination)
+            if summary["plan_sha256"] != plan_sha256:
+                raise ValueError("existing retention archive belongs to a different plan")
+            return {
+                "schema_version": REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION,
+                "archive_path": str(destination),
+                "partial": False,
+                "complete": True,
+                "plan_sha256": plan_sha256,
+                "archived_records": summary["record_count"],
+                "remaining_records": 0,
+                "resumed_records": summary["record_count"],
+            }
+
+        header = {
+            "kind": "retention_archive_header",
+            "schema_version": REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION,
+            "store_schema_version": REPAIR_STORE_SCHEMA_VERSION,
+            "format": "caretaker-repair-retention-jsonl-v1",
+            "plan_sha256": plan_sha256,
+        }
+        existing: dict[tuple[str, str], dict[str, Any]] = {}
+        if partial.exists():
+            existing_header, existing = _read_retention_partial(partial)
+            if existing_header != header:
+                raise ValueError("existing retention partial belongs to a different plan")
+        else:
+            partial.touch(mode=0o600)
+            partial.chmod(0o600)
+            with partial.open("ab") as stream:
+                stream.write(_canonical_json_bytes(header) + b"\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+
+        pending = [
+            item for item in normalized_candidates
+            if (item["family"], item["record_id"]) not in existing
+        ]
+        if len(pending) > maximum_records:
+            to_archive = pending[:maximum_records]
+        else:
+            to_archive = pending
+        new_records: list[dict[str, Any]] = []
+        with self._lock, closing(self._connect()) as connection:
+            for item in to_archive:
+                row = connection.execute(
+                    f"SELECT target_id, created_at, payload FROM {item['family']} WHERE record_id = ?",
+                    (item["record_id"],),
+                ).fetchone()
+                if row is None or row[0] != item["target_id"] or row[1] != item["created_at"]:
+                    raise ValueError(
+                        "retention plan is stale for "
+                        f"{item['family']}/{item['record_id']}"
+                    )
+                try:
+                    created_at = datetime.fromisoformat(row[1])
+                    payload = json.loads(row[2])
+                except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                    raise ValueError("retention plan row is no longer valid JSON") from exc
+                if (
+                    created_at.tzinfo is None
+                    or created_at.utcoffset() is None
+                    or created_at >= cutoff
+                    or _retention_preservation_reason(item["family"], payload) is not None
+                ):
+                    raise ValueError(
+                        "retention plan row is no longer eligible for archival: "
+                        f"{item['family']}/{item['record_id']}"
+                    )
+                record = {
+                    "kind": "retention_archive_record",
+                    "family": item["family"],
+                    "record_id": item["record_id"],
+                    "target_id": row[0],
+                    "created_at": row[1],
+                    "payload": payload,
+                }
+                record["record_sha256"] = hashlib.sha256(
+                    _canonical_json_bytes(record)
+                ).hexdigest()
+                new_records.append(record)
+
+        if new_records:
+            with partial.open("ab") as stream:
+                for record in new_records:
+                    stream.write(_canonical_json_bytes(record) + b"\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            existing.update({
+                (record["family"], record["record_id"]): record
+                for record in new_records
+            })
+
+        remaining = len(normalized_candidates) - len(existing)
+        if remaining:
+            return {
+                "schema_version": REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION,
+                "archive_path": str(destination),
+                "partial_path": str(partial),
+                "partial": True,
+                "complete": False,
+                "plan_sha256": plan_sha256,
+                "archived_records": len(existing),
+                "remaining_records": remaining,
+                "resumed_records": len(existing) - len(new_records),
+            }
+
+        records_digest = hashlib.sha256()
+        with partial.open("rb") as stream:
+            lines = stream.readlines()
+        for line in lines[1:]:
+            record = json.loads(line)
+            if record.get("kind") == "retention_archive_record":
+                records_digest.update(line)
+        footer = {
+            "kind": "retention_archive_footer",
+            "schema_version": REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION,
+            "record_count": len(existing),
+            "records_sha256": records_digest.hexdigest(),
+        }
+        with partial.open("ab") as stream:
+            stream.write(_canonical_json_bytes(footer) + b"\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary = destination.with_name(destination.name + ".tmp")
+        with partial.open("rb") as source, gzip.open(temporary, "wb") as compressed:
+            while chunk := source.read(1024 * 1024):
+                compressed.write(chunk)
+        temporary.chmod(0o600)
+        os.replace(temporary, destination)
+        partial.unlink()
+        return {
+            "schema_version": REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION,
+            "archive_path": str(destination),
+            "partial": False,
+            "complete": True,
+            "plan_sha256": plan_sha256,
+            "archived_records": len(existing),
+            "remaining_records": 0,
+            "resumed_records": len(existing) - len(new_records),
+        }
+
     def query_records(
         self,
         table: str,
@@ -1321,6 +1545,84 @@ class SQLiteRepairStore:
                 "SELECT value FROM caretaker_store_metadata WHERE key='schema_version'"
             ).fetchone()
         return int(row[0]) if row else 0
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        _jsonable(value),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _read_retention_partial(
+    path: Path,
+) -> tuple[dict[str, Any], dict[tuple[str, str], dict[str, Any]]]:
+    raw = path.read_bytes()
+    if not raw.endswith(b"\n"):
+        last_newline = raw.rfind(b"\n")
+        if last_newline < 0:
+            raise ValueError("retention partial has no complete header")
+        raw = raw[: last_newline + 1]
+        path.write_bytes(raw)
+    try:
+        lines = [json.loads(line) for line in raw.splitlines()]
+    except json.JSONDecodeError as exc:
+        raise ValueError("retention partial contains invalid JSON") from exc
+    if not lines or lines[0].get("kind") != "retention_archive_header":
+        raise ValueError("retention partial header is missing")
+    records: dict[tuple[str, str], dict[str, Any]] = {}
+    for item in lines[1:]:
+        if item.get("kind") != "retention_archive_record":
+            raise ValueError("retention partial contains an unexpected record")
+        family = item.get("family")
+        record_id = item.get("record_id")
+        if not isinstance(family, str) or not isinstance(record_id, str):
+            raise ValueError("retention partial record identity is invalid")
+        record_sha256 = item.get("record_sha256")
+        unsigned = dict(item)
+        unsigned.pop("record_sha256", None)
+        if record_sha256 != hashlib.sha256(_canonical_json_bytes(unsigned)).hexdigest():
+            raise ValueError("retention partial record integrity check failed")
+        key = (family, record_id)
+        if key in records:
+            raise ValueError("retention partial contains a duplicate record")
+        records[key] = item
+    return lines[0], records
+
+
+def _read_retention_archive(path: Path) -> dict[str, Any]:
+    try:
+        with gzip.open(path, "rb") as stream:
+            raw = stream.read()
+    except (OSError, EOFError) as exc:
+        raise ValueError("retention archive cannot be read") from exc
+    try:
+        lines = [json.loads(line) for line in raw.splitlines()]
+    except json.JSONDecodeError as exc:
+        raise ValueError("retention archive contains invalid JSON") from exc
+    if len(lines) < 2 or lines[0].get("kind") != "retention_archive_header":
+        raise ValueError("retention archive header is missing")
+    footer = lines[-1]
+    if footer.get("kind") != "retention_archive_footer":
+        raise ValueError("retention archive footer is missing")
+    digest = hashlib.sha256()
+    count = 0
+    for item, line in zip(lines[1:-1], raw.splitlines()[1:-1]):
+        if item.get("kind") != "retention_archive_record":
+            raise ValueError("retention archive contains an unexpected record")
+        record_sha256 = item.get("record_sha256")
+        unsigned = dict(item)
+        unsigned.pop("record_sha256", None)
+        if record_sha256 != hashlib.sha256(_canonical_json_bytes(unsigned)).hexdigest():
+            raise ValueError("retention archive record integrity check failed")
+        digest.update(line + b"\n")
+        count += 1
+    if footer.get("record_count") != count or footer.get("records_sha256") != digest.hexdigest():
+        raise ValueError("retention archive footer integrity check failed")
+    return {"plan_sha256": lines[0].get("plan_sha256"), "record_count": count}
 
 
 def _record_time(record: object) -> datetime:

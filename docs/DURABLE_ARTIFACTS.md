@@ -68,5 +68,9 @@ universal migration or deletion framework is implied by this contract.
 projection for the Repair store. It reports ordinary records eligible for a
 caller-supplied cutoff separately from incident-linked, signed, and protected
 families, and reports when its result was truncated. It never deletes or
-rewrites records. Family-owned archive/compaction and resumable deletion remain
-future work.
+rewrites records. `SQLiteRepairStore.retention_archive()` consumes a complete
+plan and copies its candidates to a canonical JSONL archive compressed with
+gzip. The archive is created by atomic rename; an incomplete invocation leaves
+an integrity-checked `.partial.jsonl` sidecar that can be resumed with the same
+plan. It rechecks each source row before copying and never deletes source
+records. Family-owned compaction and resumable deletion remain future work.

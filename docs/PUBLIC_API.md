@@ -47,6 +47,10 @@ surface:
   communication-draft policy helpers;
 - `RuntimeJobStore`, `RuntimeJobStoreError`, and `SQLiteRuntimeJobStore` for
   bounded restart-visible control-plane job summaries;
+- `SQLiteRepairStore.retention_dry_run()` and
+  `SQLiteRepairStore.retention_archive()` for bounded, preservation-aware
+  Repair-store retention planning and archive-only execution. These operations
+  do not delete source records or provide an authorization boundary;
 - rollout, recovery, worker authority/acceptance, comparison-worker evidence,
   post-mortem, and packet transport types and helpers;
 - integrity verification, signed publication monitoring, isolated replay, and

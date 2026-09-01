@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import gzip
 import json
 import sqlite3
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -77,3 +79,87 @@ def test_retention_dry_run_is_bounded_and_validates_scope(tmp_path) -> None:
         store.retention_dry_run(
             older_than=datetime.now(timezone.utc), families=("not-a-table",)
         )
+
+
+def test_retention_archive_is_compressed_idempotent_and_does_not_delete(tmp_path) -> None:
+    path = tmp_path / "repair.sqlite"
+    store = SQLiteRepairStore(path)
+    old = datetime.now(timezone.utc) - timedelta(days=2)
+    _insert_record(path, "candidates", target_id="archive.target", payload={"kind": "derived"}, created_at=old)
+    plan = store.retention_dry_run(
+        older_than=datetime.now(timezone.utc) - timedelta(days=1),
+        families=("candidates",),
+    )
+    archive_path = tmp_path / "archives" / "repair.jsonl.gz"
+
+    result = store.retention_archive(plan, archive_path=archive_path)
+
+    assert result["complete"] is True
+    assert result["partial"] is False
+    assert archive_path.exists()
+    assert not (tmp_path / "archives" / "repair.jsonl.gz.partial.jsonl").exists()
+    with gzip.open(archive_path, "rt", encoding="utf-8") as stream:
+        lines = [json.loads(line) for line in stream]
+    assert lines[0]["kind"] == "retention_archive_header"
+    assert lines[1]["kind"] == "retention_archive_record"
+    assert lines[1]["payload"] == {"kind": "derived"}
+    assert lines[-1]["kind"] == "retention_archive_footer"
+    assert store.query_records("candidates", limit=100)[0]["kind"] == "derived"
+
+    repeated = store.retention_archive(plan, archive_path=archive_path)
+    assert repeated["complete"] is True
+    assert repeated["archived_records"] == 1
+
+
+def test_retention_archive_resumes_from_bounded_partial_and_rechecks_rows(tmp_path) -> None:
+    path = tmp_path / "repair.sqlite"
+    store = SQLiteRepairStore(path)
+    old = datetime.now(timezone.utc) - timedelta(days=2)
+    for target in ("first.target", "second.target"):
+        _insert_record(path, "candidates", target_id=target, payload={"target": target}, created_at=old)
+    plan = store.retention_dry_run(
+        older_than=datetime.now(timezone.utc) - timedelta(days=1),
+        families=("candidates",),
+    )
+    archive_path = tmp_path / "repair.jsonl.gz"
+
+    first = store.retention_archive(plan, archive_path=archive_path, maximum_records=1)
+    assert first["complete"] is False
+    assert first["archived_records"] == 1
+    assert first["remaining_records"] == 1
+    assert Path(first["partial_path"]).exists()
+
+    second = store.retention_archive(plan, archive_path=archive_path, maximum_records=1)
+    assert second["complete"] is True
+    assert second["archived_records"] == 2
+    assert second["resumed_records"] == 1
+
+    with gzip.open(archive_path, "rt", encoding="utf-8") as stream:
+        records = [json.loads(line) for line in stream]
+    assert [item["kind"] for item in records].count("retention_archive_record") == 2
+
+
+def test_retention_archive_rejects_truncated_or_stale_plan(tmp_path) -> None:
+    path = tmp_path / "repair.sqlite"
+    store = SQLiteRepairStore(path)
+    old = datetime.now(timezone.utc) - timedelta(days=2)
+    _insert_record(path, "candidates", target_id="stale.target", payload={}, created_at=old)
+    plan = store.retention_dry_run(
+        older_than=datetime.now(timezone.utc) - timedelta(days=1),
+        families=("candidates",),
+    )
+    archive_path = tmp_path / "repair.jsonl.gz"
+
+    truncated = dict(plan)
+    truncated["truncated"] = True
+    with pytest.raises(ValueError, match="truncated"):
+        store.retention_archive(truncated, archive_path=archive_path)
+
+    with closing(sqlite3.connect(path)) as connection:
+        connection.execute(
+            "UPDATE candidates SET target_id = ? WHERE target_id = ?",
+            ("changed.target", "stale.target"),
+        )
+        connection.commit()
+    with pytest.raises(ValueError, match="stale"):
+        store.retention_archive(plan, archive_path=archive_path)

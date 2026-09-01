@@ -21,7 +21,7 @@ Commands: PYTHONPATH=src venv/bin/python -m pytest -q; venv/bin/python -m build;
 
 Observed result
 ---------------
-- 967 passed;
+- 970 passed;
 - no unexpected test failures;
 - source, test, example, and script compilation succeeded.
 
