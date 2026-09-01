@@ -12,7 +12,7 @@ import sqlite3
 import threading
 import time
 import base64
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
@@ -30,7 +30,8 @@ from .signing import (
 
 AUDIT_SCHEMA_VERSION = 1
 AUDIT_DELIVERY_QUEUE_SCHEMA_VERSION = 1
-AUDIT_DELIVERY_AUTH_SCHEMA_VERSION = 1
+AUDIT_DELIVERY_AUTH_SCHEMA_VERSION = 2
+AUDIT_DELIVERY_AUTH_LEGACY_SCHEMA_VERSION = 1
 AUDIT_DELIVERY_AUTH_MAX_BYTES = 64 * 1024
 AUDIT_SEGMENT_MANIFEST_SCHEMA_VERSION = 1
 _EVENT_TYPE = re.compile(r"^[A-Z][A-Z0-9_]{2,63}$")
@@ -434,15 +435,177 @@ def _audit_delivery_auth_payload(
     delivery_id: str,
     record_sha256: str,
     record_base64: str,
+    key_id: str | None = None,
+    schema_version: int = AUDIT_DELIVERY_AUTH_SCHEMA_VERSION,
 ) -> dict[str, Any]:
-    return {
-        "schema_version": AUDIT_DELIVERY_AUTH_SCHEMA_VERSION,
+    payload: dict[str, Any] = {
+        "schema_version": schema_version,
         "algorithm": "HMAC-SHA256",
-        "sender_id": sender_id,
         "delivery_id": delivery_id,
         "record_sha256": record_sha256,
         "record_base64": record_base64,
+        "sender_id": sender_id,
     }
+    if key_id is not None:
+        payload["key_id"] = key_id
+    return payload
+
+
+def _authenticated_envelope_key_id(
+    value: bytes | bytearray | str | Mapping[str, Any],
+) -> str | None:
+    try:
+        if isinstance(value, Mapping):
+            envelope = value
+        elif isinstance(value, (bytes, bytearray)):
+            envelope = json.loads(bytes(value).decode("utf-8"))
+        elif isinstance(value, str):
+            envelope = json.loads(value)
+        else:
+            return None
+        if not isinstance(envelope, Mapping):
+            return None
+        if envelope.get("schema_version") == AUDIT_DELIVERY_AUTH_LEGACY_SCHEMA_VERSION:
+            return "default"
+        key_id = envelope.get("key_id")
+        return key_id if isinstance(key_id, str) and key_id.strip() else None
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
+class AuthenticatedAuditKeyring:
+    """In-memory signing/verification key lifecycle for audit delivery.
+
+    Key material is supplied by the deployment and never persisted by this
+    class. Rotation adds a new key and can make it active; revocation removes
+    a key from both signing and verification. A receiver can therefore reject
+    retries signed by a revoked key while retaining accepted delivery IDs.
+    """
+
+    def __init__(
+        self,
+        keys: Mapping[str, bytes],
+        *,
+        active_key_id: str,
+        revoked_key_ids: Iterable[str] = (),
+    ) -> None:
+        if not isinstance(keys, Mapping) or not keys:
+            raise AuditStreamError("authenticated audit keyring requires at least one key")
+        self._keys: dict[str, bytes] = {}
+        for key_id, secret in keys.items():
+            self._validate_key_id(key_id)
+            _audit_delivery_secret(secret)
+            self._keys[str(key_id)] = secret
+        self._revoked = {str(value) for value in revoked_key_ids}
+        if not self._revoked.issubset(self._keys):
+            raise AuditStreamError("authenticated audit keyring contains an unknown revoked key")
+        self._validate_key_id(active_key_id)
+        if active_key_id not in self._keys or active_key_id in self._revoked:
+            raise AuditStreamError("authenticated audit keyring active key is unavailable")
+        self._active_key_id = str(active_key_id)
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def _validate_key_id(key_id: str) -> None:
+        if not isinstance(key_id, str) or not key_id.strip() or len(key_id) > 128:
+            raise AuditStreamError("authenticated audit key_id is invalid")
+
+    def add_key(self, key_id: str, secret: bytes, *, make_active: bool = False) -> None:
+        self._validate_key_id(key_id)
+        _audit_delivery_secret(secret)
+        with self._lock:
+            self._keys[key_id] = secret
+            self._revoked.discard(key_id)
+            if make_active:
+                self._active_key_id = key_id
+
+    def set_active(self, key_id: str) -> None:
+        with self._lock:
+            self._validate_key_id(key_id)
+            if key_id not in self._keys or key_id in self._revoked:
+                raise AuditStreamError("authenticated audit key is unavailable")
+            self._active_key_id = key_id
+
+    def revoke(self, key_id: str) -> None:
+        with self._lock:
+            self._validate_key_id(key_id)
+            if key_id not in self._keys:
+                raise AuditStreamError("authenticated audit key is unknown")
+            if key_id == self._active_key_id:
+                raise AuditStreamError("authenticated audit active key must be rotated before revocation")
+            self._revoked.add(key_id)
+
+    def _signing_key(self) -> tuple[str, bytes]:
+        with self._lock:
+            if self._active_key_id in self._revoked:
+                raise AuditStreamError("authenticated audit active key is revoked")
+            return self._active_key_id, self._keys[self._active_key_id]
+
+    def _verification_key(self, key_id: str) -> bytes | None:
+        with self._lock:
+            if key_id in self._revoked:
+                return None
+            return self._keys.get(key_id)
+
+    def sign_record(self, record: bytes, *, sender_id: str) -> bytes:
+        key_id, secret = self._signing_key()
+        return serialize_authenticated_audit_record(
+            record, secret, sender_id=sender_id, key_id=key_id
+        )
+
+    def verify_record(
+        self,
+        value: bytes | bytearray | str | Mapping[str, Any],
+        *,
+        sender_id: str | None = None,
+    ) -> dict[str, Any]:
+        key_id = _authenticated_envelope_key_id(value)
+        if key_id is None:
+            return {"valid": False, "failures": ("authenticated audit key_id is missing",)}
+        secret = self._verification_key(key_id)
+        if secret is None:
+            return {"valid": False, "failures": ("authenticated audit key_id is revoked or unknown",)}
+        return verify_authenticated_audit_record(
+            value, secret, sender_id=sender_id, key_id=key_id
+        )
+
+    def acknowledgement(
+        self,
+        *,
+        delivery_id: str,
+        record_sha256: str,
+        key_id: str,
+        acknowledged: bool = True,
+    ) -> dict[str, Any]:
+        secret = self._verification_key(key_id)
+        if secret is None:
+            raise AuditStreamError("authenticated audit acknowledgement key is unavailable")
+        return create_authenticated_audit_acknowledgement(
+            delivery_id=delivery_id,
+            record_sha256=record_sha256,
+            secret=secret,
+            key_id=key_id,
+            acknowledged=acknowledged,
+        )
+
+    def verify_acknowledgement(
+        self,
+        acknowledgement: Mapping[str, Any],
+        *,
+        delivery_id: str,
+        record_sha256: str,
+        key_id: str,
+    ) -> bool:
+        secret = self._verification_key(key_id)
+        if secret is None:
+            return False
+        return verify_authenticated_audit_acknowledgement(
+            acknowledgement,
+            secret,
+            delivery_id=delivery_id,
+            record_sha256=record_sha256,
+            key_id=key_id,
+        )
 
 
 def serialize_authenticated_audit_record(
@@ -450,6 +613,7 @@ def serialize_authenticated_audit_record(
     secret: bytes,
     *,
     sender_id: str,
+    key_id: str = "default",
 ) -> bytes:
     """Create a signed, replay-identifiable audit delivery envelope.
 
@@ -458,6 +622,7 @@ def serialize_authenticated_audit_record(
     acknowledge a retry idempotently while rejecting a different record.
     """
     _audit_delivery_secret(secret)
+    AuthenticatedAuditKeyring._validate_key_id(key_id)
     if not isinstance(record, bytes) or not record.endswith(b"\n"):
         raise AuditStreamError("authenticated audit record must be newline terminated bytes")
     if len(record) > AUDIT_DELIVERY_AUTH_MAX_BYTES:
@@ -474,6 +639,7 @@ def serialize_authenticated_audit_record(
         delivery_id=record_sha256,
         record_sha256=record_sha256,
         record_base64=record_base64,
+        key_id=key_id,
     )
     envelope = {
         **payload,
@@ -492,6 +658,7 @@ def verify_authenticated_audit_record(
     secret: bytes,
     *,
     sender_id: str | None = None,
+    key_id: str | None = None,
 ) -> dict[str, Any]:
     """Verify an authenticated audit envelope without executing its record."""
     _audit_delivery_secret(secret)
@@ -510,7 +677,7 @@ def verify_authenticated_audit_record(
         envelope = json.loads(encoded.decode("utf-8"))
         if not isinstance(envelope, Mapping):
             raise ValueError("authenticated audit envelope must be an object")
-        expected_fields = {
+        legacy_fields = {
             "schema_version",
             "algorithm",
             "sender_id",
@@ -519,10 +686,24 @@ def verify_authenticated_audit_record(
             "record_base64",
             "signature",
         }
+        schema_version = envelope.get("schema_version")
+        if schema_version == AUDIT_DELIVERY_AUTH_LEGACY_SCHEMA_VERSION:
+            expected_fields = legacy_fields
+            envelope_key_id = "default"
+        elif schema_version == AUDIT_DELIVERY_AUTH_SCHEMA_VERSION:
+            expected_fields = legacy_fields | {"key_id"}
+            envelope_key_id = envelope.get("key_id")
+            if not isinstance(envelope_key_id, str) or not envelope_key_id.strip():
+                raise ValueError("authenticated audit key_id is invalid")
+            AuthenticatedAuditKeyring._validate_key_id(envelope_key_id)
+        else:
+            raise ValueError("unsupported authenticated audit envelope schema")
         if set(envelope) != expected_fields:
             raise ValueError("authenticated audit envelope fields are invalid")
-        if envelope["schema_version"] != AUDIT_DELIVERY_AUTH_SCHEMA_VERSION:
-            raise ValueError("unsupported authenticated audit envelope schema")
+        if key_id is not None:
+            AuthenticatedAuditKeyring._validate_key_id(key_id)
+            if envelope_key_id != key_id:
+                raise ValueError("authenticated audit key_id does not match")
         if envelope["algorithm"] != "HMAC-SHA256":
             raise ValueError("unsupported authenticated audit envelope algorithm")
         envelope_sender = envelope["sender_id"]
@@ -560,6 +741,8 @@ def verify_authenticated_audit_record(
             delivery_id=delivery_id,
             record_sha256=record_sha256,
             record_base64=record_base64,
+            key_id=None if schema_version == AUDIT_DELIVERY_AUTH_LEGACY_SCHEMA_VERSION else envelope_key_id,
+            schema_version=int(schema_version),
         )
         expected_signature = hmac.new(secret, _canonical(payload), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(signature, expected_signature):
@@ -570,6 +753,7 @@ def verify_authenticated_audit_record(
             "delivery_id": delivery_id,
             "record_sha256": record_sha256,
             "record": record,
+            "key_id": envelope_key_id,
             "failures": (),
         }
     except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
@@ -582,14 +766,19 @@ def _authenticated_audit_ack_payload(
     delivery_id: str,
     record_sha256: str,
     acknowledged: bool,
+    key_id: str | None = None,
+    schema_version: int = AUDIT_DELIVERY_AUTH_SCHEMA_VERSION,
 ) -> dict[str, Any]:
-    return {
-        "schema_version": AUDIT_DELIVERY_AUTH_SCHEMA_VERSION,
+    payload: dict[str, Any] = {
+        "schema_version": schema_version,
         "algorithm": "HMAC-SHA256",
         "delivery_id": delivery_id,
         "record_sha256": record_sha256,
         "acknowledged": acknowledged,
     }
+    if key_id is not None:
+        payload["key_id"] = key_id
+    return payload
 
 
 def create_authenticated_audit_acknowledgement(
@@ -598,13 +787,16 @@ def create_authenticated_audit_acknowledgement(
     record_sha256: str,
     secret: bytes,
     acknowledged: bool = True,
+    key_id: str = "default",
 ) -> dict[str, Any]:
     """Create a receiver acknowledgement bound to one signed delivery."""
     _audit_delivery_secret(secret)
+    AuthenticatedAuditKeyring._validate_key_id(key_id)
     payload = _authenticated_audit_ack_payload(
         delivery_id=delivery_id,
         record_sha256=record_sha256,
         acknowledged=acknowledged,
+        key_id=key_id,
     )
     return {
         **payload,
@@ -618,13 +810,14 @@ def verify_authenticated_audit_acknowledgement(
     *,
     delivery_id: str,
     record_sha256: str,
+    key_id: str | None = None,
 ) -> bool:
     """Verify an acknowledgement's authenticity and exact delivery binding."""
     try:
         _audit_delivery_secret(secret)
         if not isinstance(acknowledgement, Mapping):
             return False
-        expected_fields = {
+        legacy_fields = {
             "schema_version",
             "algorithm",
             "delivery_id",
@@ -632,16 +825,33 @@ def verify_authenticated_audit_acknowledgement(
             "acknowledged",
             "ack_signature",
         }
+        schema_version = acknowledgement.get("schema_version")
+        if schema_version == AUDIT_DELIVERY_AUTH_LEGACY_SCHEMA_VERSION:
+            expected_fields = legacy_fields
+            envelope_key_id = "default"
+        elif schema_version == AUDIT_DELIVERY_AUTH_SCHEMA_VERSION:
+            expected_fields = legacy_fields | {"key_id"}
+            envelope_key_id = acknowledgement.get("key_id")
+            if not isinstance(envelope_key_id, str) or not envelope_key_id.strip():
+                return False
+            AuthenticatedAuditKeyring._validate_key_id(envelope_key_id)
+        else:
+            return False
         if set(acknowledgement) != expected_fields:
             return False
+        if key_id is not None:
+            AuthenticatedAuditKeyring._validate_key_id(key_id)
+            if envelope_key_id != key_id:
+                return False
         payload = _authenticated_audit_ack_payload(
             delivery_id=delivery_id,
             record_sha256=record_sha256,
             acknowledged=acknowledgement["acknowledged"],
+            key_id=None if schema_version == AUDIT_DELIVERY_AUTH_LEGACY_SCHEMA_VERSION else envelope_key_id,
+            schema_version=int(schema_version),
         )
         if (
-            acknowledgement["schema_version"] != AUDIT_DELIVERY_AUTH_SCHEMA_VERSION
-            or acknowledgement["algorithm"] != "HMAC-SHA256"
+            acknowledgement["algorithm"] != "HMAC-SHA256"
             or acknowledgement["delivery_id"] != delivery_id
             or acknowledgement["record_sha256"] != record_sha256
             or acknowledgement["acknowledged"] is not True
@@ -667,12 +877,18 @@ class AuthenticatedAuditDeliverySink:
     def __init__(
         self,
         transport: AuditDeliverySink,
-        secret: bytes,
+        secret: bytes | AuthenticatedAuditKeyring,
         *,
         sender_id: str,
         sink_id: str | None = None,
     ) -> None:
-        _audit_delivery_secret(secret)
+        if isinstance(secret, AuthenticatedAuditKeyring):
+            keyring = secret
+            raw_secret = None
+        else:
+            _audit_delivery_secret(secret)
+            keyring = None
+            raw_secret = secret
         if not callable(getattr(transport, "deliver", None)) or not callable(
             getattr(transport, "flush", None)
         ):
@@ -680,24 +896,39 @@ class AuthenticatedAuditDeliverySink:
         if not isinstance(sender_id, str) or not sender_id.strip() or len(sender_id) > 128:
             raise AuditStreamError("authenticated audit sender_id is invalid")
         self.transport = transport
-        self.secret = secret
+        self.keyring = keyring
+        self.secret = raw_secret
         self.sender_id = sender_id.strip()
         self.sink_id = str(sink_id or getattr(transport, "sink_id", "authenticated-audit"))[:128]
 
     def deliver(self, record: bytes) -> Mapping[str, Any]:
-        envelope = serialize_authenticated_audit_record(
-            record,
-            self.secret,
-            sender_id=self.sender_id,
-        )
+        if self.keyring is not None:
+            envelope = self.keyring.sign_record(record, sender_id=self.sender_id)
+            key_id = _authenticated_envelope_key_id(envelope)
+        else:
+            envelope = serialize_authenticated_audit_record(
+                record,
+                self.secret,
+                sender_id=self.sender_id,
+            )
+            key_id = "default"
         receipt = self.transport.deliver(envelope)
         record_sha256 = hashlib.sha256(record).hexdigest()
-        if not verify_authenticated_audit_acknowledgement(
-            receipt if isinstance(receipt, Mapping) else {},
-            self.secret,
-            delivery_id=record_sha256,
-            record_sha256=record_sha256,
-        ):
+        if self.keyring is not None:
+            valid_ack = key_id is not None and self.keyring.verify_acknowledgement(
+                receipt if isinstance(receipt, Mapping) else {},
+                delivery_id=record_sha256,
+                record_sha256=record_sha256,
+                key_id=key_id,
+            )
+        else:
+            valid_ack = verify_authenticated_audit_acknowledgement(
+                receipt if isinstance(receipt, Mapping) else {},
+                self.secret,
+                delivery_id=record_sha256,
+                record_sha256=record_sha256,
+            )
+        if not valid_ack:
             raise AuditStreamError("authenticated audit acknowledgement is invalid")
         return {"acknowledged": True, "record_sha256": record_sha256}
 
@@ -742,16 +973,19 @@ class AuthenticatedAuditReplayStore:
     def receive(
         self,
         envelope: bytes | bytearray | str | Mapping[str, Any],
-        secret: bytes,
+        secret: bytes | AuthenticatedAuditKeyring,
         *,
         sender_id: str | None = None,
     ) -> Mapping[str, Any]:
         """Verify and remember one envelope, returning a signed acknowledgement."""
-        verification = verify_authenticated_audit_record(
-            envelope,
-            secret,
-            sender_id=sender_id,
-        )
+        if isinstance(secret, AuthenticatedAuditKeyring):
+            verification = secret.verify_record(envelope, sender_id=sender_id)
+        else:
+            verification = verify_authenticated_audit_record(
+                envelope,
+                secret,
+                sender_id=sender_id,
+            )
         if not verification.get("valid"):
             return {
                 "acknowledged": False,
@@ -793,6 +1027,14 @@ class AuthenticatedAuditReplayStore:
             except sqlite3.Error:
                 self._connection.execute("ROLLBACK")
                 accepted = False
+        key_id = str(verification.get("key_id") or "default")
+        if isinstance(secret, AuthenticatedAuditKeyring):
+            return secret.acknowledgement(
+                delivery_id=delivery_id,
+                record_sha256=record_sha256,
+                key_id=key_id,
+                acknowledged=accepted,
+            )
         return create_authenticated_audit_acknowledgement(
             delivery_id=delivery_id,
             record_sha256=record_sha256,

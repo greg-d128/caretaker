@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ import pytest
 from caretaker.logging import (
     AUDIT_EVENT_REGISTRY,
     AuthenticatedAuditDeliverySink,
+    AuthenticatedAuditKeyring,
     AuthenticatedAuditReplayStore,
     AuditStreamError,
     AuditStreamPolicy,
@@ -99,6 +101,27 @@ class AuthenticatedRecordingTransport:
         return None
 
 
+class KeyringAuthenticatedRecordingTransport:
+    sink_id = "authenticated-keyring-test"
+
+    def __init__(self, keyring: AuthenticatedAuditKeyring) -> None:
+        self.keyring = keyring
+        self.envelopes: list[bytes] = []
+
+    def deliver(self, envelope: bytes) -> dict[str, object]:
+        self.envelopes.append(bytes(envelope))
+        verified = self.keyring.verify_record(envelope, sender_id="runtime-1")
+        assert verified["valid"] is True
+        return self.keyring.acknowledgement(
+            delivery_id=str(verified["delivery_id"]),
+            record_sha256=str(verified["record_sha256"]),
+            key_id=str(verified["key_id"]),
+        )
+
+    def flush(self) -> None:
+        return None
+
+
 def _writer(path: Path, **changes):
     policy = AuditStreamPolicy(**changes)
     return AuditStreamWriter(policy, directory=path, run_id=uuid4(), process_start_id=uuid4())
@@ -153,6 +176,43 @@ def test_authenticated_audit_delivery_rejects_tampering_and_bad_ack() -> None:
         sink.deliver(record)
 
 
+def test_authenticated_audit_schema_one_remains_verifiable() -> None:
+    secret = b"s" * 32
+    record = b'{"event_type":"INCIDENT_CAPTURED"}\n'
+    current = json.loads(
+        serialize_authenticated_audit_record(record, secret, sender_id="runtime-1")
+    )
+    current["schema_version"] = 1
+    current.pop("key_id")
+    payload = {key: value for key, value in current.items() if key != "signature"}
+    current["signature"] = hmac.new(
+        secret,
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+    verified = verify_authenticated_audit_record(current, secret, sender_id="runtime-1")
+    assert verified["valid"] is True
+    assert verified["key_id"] == "default"
+
+
+def test_authenticated_audit_keyring_sink_uses_active_key() -> None:
+    keyring = AuthenticatedAuditKeyring(
+        {"audit-1": b"a" * 32}, active_key_id="audit-1"
+    )
+    transport = KeyringAuthenticatedRecordingTransport(keyring)
+    sink = AuthenticatedAuditDeliverySink(
+        transport,
+        keyring,
+        sender_id="runtime-1",
+    )
+    record = b'{"event_type":"INCIDENT_CAPTURED"}\n'
+    receipt = sink.deliver(record)
+    assert receipt["acknowledged"] is True
+    envelope = json.loads(transport.envelopes[0])
+    assert envelope["key_id"] == "audit-1"
+
+
 def test_authenticated_audit_replay_store_survives_restart_and_is_bounded(tmp_path: Path) -> None:
     secret = b"s" * 32
     record = b'{"event_type":"INCIDENT_CAPTURED"}\n'
@@ -204,6 +264,58 @@ def test_authenticated_audit_replay_store_rejects_invalid_sender() -> None:
             assert store.count() == 0
         finally:
             store.close()
+
+
+def test_authenticated_audit_keyring_rotates_and_revokes_delivery_keys() -> None:
+    old_secret = b"o" * 32
+    new_secret = b"n" * 32
+    keyring = AuthenticatedAuditKeyring(
+        {"audit-old": old_secret}, active_key_id="audit-old"
+    )
+    record = b'{"event_type":"INCIDENT_CAPTURED"}\n'
+
+    old_envelope = keyring.sign_record(record, sender_id="runtime-1")
+    old_verified = keyring.verify_record(old_envelope, sender_id="runtime-1")
+    assert old_verified["valid"] is True
+    assert old_verified["key_id"] == "audit-old"
+
+    keyring.add_key("audit-new", new_secret, make_active=True)
+    new_envelope = keyring.sign_record(record, sender_id="runtime-1")
+    new_verified = keyring.verify_record(new_envelope, sender_id="runtime-1")
+    assert new_verified["valid"] is True
+    assert new_verified["key_id"] == "audit-new"
+    assert keyring.verify_record(old_envelope, sender_id="runtime-1")["valid"] is True
+
+    keyring.revoke("audit-old")
+    revoked = keyring.verify_record(old_envelope, sender_id="runtime-1")
+    assert revoked["valid"] is False
+    with pytest.raises(AuditStreamError, match="active key"):
+        keyring.revoke("audit-new")
+
+
+def test_authenticated_audit_replay_store_uses_rotated_keyring(tmp_path: Path) -> None:
+    keyring = AuthenticatedAuditKeyring(
+        {"audit-old": b"o" * 32}, active_key_id="audit-old"
+    )
+    old_record = b'{"event_type":"INCIDENT_CAPTURED"}\n'
+    old_envelope = keyring.sign_record(old_record, sender_id="runtime-1")
+    store = AuthenticatedAuditReplayStore(tmp_path / "replay.sqlite")
+    try:
+        first = store.receive(old_envelope, keyring, sender_id="runtime-1")
+        assert first["acknowledged"] is True
+
+        keyring.add_key("audit-new", b"n" * 32, make_active=True)
+        new_record = b'{"event_type":"WORKER_FAILED"}\n'
+        new_envelope = keyring.sign_record(new_record, sender_id="runtime-1")
+        second = store.receive(new_envelope, keyring, sender_id="runtime-1")
+        assert second["acknowledged"] is True
+
+        keyring.revoke("audit-old")
+        rejected = store.receive(old_envelope, keyring, sender_id="runtime-1")
+        assert rejected["acknowledged"] is False
+        assert store.count() == 2
+    finally:
+        store.close()
 
 
 def test_audit_stream_is_hash_chained_and_recovers_across_restart(tmp_path: Path) -> None:

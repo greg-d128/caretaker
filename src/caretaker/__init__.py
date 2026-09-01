@@ -336,6 +336,7 @@ from .telemetry import CorrelatedLogHandler
 from .logging import (
     AuditDeliverySink,
     AuthenticatedAuditDeliverySink,
+    AuthenticatedAuditKeyring,
     AuthenticatedAuditReplayStore,
     accept_adaptive_transition,
     ApplicationLoggingBaseline,
@@ -493,6 +494,7 @@ __all__ = [
     "LogSink",
     "AuditDeliverySink",
     "AuthenticatedAuditDeliverySink",
+    "AuthenticatedAuditKeyring",
     "AuthenticatedAuditReplayStore",
     "LoggingBinding",
     "LoggingCapability",

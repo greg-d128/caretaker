@@ -38,14 +38,25 @@ For an application that has a shared secret with its external receiver,
 `AuthenticatedAuditDeliverySink` wraps an output-only transport with the
 optional `serialize_authenticated_audit_record()` contract. It sends a bounded
 JSON envelope containing the exact record bytes, SHA-256 digest, deterministic
-delivery ID (the same digest), sender ID, and an HMAC-SHA256 signature. The
-receiver can validate it with `verify_authenticated_audit_record()` and should
-retain delivery IDs so exact retries are idempotent. Its response must be
-created with `create_authenticated_audit_acknowledgement()`; the adapter
-rejects acknowledgements whose signature, delivery ID, or record digest does
+delivery ID (the same digest), sender ID, an explicit key ID, and an
+HMAC-SHA256 signature. Schema-1 envelopes without a key ID remain verifiable
+for migration compatibility; new envelopes use schema 2. The receiver can
+validate them with `verify_authenticated_audit_record()` and should retain
+delivery IDs so exact retries are idempotent. Its response must be created
+with `create_authenticated_audit_acknowledgement()`; the adapter rejects
+acknowledgements whose signature, key ID, delivery ID, or record digest does
 not match. This is an authenticated transport primitive, not a command
 channel, and it does not replace external key management, receiver retention,
 or independent security review.
+
+`AuthenticatedAuditKeyring` provides an optional in-memory key lifecycle for
+deployments that need rotation or revocation. The deployment supplies named
+keys, selects one active key for new records, and may retain older keys for
+verification during a rotation window. Revoking an old key prevents further
+verification and acknowledgement with that key; an active key must be rotated
+before it can be revoked. Key material is never persisted by Caretaker, and
+keyring state does not grant policy or authority. Deployments remain
+responsible for provisioning, protecting, persisting, and auditing key state.
 
 `AuthenticatedAuditReplayStore` is a bounded SQLite reference receiver for
 this protocol. It stores sender ID, delivery ID, record digest, and receipt
@@ -63,8 +74,9 @@ Authenticated envelope example (the record body is base64 encoded):
   "delivery_id": "record-sha256",
   "record_base64": "eyJldmVudF90eXBlIjoi...",
   "record_sha256": "record-sha256",
-  "schema_version": 1,
+  "schema_version": 2,
   "sender_id": "runtime-1",
+  "key_id": "audit-2026-01",
   "signature": "hmac-sha256-hex"
 }
 ```

@@ -2,6 +2,7 @@ from .acceptance import WorkerAcceptanceStore, WorkerAcceptanceStoreError
 from .audit import (
     AuditDeliverySink,
     AuthenticatedAuditDeliverySink,
+    AuthenticatedAuditKeyring,
     AuthenticatedAuditReplayStore,
     AUDIT_EVENT_REGISTRY,
     AUDIT_DELIVERY_QUEUE_SCHEMA_VERSION,

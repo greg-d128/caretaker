@@ -1518,7 +1518,7 @@ Until this exists, restart is a rollback to deployed application code, not conti
 
 ## Other logging and storage work
 
-**Status: Implemented in development tree for the local hash-chained stream, optional per-event runtime signing, manifest-backed policy-controlled local segment rotation, a bounded synchronous output-only external sink with local store-and-forward, optional record-hash delivery acknowledgements, and an optional HMAC-authenticated delivery adapter; remote receiver assurance and retention/deletion policy remain future work.**
+**Status: Implemented in development tree for the local hash-chained stream, optional per-event runtime signing, manifest-backed policy-controlled local segment rotation, a bounded synchronous output-only external sink with local store-and-forward, optional record-hash delivery acknowledgements, an optional HMAC-authenticated delivery adapter with schema-versioned key IDs and in-memory rotation/revocation, and a bounded durable replay receiver; external key provisioning, independent receiver security, and retention/deletion policy remain future work.**
 
 - Extract the writer, attachment store, and system collector into independently restartable worker processes while preserving the current IPC and evidence contracts.
 - Add external `LogSink` implementations and connect the audit sink boundary to
@@ -1574,11 +1574,15 @@ Until this exists, restart is a rollback to deployed application code, not conti
   synchronous and output-only, and has bounded local store-and-forward;
   optional record-hash acknowledgements are policy controlled. An optional
   standard-library HMAC delivery adapter now authenticates the exact record
-  and its deterministic idempotency key, and verifies a receiver acknowledgement
-  bound to both values. External key provisioning, receiver-side replay
-  retention, rotation/revocation, and the independent security review for
-  injection, redaction, and disk-full behavior remain future work. The sink is
-  never a command channel.
+  and its deterministic idempotency key, carries an explicit key ID, and
+  verifies a receiver acknowledgement bound to the key and both values.
+  Schema-1 envelopes remain verifiable during migration. The optional
+  in-memory keyring supports deployment-controlled rotation and revocation;
+  private-key/secret provisioning, independent receiver security, and the
+  security review for injection, redaction, and disk-full behavior remain
+  future work. The bounded SQLite receiver retains replay identities across
+  restart but does not solve external retention or key persistence. The sink
+  is never a command channel.
 - Optional byte/time audit bounds now rotate the local stream into immutable,
   content-hashed segments with a manifest. Verification checks the manifest,
   closed-segment hashes, sequence ranges, and cross-segment chain continuity;
