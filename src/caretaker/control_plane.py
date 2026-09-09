@@ -14,6 +14,7 @@ from typing import Any, Callable, Mapping, Protocol
 from uuid import UUID, uuid4
 
 from .evidence.models import CodeIdentity
+from .validation_primitives import finite_number
 
 
 def utcnow() -> datetime:
@@ -249,12 +250,25 @@ class RuntimeInteractionPolicy:
                 or value <= 0
             ):
                 raise ValueError(f"{name} must be a positive integer")
-        if (
-            isinstance(self.maximum_job_duration_seconds, bool)
-            or not isinstance(self.maximum_job_duration_seconds, (int, float))
-            or self.maximum_job_duration_seconds <= 0
+        try:
+            finite_number(
+                self.maximum_job_duration_seconds,
+                name="maximum_job_duration_seconds",
+                minimum=0.0,
+            )
+        except ValueError as exc:
+            raise ValueError("maximum_job_duration_seconds must be a finite positive number") from exc
+        if self.maximum_job_duration_seconds <= 0:
+            raise ValueError("maximum_job_duration_seconds must be a finite positive number")
+        for name in (
+            "duplicate_window_seconds",
+            "minimum_internal_change_interval_seconds",
+            "scope_action_window_seconds",
         ):
-            raise ValueError("maximum_job_duration_seconds must be greater than zero")
+            try:
+                finite_number(getattr(self, name), name=name, minimum=0.0)
+            except ValueError as exc:
+                raise ValueError(f"{name} must be a finite non-negative number") from exc
 
 
 class RuntimeJobState(Enum):

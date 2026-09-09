@@ -18,6 +18,7 @@ from .integrity.canonical import assert_canonical_json, canonical_json_bytes, lo
 from .integrity.gpg import GPGUnavailableError, GPGVerifier
 from .integrity.manifest import load_root
 from .integrity.models import SignatureVerificationMode
+from .validation_primitives import bounded_text, exact_bool, finite_number, integer
 
 
 def utcnow() -> datetime:
@@ -597,8 +598,13 @@ class PolicyAuthoritySupervisor:
         signature_state: SignatureState = SignatureState.UNSIGNED,
         source_layer_fingerprint: str | None = None,
     ) -> AuthorityRuntimeLease:
-        if duration_seconds <= 0:
-            raise ValueError("Runtime authority lease duration must be greater than zero")
+        integer(
+            duration_seconds,
+            name="Runtime authority lease duration",
+            minimum=1,
+        )
+        bounded_text(requested_by, name="Runtime authority lease requested_by", maximum=256)
+        bounded_text(reason, name="Runtime authority lease reason", maximum=1024)
         settings = tuple(settings)
         if not settings:
             raise AuthorityPolicyError("Runtime authority lease requires at least one setting")
@@ -1312,18 +1318,20 @@ def _coerce_value(current: Any, raw: Any) -> Any:
         except KeyError:
             return enum_type(text)
     if isinstance(current, bool):
-        if isinstance(raw, bool):
-            return raw
-        text = str(raw).strip().lower()
-        if text in {"true", "1", "yes", "on"}:
-            return True
-        if text in {"false", "0", "no", "off"}:
-            return False
-        raise AuthorityPolicyError(f"Cannot coerce {raw!r} to bool")
+        try:
+            return exact_bool(raw, name="authority boolean setting")
+        except ValueError as exc:
+            raise AuthorityPolicyError(str(exc)) from exc
     if isinstance(current, int) and not isinstance(current, bool):
-        return int(raw)
+        try:
+            return integer(raw, name="authority integer setting")
+        except ValueError as exc:
+            raise AuthorityPolicyError(str(exc)) from exc
     if isinstance(current, float):
-        return float(raw)
+        try:
+            return float(finite_number(raw, name="authority numeric setting"))
+        except ValueError as exc:
+            raise AuthorityPolicyError(str(exc)) from exc
     if isinstance(current, str):
         return str(raw)
     if current is None:

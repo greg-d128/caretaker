@@ -41,6 +41,7 @@ from .models import (
     WorkerFailureAction,
 )
 from .metrics import MonitoringDialect, MonitoringStreamPolicy
+from ..validation_primitives import bounded_text, declared_primitive_errors, exact_bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -357,7 +358,11 @@ class LoggingPolicyConfigurationError(ValueError):
 def validate_operator_logging_policy(policy: OperatorLoggingPolicy) -> None:
     """Validate that accepted logging policy has executable semantics."""
 
-    errors: list[str] = []
+    errors: list[str] = list(declared_primitive_errors(policy, prefix="logging"))
+    if errors:
+        raise LoggingPolicyConfigurationError(
+            "Invalid operator logging policy:\n- " + "\n- ".join(errors)
+        )
     for name, rate in (("debug_rate", policy.sampling.debug_rate), ("info_rate", policy.sampling.info_rate), ("warning_rate", policy.sampling.warning_rate)):
         if not 0.0 <= rate <= 1.0:
             errors.append(f"sampling.{name} must be between 0 and 1")
@@ -760,8 +765,15 @@ def load_operator_policy(path: str | Path) -> tuple[OperatorLoggingPolicy, Loggi
         configured_directory = path.parent / configured_directory
 
     policy = OperatorLoggingPolicy(
-        enabled=bool(log.get("enabled", True)),
-        application_id=str(log.get("application_id", "application")),
+        enabled=(
+            exact_bool(log["enabled"], name="logging.enabled")
+            if "enabled" in log else True
+        ),
+        application_id=bounded_text(
+            log.get("application_id", "application"),
+            name="logging.application_id",
+            maximum=256,
+        ),
         directory=str(configured_directory),
         modes=tuple(_enum(LoggingMode, item) for item in log.get("modes", ["APPLICATION"])),
         conflict_action=_enum(PolicyConflictAction, log.get("conflict_action", "APPLY_REQUIRED_OVERRIDES")),

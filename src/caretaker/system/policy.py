@@ -5,6 +5,7 @@ from enum import Enum, auto
 from typing import Callable, Mapping
 
 from ..logging.policy import CompressionPolicy, RetentionPolicy, RotationPolicy
+from ..validation_primitives import declared_primitive_errors, exact_bool, finite_number, integer
 
 
 class SystemTimestampMode(Enum):
@@ -143,8 +144,14 @@ def _source_selection(
         resolved.append(SystemSourceDefinition(
             source_id=source_id,
             path_template=path_template,
-            per_process=bool(item.get("per_process", per_process)),
-            enabled=bool(item.get("enabled", True)),
+            per_process=(
+                exact_bool(item["per_process"], name="system source per_process")
+                if "per_process" in item else per_process
+            ),
+            enabled=(
+                exact_bool(item["enabled"], name="system source enabled")
+                if "enabled" in item else True
+            ),
         ))
     return tuple(resolved)
 
@@ -179,16 +186,30 @@ def load_system_policy(
         from ..logging.models import CompressionAlgorithm
         compression_data["algorithm"] = _enum(CompressionAlgorithm, compression_data["algorithm"])
 
+    enabled = (
+        exact_bool(raw["enabled"], name="system_data.enabled")
+        if "enabled" in raw else False
+    )
+    interval_seconds = (
+        finite_number(
+            raw["interval_seconds"],
+            name="system_data.interval_seconds",
+            minimum=0.0,
+        )
+        if "interval_seconds" in raw else 5.0
+    )
+    if interval_seconds <= 0:
+        raise ValueError("system_data.interval_seconds must be greater than zero")
     policy = SystemCollectionPolicy(
-        enabled=bool(raw.get("enabled", False)),
-        interval_seconds=float(raw.get("interval_seconds", 5.0)),
+        enabled=enabled,
+        interval_seconds=interval_seconds,
         host_sources=_source_selection(raw.get("host_sources"), DEFAULT_HOST_SOURCES, per_process=False),
         process_sources=_source_selection(raw.get("process_sources"), DEFAULT_PROCESS_SOURCES, per_process=True),
         process_selector=ProcessSelector(**{
             **selector_data,
             **({"command_regexes": tuple(selector_data["command_regexes"])} if "command_regexes" in selector_data else {}),
             **({"executable_paths": tuple(selector_data["executable_paths"])} if "executable_paths" in selector_data else {}),
-            **({"explicit_pids": tuple(int(value) for value in selector_data["explicit_pids"])} if "explicit_pids" in selector_data else {}),
+            **({"explicit_pids": tuple(integer(value, name="system process selector PID", minimum=1) for value in selector_data["explicit_pids"])} if "explicit_pids" in selector_data else {}),
             **({"exclude_command_regexes": tuple(selector_data["exclude_command_regexes"])} if "exclude_command_regexes" in selector_data else {}),
         }),
         sys_paths=tuple(str(value) for value in raw.get("sys_paths", ())),
@@ -219,7 +240,13 @@ class SystemPolicyConfigurationError(ValueError):
 
 
 def validate_system_policy(policy: SystemCollectionPolicy) -> None:
-    errors: list[str] = []
+    errors: list[str] = list(declared_primitive_errors(policy, prefix="system"))
+    try:
+        finite_number(policy.interval_seconds, name="system.interval_seconds", minimum=0.0)
+    except ValueError as exc:
+        errors.append(str(exc))
+    if errors:
+        raise SystemPolicyConfigurationError("Invalid system collection policy:\n- " + "\n- ".join(errors))
     if policy.interval_seconds <= 0:
         errors.append("interval_seconds must be greater than zero")
     if policy.process_selector.include_same_cgroup:

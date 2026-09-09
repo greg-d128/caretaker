@@ -16,6 +16,7 @@ from .logging.policy import LoggingBinding
 from .logging.models import RepairAuthority
 from .repair_recovery import RepairRecoveryPolicy, validate_worker_acceptance_policy
 from .repair_rollout import RepairRolloutPolicy
+from .validation_primitives import exact_bool, finite_number, integer
 from .domain import (
     CandidateSelectionMode,
     DifferentialExecutionMode,
@@ -317,7 +318,96 @@ def validate_policy(policy: RepairPolicy) -> None:
     that would silently have no effect raises PolicyConfigurationError instead.
     """
 
+    if not isinstance(policy, RepairPolicy):
+        raise PolicyConfigurationError("policy must be a RepairPolicy")
     errors: list[str] = []
+
+    def check(name: str, validator, value: Any) -> None:
+        try:
+            validator(value, name=name)
+        except ValueError as exc:
+            errors.append(str(exc))
+
+    for name, value in (
+        ("state.capture_arguments", policy.state.capture_arguments),
+        ("state.capture_failure_locals", policy.state.capture_failure_locals),
+        ("state.capture_instance_state", policy.state.capture_instance_state),
+        ("state.snapshot_arguments", policy.state.snapshot_arguments),
+        ("state.snapshot_instance", policy.state.snapshot_instance),
+        ("state.detect_mutations", policy.state.detect_mutations),
+        ("state.include_diff_in_incident", policy.state.include_diff_in_incident),
+        ("state.restore_for_validation", policy.state.restore_for_validation),
+        ("state.restore_before_retry", policy.state.restore_before_retry),
+        ("state.restore_live_environment", policy.state.restore_live_environment),
+        ("state.restore_external_side_effects", policy.state.restore_external_side_effects),
+        ("retry.require_successful_state_restore", policy.retry.require_successful_state_restore),
+        ("retry.retry_original_exception_only", policy.retry.retry_original_exception_only),
+        ("validation.require_ast_parse", policy.validation.require_ast_parse),
+        ("validation.require_compilation", policy.validation.require_compilation),
+        ("validation.preserve_name", policy.validation.preserve_name),
+        ("validation.preserve_signature", policy.validation.preserve_signature),
+        ("validation.preserve_callable_kind", policy.validation.preserve_callable_kind),
+        ("validation.run_registered_tests", policy.validation.run_registered_tests),
+        ("validation.run_generated_tests", policy.validation.run_generated_tests),
+        ("validation.isolate_validation", policy.validation.isolate_validation),
+        ("validation.allow_imports", policy.validation.allow_imports),
+        ("validation.allow_network", policy.validation.allow_network),
+        ("validation.allow_subprocesses", policy.validation.allow_subprocesses),
+        ("validation.allow_filesystem_writes", policy.validation.allow_filesystem_writes),
+        ("activation.activate_in_memory", policy.activation.activate_in_memory),
+        ("activation.rollback_on_retry_failure", policy.activation.rollback_on_retry_failure),
+        ("observation.rollback_during_probation", policy.observation.rollback_during_probation),
+        ("observation.rollback_after_acceptance", policy.observation.rollback_after_acceptance),
+        ("stability.detect_oscillation", policy.stability.detect_oscillation),
+        ("stability.prevent_reactivation_of_failed_version", policy.stability.prevent_reactivation_of_failed_version),
+        ("stability.require_regression_replay_before_reactivation", policy.stability.require_regression_replay_before_reactivation),
+        ("recovery.enabled", policy.recovery.enabled),
+        ("recovery.require_full_worker_postmortem_for_critical_evidence", policy.recovery.require_full_worker_postmortem_for_critical_evidence),
+        ("recovery.allow_candidate_reactivation_after_restart", policy.recovery.allow_candidate_reactivation_after_restart),
+        ("enabled", policy.enabled),
+    ):
+        check(name, exact_bool, value)
+    for name, value, minimum in (
+        ("retry.backoff_seconds", policy.retry.backoff_seconds, 0.0),
+        ("validation.validation_timeout_seconds", policy.validation.validation_timeout_seconds, 0.0),
+        ("observation.long_term_failure_rate", policy.observation.long_term_failure_rate, 0.0),
+        ("selection.minimum_total_score", policy.selection.minimum_total_score, 0.0),
+        ("selection.synthesis.minimum_parent_score", policy.selection.synthesis.minimum_parent_score, 0.0),
+        ("selection.synthesis.minimum_improvement", policy.selection.synthesis.minimum_improvement, 0.0),
+        ("limits.cooldown_seconds", policy.limits.cooldown_seconds, 0.0),
+        ("scoring.correctness_weight", policy.scoring.correctness_weight, 0.0),
+        ("scoring.contract_weight", policy.scoring.contract_weight, 0.0),
+        ("scoring.safety_weight", policy.scoring.safety_weight, 0.0),
+        ("scoring.performance_weight", policy.scoring.performance_weight, 0.0),
+        ("scoring.evidence_weight", policy.scoring.evidence_weight, 0.0),
+        ("scoring.maintainability_weight", policy.scoring.maintainability_weight, 0.0),
+        ("recovery.clock_skew_tolerance_seconds", policy.recovery.clock_skew_tolerance_seconds, 0.0),
+    ):
+        check(name, lambda value, *, name: finite_number(value, name=name, minimum=minimum), value)
+    for name, value, minimum in (
+        ("state.max_snapshot_bytes", policy.state.max_snapshot_bytes, 1),
+        ("state.max_diff_entries", policy.state.max_diff_entries, 0),
+        ("context.previous_calls", policy.context.previous_calls, 0),
+        ("context.previous_incidents", policy.context.previous_incidents, 0),
+        ("context.maximum_log_records", policy.context.maximum_log_records, 0),
+        ("context.maximum_context_characters", policy.context.maximum_context_characters, 1),
+        ("retry.max_attempts", policy.retry.max_attempts, 0),
+        ("selection.maximum_candidates_to_evaluate", policy.selection.maximum_candidates_to_evaluate, 1),
+        ("limits.maximum_repair_depth", policy.limits.maximum_repair_depth, 1),
+        ("limits.maximum_candidates_per_incident", policy.limits.maximum_candidates_per_incident, 1),
+        ("limits.maximum_repairs_per_target", policy.limits.maximum_repairs_per_target, 1),
+        ("observation.initial_successful_executions", policy.observation.initial_successful_executions, 0),
+        ("observation.long_term_successful_executions", policy.observation.long_term_successful_executions, 0),
+        ("observation.probation_failure_budget", policy.observation.probation_failure_budget, 0),
+        ("observation.long_term_maximum_failures", policy.observation.long_term_maximum_failures, 0),
+        ("selection.synthesis.minimum_parent_candidates", policy.selection.synthesis.minimum_parent_candidates, 1),
+        ("selection.synthesis.maximum_parent_candidates", policy.selection.synthesis.maximum_parent_candidates, 1),
+        ("recovery.approval_packet_ttl_seconds", policy.recovery.approval_packet_ttl_seconds, 1),
+        ("recovery.suggested_change_packet_ttl_seconds", policy.recovery.suggested_change_packet_ttl_seconds, 1),
+    ):
+        check(name, lambda value, *, name: integer(value, name=name, minimum=minimum), value)
+    if errors:
+        raise PolicyConfigurationError("Invalid Caretaker policy:\n- " + "\n- ".join(errors))
     try:
         validate_repair_retention_policy(policy.retention)
     except PolicyConfigurationError as exc:
