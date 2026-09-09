@@ -23,6 +23,7 @@ from .models import (
 )
 from .buffering import ApplicationStopRequested
 from .policy import AttachmentPolicy
+from ..rooted_io import RootedFilesystem
 
 
 class AttachmentStore:
@@ -39,6 +40,8 @@ class AttachmentStore:
         self.manifest_dir = self.root / "application" / "attachment-manifests"
         self.segment_dir.mkdir(parents=True, exist_ok=True)
         self.manifest_dir.mkdir(parents=True, exist_ok=True)
+        self._segment_rooted = RootedFilesystem(self.segment_dir)
+        self._manifest_rooted = RootedFilesystem(self.manifest_dir)
         self._lock = RLock()
         self._arrival_times: deque[float] = deque()
         self._previous_hash: str | None = None
@@ -54,7 +57,7 @@ class AttachmentStore:
         self.segment_id = uuid4()
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
         self.path = self.segment_dir / f"{stamp}-{self.segment_id}.ctattach"
-        self._file = self.path.open("ab", buffering=0)
+        self._file = self._segment_rooted.open_exclusive(self.path)
         self._created = datetime.now(timezone.utc)
         self._entries: list[dict[str, object]] = []
 
@@ -183,7 +186,10 @@ class AttachmentStore:
                 "attachment_count": len(self._entries),
                 "attachments": self._entries,
             }
-            (self.manifest_dir / f"{self.segment_id}.json").write_text(json.dumps(manifest, indent=2, sort_keys=True))
+            self._manifest_rooted.atomic_write(
+                self.manifest_dir / f"{self.segment_id}.json",
+                json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8"),
+            )
             self._previous_hash = segment_hash
             self._retention()
             self._file = None

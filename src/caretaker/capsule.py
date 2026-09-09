@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Any, Mapping
 from uuid import UUID, uuid4
 
+from .rooted_io import RootedFilesystem
+
 CAPSULE_SCHEMA_VERSION = 1
 ARTIFACT_SCHEMA_VERSION = 1
 
@@ -223,6 +225,8 @@ class IncidentCapsuleStore:
         self.artifact_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.directory.chmod(0o700)
         self.artifact_directory.chmod(0o700)
+        self._rooted = RootedFilesystem(self.directory)
+        self._artifact_rooted = RootedFilesystem(self.artifact_directory)
         self.policy = policy or IncidentCapsulePolicy()
         validate_incident_capsule_policy(self.policy)
         self.artifact_signer = artifact_signer
@@ -681,15 +685,11 @@ class IncidentCapsuleStore:
             raise IncidentCapsuleError(
                 f"Incident Capsule data exceeds maximum size {maximum_bytes} bytes"
             )
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
-            with os.fdopen(descriptor, "wb") as handle:
+            rooted = self._artifact_rooted if path.parent == self.artifact_directory else self._rooted
+            with rooted.open_exclusive(path) as handle:
                 handle.write(encoded)
         except Exception:
-            try:
-                os.close(descriptor)
-            except OSError:
-                pass
             raise
 
     @staticmethod

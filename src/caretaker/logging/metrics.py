@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol
 from uuid import UUID
 
+from ..rooted_io import RootedFilesystem
 
 MONITORING_STREAM_SCHEMA_VERSION = 1
 _METRIC_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")
@@ -486,6 +487,7 @@ class MonitoringStreamWriter:
     ) -> None:
         self.policy = policy
         self.directory = Path(directory)
+        self._rooted = RootedFilesystem(self.directory)
         self.application_id = self._bounded_text(application_id, "application_id", 128)
         self.run_id = self._bounded_text(str(run_id), "run_id", 128)
         self.process_start_id = self._bounded_text(
@@ -497,8 +499,7 @@ class MonitoringStreamWriter:
         self._closed = False
         self._sequence = 0
         if policy.enabled:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self._file = self.path.open("a", encoding="utf-8", buffering=1)
+            self._file = self._rooted.open_append(self.path, text=True)
             try:
                 os.chmod(self.path, 0o600)
             except OSError:

@@ -31,6 +31,7 @@ from .validation import (
     ValidationBackendCapabilities,
     _run_worker_command,
 )
+from .rooted_io import RootedFilesystem
 
 
 class ReplayExecutionError(ValueError):
@@ -59,6 +60,11 @@ class ReplayResultStore:
         if create_directory:
             self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
             self.directory.chmod(0o700)
+        self._rooted = (
+            RootedFilesystem(self.directory)
+            if self.directory.exists()
+            else None
+        )
 
     def _payload(self, result: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(result, Mapping):
@@ -95,8 +101,10 @@ class ReplayResultStore:
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
         encoded = canonical_json_bytes(envelope)
+        if self._rooted is None:
+            raise ReplayExecutionError("replay result directory does not exist")
         try:
-            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            stream = self._rooted.open_exclusive(path)
         except FileExistsError:
             loaded = self.load(digest)
             return {
@@ -106,7 +114,7 @@ class ReplayResultStore:
                 "duplicate": True,
             }
         try:
-            with os.fdopen(descriptor, "wb") as stream:
+            with stream:
                 stream.write(encoded)
                 stream.flush()
                 os.fsync(stream.fileno())
@@ -128,8 +136,10 @@ class ReplayResultStore:
         if not isinstance(digest, str) or _REPLAY_RESULT_DIGEST.fullmatch(digest) is None:
             raise ReplayExecutionError("replay result content hash is invalid")
         path = self.directory / f"{digest}.json"
+        if self._rooted is None:
+            raise ReplayExecutionError("replay result directory does not exist")
         try:
-            envelope = json.loads(path.read_text(encoding="utf-8"))
+            envelope = json.loads(self._rooted.read_bytes(path).decode("utf-8"))
         except Exception as exc:
             raise ReplayExecutionError("replay result is not valid JSON") from exc
         if not isinstance(envelope, Mapping):

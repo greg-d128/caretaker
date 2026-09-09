@@ -26,6 +26,7 @@ from .signing import (
     serialize_signed_artifact,
     verify_signed_artifact,
 )
+from ..rooted_io import RootedFilesystem, RootedWriteError
 
 
 AUDIT_SCHEMA_VERSION = 1
@@ -1228,20 +1229,9 @@ def _audit_segment_path(path: Path, index: int) -> Path:
 
 
 def _write_atomic_json(path: Path, value: Mapping[str, Any]) -> None:
-    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
     try:
-        with temporary.open("wb") as stream:
-            stream.write(_canonical(value))
-            stream.write(b"\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        temporary.chmod(0o600)
-        temporary.replace(path)
-    except OSError as exc:
-        try:
-            temporary.unlink()
-        except OSError:
-            pass
+        RootedFilesystem(path.parent).atomic_write(path, _canonical(value) + b"\n")
+    except (OSError, RootedWriteError) as exc:
         raise AuditStreamError(f"Unable to persist audit segment manifest: {exc}") from exc
 
 
@@ -1683,8 +1673,11 @@ class AuditStreamWriter:
                 "Audit event signing is enabled but no runtime artifact signer was provided"
             )
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._rooted = RootedFilesystem(self.path.parent)
+        if self.path.is_symlink() or self.manifest_path.is_symlink() or self.delivery_queue_path.is_symlink():
+            raise AuditStreamError("audit output path cannot be a symlink")
         self._recover_existing()
-        self._file = self.path.open("ab", buffering=0)
+        self._file = self._rooted.open_append(self.path)
         if self._external_sink is not None:
             delivered = self._drain_external_queue()
             if not delivered and getattr(policy, "external_delivery_required", False):
@@ -2029,7 +2022,7 @@ class AuditStreamWriter:
         if segment_path.exists():
             raise AuditStreamError("Audit segment destination already exists")
         try:
-            self.path.replace(segment_path)
+            self._rooted.replace(self.path, segment_path)
         except OSError as exc:
             raise AuditStreamError("Unable to close audit segment") from exc
         descriptor = self._describe_closed_segment(segment_path, self._segment_index)
@@ -2039,7 +2032,7 @@ class AuditStreamWriter:
         self._segment_record_count = 0
         self._segment_opened_at = datetime.now(timezone.utc)
         try:
-            self._file = self.path.open("ab", buffering=0)
+            self._file = self._rooted.open_append(self.path)
             self._write_segment_manifest()
         except OSError as exc:
             raise AuditStreamError("Unable to open new audit segment") from exc

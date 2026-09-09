@@ -18,6 +18,7 @@ from .models import CompressionAlgorithm, LogEnvelope, RuntimeRecordIntegrityMod
 from .policy import OperatorLoggingPolicy
 from .records import HEADER, RecordFormatError, TLVLogCodec
 from .signing import RuntimeArtifactSigningService, serialize_signed_artifact
+from ..rooted_io import RootedFilesystem
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +160,8 @@ class SegmentWriter:
         self.manifest_dir = self.root / "application" / "manifests"
         self.segment_dir.mkdir(parents=True, exist_ok=True)
         self.manifest_dir.mkdir(parents=True, exist_ok=True)
+        self._segment_rooted = RootedFilesystem(self.segment_dir)
+        self._manifest_rooted = RootedFilesystem(self.manifest_dir)
         index_path = Path(policy.indexing.sqlite_path) if policy.indexing.sqlite_path else self.root / "index" / "logging.sqlite"
         self.index = SegmentIndex(index_path)
         self.codec = TLVLogCodec(maximum_record_bytes=policy.codec.maximum_record_bytes)
@@ -221,7 +224,7 @@ class SegmentWriter:
         self.segment_id = uuid4()
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
         self.path = self.segment_dir / f"{stamp}-{self.segment_id}.ctlog"
-        self._file = self.path.open("ab", buffering=0)
+        self._file = self._segment_rooted.open_exclusive(self.path)
         self._created_at = datetime.now(timezone.utc)
         self._first_sequence: int | None = None
         self._last_sequence = -1
@@ -298,8 +301,13 @@ class SegmentWriter:
                 and self.policy.compression.compress_closed_segments
             ):
                 compressed = self.path.with_suffix(self.path.suffix + ".gz")
-                with self.path.open("rb") as source, gzip.open(compressed, "wb", compresslevel=self.policy.compression.level) as target:
-                    shutil.copyfileobj(source, target)
+                self._segment_rooted.atomic_write(
+                    compressed,
+                    gzip.compress(
+                        self.path.read_bytes(),
+                        compresslevel=self.policy.compression.level,
+                    ),
+                )
                 compressed_path = str(compressed)
             signature_status = SignatureStatus.HASHED_AND_CHAINED
             signature_path: str | None = None
@@ -337,7 +345,10 @@ class SegmentWriter:
                         "manifest": _jsonable(signed),
                         "transitions": [_jsonable(item) for item in transitions],
                     }
-                signature_file.write_text(json.dumps(signature_payload, indent=2, sort_keys=True))
+                self._manifest_rooted.atomic_write(
+                    signature_file,
+                    json.dumps(signature_payload, indent=2, sort_keys=True).encode("utf-8"),
+                )
                 signature_path = str(signature_file)
             manifest = SegmentManifest(
                 segment_id=self.segment_id,
@@ -354,7 +365,10 @@ class SegmentWriter:
                 signature_path=signature_path,
             )
             manifest_path = self.manifest_dir / f"{self.segment_id}.json"
-            manifest_path.write_text(json.dumps(_jsonable(manifest), indent=2, sort_keys=True))
+            self._manifest_rooted.atomic_write(
+                manifest_path,
+                json.dumps(_jsonable(manifest), indent=2, sort_keys=True).encode("utf-8"),
+            )
             self.index.close_segment(manifest)
             self._previous_hash = content_hash
             self._enforce_retention()

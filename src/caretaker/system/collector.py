@@ -14,6 +14,7 @@ from typing import Iterable, Mapping
 from uuid import UUID, uuid4
 
 from ..logging.models import CompressionAlgorithm
+from ..rooted_io import RootedFilesystem
 
 from .policy import (
     ProcessSelector,
@@ -74,6 +75,7 @@ class RotatingSystemStream:
         self.base_path = path
         self.policy = policy
         self.base_path.parent.mkdir(parents=True, exist_ok=True)
+        self._rooted = RootedFilesystem(self.base_path.parent)
         self._lock = threading.RLock()
         self._sequence = 0
         self._open()
@@ -82,7 +84,7 @@ class RotatingSystemStream:
         self._sequence += 1
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
         self.path = self.base_path.with_name(f"{self.base_path.stem}-{stamp}-{self._sequence}{self.base_path.suffix}")
-        self._file = self.path.open("ab", buffering=0)
+        self._file = self._rooted.open_exclusive(self.path)
         self._created = datetime.now(timezone.utc)
 
     def write(self, data: bytes) -> Path:
@@ -115,8 +117,11 @@ class RotatingSystemStream:
                 and self.policy.compression.compress_closed_segments
             ):
                 compressed = self.path.with_suffix(self.path.suffix + ".gz")
-                with self.path.open("rb") as source, gzip.open(compressed, "wb", compresslevel=self.policy.compression.level) as target:
-                    shutil.copyfileobj(source, target)
+                compressed_payload = gzip.compress(
+                    self.path.read_bytes(),
+                    compresslevel=self.policy.compression.level,
+                )
+                self._rooted.atomic_write(compressed, compressed_payload)
             self._retention()
             return self.path
 
