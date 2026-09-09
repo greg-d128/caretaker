@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import math
 import json
 import math
 import os
@@ -277,6 +278,23 @@ class WorkerRestartPolicy:
     initial_backoff_seconds: float = 0.5
     maximum_backoff_seconds: float = 30.0
     exhaustion_action: WorkerFailureAction = WorkerFailureAction.DISABLE_COMPONENT
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise ValueError("worker_restart.enabled must be a boolean")
+        if isinstance(self.maximum_restarts, bool) or not isinstance(self.maximum_restarts, int) or not 0 <= self.maximum_restarts <= 1000:
+            raise ValueError("worker_restart.maximum_restarts must be an integer from 0 through 1000")
+        for name, value, minimum in (
+            ("restart_window_seconds", self.restart_window_seconds, 0.0),
+            ("initial_backoff_seconds", self.initial_backoff_seconds, 0.0),
+            ("maximum_backoff_seconds", self.maximum_backoff_seconds, 0.0),
+        ):
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < minimum:
+                raise ValueError(f"worker_restart.{name} must be a finite non-negative number")
+        if self.maximum_backoff_seconds < self.initial_backoff_seconds:
+            raise ValueError("worker_restart.maximum_backoff_seconds must cover initial backoff")
+        if not isinstance(self.exhaustion_action, WorkerFailureAction):
+            raise ValueError("worker_restart.exhaustion_action is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -665,7 +683,10 @@ def policy_snapshot(policy: OperatorLoggingPolicy, *, source_path: str | None = 
 def _enum(enum_type, value):
     if isinstance(value, enum_type):
         return value
-    return enum_type[str(value).upper()]
+    try:
+        return enum_type[str(value).upper()]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"invalid {enum_type.__name__} value: {value!r}") from exc
 
 
 def _capabilities(values: list[str] | tuple[str, ...] | None) -> frozenset[LoggingCapability]:

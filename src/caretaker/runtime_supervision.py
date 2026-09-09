@@ -71,6 +71,20 @@ MAX_ADAPTIVE_QUEUE_WORKERS = 128
 MAX_WORKER_AUTHORITY_HANDOFFS = 4096
 MAX_WORKER_FAILURE_COHORT = 128
 
+# A supervisor owns application shutdown and cannot safely replace itself from
+# inside its own failure callback. Other roles are replaceable only through the
+# existing packet/identity admission path.
+RESTARTABLE_WORKER_KINDS = frozenset({
+    WorkerKind.WRITER,
+    WorkerKind.EVENT_SERVER,
+    WorkerKind.CONTROL_SERVER,
+    WorkerKind.SYSTEM_COLLECTOR,
+    WorkerKind.GUARD_ANALYZER,
+    WorkerKind.REPAIR_ANALYZER,
+    WorkerKind.INTERROGATION,
+    WorkerKind.SIGNER,
+})
+
 
 class WorkRegistry:
     """Bounded in-memory registry for application-runtime work."""
@@ -3127,11 +3141,25 @@ def handle_worker_failure(
     else:
         incident_status = "NOT_CONFIGURED"
     restart_policy = policy
+    role_restartable = worker.worker_kind in RESTARTABLE_WORKER_KINDS
+    if not role_restartable:
+        restart_result = {
+            "started": False,
+            "error": f"worker role {worker.worker_kind.name} is not restartable",
+        }
+    else:
+        restart_result = None
+    configured_enabled = getattr(restart_policy, "enabled", False)
+    configured_limit = getattr(restart_policy, "maximum_restarts", 0)
+    if not isinstance(configured_enabled, bool):
+        raise ValueError("worker restart enabled flag must be a boolean")
+    if isinstance(configured_limit, bool) or not isinstance(configured_limit, int) or not 0 <= configured_limit <= 1000:
+        raise ValueError("worker restart maximum_restarts must be an integer from 0 through 1000")
     restart_requested = (
-        bool(getattr(restart_policy, "enabled", False))
-        and worker.restart_count < int(getattr(restart_policy, "maximum_restarts", 0))
+        role_restartable
+        and configured_enabled
+        and worker.restart_count < configured_limit
     )
-    restart_result: dict[str, Any] | None = None
     if restart_requested and restart_worker is not None:
         supervisor._audit_event(
             "WORKER_REPLACEMENT_REQUESTED",
@@ -3252,7 +3280,10 @@ def handle_worker_failure(
         WorkerFailureAction.DISABLE_COMPONENT,
     )
     if not isinstance(exhaustion, WorkerFailureAction):
-        exhaustion = WorkerFailureAction[str(exhaustion).upper()]
+        try:
+            exhaustion = WorkerFailureAction[str(exhaustion).upper()]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"invalid worker exhaustion action: {exhaustion!r}") from exc
     callback_result = None
     if exhaustion is WorkerFailureAction.DISABLE_COMPONENT and disable_component is not None:
         callback_result = disable_component(worker)

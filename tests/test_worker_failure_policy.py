@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -118,6 +119,42 @@ def test_worker_failure_records_incident_and_uses_callback_owned_restart() -> No
         "action": "RESTART_WORKER",
         "authority_granted": False,
     }
+
+
+def test_supervisor_role_is_explicitly_non_restartable() -> None:
+    runtime = FakeRuntime()
+    supervisor = CaretakerApplicationSupervisor(runtime)
+    failed = supervisor.workers.mark_failed(supervisor.supervisor_health.worker_id)
+    called = []
+
+    result = supervisor.handle_worker_failure(
+        failed,
+        policy=WorkerRestartPolicy(maximum_restarts=1),
+        restart_worker=lambda _worker: called.append(True),
+    )
+
+    assert called == []
+    assert result["restart"]["started"] is False
+    assert "not restartable" in result["restart"]["error"]
+
+
+def test_worker_restart_limits_and_exhaustion_values_fail_with_domain_errors() -> None:
+    with pytest.raises(ValueError, match="maximum_restarts"):
+        WorkerRestartPolicy(maximum_restarts="1")  # type: ignore[arg-type]
+
+    runtime = FakeRuntime()
+    supervisor = CaretakerApplicationSupervisor(runtime)
+    worker = supervisor.workers.register(WorkerKind.WRITER, 1234)
+    failed = supervisor.workers.mark_failed(worker.worker_id)
+    with pytest.raises(ValueError, match="exhaustion action"):
+        supervisor.handle_worker_failure(
+            failed,
+            policy=SimpleNamespace(
+                enabled=False,
+                maximum_restarts=0,
+                exhaustion_action="not-a-worker-action",
+            ),
+        )
 
 
 def test_worker_failure_cohort_captures_all_postmortems_before_one_policy_action() -> None:

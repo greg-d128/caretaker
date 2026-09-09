@@ -3889,5 +3889,10 @@ def _coerce_enum(enum_type: type[Enum], value: Any) -> Any:
     text = str(value)
     try:
         return enum_type[text]
-    except KeyError:
-        return enum_type(text)
+    except (KeyError, TypeError, ValueError):
+        try:
+            return enum_type(text)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RepairRolloutError(
+                f"invalid {enum_type.__name__} value: {value!r}"
+            ) from exc
