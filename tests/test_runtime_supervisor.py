@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from caretaker import ApplicationRuntimeSupervisor
+from caretaker.policy import RepairPolicy
+from caretaker.repair_rollout import RepairRolloutPolicy
 from caretaker.logging.supervisor import CaretakerApplicationSupervisor
 from caretaker.logging import Watchdog as LoggingWatchdog
 from caretaker.logging import WorkRegistry as LoggingWorkRegistry
@@ -35,6 +37,17 @@ def test_application_runtime_supervisor_preserves_start_stop_surface() -> None:
         assert supervisor.watchdog is supervisor.implementation.watchdog
     finally:
         supervisor.stop()
+
+
+def test_application_runtime_supervisor_uses_explicit_repair_policy_components() -> None:
+    rollout = RepairRolloutPolicy(enabled=True, allow_operator_routing_changes=True)
+    repair_policy = RepairPolicy(rollout=rollout)
+
+    supervisor = ApplicationRuntimeSupervisor(_Runtime(), repair_policy=repair_policy)
+
+    assert supervisor.repair_policy is repair_policy
+    assert supervisor.rollout_policy is rollout
+    assert supervisor.recovery_policy is repair_policy.recovery
 
 
 def test_runtime_scheduling_and_watchdog_are_owned_outside_logging() -> None:

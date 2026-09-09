@@ -70,6 +70,7 @@ from .logging.ipc import (
     unix_socket_exists,
 )
 from .logging.policy import OperatorLoggingPolicy, load_operator_policy
+from .policy import RepairPolicy
 from .logging.segments import read_segment
 from .regression import RegressionFixtureStore
 from .repair_recovery import worker_failure_recovery_status
@@ -4402,8 +4403,9 @@ def main(argv: list[str] | None = None) -> int:
     child_holder["child"] = child
     failure_store = SQLiteRepairStore(Path(policy.directory) / "repair.sqlite")
     failure_store_holder["store"] = failure_store
+    supervisor_repair_policy = RepairPolicy()
     rollout_ledger_holder["ledger"] = RepairRolloutLedger(
-        policy=policy.rollout,
+        policy=supervisor_repair_policy.rollout,
         store=failure_store,
         signer=runtime.writer.signing_service,
         audit_event=lambda event_type, **fields: runtime.audit.emit(
@@ -4425,6 +4427,7 @@ def main(argv: list[str] | None = None) -> int:
         application_process=child,
         acceptance_store_path=Path(policy.directory) / "worker-acceptance.sqlite",
         failure_store=failure_store,
+        repair_policy=supervisor_repair_policy,
     )
     supervisor_holder["supervisor"] = supervisor
     supervisor.start()

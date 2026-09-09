@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .logging.supervisor import CaretakerApplicationSupervisor
+from .policy import RepairPolicy, validate_policy
 from .runtime_supervision import (
     AdaptiveAggregationQueueRegistry,
     ApplicationWorkerLifecycle,
@@ -70,7 +71,13 @@ class ApplicationRuntimeSupervisor:
         acceptance_store: Any | None = None,
         acceptance_store_path: str | Path | None = None,
         failure_store: Any | None = None,
+        repair_policy: RepairPolicy | None = None,
     ) -> None:
+        if repair_policy is not None:
+            validate_policy(repair_policy)
+        self.repair_policy = repair_policy or RepairPolicy()
+        self.recovery_policy = self.repair_policy.recovery
+        self.rollout_policy = self.repair_policy.rollout
         self._implementation = CaretakerApplicationSupervisor(
             runtime,
             application_pid=application_pid,
