@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -835,6 +836,13 @@ def test_audit_registry_is_complete_and_exposes_redaction_contract() -> None:
         assert isinstance(definition["required_fields"], tuple)
         assert isinstance(definition["redaction_rules"], tuple)
         assert definition["example"]
+
+    registry_doc = Path(__file__).parents[1] / "docs" / "AUDIT_EVENT_REGISTRY.md"
+    documented = {
+        match.group(1)
+        for match in re.finditer(r"^\| `([A-Z0-9_]+)` \|", registry_doc.read_text(), re.MULTILINE)
+    }
+    assert documented == set(AUDIT_EVENT_REGISTRY)
 
 
 def test_audit_keyring_lifecycle_is_critical_and_never_logs_secret_material(

@@ -145,6 +145,7 @@ All event types share these redaction rules:
 | `ADAPTIVE_BATCH_REVALIDATED` | `IMPORTANT` | `scope.batch_id`, `outcome.state` | `{"batch_id": "batch-uuid", "state": "VALIDATED", "aggregate_modified": false, "authority_granted": false}` |
 | `ADAPTIVE_POLICY_INSTALLATION` | `CRITICAL` | `scope.acceptance_id`, `outcome.state` | `{"acceptance_id": "acceptance-uuid", "installation_id": "installation-uuid", "state": "INSTALLED", "policy_mutated": false, "authority_granted": false}` |
 | `BEHAVIOR_COLLECTION_OUTCOME` | `IMPORTANT` | `scope.scope`, `scope.subject`, `outcome.state` | `{"scope": "function", "subject": "demo.target", "state": "CAPTURED", "observed_calls": 50, "authority_granted": false}` |
+| `GUARD_BASELINE_ACCEPTED` | `CRITICAL` | `actor.id`, `scope.target_id`, `outcome.state` | `{"target_id": "demo.target", "state": "ACCEPTED", "authority_granted": false, "reason": "operator review completed"}` |
 | `VALIDATION_DECISION` | `IMPORTANT` | — | `{"state": "ELIGIBLE", "validation_id": "validation-uuid"}` |
 | `RECOVERY_DECISION` | `CRITICAL` | — | `{"state": "PLANNED_ONLY", "action": "ROLLBACK_TO_DEPLOYED_CODE"}` |
 | `REPAIR_ROLLOUT_TRANSITION` | `CRITICAL` | `scope.rollout_id`, `scope.transition_id`, `outcome.state` | `{"rollout_id": "rollout-uuid", "transition_id": "transition-uuid", "state": "validated", "action": "advance"}` |
