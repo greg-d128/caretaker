@@ -434,7 +434,7 @@ def verify_envelope(
         return False, "snapshot creation time is invalid"
     if not isinstance(snapshot.get("subject_key"), str) or not snapshot["subject_key"].strip():
         return False, "snapshot subject identity is missing"
-    if not isinstance(snapshot.get("generation_id"), str) or _SHA256.fullmatch(snapshot["generation_id"]) is None:
+    if not isinstance(snapshot.get("generation_id"), str) or not snapshot["generation_id"].strip():
         return False, "snapshot generation identity is invalid"
     if snapshot.get("code_hash") is not None and (
         not isinstance(snapshot["code_hash"], str) or _SHA256.fullmatch(snapshot["code_hash"]) is None
