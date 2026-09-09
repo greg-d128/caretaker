@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -116,12 +117,61 @@ class RegressionFixtureStore:
         return False
 
     @classmethod
-    def _verify_envelope(cls, envelope: Any) -> dict[str, Any]:
+    def _verify_envelope(cls, envelope: Any, *, path: Path | None = None) -> dict[str, Any]:
         if not isinstance(envelope, dict):
             raise RegressionFixtureIntegrityError("fixture envelope must be an object")
+        required = {
+            "schema_version", "fixture_id", "target_id", "name", "created_at",
+            "source_incident_id", "source_candidate_id", "source_function_version",
+            "source_function_hash", "replay_safety", "replay_status",
+            "rehydration_status", "args", "kwargs", "expected", "content_sha256",
+        }
+        if set(envelope) != required:
+            missing = sorted(required - set(envelope))
+            unknown = sorted(set(envelope) - required)
+            detail = ", ".join([*(f"missing {item}" for item in missing), *(f"unknown {item}" for item in unknown)])
+            raise RegressionFixtureIntegrityError(f"fixture schema fields are invalid: {detail}")
         expected = envelope.get("content_sha256")
-        if not isinstance(expected, str):
+        if not isinstance(expected, str) or re.fullmatch(r"[0-9a-f]{64}", expected) is None:
             raise RegressionFixtureIntegrityError("fixture content hash is missing")
+        try:
+            fixture_id = UUID(str(envelope["fixture_id"]))
+        except (ValueError, TypeError) as exc:
+            raise RegressionFixtureIntegrityError("fixture identity is invalid") from exc
+        if path is not None:
+            if path.name != f"{fixture_id}.json":
+                raise RegressionFixtureIntegrityError("fixture filename does not match fixture identity")
+            target_id = envelope.get("target_id")
+            if not isinstance(target_id, str) or path.parent.name != cls._target_key(target_id):
+                raise RegressionFixtureIntegrityError("fixture directory does not match target identity")
+        if not isinstance(envelope.get("target_id"), str) or not envelope["target_id"].strip():
+            raise RegressionFixtureIntegrityError("fixture target identity is missing")
+        if not isinstance(envelope.get("name"), str) or not envelope["name"].strip():
+            raise RegressionFixtureIntegrityError("fixture name is invalid")
+        if not isinstance(envelope.get("created_at"), str) or not envelope["created_at"].strip():
+            raise RegressionFixtureIntegrityError("fixture creation time is invalid")
+        for field in ("source_incident_id", "source_candidate_id"):
+            value = envelope.get(field)
+            if value is not None:
+                try:
+                    UUID(str(value))
+                except (ValueError, TypeError) as exc:
+                    raise RegressionFixtureIntegrityError(f"fixture {field} is invalid") from exc
+        source_hash = envelope.get("source_function_hash")
+        if source_hash is not None and (
+            not isinstance(source_hash, str) or re.fullmatch(r"[0-9a-f]{64}", source_hash) is None
+        ):
+            raise RegressionFixtureIntegrityError("fixture source function hash is invalid")
+        if envelope.get("source_function_version") is not None and (
+            isinstance(envelope["source_function_version"], bool)
+            or not isinstance(envelope["source_function_version"], int)
+            or envelope["source_function_version"] < 0
+        ):
+            raise RegressionFixtureIntegrityError("fixture source function version is invalid")
+        if envelope.get("replay_safety") not in {"PURE", "IDEMPOTENT"}:
+            raise RegressionFixtureIntegrityError("fixture replay safety is invalid")
+        if not isinstance(envelope.get("args"), list) or not isinstance(envelope.get("kwargs"), dict):
+            raise RegressionFixtureIntegrityError("fixture arguments are invalid")
         payload = dict(envelope)
         payload.pop("content_sha256", None)
         actual = cls._payload_hash(payload)
@@ -247,7 +297,7 @@ class RegressionFixtureStore:
             envelope = json.loads(path.read_text(encoding="utf-8"))
         except Exception as exc:
             raise RegressionFixtureIntegrityError(f"fixture is not valid JSON: {exc}") from exc
-        return self._verify_envelope(envelope)
+        return self._verify_envelope(envelope, path=path)
 
     def load(self, fixture_id: str | UUID) -> dict[str, Any]:
         try:

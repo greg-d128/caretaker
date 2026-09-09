@@ -8,6 +8,7 @@ import json
 import math
 import os
 import random
+import re
 import threading
 import tarfile
 import time
@@ -37,6 +38,7 @@ from .logging.signing import (
 
 SCHEMA_VERSION = 2
 STATISTICS_SCHEMA_VERSION = 2
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 RETURN_NOVELTY_MINIMUM_SUCCESS_SAMPLES = 20
 RETURN_NOVELTY_MAX_REPORTED_ITEMS = 64
 
@@ -407,9 +409,49 @@ def verify_envelope(
     integrity = envelope.get("integrity")
     if not isinstance(snapshot, Mapping) or not isinstance(integrity, Mapping):
         return False, "snapshot envelope is missing snapshot/integrity objects"
+    required = {
+        "schema_version", "snapshot_id", "created_at", "observation_started_at",
+        "observation_ended_at", "epoch_id", "epoch_sequence", "first_sample_sequence",
+        "last_sample_sequence", "complete_epoch", "scope", "subject", "subject_key",
+        "generation_id", "code_hash", "code_hash_kind", "monitoring_fingerprint",
+        "monitoring_configuration", "statistics_schema_version", "behavior_revision",
+        "generation_reason", "previous_generation_id", "seal_reason",
+        "environment_fingerprint", "workload_label", "profile", "children",
+        "collection_request", "authority_fingerprint", "deployment_fingerprint",
+        "snapshot_sequence", "previous_snapshot_hash",
+    }
+    if set(snapshot) != required:
+        return False, "snapshot payload fields are invalid: " + ", ".join(
+            sorted((set(snapshot) - required) | (required - set(snapshot)))
+        )
+    if snapshot.get("schema_version") != SCHEMA_VERSION:
+        return False, "unsupported behavior snapshot schema version"
+    try:
+        UUID(str(snapshot.get("snapshot_id")))
+    except (ValueError, TypeError):
+        return False, "snapshot identity is invalid"
+    if not isinstance(snapshot.get("created_at"), str) or not snapshot["created_at"].strip():
+        return False, "snapshot creation time is invalid"
+    if not isinstance(snapshot.get("subject_key"), str) or not snapshot["subject_key"].strip():
+        return False, "snapshot subject identity is missing"
+    if not isinstance(snapshot.get("generation_id"), str) or _SHA256.fullmatch(snapshot["generation_id"]) is None:
+        return False, "snapshot generation identity is invalid"
+    if snapshot.get("code_hash") is not None and (
+        not isinstance(snapshot["code_hash"], str) or _SHA256.fullmatch(snapshot["code_hash"]) is None
+    ):
+        return False, "snapshot code hash is invalid"
+    previous_snapshot_hash = snapshot.get("previous_snapshot_hash")
+    if previous_snapshot_hash is not None and (
+        not isinstance(previous_snapshot_hash, str) or _SHA256.fullmatch(previous_snapshot_hash) is None
+    ):
+        return False, "snapshot previous hash is invalid"
+    if isinstance(snapshot.get("snapshot_sequence"), bool) or not isinstance(snapshot.get("snapshot_sequence"), int) or snapshot["snapshot_sequence"] < 1:
+        return False, "snapshot sequence is invalid"
+    if not isinstance(snapshot.get("complete_epoch"), bool) or not isinstance(snapshot.get("children"), list):
+        return False, "snapshot provenance fields are invalid"
     expected = str(integrity.get("content_sha256") or "")
     observed = content_hash(snapshot)
-    if not expected or observed != expected:
+    if _SHA256.fullmatch(expected) is None or observed != expected:
         return False, "snapshot content hash does not match the integrity envelope"
 
     signed_value = integrity.get("artifact_signature")
@@ -646,6 +688,8 @@ class BehaviorSnapshotStore:
         identifier = UUID(str(snapshot_id))
         path = self.snapshot_directory / f"{identifier}.json"
         envelope = json.loads(path.read_text(encoding="utf-8"))
+        if path.name != f"{identifier}.json":
+            raise ValueError("behavior snapshot filename does not match snapshot identity")
         ok, error = verify_envelope(
             envelope,
             identity_journal=self.identity_journal,
@@ -1230,6 +1274,45 @@ class BehaviorSnapshotStore:
                 ):
                     errors.append(f"unsafe archive member: {member.name}")
             manifest = _tar_json(archive, "manifest.json")
+            if manifest is None:
+                raise ValueError("archive manifest is missing")
+            required_manifest = {
+                "schema_version", "archive_id", "created_at", "reason", "subject_key",
+                "generation_id", "snapshots",
+            }
+            if set(manifest) != required_manifest:
+                errors.append("archive manifest fields are invalid")
+            if manifest.get("schema_version") != 1:
+                errors.append("unsupported behavior archive manifest schema")
+            try:
+                archive_id = UUID(str(manifest.get("archive_id")))
+            except (ValueError, TypeError):
+                archive_id = None
+                errors.append("archive identity is invalid")
+            if path.name != f"behavior-{manifest.get('archive_id')}.tar.gz":
+                errors.append("archive filename does not match archive identity")
+            if not isinstance(manifest.get("created_at"), str) or not manifest["created_at"].strip():
+                errors.append("archive creation time is invalid")
+            if not isinstance(manifest.get("snapshots"), list) or not manifest["snapshots"]:
+                errors.append("archive snapshot list is invalid")
+            for item in manifest.get("snapshots") or ():
+                if not isinstance(item, Mapping):
+                    errors.append("archive snapshot entry is invalid")
+                    continue
+                if set(item) != {"snapshot_id", "content_sha256", "filename"}:
+                    errors.append("archive snapshot entry fields are invalid")
+                    continue
+                try:
+                    snapshot_id = UUID(str(item["snapshot_id"]))
+                except (ValueError, TypeError):
+                    errors.append("archive snapshot identity is invalid")
+                else:
+                    if item["filename"] != f"{snapshot_id}.json":
+                        errors.append("archive snapshot filename does not match identity")
+                if not isinstance(item["content_sha256"], str) or _SHA256.fullmatch(item["content_sha256"]) is None:
+                    errors.append("archive snapshot content hash is invalid")
+                if not isinstance(item["filename"], str) or Path(item["filename"]).name != item["filename"]:
+                    errors.append("archive snapshot filename is unsafe")
             identity_value = _tar_json(archive, "signing-identities.json", required=False) or {}
             identity_records = tuple(identity_value.get("records") or ())
             signature_value = _tar_json(archive, "archive-signature.json", required=False)
@@ -1284,6 +1367,13 @@ class BehaviorSnapshotStore:
                 )
                 if not ok:
                     errors.append(f"{member_name}: {error}")
+                    continue
+                snapshot = envelope.get("snapshot") or {}
+                if manifest.get("subject_key") is not None and snapshot.get("subject_key") != manifest["subject_key"]:
+                    errors.append(f"{member_name}: snapshot subject provenance does not match archive")
+                    continue
+                if manifest.get("generation_id") is not None and snapshot.get("generation_id") != manifest["generation_id"]:
+                    errors.append(f"{member_name}: snapshot generation provenance does not match archive")
                     continue
                 verified_snapshots += 1
         return {

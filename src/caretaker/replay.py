@@ -43,6 +43,15 @@ MAX_REPLAY_RESULT_BYTES = 512 * 1024
 _REPLAY_RESULT_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 
 
+def _strict_json_loads(value: str) -> Any:
+    return json.loads(
+        value,
+        parse_constant=lambda token: (_ for _ in ()).throw(
+            ValueError(f"non-finite JSON constant {token} is not permitted")
+        ),
+    )
+
+
 class ReplayResultStore:
     """Persist bounded replay responses as separate, content-addressed evidence."""
 
@@ -139,11 +148,13 @@ class ReplayResultStore:
         if self._rooted is None:
             raise ReplayExecutionError("replay result directory does not exist")
         try:
-            envelope = json.loads(self._rooted.read_bytes(path).decode("utf-8"))
+            envelope = _strict_json_loads(self._rooted.read_bytes(path).decode("utf-8"))
         except Exception as exc:
             raise ReplayExecutionError("replay result is not valid JSON") from exc
         if not isinstance(envelope, Mapping):
             raise ReplayExecutionError("replay result envelope must be an object")
+        if set(envelope) != {"schema_version", "result", "content_sha256", "recorded_at"}:
+            raise ReplayExecutionError("replay result envelope fields are invalid")
         payload = {
             "schema_version": envelope.get("schema_version"),
             "result": envelope.get("result"),
@@ -154,7 +165,24 @@ class ReplayResultStore:
             raise ReplayExecutionError("replay result filename does not match its hash")
         if content_hash(payload) != digest:
             raise ReplayExecutionError("replay result content hash does not match")
-        if not isinstance(envelope.get("recorded_at"), str):
+        if not isinstance(envelope.get("result"), Mapping):
+            raise ReplayExecutionError("replay result payload must be an object")
+        result = envelope["result"]
+        results = result.get("results")
+        if results is not None:
+            if not isinstance(results, list):
+                raise ReplayExecutionError("replay result entries are invalid")
+            for item in results:
+                if not isinstance(item, Mapping) or not isinstance(item.get("fixture_id"), str):
+                    raise ReplayExecutionError("replay result entry fixture identity is invalid")
+                if item.get("capsule_id") is not None:
+                    try:
+                        UUID(str(item["capsule_id"]))
+                    except (ValueError, TypeError) as exc:
+                        raise ReplayExecutionError("replay result capsule identity is invalid") from exc
+                if item.get("source_incident_id") and item.get("incident_id") and str(item["source_incident_id"]) != str(item["incident_id"]):
+                    raise ReplayExecutionError("replay result incident provenance is inconsistent")
+        if not isinstance(envelope.get("recorded_at"), str) or not envelope["recorded_at"].strip():
             raise ReplayExecutionError("replay result recorded_at is missing")
         return dict(envelope)
 

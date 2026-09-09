@@ -26,6 +26,7 @@ from .rooted_io import RootedFilesystem
 
 CAPSULE_SCHEMA_VERSION = 1
 ARTIFACT_SCHEMA_VERSION = 1
+_CAPSULE_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 
 
 class IncidentCapsuleLevel(Enum):
@@ -434,12 +435,16 @@ class IncidentCapsuleStore:
         parsed = UUID(str(artifact_id))
         path = self.artifact_directory / f"{parsed}.json"
         envelope = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(envelope, Mapping) or set(envelope) != {"artifact", "integrity"}:
+            raise IncidentCapsuleIntegrityError("artifact envelope fields are invalid")
         artifact = envelope.get("artifact")
         integrity = envelope.get("integrity")
         if not isinstance(artifact, Mapping) or not isinstance(integrity, Mapping):
             raise IncidentCapsuleIntegrityError("artifact envelope is missing artifact/integrity objects")
+        if artifact.get("schema_version") != ARTIFACT_SCHEMA_VERSION:
+            raise IncidentCapsuleIntegrityError("unsupported Incident Capsule artifact schema version")
         expected = str(integrity.get("content_sha256") or "")
-        if not expected or content_hash(artifact) != expected:
+        if _CAPSULE_DIGEST.fullmatch(expected) is None or content_hash(artifact) != expected:
             raise IncidentCapsuleIntegrityError(f"artifact content hash is invalid at {path}")
         if str(artifact.get("artifact_id")) != str(parsed):
             raise IncidentCapsuleIntegrityError(f"artifact identity is invalid at {path}")
@@ -694,12 +699,45 @@ class IncidentCapsuleStore:
 
     @staticmethod
     def _verify_envelope(envelope: Mapping[str, Any], *, path: Path | None = None) -> None:
+        if not isinstance(envelope, Mapping):
+            raise IncidentCapsuleIntegrityError("capsule envelope must be an object")
         payload = envelope.get("capsule")
         integrity = envelope.get("integrity")
         if not isinstance(payload, Mapping) or not isinstance(integrity, Mapping):
             raise IncidentCapsuleIntegrityError("capsule envelope is missing capsule/integrity objects")
+        required = {
+            "schema_version", "capsule_id", "incident_id", "run_id", "revision",
+            "created_at", "previous_revision_sha256", "policy_fingerprint",
+            "authority_policy_generation", "authority_policy_fingerprint",
+            "incident_state", "artifacts", "communications",
+        }
+        if set(payload) != required:
+            raise IncidentCapsuleIntegrityError("capsule payload fields are invalid")
+        if payload.get("schema_version") != CAPSULE_SCHEMA_VERSION:
+            raise IncidentCapsuleIntegrityError("unsupported Incident Capsule schema version")
+        try:
+            capsule_id = UUID(str(payload.get("capsule_id")))
+            UUID(str(payload.get("incident_id")))
+        except (ValueError, TypeError) as exc:
+            raise IncidentCapsuleIntegrityError("capsule identity is invalid") from exc
+        if payload.get("run_id") is not None:
+            try:
+                UUID(str(payload["run_id"]))
+            except (ValueError, TypeError) as exc:
+                raise IncidentCapsuleIntegrityError("capsule run identity is invalid") from exc
+        if isinstance(payload.get("revision"), bool) or not isinstance(payload.get("revision"), int) or payload["revision"] < 1:
+            raise IncidentCapsuleIntegrityError("capsule revision is invalid")
+        if not isinstance(payload.get("created_at"), str) or not payload["created_at"].strip():
+            raise IncidentCapsuleIntegrityError("capsule creation time is invalid")
+        previous = payload.get("previous_revision_sha256")
+        if previous is not None and (not isinstance(previous, str) or _CAPSULE_DIGEST.fullmatch(previous) is None):
+            raise IncidentCapsuleIntegrityError("capsule previous revision hash is invalid")
+        if not isinstance(payload.get("artifacts"), list) or not isinstance(payload.get("communications"), list):
+            raise IncidentCapsuleIntegrityError("capsule artifact or communication collections are invalid")
+        if path is not None and path.name != f"{capsule_id}.r{payload['revision']}.json":
+            raise IncidentCapsuleIntegrityError("capsule filename does not match capsule identity")
         expected = str(integrity.get("content_sha256") or "")
-        if not expected or content_hash(payload) != expected:
+        if _CAPSULE_DIGEST.fullmatch(expected) is None or content_hash(payload) != expected:
             suffix = f" at {path}" if path else ""
             raise IncidentCapsuleIntegrityError(f"capsule content hash is invalid{suffix}")
         signed = integrity.get("artifact_signature")
