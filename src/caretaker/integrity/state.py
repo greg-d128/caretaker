@@ -90,7 +90,7 @@ class IntegrityStateStore:
 
     def _write(self, state: TrustedVersionState) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps(asdict(state), sort_keys=True, indent=2) + "\n"
+        payload = json.dumps(asdict(state), sort_keys=True, indent=2, allow_nan=False) + "\n"
         fd, temporary = tempfile.mkstemp(prefix=self.path.name + ".", dir=self.path.parent)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as destination:

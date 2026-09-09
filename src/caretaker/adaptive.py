@@ -2071,7 +2071,7 @@ class _AdaptiveController:
             for scope, events in sorted(self._scope_timing_events.items())
         }
         payload["resolved_scopes"] = list(sorted(self._known_scopes))[:_MAX_RESOLVED_SCOPE_STATES]
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
         fd, temporary = tempfile.mkstemp(prefix=".adaptive-", dir=str(self._state_path.parent))
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:

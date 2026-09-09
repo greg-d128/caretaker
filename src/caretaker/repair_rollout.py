@@ -3693,7 +3693,7 @@ def _sign(
 
 
 def _digest(value: Mapping[str, Any]) -> str:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str, allow_nan=False).encode()
     return hashlib.sha256(encoded).hexdigest()
 
 

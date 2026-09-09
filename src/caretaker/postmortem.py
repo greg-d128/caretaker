@@ -128,7 +128,7 @@ class PostMortemRecorder:
     def _write_emergency(self, record: InternalIncident) -> None:
         self.emergency_path.parent.mkdir(parents=True, exist_ok=True)
         with self.emergency_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(_jsonable(record), sort_keys=True) + "\n")
+            handle.write(json.dumps(_jsonable(record), sort_keys=True, allow_nan=False) + "\n")
 
     @staticmethod
     def _emergency_stderr(message: str) -> None:

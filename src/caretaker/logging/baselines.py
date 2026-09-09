@@ -104,7 +104,7 @@ class BaselineStore:
 
     def save(self, baseline: ApplicationLoggingBaseline) -> Path:
         path = self.directory / f"{baseline.baseline_id}.json"
-        path.write_text(json.dumps(_jsonable(baseline), indent=2, sort_keys=True))
+        path.write_text(json.dumps(_jsonable(baseline), indent=2, sort_keys=True, allow_nan=False))
         return path
 
     def accept(self, baseline: ApplicationLoggingBaseline | UUID | str) -> ApplicationLoggingBaseline:

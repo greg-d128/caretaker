@@ -87,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
         }
     except BaseException as exc:
         result = {"outcome": "ERROR", "error": f"{type(exc).__name__}: {exc}"}
-    result_path.write_text(json.dumps(result, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+    result_path.write_text(json.dumps(result, sort_keys=True, separators=(",", ":"), allow_nan=False), encoding="utf-8")
     return 0 if result.get("outcome") in {"PASSED", "FAILED"} else 1
 
 
