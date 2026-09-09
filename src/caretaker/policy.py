@@ -292,6 +292,8 @@ def validate_repair_retention_policy(policy: RepairRetentionPolicy) -> None:
     if not isinstance(policy, RepairRetentionPolicy):
         raise PolicyConfigurationError("retention policy must be a RepairRetentionPolicy")
     errors: list[str] = []
+    if not isinstance(policy.allow_automatic_compaction, bool):
+        errors.append("retention.allow_automatic_compaction must be a boolean")
     if (
         isinstance(policy.maximum_records_per_run, bool)
         or not isinstance(policy.maximum_records_per_run, int)

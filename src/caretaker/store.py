@@ -6,6 +6,7 @@ import gzip
 import hashlib
 import json
 import os
+import re
 import sqlite3
 from contextlib import closing
 from collections import defaultdict, deque
@@ -53,8 +54,10 @@ from .repair_rollout import (
 
 
 REPAIR_STORE_SCHEMA_VERSION = 9
-REPAIR_RETENTION_PLAN_SCHEMA_VERSION = 1
-REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION = 1
+REPAIR_RETENTION_PLAN_SCHEMA_VERSION = 2
+REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION = 2
+_RETENTION_ARCHIVE_FORMAT = "caretaker-repair-retention-jsonl-v2"
+_HEX_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 
 _RETENTION_PROTECTED_TABLES = frozenset({
     "incidents",
@@ -1264,8 +1267,8 @@ class SQLiteRepairStore:
                     if created_at >= older_than:
                         continue
                     try:
-                        payload = json.loads(row[3])
-                    except (TypeError, ValueError):
+                        payload = _strict_json_loads(row[3])
+                    except (TypeError, ValueError, json.JSONDecodeError):
                         payload = None
                     reason = _retention_preservation_reason(table, payload)
                     item = {
@@ -1273,7 +1276,14 @@ class SQLiteRepairStore:
                         "record_id": row[0],
                         "target_id": row[1],
                         "created_at": row[2],
+                        "payload_sha256": (
+                            hashlib.sha256(_canonical_json_bytes(payload)).hexdigest()
+                            if payload is not None
+                            else None
+                        ),
                     }
+                    if reason is None and (not isinstance(row[1], str) or not row[1].strip()):
+                        reason = "missing_target_id"
                     if reason is not None:
                         item["reason"] = reason
                         preserved.append(item)
@@ -1317,81 +1327,37 @@ class SQLiteRepairStore:
         Deletion and compaction are separate, policy-owned operations.
         """
 
-        if not isinstance(plan, Mapping):
-            raise TypeError("retention plan must be a mapping")
+        normalized_plan, normalized_candidates, plan_sha256 = _validate_retention_plan(
+            plan,
+            tables=self._TABLES,
+        )
         if audit_event is not None and not callable(audit_event):
             raise TypeError("retention audit_event must be callable")
-        if plan.get("schema_version") != REPAIR_RETENTION_PLAN_SCHEMA_VERSION:
-            raise ValueError("unsupported Caretaker retention plan schema version")
-        if plan.get("store_schema_version") != REPAIR_STORE_SCHEMA_VERSION:
-            raise ValueError("retention plan targets an unsupported store schema version")
-        if plan.get("truncated"):
-            raise ValueError("a truncated retention plan cannot be archived")
         if (
             isinstance(maximum_records, bool)
             or not isinstance(maximum_records, int)
             or maximum_records <= 0
         ):
             raise ValueError("maximum_records must be a positive integer")
-        try:
-            cutoff = datetime.fromisoformat(str(plan["older_than"]))
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ValueError("retention plan cutoff is invalid") from exc
-        if cutoff.tzinfo is None or cutoff.utcoffset() is None:
-            raise ValueError("retention plan cutoff must be timezone-aware")
-        candidates = plan.get("candidate_records")
-        if isinstance(candidates, (str, bytes)) or not isinstance(candidates, Sequence):
-            raise ValueError("retention plan candidates must be a sequence")
-        normalized_candidates: list[dict[str, Any]] = []
-        candidate_keys: set[tuple[str, str]] = set()
-        for item in candidates:
-            if not isinstance(item, Mapping):
-                raise ValueError("retention plan candidate is not a mapping")
-            family = item.get("family")
-            record_id = item.get("record_id")
-            if not isinstance(family, str) or family not in self._TABLES:
-                raise ValueError("retention plan contains an unknown family")
-            if not isinstance(record_id, str) or not record_id:
-                raise ValueError("retention plan contains an invalid record ID")
-            plan_families = plan.get("families", ())
-            if (
-                isinstance(plan_families, (str, bytes))
-                or not isinstance(plan_families, Sequence)
-                or family not in plan_families
-            ):
-                raise ValueError("retention plan candidate is outside its family scope")
-            key = (family, record_id)
-            if key in candidate_keys:
-                raise ValueError("retention plan contains a duplicate record")
-            candidate_keys.add(key)
-            normalized_candidates.append({
-                "family": family,
-                "record_id": record_id,
-                "target_id": item.get("target_id"),
-                "created_at": item.get("created_at"),
-            })
+        cutoff = datetime.fromisoformat(normalized_plan["older_than"])
+        candidate_keys = {
+            (item["family"], item["record_id"])
+            for item in normalized_candidates
+        }
 
         destination = Path(archive_path)
         if destination.resolve() == self.path.resolve():
             raise ValueError("retention archive cannot overwrite the repair store")
         destination.parent.mkdir(parents=True, exist_ok=True)
         partial = destination.with_name(destination.name + ".partial.jsonl")
-        plan_sha256 = hashlib.sha256(
-            _canonical_json_bytes({
-                "schema_version": plan["schema_version"],
-                "store_schema_version": plan["store_schema_version"],
-                "older_than": plan["older_than"],
-                "families": plan.get("families", []),
-                "candidate_records": normalized_candidates,
-            })
-        ).hexdigest()
-
         if destination.exists():
             summary = _read_retention_archive(destination)
             if summary["plan_sha256"] != plan_sha256:
                 raise ValueError("existing retention archive belongs to a different plan")
             if summary["record_keys"] != candidate_keys:
                 raise ValueError("existing retention archive does not match the retention plan")
+            if summary["plan_records"] != normalized_candidates:
+                raise ValueError("existing retention archive does not match planned content")
             return _finish_retention_result({
                 "schema_version": REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION,
                 "archive_path": str(destination),
@@ -1407,8 +1373,9 @@ class SQLiteRepairStore:
             "kind": "retention_archive_header",
             "schema_version": REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION,
             "store_schema_version": REPAIR_STORE_SCHEMA_VERSION,
-            "format": "caretaker-repair-retention-jsonl-v1",
+            "format": _RETENTION_ARCHIVE_FORMAT,
             "plan_sha256": plan_sha256,
+            "plan_records": normalized_candidates,
         }
         existing: dict[tuple[str, str], dict[str, Any]] = {}
         if partial.exists():
@@ -1447,7 +1414,7 @@ class SQLiteRepairStore:
                     )
                 try:
                     created_at = datetime.fromisoformat(row[1])
-                    payload = json.loads(row[2])
+                    payload = _strict_json_loads(row[2])
                 except (TypeError, ValueError, json.JSONDecodeError) as exc:
                     raise ValueError("retention plan row is no longer valid JSON") from exc
                 if (
@@ -1462,12 +1429,21 @@ class SQLiteRepairStore:
                     )
                 record = {
                     "kind": "retention_archive_record",
+                    "schema_version": REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION,
                     "family": item["family"],
                     "record_id": item["record_id"],
                     "target_id": row[0],
                     "created_at": row[1],
                     "payload": payload,
+                    "payload_sha256": hashlib.sha256(
+                        _canonical_json_bytes(payload)
+                    ).hexdigest(),
                 }
+                if record["payload_sha256"] != item["payload_sha256"]:
+                    raise ValueError(
+                        "retention source row payload changed: "
+                        f"{item['family']}/{item['record_id']}"
+                    )
                 record["record_sha256"] = hashlib.sha256(
                     _canonical_json_bytes(record)
                 ).hexdigest()
@@ -1746,6 +1722,185 @@ def _canonical_json_bytes(value: Any) -> bytes:
     ).encode("utf-8")
 
 
+def _strict_json_loads(value: str | bytes) -> Any:
+    """Decode JSON without admitting non-finite numeric values."""
+
+    def reject_constant(name: str) -> None:
+        raise ValueError(f"non-finite JSON constant is not permitted: {name}")
+
+    return json.loads(value, parse_constant=reject_constant)
+
+
+def _validate_digest(value: Any, *, field: str) -> str:
+    if not isinstance(value, str) or _HEX_DIGEST.fullmatch(value) is None:
+        raise ValueError(f"{field} must be a lowercase SHA-256 hex digest")
+    return value
+
+
+def _validate_retention_timestamp(value: Any, *, field: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be an ISO-8601 string")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"{field} is invalid") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{field} must be timezone-aware")
+    return value
+
+
+def _validate_retention_record_id(value: Any, *, field: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{field} must be a UUID string")
+    try:
+        parsed = UUID(value)
+    except (AttributeError, ValueError) as exc:
+        raise ValueError(f"{field} must be a UUID string") from exc
+    if str(parsed) != value:
+        raise ValueError(f"{field} must use canonical UUID formatting")
+    return value
+
+
+def _validate_retention_plan_candidate(
+    item: Any,
+    *,
+    family_scope: set[str],
+    tables: Mapping[str, str] | set[str] | frozenset[str],
+) -> dict[str, Any]:
+    if not isinstance(item, Mapping):
+        raise ValueError("retention plan candidate is not a mapping")
+    expected = {"family", "record_id", "target_id", "created_at", "payload_sha256"}
+    if set(item) != expected:
+        raise ValueError("retention plan candidate has an unsupported field set")
+    family = item["family"]
+    if not isinstance(family, str) or family not in tables:
+        raise ValueError("retention plan contains an unknown family")
+    if family not in family_scope:
+        raise ValueError("retention plan candidate is outside its family scope")
+    record_id = _validate_retention_record_id(item["record_id"], field="retention plan record_id")
+    target_id = item["target_id"]
+    if not isinstance(target_id, str) or not target_id.strip():
+        raise ValueError("retention plan target_id must be a non-empty string")
+    created_at = _validate_retention_timestamp(item["created_at"], field="retention plan created_at")
+    payload_sha256 = _validate_digest(
+        item["payload_sha256"],
+        field="retention plan payload_sha256",
+    )
+    return {
+        "family": family,
+        "record_id": record_id,
+        "target_id": target_id,
+        "created_at": created_at,
+        "payload_sha256": payload_sha256,
+    }
+
+
+def _validate_retention_plan(
+    plan: Any,
+    *,
+    tables: Mapping[str, str] | set[str] | frozenset[str],
+) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
+    if not isinstance(plan, Mapping):
+        raise TypeError("retention plan must be a mapping")
+    expected = {
+        "schema_version",
+        "store_schema_version",
+        "older_than",
+        "families",
+        "maximum_records",
+        "examined_records",
+        "truncated",
+        "candidate_records",
+        "preserved_records",
+    }
+    if set(plan) != expected:
+        raise ValueError("retention plan has an unsupported field set")
+    if plan["schema_version"] != REPAIR_RETENTION_PLAN_SCHEMA_VERSION:
+        raise ValueError("unsupported Caretaker retention plan schema version")
+    if plan["store_schema_version"] != REPAIR_STORE_SCHEMA_VERSION:
+        raise ValueError("retention plan targets an unsupported store schema version")
+    older_than = _validate_retention_timestamp(plan["older_than"], field="retention plan cutoff")
+    families = plan["families"]
+    if (
+        not isinstance(families, list)
+        or not families
+        or any(not isinstance(family, str) or family not in tables for family in families)
+        or len(set(families)) != len(families)
+    ):
+        raise ValueError("retention plan families must be a unique list of known families")
+    maximum_records = plan["maximum_records"]
+    if (
+        isinstance(maximum_records, bool)
+        or not isinstance(maximum_records, int)
+        or maximum_records <= 0
+    ):
+        raise ValueError("retention plan maximum_records must be a positive integer")
+    examined_records = plan["examined_records"]
+    if (
+        isinstance(examined_records, bool)
+        or not isinstance(examined_records, int)
+        or examined_records < 0
+    ):
+        raise ValueError("retention plan examined_records must be a non-negative integer")
+    if not isinstance(plan["truncated"], bool):
+        raise ValueError("retention plan truncated must be a boolean")
+    if plan["truncated"]:
+        raise ValueError("a truncated retention plan cannot be archived")
+    candidates = plan["candidate_records"]
+    preserved = plan["preserved_records"]
+    if not isinstance(candidates, list) or not isinstance(preserved, list):
+        raise ValueError("retention plan record collections must be lists")
+    if len(candidates) > examined_records or len(candidates) > maximum_records:
+        raise ValueError("retention plan candidate count is inconsistent")
+    normalized_candidates: list[dict[str, Any]] = []
+    keys: set[tuple[str, str]] = set()
+    family_scope = set(families)
+    for item in candidates:
+        normalized = _validate_retention_plan_candidate(
+            item,
+            family_scope=family_scope,
+            tables=tables,
+        )
+        key = (normalized["family"], normalized["record_id"])
+        if key in keys:
+            raise ValueError("retention plan contains a duplicate record")
+        keys.add(key)
+        normalized_candidates.append(normalized)
+    for item in preserved:
+        if not isinstance(item, Mapping):
+            raise ValueError("retention plan preserved record is not a mapping")
+        allowed = {"family", "record_id", "target_id", "created_at", "reason"}
+        if not {"family", "record_id", "reason"}.issubset(item) or not set(item) <= allowed:
+            raise ValueError("retention plan preserved record has an unsupported field set")
+        family = item["family"]
+        if not isinstance(family, str) or family not in family_scope:
+            raise ValueError("retention plan preserved record has an invalid family")
+        _validate_retention_record_id(item["record_id"], field="retention plan preserved record_id")
+        if not isinstance(item["reason"], str) or not item["reason"].strip():
+            raise ValueError("retention plan preserved record reason is invalid")
+    normalized_plan = {
+        "schema_version": REPAIR_RETENTION_PLAN_SCHEMA_VERSION,
+        "store_schema_version": REPAIR_STORE_SCHEMA_VERSION,
+        "older_than": older_than,
+        "families": list(families),
+        "maximum_records": maximum_records,
+        "examined_records": examined_records,
+        "truncated": plan["truncated"],
+        "candidate_records": normalized_candidates,
+        "preserved_records": preserved,
+    }
+    plan_sha256 = hashlib.sha256(
+        _canonical_json_bytes({
+            "schema_version": normalized_plan["schema_version"],
+            "store_schema_version": normalized_plan["store_schema_version"],
+            "older_than": normalized_plan["older_than"],
+            "families": normalized_plan["families"],
+            "candidate_records": normalized_candidates,
+        })
+    ).hexdigest()
+    return normalized_plan, normalized_candidates, plan_sha256
+
+
 def _finish_retention_result(
     result: dict[str, Any],
     audit_event: Callable[..., Any] | None,
@@ -1823,36 +1978,25 @@ def _read_retention_partial(
         raw = raw[: last_newline + 1]
         path.write_bytes(raw)
     try:
-        lines = [json.loads(line) for line in raw.splitlines()]
-    except json.JSONDecodeError as exc:
+        lines = [_strict_json_loads(line) for line in raw.splitlines()]
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
         raise ValueError("retention partial contains invalid JSON") from exc
-    if not lines or lines[0].get("kind") != "retention_archive_header":
+    if not lines:
         raise ValueError("retention partial header is missing")
-    if (
-        lines[0].get("schema_version") != REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION
-        or lines[0].get("store_schema_version") != REPAIR_STORE_SCHEMA_VERSION
-        or lines[0].get("format") != "caretaker-repair-retention-jsonl-v1"
-        or not isinstance(lines[0].get("plan_sha256"), str)
-    ):
-        raise ValueError("retention partial header is unsupported")
+    header, plan_records = _validate_retention_archive_header(lines[0])
+    planned = {(item["family"], item["record_id"]): item for item in plan_records}
     records: dict[tuple[str, str], dict[str, Any]] = {}
     for item in lines[1:]:
-        if item.get("kind") != "retention_archive_record":
-            raise ValueError("retention partial contains an unexpected record")
-        family = item.get("family")
-        record_id = item.get("record_id")
-        if not isinstance(family, str) or not isinstance(record_id, str):
-            raise ValueError("retention partial record identity is invalid")
-        record_sha256 = item.get("record_sha256")
-        unsigned = dict(item)
-        unsigned.pop("record_sha256", None)
-        if record_sha256 != hashlib.sha256(_canonical_json_bytes(unsigned)).hexdigest():
-            raise ValueError("retention partial record integrity check failed")
+        record = _validate_retention_archive_record(item)
+        family = record["family"]
+        record_id = record["record_id"]
         key = (family, record_id)
         if key in records:
             raise ValueError("retention partial contains a duplicate record")
-        records[key] = item
-    return lines[0], records
+        if key not in planned or not _retention_record_matches_plan(record, planned[key]):
+            raise ValueError("retention partial record does not match planned content")
+        records[key] = record
+    return header, records
 
 
 def _read_retention_archive(path: Path) -> dict[str, Any]:
@@ -1862,58 +2006,143 @@ def _read_retention_archive(path: Path) -> dict[str, Any]:
     except (OSError, EOFError) as exc:
         raise ValueError("retention archive cannot be read") from exc
     try:
-        lines = [json.loads(line) for line in raw.splitlines()]
-    except json.JSONDecodeError as exc:
+        lines = [_strict_json_loads(line) for line in raw.splitlines()]
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
         raise ValueError("retention archive contains invalid JSON") from exc
-    if len(lines) < 2 or lines[0].get("kind") != "retention_archive_header":
+    if len(lines) < 2:
         raise ValueError("retention archive header is missing")
-    if (
-        lines[0].get("schema_version") != REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION
-        or lines[0].get("store_schema_version") != REPAIR_STORE_SCHEMA_VERSION
-        or lines[0].get("format") != "caretaker-repair-retention-jsonl-v1"
-    ):
-        raise ValueError("retention archive header is unsupported")
+    header, plan_records = _validate_retention_archive_header(lines[0])
+    planned = {(item["family"], item["record_id"]): item for item in plan_records}
     footer = lines[-1]
+    if set(footer) != {"kind", "schema_version", "record_count", "records_sha256"}:
+        raise ValueError("retention archive footer has an unsupported field set")
     if footer.get("kind") != "retention_archive_footer":
         raise ValueError("retention archive footer is missing")
     if footer.get("schema_version") != REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION:
         raise ValueError("retention archive footer is unsupported")
+    if isinstance(footer.get("record_count"), bool) or not isinstance(footer.get("record_count"), int):
+        raise ValueError("retention archive footer record_count is invalid")
+    _validate_digest(footer.get("records_sha256"), field="retention archive records_sha256")
     digest = hashlib.sha256()
     count = 0
     record_keys: set[tuple[str, str]] = set()
     records: dict[tuple[str, str], dict[str, Any]] = {}
     for item, line in zip(lines[1:-1], raw.splitlines()[1:-1]):
-        if item.get("kind") != "retention_archive_record":
-            raise ValueError("retention archive contains an unexpected record")
-        record_sha256 = item.get("record_sha256")
-        unsigned = dict(item)
-        unsigned.pop("record_sha256", None)
-        if record_sha256 != hashlib.sha256(_canonical_json_bytes(unsigned)).hexdigest():
-            raise ValueError("retention archive record integrity check failed")
-        family = item.get("family")
-        record_id = item.get("record_id")
-        if (
-            not isinstance(family, str)
-            or family not in SQLiteRepairStore._TABLES
-            or not isinstance(record_id, str)
-            or not record_id
-        ):
-            raise ValueError("retention archive record identity is invalid")
+        record = _validate_retention_archive_record(item)
+        family = record["family"]
+        record_id = record["record_id"]
         key = (family, record_id)
         if key in record_keys:
             raise ValueError("retention archive contains a duplicate record")
+        if key not in planned or not _retention_record_matches_plan(record, planned[key]):
+            raise ValueError("retention archive record does not match planned content")
         record_keys.add(key)
-        records[key] = item
+        records[key] = record
         digest.update(line + b"\n")
         count += 1
     if footer.get("record_count") != count or footer.get("records_sha256") != digest.hexdigest():
         raise ValueError("retention archive footer integrity check failed")
     return {
-        "plan_sha256": lines[0].get("plan_sha256"),
+        "plan_sha256": header["plan_sha256"],
+        "plan_records": plan_records,
         "record_count": count,
         "record_keys": record_keys,
         "records": records,
     }
+
+
+def _validate_retention_archive_header(value: Any) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if not isinstance(value, Mapping) or set(value) != {
+        "kind", "schema_version", "store_schema_version", "format",
+        "plan_sha256", "plan_records",
+    }:
+        raise ValueError("retention archive header is unsupported")
+    if value.get("kind") != "retention_archive_header":
+        raise ValueError("retention archive header is missing")
+    if value.get("schema_version") != REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION:
+        raise ValueError("retention archive header is unsupported")
+    if value.get("store_schema_version") != REPAIR_STORE_SCHEMA_VERSION:
+        raise ValueError("retention archive header is unsupported")
+    if value.get("format") != _RETENTION_ARCHIVE_FORMAT:
+        raise ValueError("retention archive header is unsupported")
+    plan_sha256 = _validate_digest(value.get("plan_sha256"), field="retention archive plan_sha256")
+    raw_records = value.get("plan_records")
+    if not isinstance(raw_records, list):
+        raise ValueError("retention archive plan_records must be a list")
+    plan_records: list[dict[str, Any]] = []
+    keys: set[tuple[str, str]] = set()
+    for item in raw_records:
+        normalized = _validate_retention_plan_candidate(
+            item,
+            family_scope=set(SQLiteRepairStore._TABLES),
+            tables=SQLiteRepairStore._TABLES,
+        )
+        key = (normalized["family"], normalized["record_id"])
+        if key in keys:
+            raise ValueError("retention archive plan contains a duplicate record")
+        keys.add(key)
+        plan_records.append(normalized)
+    return {
+        "kind": value["kind"],
+        "schema_version": value["schema_version"],
+        "store_schema_version": value["store_schema_version"],
+        "format": value["format"],
+        "plan_sha256": plan_sha256,
+        "plan_records": plan_records,
+    }, plan_records
+
+
+def _validate_retention_archive_record(value: Any) -> dict[str, Any]:
+    expected = {
+        "kind", "schema_version", "family", "record_id", "target_id",
+        "created_at", "payload", "payload_sha256", "record_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected:
+        raise ValueError("retention archive record has an unsupported field set")
+    if value.get("kind") != "retention_archive_record":
+        raise ValueError("retention archive contains an unexpected record")
+    if value.get("schema_version") != REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION:
+        raise ValueError("retention archive record schema is unsupported")
+    family = value.get("family")
+    if not isinstance(family, str) or family not in SQLiteRepairStore._TABLES:
+        raise ValueError("retention archive record family is invalid")
+    record_id = _validate_retention_record_id(value.get("record_id"), field="retention archive record_id")
+    target_id = value.get("target_id")
+    if not isinstance(target_id, str) or not target_id.strip():
+        raise ValueError("retention archive record target_id is invalid")
+    created_at = _validate_retention_timestamp(value.get("created_at"), field="retention archive created_at")
+    try:
+        _canonical_json_bytes(value["payload"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("retention archive record payload is invalid") from exc
+    payload_sha256 = _validate_digest(value.get("payload_sha256"), field="retention archive payload_sha256")
+    if payload_sha256 != hashlib.sha256(_canonical_json_bytes(value["payload"])).hexdigest():
+        raise ValueError("retention archive payload integrity commitment failed")
+    unsigned = dict(value)
+    unsigned.pop("record_sha256")
+    record_sha256 = _validate_digest(value.get("record_sha256"), field="retention archive record_sha256")
+    if record_sha256 != hashlib.sha256(_canonical_json_bytes(unsigned)).hexdigest():
+        raise ValueError("retention archive record integrity check failed")
+    return {
+        "kind": value["kind"],
+        "schema_version": value["schema_version"],
+        "family": family,
+        "record_id": record_id,
+        "target_id": target_id,
+        "created_at": created_at,
+        "payload": value["payload"],
+        "payload_sha256": payload_sha256,
+        "record_sha256": record_sha256,
+    }
+
+
+def _retention_record_matches_plan(
+    record: Mapping[str, Any],
+    planned: Mapping[str, Any],
+) -> bool:
+    return all(record.get(name) == planned.get(name) for name in (
+        "family", "record_id", "target_id", "created_at", "payload_sha256",
+    ))
 
 
 def _record_time(record: object) -> datetime:

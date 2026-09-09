@@ -12,6 +12,7 @@ from uuid import uuid4
 import pytest
 
 from caretaker import RepairRetentionPolicy, SQLiteRepairStore
+from caretaker.policy import PolicyConfigurationError, validate_repair_retention_policy
 
 
 def _insert_record(path, table: str, *, target_id: str | None, payload: dict, created_at: datetime) -> None:
@@ -49,7 +50,7 @@ def test_retention_dry_run_preserves_incident_and_signed_evidence_without_mutati
     before = store.query_records("candidates", limit=100)
     plan = store.retention_dry_run(older_than=datetime.now(timezone.utc) - timedelta(days=1))
 
-    assert plan["schema_version"] == 1
+    assert plan["schema_version"] == 2
     assert plan["truncated"] is False
     assert len(plan["candidate_records"]) == 1
     assert len(plan["preserved_records"]) == 3
@@ -217,7 +218,7 @@ def test_retention_archive_rejects_valid_archive_with_wrong_record_set(tmp_path)
             "kind": "retention_archive_footer",
             "record_count": 1,
             "records_sha256": hashlib.sha256(lines[1] + b"\n").hexdigest(),
-            "schema_version": 1,
+                "schema_version": 2,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -227,6 +228,80 @@ def test_retention_archive_rejects_valid_archive_with_wrong_record_set(tmp_path)
 
     with pytest.raises(ValueError, match="does not match"):
         store.retention_archive(plan, archive_path=archive_path)
+
+
+@pytest.mark.parametrize("value", ("true", 1, 0, [], {}, None))
+def test_retention_compaction_authorization_requires_exact_boolean(value) -> None:
+    policy = RepairRetentionPolicy(allow_automatic_compaction=value)
+    with pytest.raises(PolicyConfigurationError, match="must be a boolean"):
+        validate_repair_retention_policy(policy)
+
+
+def test_retention_archive_status_rejects_payload_mutation_even_with_rehashed_record(tmp_path) -> None:
+    path = tmp_path / "repair.sqlite"
+    store = SQLiteRepairStore(path)
+    old = datetime.now(timezone.utc) - timedelta(days=2)
+    _insert_record(path, "candidates", target_id="payload.target", payload={"value": 1}, created_at=old)
+    plan = store.retention_dry_run(
+        older_than=datetime.now(timezone.utc) - timedelta(days=1),
+        families=("candidates",),
+    )
+    archive_path = tmp_path / "repair.jsonl.gz"
+    store.retention_archive(plan, archive_path=archive_path)
+
+    with gzip.open(archive_path, "rb") as stream:
+        lines = stream.read().splitlines()
+    record = json.loads(lines[1])
+    record["payload"] = {"value": 2}
+    unsigned = dict(record)
+    unsigned.pop("record_sha256")
+    record["record_sha256"] = hashlib.sha256(
+        json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    lines[1] = json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
+    footer = json.loads(lines[-1])
+    footer["records_sha256"] = hashlib.sha256(lines[1] + b"\n").hexdigest()
+    lines[-1] = json.dumps(footer, sort_keys=True, separators=(",", ":")).encode()
+    with gzip.open(archive_path, "wb") as stream:
+        stream.write(b"\n".join(lines) + b"\n")
+
+    with pytest.raises(ValueError, match="payload integrity commitment"):
+        store.retention_archive_status(archive_path)
+
+
+def test_retention_archive_status_rejects_mutation_that_recomputes_all_record_hashes(tmp_path) -> None:
+    path = tmp_path / "repair.sqlite"
+    store = SQLiteRepairStore(path)
+    old = datetime.now(timezone.utc) - timedelta(days=2)
+    _insert_record(path, "candidates", target_id="payload.target", payload={"value": 1}, created_at=old)
+    plan = store.retention_dry_run(
+        older_than=datetime.now(timezone.utc) - timedelta(days=1),
+        families=("candidates",),
+    )
+    archive_path = tmp_path / "repair.jsonl.gz"
+    store.retention_archive(plan, archive_path=archive_path)
+
+    with gzip.open(archive_path, "rb") as stream:
+        lines = stream.read().splitlines()
+    record = json.loads(lines[1])
+    record["payload"] = {"value": 2}
+    record["payload_sha256"] = hashlib.sha256(
+        json.dumps(record["payload"], sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    unsigned = dict(record)
+    unsigned.pop("record_sha256")
+    record["record_sha256"] = hashlib.sha256(
+        json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    lines[1] = json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
+    footer = json.loads(lines[-1])
+    footer["records_sha256"] = hashlib.sha256(lines[1] + b"\n").hexdigest()
+    lines[-1] = json.dumps(footer, sort_keys=True, separators=(",", ":")).encode()
+    with gzip.open(archive_path, "wb") as stream:
+        stream.write(b"\n".join(lines) + b"\n")
+
+    with pytest.raises(ValueError, match="planned content"):
+        store.retention_archive_status(archive_path)
 
 
 def test_retention_compaction_requires_policy_and_deletes_only_after_archive(tmp_path) -> None:
