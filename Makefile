@@ -28,7 +28,7 @@ PODMAN_CGROUP_MANAGER ?= cgroupfs
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup test compile check wheel podman-image podman-failure-corpus-image podman-verify build package-check artifact-parity verify-wheel publish-testpypi publish-pypi publish-test publish root-check signing-check signing-status signing-bundle release-check release-manifest protected-manifest manifests generate-release-manifest generate-protected-manifest generate-manifests wheel-manifests inspect-integrity sign-check sign-all verify-signature verify-all verify-publication policy-catalogs lab lab-verified lab-console profile clean distclean
+.PHONY: help setup test compile check release-gate wheel podman-image podman-failure-corpus-image podman-verify build package-check artifact-parity verify-wheel publish-testpypi publish-pypi publish-test publish root-check signing-check signing-status signing-bundle release-check release-manifest protected-manifest manifests generate-release-manifest generate-protected-manifest generate-manifests wheel-manifests inspect-integrity sign-check sign-all verify-signature verify-all verify-publication policy-catalogs lab lab-verified lab-console profile clean distclean
 
 help: ## Show commands grouped by operator role
 	@printf '%s\n' \
@@ -36,6 +36,7 @@ help: ## Show commands grouped by operator role
 	  'Development:' \
 	  '  setup                    Create the development environment' \
 	  '  check                    Run tests and compilation checks' \
+	  '  release-gate             Run lifecycle, IPC, authority, and rollout regression gates' \
 	  '  build                    Build wheel and source distribution' \
 	  '  artifact-parity          Compare exact source-distribution and wheel payloads' \
 	  '  package-check            Validate current-version distributions with Twine' \
@@ -79,6 +80,14 @@ compile: ## Compile the source, tests, and examples
 	$(BIN)/python -m compileall -q src tests examples scripts
 
 check: test compile ## Run source tests and compilation checks
+
+release-gate: ## Run the completed lifecycle, IPC, authority, and rollout regression gates
+	PYTHONPATH=src $(BIN)/python -m pytest -q \
+		tests/test_worker_failure_policy.py \
+		tests/test_logging_ipc_supervisor.py \
+		tests/test_baseline_authority.py \
+		tests/test_adaptive_policy_ledger.py \
+		tests/test_repair_rollout.py
 
 wheel: ## Build the wheel in dist/
 	$(BIN)/python -m build --wheel
