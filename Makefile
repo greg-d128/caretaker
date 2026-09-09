@@ -16,8 +16,8 @@ PACKAGE_VERSION ?= $(shell sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml
 ROOT_VERSION ?= $(shell $(TOOLS_PYTHON) -c 'import json; print(json.load(open("$(ROOT)"))["root_version"])' 2>/dev/null)
 INTEGRITY := PYTHONPATH=src $(TOOLS_PYTHON) -m caretaker.integrity.cli
 TWINE := $(TOOLS_PYTHON) -m twine
-PACKAGE_FILES = dist/caretaker-$(PACKAGE_VERSION)*.tar.gz dist/caretaker-$(PACKAGE_VERSION)*-py3-none-any.whl
-PODMAN_WHEEL = $(wildcard dist/caretaker-$(PACKAGE_VERSION)*-py3-none-any.whl)
+PACKAGE_FILES = dist/caretaker-$(PACKAGE_VERSION).tar.gz dist/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl
+PODMAN_WHEEL = $(wildcard dist/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl)
 PYPI_UPLOAD_URL ?= https://upload.pypi.org/legacy/
 TEST_PYPI_UPLOAD_URL ?= https://test.pypi.org/legacy/
 PODMAN ?= podman
@@ -123,17 +123,17 @@ build: ## Build the wheel and source distribution in dist/
 	$(BIN)/python -m build
 
 package-check: build artifact-parity ## Validate exactly the current-version wheel and source distribution
-	@test "$(words $(wildcard dist/caretaker-$(PACKAGE_VERSION)*.tar.gz))" -eq 1 || { echo "Expected exactly one source distribution for version $(PACKAGE_VERSION)" >&2; exit 2; }
-	@test "$(words $(wildcard dist/caretaker-$(PACKAGE_VERSION)*-py3-none-any.whl))" -eq 1 || { echo "Expected exactly one wheel for version $(PACKAGE_VERSION)" >&2; exit 2; }
+	@test "$(words $(wildcard dist/caretaker-$(PACKAGE_VERSION).tar.gz))" -eq 1 || { echo "Expected exactly one source distribution for version $(PACKAGE_VERSION)" >&2; exit 2; }
+	@test "$(words $(wildcard dist/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl))" -eq 1 || { echo "Expected exactly one wheel for version $(PACKAGE_VERSION)" >&2; exit 2; }
 	$(TWINE) check $(PACKAGE_FILES)
 	@echo "Validated distributions for Caretaker $(PACKAGE_VERSION): $(PACKAGE_FILES)"
 
 artifact-parity: build ## Compare exact source-distribution and wheel payloads
-	@test "$(words $(wildcard dist/caretaker-$(PACKAGE_VERSION)*.tar.gz))" -eq 1 || { echo "Expected exactly one source distribution for version $(PACKAGE_VERSION)" >&2; exit 2; }
-	@test "$(words $(wildcard dist/caretaker-$(PACKAGE_VERSION)*-py3-none-any.whl))" -eq 1 || { echo "Expected exactly one wheel for version $(PACKAGE_VERSION)" >&2; exit 2; }
+	@test "$(words $(wildcard dist/caretaker-$(PACKAGE_VERSION).tar.gz))" -eq 1 || { echo "Expected exactly one source distribution for version $(PACKAGE_VERSION)" >&2; exit 2; }
+	@test "$(words $(wildcard dist/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl))" -eq 1 || { echo "Expected exactly one wheel for version $(PACKAGE_VERSION)" >&2; exit 2; }
 	$(TOOLS_PYTHON) scripts/verify-package-parity.py \
-	  --sdist "$(firstword $(wildcard dist/caretaker-$(PACKAGE_VERSION)*.tar.gz))" \
-	  --wheel "$(firstword $(wildcard dist/caretaker-$(PACKAGE_VERSION)*-py3-none-any.whl))" \
+	  --sdist "dist/caretaker-$(PACKAGE_VERSION).tar.gz" \
+	  --wheel "dist/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl" \
 	  --version "$(PACKAGE_VERSION)"
 
 publish-testpypi: release-check package-check verify-wheel ## Upload the checked package to TestPyPI

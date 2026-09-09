@@ -149,7 +149,7 @@ from caretaker.failure_corpus import FailureCorpusPodmanRunner
 
 runner = FailureCorpusPodmanRunner(
     corpus,
-    "localhost/caretaker-replay-base:0.6.5a",
+    "localhost/caretaker-replay-base:0.6.5",
     {"exception.unhandled": ["trusted-runner", "--json"]},
     policy=FailureCorpusExecutionPolicy(minimum_isolation="CONTAINER"),
 )

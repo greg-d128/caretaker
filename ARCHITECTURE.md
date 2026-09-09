@@ -2,7 +2,7 @@
 
 ## Application-scoped runtime
 
-Caretaker 0.6.5a contains four cooperating top-level subsystems over a shared evidence and runtime-control foundation:
+Caretaker 0.6.5 contains four cooperating top-level subsystems over a shared evidence and runtime-control foundation:
 
 ```text
                               Application process tree

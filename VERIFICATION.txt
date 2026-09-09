@@ -1,9 +1,9 @@
-Caretaker 0.6.5a development verification status
+Caretaker 0.6.5 development verification status
 =================================================
 
 Status date
 -----------
-2026-09-01
+2026-09-09
 
 Scope and interpretation
 ------------------------
@@ -17,20 +17,22 @@ Environment used for this review
 --------------------------------
 Python: 3.14.4 (review environment; declared support is CPython 3.11-3.14)
 Platform: Linux workspace; full run allowed normal GnuPG-agent and Unix-socket access
-Commands: PYTHONPATH=src venv/bin/python -m pytest -q; venv/bin/python -m build; git diff --check
+Commands: make check; make package-check; git diff --check
 
 Observed result
 ---------------
-- 971 passed;
+- 1007 passed;
 - no unexpected test failures;
-- source, test, example, and script compilation succeeded.
+- source, test, example, and script compilation succeeded;
+- the 0.6.5 source distribution and wheel built, passed exact payload parity,
+  and passed Twine metadata checks.
 
 The complete run included GnuPG key/signature tests and Unix-domain logging and
 control-socket tests. Forgejo CI is configured to run the suite on ordinary Linux
 for CPython 3.11, 3.12, and 3.13; this local review used the additionally
 supported Python 3.14 and supplements rather than replaces the CI matrix.
 The exact Python 3.14.4 development and release-tool environment is recorded
-in `constraints/caretaker-0.6.5a-py3.14.txt`.
+in `constraints/caretaker-0.6.5-py3.14.txt`.
 
 Known assurance debt
 ------------------------------
@@ -68,12 +70,12 @@ Additional checks performed
 - Relative links across root, docs, and example Markdown resolve locally.
 - Current operator guides are checked against retired Lab/Console labels and the
   role-oriented signing commands.
-- `make package-check` passed for the normalized PEP 440 artifacts
-  `caretaker-0.6.5a0.tar.gz` and `caretaker-0.6.5a0-py3-none-any.whl`.
+- `make package-check` passed for the final release artifacts
+  `caretaker-0.6.5.tar.gz` and `caretaker-0.6.5-py3-none-any.whl`.
 - `make verify-wheel` intentionally failed closed: the committed signed wheel
   manifests still describe the prior 0.6.1 publication and omit newer modules.
   Regenerating and re-signing those manifests is a separate release-station
-  task; this development-version update does not modify signed publication
+  task; this release-version update does not modify signed publication
   material or weaken installed integrity verification.
 - `git diff --check` passed before this verification update.
 
@@ -83,7 +85,7 @@ Historical Caretaker 0.5.0a1 verification report
 Historical notice
 -----------------
 This report records verification performed for 0.5.0a1. It is retained as release
-history and is not a verification report for the current 0.6.5a research tree.
+history and is not a verification report for the current 0.6.5 research tree.
 Current features, test counts, security debt, and isolation backends differ. Do
 not use the results below as evidence that the current checkout has been verified.
 

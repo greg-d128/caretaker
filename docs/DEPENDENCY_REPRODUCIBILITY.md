@@ -16,7 +16,7 @@ environment.
 | CPython 3.14 | Supported | 3.14.4 review environment: full source suite and package build passed |
 
 The current snapshot is
-`constraints/caretaker-0.6.5a-py3.14.txt`. It records the complete resolved
+`constraints/caretaker-0.6.5-py3.14.txt`. It records the complete resolved
 development/signing/release environment observed by `pip freeze --all`,
 including the runtime dependency `textual` and optional signing dependency
 `cryptography`. It is a verification input, not a runtime pin.
@@ -31,7 +31,7 @@ matching snapshot when one exists:
 python3.14 -m venv venv
 venv/bin/python -m pip install --upgrade pip
 venv/bin/python -m pip install --constraint \
-  constraints/caretaker-0.6.5a-py3.14.txt \
+  constraints/caretaker-0.6.5-py3.14.txt \
   'textual>=0.80' 'pytest>=8' 'build>=1' 'twine>=5' 'cryptography>=42'
 PYTHONPATH=src venv/bin/python -m pytest -q
 venv/bin/python -m build

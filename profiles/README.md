@@ -1,14 +1,14 @@
 # Caretaker framework policy profiles
 
 The production canonical JSON files are the previously signed profile
-revisions and remain review candidates for Caretaker 0.6.5a. Their metadata
+revisions and remain review candidates for Caretaker 0.6.5. Their metadata
 currently targets policy surface 11 and Caretaker 0.6.1, so they require a new
-profile revision and fresh signatures before claiming complete 0.6.5a
+profile revision and fresh signatures before claiming complete 0.6.5
 coverage. The current unsigned sandbox revision is `caretaker-sandbox-v2.json`;
-it is intentionally unsigned and carries the reviewed 0.6.5a surface. The
+it is intentionally unsigned and carries the reviewed 0.6.5 surface. The
 current capability and reserved-setting catalogs are in
 `../catalogs/`; run `make policy-catalogs` to regenerate them. A profile is not
-a trusted 0.6.5a publication artifact until its exact reviewed bytes are
+a trusted 0.6.5 publication artifact until its exact reviewed bytes are
 signed by the identities authorized for the `protected` role in `root.json`.
 
 - `caretaker-observe-only-v1.json` is the conservative adoption profile. Repair may analyze incidents but cannot propose or activate replacements.

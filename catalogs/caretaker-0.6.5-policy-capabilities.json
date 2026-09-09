@@ -207,7 +207,7 @@
     {
       "capability_id": "repair.retention-compaction",
       "description": "Controls bounded archive-before-delete compaction of ordinary, unreferenced Repair records without requiring a live operator when explicitly enabled.",
-      "introduced_in": "0.6.5a",
+      "introduced_in": "0.6.5",
       "paths": [
         "repair.retention."
       ],
@@ -216,7 +216,7 @@
       "title": "Policy-authorized Repair retention compaction"
     }
   ],
-  "caretaker_version": "0.6.5a",
+  "caretaker_version": "0.6.5",
   "catalog": "policy-capabilities",
   "policy_semantics_review_generation": 33,
   "policy_surface_version": 12,

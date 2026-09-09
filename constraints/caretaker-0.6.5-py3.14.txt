@@ -1,4 +1,4 @@
-# Caretaker 0.6.5a release-verification constraints
+# Caretaker 0.6.5 release-verification constraints
 # Python: 3.14.4
 # Platform: Linux x86_64
 #

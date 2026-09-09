@@ -57,7 +57,7 @@ BASE_IMAGE="$(podman image inspect python:3.13-slim \
 printf '%s\n' "$BASE_IMAGE"
 make podman-image \
   PODMAN_BASE_IMAGE="$BASE_IMAGE" \
-  PODMAN_IMAGE='localhost/caretaker-replay-base:0.6.5a'
+  PODMAN_IMAGE='localhost/caretaker-replay-base:0.6.5'
 ```
 
 The Make target rejects the documentation placeholder `REVIEWED_DIGEST` and
@@ -74,8 +74,8 @@ podman --cgroup-manager=cgroupfs build \
   --file isolated/podman/Containerfile \
   --ignorefile isolated/podman/.containerignore \
   --build-arg "PYTHON_BASE_IMAGE=$BASE_IMAGE" \
-  --build-arg "CARETAKER_WHEEL=caretaker-0.6.5a0-py3-none-any.whl" \
-  --tag localhost/caretaker-replay-base:0.6.5a \
+  --build-arg "CARETAKER_WHEEL=caretaker-0.6.5-py3-none-any.whl" \
+  --tag localhost/caretaker-replay-base:0.6.5 \
   dist
 ```
 
@@ -106,7 +106,7 @@ For reviewed or production use, pass the same digest-pinned
 ```sh
 make podman-failure-corpus-image \
   PODMAN_BASE_IMAGE="$BASE_IMAGE" \
-  PODMAN_FAILURE_CORPUS_IMAGE='localhost/caretaker-failure-corpus-lab:0.6.5a'
+  PODMAN_FAILURE_CORPUS_IMAGE='localhost/caretaker-failure-corpus-lab:0.6.5'
 ```
 
 The image runs as UID/GID `10001:10001`. The existing
@@ -119,7 +119,7 @@ workspace. To run all laboratory scenarios through the non-interactive CLI:
 caretaker-failure-corpus-run \
   --isolation CONTAINER \
   --minimum-isolation CONTAINER \
-  --image localhost/caretaker-failure-corpus-lab:0.6.5a \
+  --image localhost/caretaker-failure-corpus-lab:0.6.5 \
   --application-laboratory \
   --data-directory ./caretaker-data
 ```
@@ -132,7 +132,7 @@ process execution.
 Review the resulting image identity before using it:
 
 ```sh
-podman image inspect localhost/caretaker-replay-base:0.6.5a \
+podman image inspect localhost/caretaker-replay-base:0.6.5 \
   --format 'image={{.Id}}'
 ```
 
@@ -140,7 +140,7 @@ Then verify rootless execution and the installed package:
 
 ```sh
 sh isolated/podman/verify-rootless.sh \
-  localhost/caretaker-replay-base:0.6.5a
+  localhost/caretaker-replay-base:0.6.5
 ```
 
 Configure replay explicitly. Replay is disabled by default and has a

@@ -297,7 +297,7 @@ class LoggingRuntime:
             }
         envelope = LogEnvelope(
             schema_version=1,
-            writer_version="0.6.5a",
+            writer_version="0.6.5",
             record_id=record_id,
             occurred_at=datetime.now(timezone.utc),
             monotonic_ns=time.monotonic_ns(),
@@ -865,7 +865,7 @@ class RemoteLoggingRuntime:
             sanitized_fields = _redact(sanitized_fields, names=active_policy.redaction.secret_field_names, replacement=active_policy.redaction.replacement)
             message = _redact(message, names=active_policy.redaction.secret_field_names, replacement=active_policy.redaction.replacement) if message else None
         envelope = LogEnvelope(
-            schema_version=1, writer_version="0.6.5a", record_id=record_id,
+            schema_version=1, writer_version="0.6.5", record_id=record_id,
             occurred_at=datetime.now(timezone.utc), monotonic_ns=time.monotonic_ns(),
             process_start_id=self.process_start_id, sequence_number=sequence,
             channel=channel, severity=severity, logger_name=logger_name,

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.5a
+## 0.6.5
 
 ### Pre-version-1 application scope
 
@@ -28,7 +28,7 @@
   compaction are now available through an explicit opt-in Repair retention
   policy with archive verification, bounded reference scanning, and critical
   audit events. Refresh the machine-readable capability and reserved-setting
-  catalogs for the 0.6.5a policy surface.
+  catalogs for the 0.6.5 policy surface.
 
 ## 0.6.1
 

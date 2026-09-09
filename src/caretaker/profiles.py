@@ -242,7 +242,7 @@ POLICY_CAPABILITIES: tuple[PolicyCapability, ...] = (
     PolicyCapability(
         "repair.retention-compaction",
         12,
-        "0.6.5a",
+        "0.6.5",
         "Policy-authorized Repair retention compaction",
         "Controls bounded archive-before-delete compaction of ordinary, unreferenced Repair records without requiring a live operator when explicitly enabled.",
         "Review automatic-compaction authority, archive verification, reference-scan bounds, protected evidence, idempotency, and critical audit requirements.",
