@@ -2326,3 +2326,432 @@ The policy-truthfulness pass intentionally leaves a small number of forward-look
 Major reserved groups include incident-history Repair context, structural-review scheduling, incident-window oscillation/replay, Guard environment/function-call collectors, durable time-based Guard retention, segment-class-aware log retention, automatic logging-baseline orchestration, metrics-provider adapters, cgroup process discovery, and system-collector-driven Guard/mode degradation.
 
 Before any reserved setting becomes active it must receive runtime semantics, authority/profile review, behavioral tests, migration documentation, and an updated reviewed policy-surface fingerprint.
+
+## Caretaker 0.6.5 release gap-closure plan
+
+**Status: Planned from the Crucible and Validator review; not yet implemented.**
+
+This section is the implementation plan for the 0.6.5 release. It is based on
+the current Caretaker source revision reviewed by Validator and Crucible. The
+reports distinguish current implementation findings from environmental and
+release-process limitations. This plan does the same.
+
+The release goal is a small hardening and consolidation pass, not an
+architectural rewrite. Preserve the application-scoped authority boundary,
+existing storage families, signed-artifact rules, and the independent
+validation/Crucible test seams.
+
+### Release exit criteria
+
+Caretaker 0.6.5 should not be described as release-ready until all Critical and
+High implementation items below are complete and the following evidence exists:
+
+1. The supervised runtime starts successfully for every supported policy
+   composition, including the worker-recovery path.
+2. Destructive retention authorization is strictly typed and archive status
+   verifies the planned content, not merely internally consistent archive
+   hashes.
+3. All configured filesystem writers reject symlink substitution and paths
+   outside their configured roots.
+4. Authority, policy, provider, artifact, and resource-limit inputs fail closed
+   on wrong types, non-finite values, unsupported schemas, and identity
+   mismatches.
+5. Provider output remains advisory and cannot preserve or manufacture
+   authority-shaped fields.
+6. The audit event registry, runtime events, release artifacts, and release
+   documentation agree.
+7. Focused Caretaker tests pass, followed by the upstream suite, Validator, and
+   Crucible against the same source revision and explicitly identified
+   artifacts.
+
+### P0 — release-blocking correctness and security work
+
+#### CT-01: Fix supervisor policy composition
+
+**Priority:** Critical
+**Components:** `src/caretaker/run.py`, `src/caretaker/policy.py`,
+`src/caretaker/logging/policy.py`, runtime supervision tests
+
+**Problem:** The supervisor bootstrap receives an `OperatorLoggingPolicy` but
+dereferences `policy.rollout`. `rollout` belongs to `RepairPolicy`; it should
+not be added to the logging policy merely to make the access succeed.
+
+**Implementation tasks:**
+
+- Identify the composition root in `run.py` and make the policy types explicit.
+- Pass `RepairRolloutPolicy` or a small explicitly named supervisor/recovery
+  configuration into `RepairRolloutLedger` and
+  `ApplicationRuntimeSupervisor`.
+- Keep `OperatorLoggingPolicy` limited to logging concerns.
+- Ensure repair, recovery, and rollout policy values come from the configured
+  `RepairPolicy`, while logging values continue to come from
+  `OperatorLoggingPolicy`.
+- Avoid a generic service-container or merged mega-policy abstraction.
+
+**Required tests:**
+
+- default policy supervisor startup;
+- explicit logging policy startup;
+- repair policy with default and customized rollout settings;
+- worker recovery enabled and disabled;
+- system collector enabled and disabled;
+- malformed policy combinations fail during startup with a declared error;
+- startup reaches readiness before restart/exhaustion tests run.
+
+**Done when:** The supervisor bootstrap completes without an attribute error,
+and the recovery/control-plane tests can reach their intended assertions.
+
+#### CT-02: Make retention authorization and archive schemas strict
+
+**Priority:** Critical
+**Components:** `src/caretaker/policy.py`, `src/caretaker/store.py`, retention
+tests
+
+**Problem:** `allow_automatic_compaction` accepts truthy non-boolean values.
+Retention archives also accept malformed schema types, missing record fields,
+invalid fingerprints, invalid timestamps, invalid family scopes, and malformed
+payload values.
+
+**Implementation tasks:**
+
+- Require `allow_automatic_compaction` to be exactly `bool`; reject strings,
+  integers, mappings, tuples, and other truthy/falsey values.
+- Apply the same strict boolean rule to all retention authorization and
+  destructive-operation flags.
+- Define one retention-specific strict validator for plan, header, record, and
+  footer structures.
+- Require schema version, format, family, record ID, target identity,
+  creation timestamp, payload, record digest, and footer fields where required
+  by the archive contract.
+- Validate fingerprint and digest format rather than only checking that a value
+  is present.
+- Reject unsupported schemas and unknown security-relevant structures.
+- Preserve archive-before-delete ordering, bounded scans, idempotence, and the
+  final source-row comparison before deletion.
+
+**Required tests:**
+
+- every wrong-type value for `allow_automatic_compaction`;
+- missing, null, empty, and malformed record fields;
+- invalid schema, family, timestamp, fingerprint, and digest values;
+- duplicate records and mismatched footer counts;
+- archive restart and idempotent rerun;
+- failed archive validation causes no deletion;
+- protected and incident-linked records remain protected.
+
+**Done when:** No malformed retention policy or archive can cross the
+authorization, verification, or deletion boundary.
+
+#### CT-03: Bind retention plans to payload content
+
+**Priority:** High, raised to Critical if archive status is used as a recovery
+or deletion authority
+**Components:** retention planning and archive verification in
+`src/caretaker/store.py`
+
+**Problem:** The current plan fingerprint commits to candidate identity and
+metadata but not payload content. A substituted payload can therefore be
+rehashed and reported as valid by archive verification.
+
+**Implementation tasks:**
+
+- Add a canonical payload digest to each planned record, or include an
+  equivalent canonical payload commitment in the plan.
+- Include those commitments in the plan fingerprint.
+- Verify archive payload bytes against the planned digest.
+- Retain the source-row comparison immediately before deletion; the new digest
+  check supplements rather than replaces it.
+- Ensure archive status reports the distinct failure reason: plan mismatch,
+  payload mismatch, source mismatch, or malformed archive.
+
+**Required tests:**
+
+- mutate payload and recompute the archive's internal record hash;
+- mutate payload without changing the record hash;
+- mutate plan metadata;
+- substitute a record with the same family and ID but different content;
+- verify that every mutation fails archive status and cannot trigger deletion.
+
+**Done when:** Archive verification proves that the archive contains the
+content selected by the retention plan, not merely a self-consistent set of
+records.
+
+#### CT-04: Establish one safe rooted-write primitive
+
+**Priority:** Critical
+**Components:** `MonitoringStreamWriter`, `AuditStreamWriter`,
+`ReplayResultStore`, `CapsuleStore`, system-collection writers, and shared
+filesystem helpers
+
+**Problem:** Multiple writers can follow symlinks or escape configured output
+roots. Implementations have drifted instead of sharing one filesystem-boundary
+pattern.
+
+**Implementation tasks:**
+
+- Inventory every configured-root writer and its temporary-file/rename path.
+- Reuse or extend one narrow rooted-write helper; do not merge the stores or
+  their data models.
+- Reject symlinked destination and parent components.
+- Enforce root containment after path normalization.
+- Use descriptor-relative operations and `O_NOFOLLOW` or the platform
+  equivalent where available.
+- Create temporary files inside the trusted root and atomically replace only a
+  validated destination.
+- Ensure the check covers the time between validation and open/rename.
+
+**Required tests:**
+
+- final destination symlink;
+- parent-directory symlink;
+- `..` traversal and absolute paths;
+- replacement of a validated path with a symlink between operations;
+- temporary-file and atomic-rename confinement;
+- normal nested paths and restart recovery.
+
+**Done when:** Every affected writer either writes within its configured root
+or fails without modifying the outside target.
+
+### P1 — boundary validation and operational reliability
+
+#### CT-05: Centralize strict boundary-value validation
+
+**Priority:** High
+**Components:** authority lease handling, policy loading, runtime jobs,
+worker registry, stores, replay, fixtures, behavior scheduling, JSON codecs
+
+**Problem:** Several boundaries coerce wrong types or accept non-finite values.
+Examples include boolean/fractional lease durations, string authority fields,
+invalid repair settings, invalid restart limits, non-finite job durations, and
+malformed resource limits.
+
+**Implementation tasks:**
+
+- Add a small shared set of strict primitive validators for exact booleans,
+  positive integers, bounded integers, finite numbers, enums, UUIDs, hashes,
+  and bounded text.
+- Use the validators at public/control-plane and persistence boundaries.
+- Reject booleans where integers are required; Python `bool` must not pass as an
+  integer.
+- Reject NaN and Infinity during JSON parsing and serialization.
+- Remove coercive `int()`, `float()`, `bool()`, and `max()` calls from
+  security-sensitive input paths unless parsing has already established the
+  exact type.
+- Keep convenience parsing at the CLI edge only.
+
+**Required tests:**
+
+- wrong-type and boundary-value matrices for every affected field;
+- NaN, Infinity, and negative-zero cases where relevant;
+- malformed enum, UUID, hash, and timestamp inputs;
+- direct API and control-socket paths;
+- configuration-file and in-memory policy construction paths.
+
+**Done when:** Invalid boundary values are rejected with stable domain errors,
+without silently changing their meaning.
+
+#### CT-06: Add provenance and identity validation to artifact readers
+
+**Priority:** High
+**Components:** behavior archives/checkpoints, Capsules, communications,
+replay results, regression fixtures, audit manifests
+
+**Problem:** Some readers accept unsupported schemas, missing required fields,
+malformed hashes, or artifacts whose target, generation, incident, snapshot,
+or fixture identity does not match the operation context.
+
+**Implementation tasks:**
+
+- Define a small non-authorizing provenance envelope for fields with the same
+  meaning across artifact families.
+- Keep family-specific schemas and storage owners.
+- Validate artifact kind, schema version, artifact ID, target ID, generation ID,
+  incident ID where applicable, content digest, and relevant policy/authority
+  fingerprints.
+- Compare the envelope against the caller's expected operation context before
+  accepting or restoring the artifact.
+- Preserve legacy readers only where an explicit compatibility requirement
+  exists; do not silently accept unrelated legacy values.
+
+**Required tests:**
+
+- every identity mismatch identified by Crucible;
+- unsupported schema and missing-field cases;
+- malformed and non-hex digests;
+- valid legacy artifacts that must remain readable;
+- restore/replay rejection before state mutation.
+
+**Done when:** An artifact cannot be accepted merely because its local hash is
+   valid; its provenance must also match the operation that consumes it.
+
+#### CT-07: Separate provider transport, response, and advisory schemas
+
+**Priority:** High
+**Components:** provider security, Behavior Analyst, Capsule assistant, Guard
+provider
+
+**Implementation tasks:**
+
+- Enforce response byte limits before JSON materialization.
+- Revalidate every redirect against the endpoint policy.
+- Reject embedded endpoint credentials and model mismatches.
+- Require finite numeric confidence values and exact list types.
+- Reject unknown severity values instead of defaulting to `MEDIUM`.
+- Convert provider output into a dedicated advisory result containing only
+  allowed recommendation fields.
+- Strip or reject provider-supplied authority, approval, permission, policy,
+  execution, and routing fields.
+- Attach Caretaker authority and policy context independently of provider data.
+
+**Required tests:**
+
+- oversized response and oversized individual fields;
+- redirect to a disallowed host, scheme, or credentialed URL;
+- mismatched model;
+- malformed confidence, list, severity, and authority-shaped fields;
+- valid advisory output remains non-authorizing.
+
+**Done when:** Provider output can inform a recommendation but cannot create,
+preserve, or impersonate authority.
+
+#### CT-08: Correct worker restart policy and rollout error handling
+
+**Priority:** High
+**Components:** `runtime_supervision.py`, `logging/supervisor.py`, rollout
+parsing and recovery paths
+
+**Implementation tasks:**
+
+- Make restart eligibility explicit per worker role.
+- Reject restart attempts for non-restartable roles before process actions.
+- Validate restart limits as strict bounded integers.
+- Convert invalid rollout values into declared `RepairRolloutError` or another
+  documented domain error, never a raw `KeyError`.
+- Preserve terminal-state monotonicity and the existing worker identity rules.
+
+**Required tests:**
+
+- every worker role's restartability;
+- restart exhaustion and invalid limits;
+- malformed rollout enum values through API and control-plane paths;
+- late heartbeat cannot revive terminal workers;
+- explicit restart receives a new worker identity.
+
+**Done when:** Worker recovery behavior is role-aware, bounded, and exposes
+stable errors.
+
+#### CT-09: Enforce resource limits before materialization
+
+**Priority:** High
+**Components:** replay results, Capsules, behavior stores, fixture stores,
+SQLite runtime jobs, scheduler and collection limits
+
+**Implementation tasks:**
+
+- Validate configured item and byte limits strictly at construction or policy
+  load time.
+- Enforce replay/result limits while reading instead of loading all summaries
+  first.
+- Reject oversized results, Capsules, artifacts, and communication payloads
+  before persistence.
+- Use `allow_nan=False` or equivalent rejection for all persisted JSON.
+- Preserve bounded client slots, audit records, and existing backpressure
+  semantics.
+
+**Required tests:**
+
+- malformed limits and coercion attempts;
+- one-byte-over and one-item-over cases;
+- large streams that must stop before full materialization;
+- non-standard JSON values;
+- restart behavior after a rejected oversized record.
+
+**Done when:** Resource bounds are enforced as actual memory, disk, and input
+limits rather than post-processing preferences.
+
+### P2 — contract, release, and regression closure
+
+#### CT-10: Generate or mechanically validate the audit registry
+
+**Priority:** Medium
+**Components:** `src/caretaker/logging/audit.py`,
+`docs/AUDIT_EVENT_REGISTRY.md`, audit tests
+
+**Implementation tasks:**
+
+- Treat the source event registry as authoritative.
+- Generate the documentation table from the registry, or add a strict test
+  that compares every runtime event definition with the published registry.
+- Add `GUARD_BASELINE_ACCEPTED` to the published contract if generation is not
+  adopted immediately.
+- Keep event-specific fields distinct from authority; event values remain
+  evidence.
+
+**Done when:** Runtime and published event definitions cannot silently drift.
+
+#### CT-11: Close exact-artifact parity and environment evidence gaps
+
+**Priority:** Medium for source changes; High for release publication
+
+**Implementation tasks:**
+
+- Build sdist and wheel from one exact source revision.
+- Compare Python member manifests, metadata, version, and profile assets.
+- Record artifact hashes in release evidence.
+- Make the clean-room runner use `--pull=never` where required and verify the
+  intended local image/artifact.
+- Fix structured container mount argument handling for comma-containing paths.
+- Do not claim cgroup memory/PID enforcement unless the validation environment
+  actually enforces it.
+
+**Done when:** Artifact drift and environmental limitations are distinguishable
+and release evidence identifies exactly what was tested.
+
+#### CT-12: Preserve completed architectural guarantees as regression gates
+
+**Priority:** Medium
+**Components:** existing lifecycle, IPC, authority, and rollout tests
+
+The following areas are reported as passing on the reviewed revision and should
+not be reimplemented as new architecture:
+
+- terminal worker states remain monotonic;
+- live IPC endpoint ownership rejects duplicate owners and unsafe cleanup;
+- baseline review does not grant runtime Guard authority;
+- atomic rollout milestone persistence is failure-safe and idempotent;
+- existing operation-context and capability-view boundaries remain intact.
+
+Add these to the 0.6.5 regression gate while implementing CT-01 through CT-09.
+Any failure should be treated as a regression, not as permission to weaken the
+existing boundary.
+
+### Recommended implementation sequence
+
+1. Establish the focused test matrix and capture the current failures.
+2. Complete CT-01 so all subsequent supervisor and recovery tests can run.
+3. Complete CT-02 and CT-03 before changing retention-related formats.
+4. Complete CT-04 and CT-05, reusing existing helpers where they already
+   implement part of the required invariant.
+5. Complete CT-06 through CT-09 and add negative/adversarial tests with each
+   fix.
+6. Complete CT-10 and CT-11 before preparing release evidence.
+7. Run the full Caretaker suite, then Validator and Crucible against the same
+   source revision and explicitly identified artifacts.
+8. Update README, policy, architecture, release, and website-facing
+   documentation only after the implemented behavior and evidence agree.
+
+Each task is complete only when its focused tests pass, the normal Caretaker
+suite passes, failure behavior is documented, and no authority or filesystem
+boundary has been weakened.
+
+### Explicitly out of scope for 0.6.5
+
+These findings do not authorize a new product scope:
+
+- Host Caretaker or Infrastructure Caretaker;
+- remote attestation or universal hostile-code containment;
+- a general asynchronous job framework;
+- merging all stores into one artifact abstraction;
+- a generic dependency-injection or service-container framework;
+- treating local Podman cgroup behavior as a Caretaker runtime defect without
+  matching environment evidence.
