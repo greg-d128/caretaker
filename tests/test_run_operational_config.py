@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 import caretaker.run as run_module
@@ -9,9 +9,19 @@ import caretaker.run as run_module
 from caretaker.run import (
     _adaptive_threshold_policy_settings,
     _behavior_materialization_log,
+    _logging_policy_fingerprint,
     _load_external_signer,
     main,
 )
+
+
+def test_logging_policy_fingerprint_uses_snapshot_content_hash():
+    runtime = SimpleNamespace(
+        snapshot=SimpleNamespace(content_hash="snapshot-content-hash"),
+        effective=SimpleNamespace(generation=7),
+    )
+
+    assert _logging_policy_fingerprint(runtime) == "snapshot-content-hash"
 
 
 def test_external_signer_provider_can_be_loaded_from_module_attribute(monkeypatch):

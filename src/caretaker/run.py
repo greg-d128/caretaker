@@ -94,6 +94,12 @@ from .system import SystemCollectionPolicy, SystemDataCollector, SystemOutputPol
 from .store import SQLiteRepairStore
 
 
+def _logging_policy_fingerprint(runtime: LoggingRuntime) -> str:
+    """Return the immutable content hash for the active logging policy."""
+
+    return runtime.snapshot.content_hash
+
+
 _ADAPTIVE_THRESHOLD_SETTING_PATHS = {
     "exception.occurrences": "lightweight.exception.occurrences",
     "exception.window_seconds": "lightweight.exception.window_seconds",
@@ -2316,7 +2322,7 @@ def main(argv: list[str] | None = None) -> int:
                 coordinator,
                 request,
                 credentials,
-                policy_fingerprint=runtime.effective.fingerprint,
+                policy_fingerprint=_logging_policy_fingerprint(runtime),
                 authority_fingerprint=authority.effective.fingerprint,
             )
         if command in {"repair-rollout-pause", "repair-rollout-resume"}:
@@ -2330,7 +2336,7 @@ def main(argv: list[str] | None = None) -> int:
                 request,
                 credentials,
                 paused=command == "repair-rollout-pause",
-                policy_fingerprint=runtime.effective.fingerprint,
+                policy_fingerprint=_logging_policy_fingerprint(runtime),
                 authority_fingerprint=authority.effective.fingerprint,
             )
         if command == "repair-rollout-routing-update":
@@ -2343,7 +2349,7 @@ def main(argv: list[str] | None = None) -> int:
                 coordinator,
                 request,
                 credentials,
-                policy_fingerprint=runtime.effective.fingerprint,
+                policy_fingerprint=_logging_policy_fingerprint(runtime),
                 authority_fingerprint=authority.effective.fingerprint,
             )
         if command == "repair-rollout-status":
@@ -2366,7 +2372,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             try:
                 projection = ledger.operator_projection(
-                    policy_fingerprint=runtime.effective.fingerprint,
+                    policy_fingerprint=_logging_policy_fingerprint(runtime),
                     rollout_id=rollout_id,
                     limit=limit,
                     transition_limit=transition_limit,
@@ -4416,7 +4422,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     rollout_coordinator_holder["coordinator"] = RepairRolloutCoordinator(
         rollout_ledger_holder["ledger"],
-        policy_fingerprint=runtime.effective.fingerprint,
+        policy_fingerprint=_logging_policy_fingerprint(runtime),
         authority_fingerprint=authority.effective.fingerprint,
         store=failure_store,
     )
