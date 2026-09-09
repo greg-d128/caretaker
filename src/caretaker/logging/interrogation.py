@@ -3,6 +3,7 @@ from __future__ import annotations
 from ..adaptive import lightweight_dependency
 import hashlib
 import json
+import math
 import statistics
 import urllib.request
 from collections import Counter
@@ -11,7 +12,7 @@ from datetime import datetime
 from typing import Any, Mapping, Protocol
 from uuid import UUID, uuid4
 
-from ..provider_security import validate_provider_endpoint
+from ..provider_security import MAX_PROVIDER_RESPONSE_BYTES, provider_json_response, validate_provider_endpoint
 from ..llm import LLMRequestGate, LLMUsagePolicy
 from .models import LogEnvelope, RootCauseAssessment, RootCauseConfidence, RootCauseHypothesis
 
@@ -131,6 +132,7 @@ class OllamaRootCauseProvider:
 
     def __init__(self, *, model: str, endpoint: str = "http://127.0.0.1:11434/api/generate", timeout_seconds: float = 120.0, allow_remote_endpoint: bool = False, usage_policy: LLMUsagePolicy | None = None, usage_gate: LLMRequestGate | None = None) -> None:
         self.model_name = model
+        self.allow_remote_endpoint = allow_remote_endpoint
         self.endpoint = validate_provider_endpoint(
             endpoint, allow_remote_endpoint=allow_remote_endpoint
         )
@@ -160,23 +162,31 @@ class OllamaRootCauseProvider:
             headers={"Content-Type": "application/json"},
         )
         with self._usage_gate.request():
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-                outer = json.loads(response.read())
-        data = json.loads(outer["response"])
+            outer, _raw = provider_json_response(
+                request,
+                allow_remote_endpoint=self.allow_remote_endpoint,
+                timeout_seconds=self.timeout_seconds,
+                maximum_bytes=MAX_PROVIDER_RESPONSE_BYTES,
+            )
+        if outer.get("model") is not None and outer.get("model") != self.model_name:
+            raise ValueError("root-cause provider response model does not match the requested model")
+        if not isinstance(outer.get("response"), str):
+            raise ValueError("root-cause provider response content is invalid")
+        data = _parse_root_cause_response(outer["response"])
         hypothesis = RootCauseHypothesis(
             statement=str(data.get("primary_hypothesis", "No primary hypothesis")),
-            confidence=float(data.get("confidence", 0.0)),
+            confidence=data["confidence"],
             confidence_kind=RootCauseConfidence.PROBABLE_CAUSAL_CONTRIBUTION,
             supporting_evidence=tuple(record.record_id for record in bundle.representative_logs),
-            missing_evidence=tuple(map(str, data.get("missing_evidence", ()))),
+            missing_evidence=tuple(data["missing_evidence"]),
         )
         return RootCauseAssessment(
             assessment_id=uuid4(), subject=bundle.request.objective or "logging interrogation",
             period_start=bundle.request.period_start, period_end=bundle.request.period_end,
             primary_hypothesis=hypothesis,
             alternative_hypotheses=tuple(
-                RootCauseHypothesis(str(item), 0.25, RootCauseConfidence.STATISTICAL_ASSOCIATION, ())
-                for item in data.get("alternatives", ())
+                RootCauseHypothesis(item, 0.25, RootCauseConfidence.STATISTICAL_ASSOCIATION, ())
+                for item in data["alternatives"]
             ),
             significant_outliers=bundle.outliers, causal_sequence=bundle.timeline_summary,
             affected_targets=tuple(sorted({record.target_id for record in bundle.representative_logs if record.target_id})),
@@ -184,6 +194,30 @@ class OllamaRootCauseProvider:
             supporting_log_ids=tuple(record.record_id for record in bundle.representative_logs),
             supporting_behavior_event_ids=(), supporting_deviation_ids=(), confidence=hypothesis.confidence,
             missing_evidence=hypothesis.missing_evidence,
-            recommended_next_actions=tuple(map(str, data.get("recommended_actions", ()))),
+            recommended_next_actions=tuple(data["recommended_actions"]),
             provider_name=self.provider_name, model_name=self.model_name, prompt_version=self.prompt_version,
         )
+
+
+def _parse_root_cause_response(content: str) -> dict[str, Any]:
+    try:
+        data = json.loads(
+            content,
+            parse_constant=lambda token: (_ for _ in ()).throw(ValueError(token)),
+        )
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ValueError("root-cause provider response was not strict JSON") from exc
+    allowed = {"primary_hypothesis", "confidence", "alternatives", "missing_evidence", "recommended_actions"}
+    if not isinstance(data, dict) or set(data) != allowed:
+        raise ValueError("root-cause provider response fields are invalid")
+    if not isinstance(data["primary_hypothesis"], str) or not data["primary_hypothesis"].strip():
+        raise ValueError("root-cause primary hypothesis is invalid")
+    confidence = data["confidence"]
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not math.isfinite(confidence) or not 0 <= confidence <= 1:
+        raise ValueError("root-cause confidence is invalid")
+    result = {"primary_hypothesis": data["primary_hypothesis"], "confidence": float(confidence)}
+    for field in ("alternatives", "missing_evidence", "recommended_actions"):
+        if not isinstance(data[field], list) or not all(isinstance(item, str) for item in data[field]):
+            raise ValueError(f"root-cause {field} must be a list of strings")
+        result[field] = data[field]
+    return result

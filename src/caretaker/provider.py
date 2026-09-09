@@ -8,7 +8,11 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Protocol, Sequence
 
-from .provider_security import validate_provider_endpoint
+from .provider_security import (
+    MAX_PROVIDER_RESPONSE_BYTES,
+    provider_json_response,
+    validate_provider_endpoint,
+)
 from .llm import LLMRequestGate, LLMUsagePolicy
 
 from .domain import CandidateGeneratorKind
@@ -125,6 +129,7 @@ class OllamaRepairProvider:
         usage_gate: LLMRequestGate | None = None,
     ) -> None:
         self.model_name = model
+        self.allow_remote_endpoint = allow_remote_endpoint
         self.base_url = validate_provider_endpoint(
             base_url, allow_remote_endpoint=allow_remote_endpoint
         )
@@ -136,7 +141,9 @@ class OllamaRepairProvider:
         prompt = _repair_prompt(request)
         with self._usage_gate.request():
             payload = self._chat(prompt)
-        candidates = _parse_candidate_response(payload["message"]["content"])
+        _validate_provider_model(payload, self.model_name)
+        content = _message_content(payload)
+        candidates = _parse_candidate_response(content)
         return CandidateBatch(
             provider_name=self.name,
             model_name=self.model_name,
@@ -158,7 +165,9 @@ class OllamaRepairProvider:
         prompt = _synthesis_prompt(request, candidates)
         with self._usage_gate.request():
             payload = self._chat(prompt)
-        proposals = _parse_candidate_response(payload["message"]["content"])
+        _validate_provider_model(payload, self.model_name)
+        content = _message_content(payload)
+        proposals = _parse_candidate_response(content)
         return CandidateBatch(
             provider_name=self.name,
             model_name=self.model_name,
@@ -198,11 +207,13 @@ class OllamaRepairProvider:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"Ollama request failed: {exc}") from exc
+        payload, _content = provider_json_response(
+            request,
+            allow_remote_endpoint=self.allow_remote_endpoint,
+            timeout_seconds=self.timeout_seconds,
+            maximum_bytes=MAX_PROVIDER_RESPONSE_BYTES,
+        )
+        return payload
 
 
 def _repair_prompt(request: RepairRequest) -> str:
@@ -283,9 +294,14 @@ Incident:
 
 def _parse_candidate_response(content: str) -> list[CandidateProposal]:
     try:
-        payload = json.loads(content)
-    except json.JSONDecodeError as exc:
+        payload = json.loads(
+            content,
+            parse_constant=lambda token: (_ for _ in ()).throw(ValueError(token)),
+        )
+    except (json.JSONDecodeError, ValueError) as exc:
         raise ValueError(f"Provider response was not valid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Provider response must be a JSON object")
     raw_candidates = payload.get("candidates")
     if not isinstance(raw_candidates, list):
         if isinstance(payload.get("source"), str):
@@ -294,8 +310,16 @@ def _parse_candidate_response(content: str) -> list[CandidateProposal]:
             raise ValueError("Provider response does not contain a candidates array")
     proposals: list[CandidateProposal] = []
     for index, item in enumerate(raw_candidates):
-        if not isinstance(item, dict) or not isinstance(item.get("source"), str):
+        if not isinstance(item, dict) or set(item) - {"source", "explanation", "assumptions", "generated_tests"}:
+            raise ValueError(f"Candidate {index} contains unsupported fields")
+        if not isinstance(item.get("source"), str) or not isinstance(item.get("explanation", ""), str):
             raise ValueError(f"Candidate {index} does not contain source text")
+        for field in ("assumptions", "generated_tests"):
+            if field in item and (
+                not isinstance(item[field], list)
+                or not all(isinstance(value, str) for value in item[field])
+            ):
+                raise ValueError(f"Candidate {index} {field} must be a list of strings")
         proposals.append(
             CandidateProposal(
                 source=item["source"],
@@ -307,3 +331,16 @@ def _parse_candidate_response(content: str) -> list[CandidateProposal]:
             )
         )
     return proposals
+
+
+def _message_content(payload: dict[str, Any]) -> str:
+    message = payload.get("message")
+    if not isinstance(message, dict) or not isinstance(message.get("content"), str):
+        raise ValueError("Provider response message content is invalid")
+    return message["content"]
+
+
+def _validate_provider_model(payload: dict[str, Any], expected: str) -> None:
+    actual = payload.get("model")
+    if actual is not None and actual != expected:
+        raise ValueError("Provider response model does not match the requested model")

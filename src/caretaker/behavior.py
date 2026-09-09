@@ -23,7 +23,7 @@ from uuid import UUID, uuid4
 
 from .domain import ValueSnapshot
 from .llm import LLMRequestGate, LLMUsagePolicy
-from .provider_security import validate_provider_endpoint
+from .provider_security import MAX_PROVIDER_RESPONSE_BYTES, provider_json_response, validate_provider_endpoint
 from .logging.models import RuntimeRecordIntegrityMode, RuntimeSignedArtifact
 from .logging.signing import (
     RuntimeArtifactSigningService,
@@ -3692,6 +3692,7 @@ class OllamaBehaviorSnapshotAnalyst:
         usage_gate: LLMRequestGate | None = None,
     ) -> None:
         self.model = model
+        self.allow_remote_endpoint = allow_remote_endpoint
         self.endpoint = validate_provider_endpoint(
             endpoint, allow_remote_endpoint=allow_remote_endpoint
         )
@@ -3758,15 +3759,49 @@ class OllamaBehaviorSnapshotAnalyst:
         )
         try:
             with self._usage_gate.request():
-                with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-                    outer = json.loads(response.read())
+                outer, _raw = provider_json_response(
+                    request,
+                    allow_remote_endpoint=self.allow_remote_endpoint,
+                    timeout_seconds=self.timeout_seconds,
+                    maximum_bytes=MAX_PROVIDER_RESPONSE_BYTES,
+                )
         except urllib.error.URLError as exc:
             raise RuntimeError(f"Ollama behavior snapshot assessment failed: {exc}") from exc
-        parsed = json.loads(outer["response"])
+        if outer.get("model") is not None and outer.get("model") != self.model:
+            raise ValueError("behavior analyst response model does not match the requested model")
+        if not isinstance(outer.get("response"), str):
+            raise ValueError("behavior analyst response content is invalid")
+        try:
+            parsed = json.loads(
+                outer["response"],
+                parse_constant=lambda token: (_ for _ in ()).throw(ValueError(token)),
+            )
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise ValueError("behavior analyst response was not strict JSON") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError("behavior analyst response must be a JSON object")
+        allowed = {"summary", "notable_changes", "plausible_explanations", "concerns", "recommended_checks", "confidence"}
+        if set(parsed) != allowed:
+            raise ValueError("behavior analyst response fields are invalid")
+        confidence = parsed["confidence"]
+        if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not math.isfinite(confidence) or not 0 <= confidence <= 1:
+            raise ValueError("behavior analyst confidence is invalid")
+        if not isinstance(parsed["summary"], str):
+            raise ValueError("behavior analyst summary is invalid")
+        for field in sorted(allowed - {"summary", "confidence"}):
+            if not isinstance(parsed[field], list) or not all(isinstance(item, str) for item in parsed[field]):
+                raise ValueError(f"behavior analyst {field} must be a list of strings")
         return {
             "provider": "ollama",
             "model": self.model,
             "evidence_kind": kind,
             "evidence_hash": content_hash(evidence),
-            "assessment": parsed,
+            "assessment": {
+                "summary": parsed["summary"],
+                "notable_changes": parsed["notable_changes"],
+                "plausible_explanations": parsed["plausible_explanations"],
+                "concerns": parsed["concerns"],
+                "recommended_checks": parsed["recommended_checks"],
+                "confidence": float(confidence),
+            },
         }

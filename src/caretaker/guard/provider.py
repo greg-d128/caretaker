@@ -3,12 +3,17 @@ from __future__ import annotations
 from ..adaptive import lightweight_dependency
 import hashlib
 import json
+import math
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Protocol
 
-from ..provider_security import validate_provider_endpoint
+from ..provider_security import (
+    MAX_PROVIDER_RESPONSE_BYTES,
+    provider_json_response,
+    validate_provider_endpoint,
+)
 from ..llm import LLMRequestGate, LLMUsagePolicy
 from .models import (
     AssessmentSeverity,
@@ -57,6 +62,7 @@ class OllamaBehaviorAssessmentProvider:
         usage_gate: LLMRequestGate | None = None,
     ) -> None:
         self.model_name = model
+        self.allow_remote_endpoint = allow_remote_endpoint
         self.base_url = validate_provider_endpoint(
             base_url, allow_remote_endpoint=allow_remote_endpoint
         )
@@ -68,10 +74,15 @@ class OllamaBehaviorAssessmentProvider:
         prompt = _assessment_prompt(request)
         with self._usage_gate.request():
             payload = self._chat(prompt)
-        content = payload["message"]["content"]
-        parsed = json.loads(content)
-        severity_name = str(parsed.get("severity", "MEDIUM")).upper()
-        severity = AssessmentSeverity.__members__.get(severity_name, AssessmentSeverity.MEDIUM)
+        actual_model = payload.get("model")
+        if actual_model is not None and actual_model != self.model_name:
+            raise ValueError("Guard provider response model does not match the requested model")
+        message = payload.get("message")
+        if not isinstance(message, dict) or not isinstance(message.get("content"), str):
+            raise ValueError("Guard provider response message content is invalid")
+        content = message["content"]
+        parsed = _parse_assessment_response(content)
+        severity = AssessmentSeverity[parsed["severity"]]
         evidence = request.evidence
         return BehaviorAssessment(
             assessment_id=__import__("uuid").uuid4(),
@@ -83,15 +94,15 @@ class OllamaBehaviorAssessmentProvider:
             ),
             deviation_ids=tuple(item.deviation_id for item in evidence.deviations),
             severity=severity,
-            confidence=float(parsed.get("confidence", 0.5)),
-            significant_changes=tuple(str(item) for item in parsed.get("significant_changes", ())),
-            suspicious_patterns=tuple(str(item) for item in parsed.get("suspicious_patterns", ())),
+            confidence=parsed["confidence"],
+            significant_changes=tuple(parsed["significant_changes"]),
+            suspicious_patterns=tuple(parsed["suspicious_patterns"]),
             plausible_benign_explanations=tuple(
-                str(item) for item in parsed.get("plausible_benign_explanations", ())
+                parsed["plausible_benign_explanations"]
             ),
-            recommended_actions=tuple(str(item) for item in parsed.get("recommended_actions", ())),
+            recommended_actions=tuple(parsed["recommended_actions"]),
             requested_additional_evidence=tuple(
-                str(item) for item in parsed.get("requested_additional_evidence", ())
+                parsed["requested_additional_evidence"]
             ),
             provider_name=self.name,
             model_name=self.model_name,
@@ -126,11 +137,44 @@ class OllamaBehaviorAssessmentProvider:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"Ollama Guard assessment failed: {exc}") from exc
+        payload, _content = provider_json_response(
+            request,
+            allow_remote_endpoint=self.allow_remote_endpoint,
+            timeout_seconds=self.timeout_seconds,
+            maximum_bytes=MAX_PROVIDER_RESPONSE_BYTES,
+        )
+        return payload
+
+
+def _parse_assessment_response(content: str) -> dict[str, object]:
+    try:
+        parsed = json.loads(
+            content,
+            parse_constant=lambda token: (_ for _ in ()).throw(ValueError(token)),
+        )
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ValueError("Guard provider assessment was not strict JSON") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("Guard provider assessment must be a JSON object")
+    allowed = {
+        "severity", "confidence", "significant_changes", "suspicious_patterns",
+        "plausible_benign_explanations", "recommended_actions", "requested_additional_evidence",
+    }
+    if set(parsed) != allowed:
+        raise ValueError("Guard provider assessment fields are invalid")
+    severity = parsed["severity"]
+    if not isinstance(severity, str) or severity.upper() not in AssessmentSeverity.__members__:
+        raise ValueError("Guard provider assessment severity is invalid")
+    confidence = parsed["confidence"]
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not math.isfinite(confidence) or not 0 <= confidence <= 1:
+        raise ValueError("Guard provider assessment confidence is invalid")
+    result: dict[str, object] = {"severity": severity.upper(), "confidence": float(confidence)}
+    for field in sorted(allowed - {"severity", "confidence"}):
+        value = parsed[field]
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise ValueError(f"Guard provider assessment {field} must be a list of strings")
+        result[field] = value
+    return result
 
 
 def _assessment_prompt(request: BehaviorAssessmentRequest) -> str:
