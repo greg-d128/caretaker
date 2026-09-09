@@ -830,6 +830,23 @@ class ExternalValidationBackend(SubprocessValidationBackend):
             )
 
 
+def _structured_bind_mount(
+    source: Path,
+    destination: str,
+    *,
+    read_only: bool,
+    docker: bool = False,
+) -> str:
+    """Encode bind-source paths so commas cannot become mount options."""
+    encoded_source = str(source).replace("\\", "\\\\").replace(",", "\\,")
+    options = f"type=bind,src={encoded_source},dst={destination}"
+    if docker:
+        options += ",readonly" if read_only else ",rw"
+    else:
+        options += ",ro=true" if read_only else ",rw=true"
+    return options
+
+
 class RootlessPodmanValidationBackend(SubprocessValidationBackend):
     """Run a validation worker in a constrained rootless Podman container.
 
@@ -979,9 +996,7 @@ class RootlessPodmanValidationBackend(SubprocessValidationBackend):
             f"--tmpfs=/tmp:rw,nosuid,nodev,noexec,size={self.tmpfs_size}",
         ]
         for source, destination, read_only in mounts:
-            options = f"type=bind,src={source},dst={destination}"
-            options += ",ro=true" if read_only else ",rw=true"
-            command.extend(("--mount", options))
+            command.extend(("--mount", _structured_bind_mount(source, destination, read_only=read_only)))
         command.extend(
             (
                 "--workdir=/work",
@@ -1181,9 +1196,7 @@ class RootlessDockerValidationBackend(RootlessPodmanValidationBackend):
             f"/tmp:rw,nosuid,nodev,noexec,size={self.tmpfs_size}",
         ]
         for source, destination, read_only in mounts:
-            options = f"type=bind,src={source},dst={destination}"
-            options += ",readonly" if read_only else ",rw"
-            command.extend(("--mount", options))
+            command.extend(("--mount", _structured_bind_mount(source, destination, read_only=read_only, docker=True)))
         command.extend(
             (
                 "--workdir=/work",

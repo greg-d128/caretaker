@@ -164,6 +164,19 @@ def test_rootless_podman_worker_preserves_rootless_host_environment(monkeypatch,
     assert captured["env"]["XDG_RUNTIME_DIR"] == "/run/user/1000"
     assert captured["env"]["DBUS_SESSION_BUS_ADDRESS"] == "unix:path=/run/user/1000/bus"
 
+
+def test_structured_bind_mount_escapes_comma_in_host_path(tmp_path: Path) -> None:
+    from caretaker.replay import RootlessPodmanReplayBackend
+
+    workdir = tmp_path / "request,with,commas"
+    validation = RootlessPodmanValidationBackend("caretaker-validator:local")
+    validation_command = validation._build_command(workdir)
+    assert any("src=" + str(workdir).replace(",", "\\,") in item for item in validation_command)
+
+    replay = RootlessPodmanReplayBackend("caretaker-replay:local")
+    replay_command = replay._build_replay_command(workdir)
+    assert any("src=" + str(workdir).replace(",", "\\,") in item for item in replay_command)
+
 def test_multipass_rejects_host_directory_mounts(monkeypatch) -> None:
     monkeypatch.setattr("caretaker.validation.shutil.which", lambda executable: f"/usr/bin/{executable}")
     backend = MultipassValidationBackend(require_network_isolation=False)

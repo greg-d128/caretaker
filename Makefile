@@ -28,7 +28,7 @@ PODMAN_CGROUP_MANAGER ?= cgroupfs
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup test compile check wheel podman-image podman-failure-corpus-image podman-verify build package-check verify-wheel publish-testpypi publish-pypi publish-test publish root-check signing-check signing-status signing-bundle release-check release-manifest protected-manifest manifests generate-release-manifest generate-protected-manifest generate-manifests wheel-manifests inspect-integrity sign-check sign-all verify-signature verify-all verify-publication policy-catalogs lab lab-verified lab-console profile clean distclean
+.PHONY: help setup test compile check wheel podman-image podman-failure-corpus-image podman-verify build package-check artifact-parity verify-wheel publish-testpypi publish-pypi publish-test publish root-check signing-check signing-status signing-bundle release-check release-manifest protected-manifest manifests generate-release-manifest generate-protected-manifest generate-manifests wheel-manifests inspect-integrity sign-check sign-all verify-signature verify-all verify-publication policy-catalogs lab lab-verified lab-console profile clean distclean
 
 help: ## Show commands grouped by operator role
 	@printf '%s\n' \
@@ -37,6 +37,7 @@ help: ## Show commands grouped by operator role
 	  '  setup                    Create the development environment' \
 	  '  check                    Run tests and compilation checks' \
 	  '  build                    Build wheel and source distribution' \
+	  '  artifact-parity          Compare exact source-distribution and wheel payloads' \
 	  '  package-check            Validate current-version distributions with Twine' \
 	  '  verify-wheel             Install and test the built wheel' '' \
 	  'Isolation:' \
@@ -112,11 +113,19 @@ podman-verify: ## Verify rootless Podman and a previously built worker image
 build: ## Build the wheel and source distribution in dist/
 	$(BIN)/python -m build
 
-package-check: build ## Validate exactly the current-version wheel and source distribution
+package-check: build artifact-parity ## Validate exactly the current-version wheel and source distribution
 	@test "$(words $(wildcard dist/caretaker-$(PACKAGE_VERSION)*.tar.gz))" -eq 1 || { echo "Expected exactly one source distribution for version $(PACKAGE_VERSION)" >&2; exit 2; }
 	@test "$(words $(wildcard dist/caretaker-$(PACKAGE_VERSION)*-py3-none-any.whl))" -eq 1 || { echo "Expected exactly one wheel for version $(PACKAGE_VERSION)" >&2; exit 2; }
 	$(TWINE) check $(PACKAGE_FILES)
 	@echo "Validated distributions for Caretaker $(PACKAGE_VERSION): $(PACKAGE_FILES)"
+
+artifact-parity: build ## Compare exact source-distribution and wheel payloads
+	@test "$(words $(wildcard dist/caretaker-$(PACKAGE_VERSION)*.tar.gz))" -eq 1 || { echo "Expected exactly one source distribution for version $(PACKAGE_VERSION)" >&2; exit 2; }
+	@test "$(words $(wildcard dist/caretaker-$(PACKAGE_VERSION)*-py3-none-any.whl))" -eq 1 || { echo "Expected exactly one wheel for version $(PACKAGE_VERSION)" >&2; exit 2; }
+	$(TOOLS_PYTHON) scripts/verify-package-parity.py \
+	  --sdist "$(firstword $(wildcard dist/caretaker-$(PACKAGE_VERSION)*.tar.gz))" \
+	  --wheel "$(firstword $(wildcard dist/caretaker-$(PACKAGE_VERSION)*-py3-none-any.whl))" \
+	  --version "$(PACKAGE_VERSION)"
 
 publish-testpypi: release-check package-check verify-wheel ## Upload the checked package to TestPyPI
 	@test "$(CONFIRM)" = 1 || { echo "Refusing TestPyPI upload; rerun with CONFIRM=1" >&2; exit 2; }

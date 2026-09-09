@@ -29,6 +29,7 @@ from .regression import (
 from .validation import (
     RootlessPodmanValidationBackend,
     ValidationBackendCapabilities,
+    _structured_bind_mount,
     _run_worker_command,
 )
 from .rooted_io import RootedFilesystem
@@ -575,7 +576,7 @@ class RootlessPodmanReplayBackend(RootlessPodmanValidationBackend):
             "--userns=keep-id",
             f"--tmpfs=/tmp:rw,nosuid,nodev,noexec,size={self.tmpfs_size}",
             "--mount",
-            f"type=bind,src={host_workdir},dst=/work,rw=true",
+            _structured_bind_mount(host_workdir, "/work", read_only=False),
             "--workdir=/work",
             "--env",
             "PYTHONIOENCODING=utf-8",

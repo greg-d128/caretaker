@@ -27,6 +27,7 @@ if rootless is not True:
 
 $podman_command image exists "$image"
 $podman_command --cgroup-manager="$cgroup_manager" run --rm \
+    --pull=never \
     --network=none \
     --read-only \
     --cap-drop=ALL \
