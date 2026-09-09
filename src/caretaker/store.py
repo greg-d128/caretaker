@@ -1749,6 +1749,20 @@ def _validate_retention_timestamp(value: Any, *, field: str) -> str:
     return value
 
 
+def _validate_retention_schema_version(
+    value: Any,
+    expected: int,
+    *,
+    field: str,
+    unsupported_message: str,
+) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{field} must be an integer")
+    if value != expected:
+        raise ValueError(unsupported_message)
+    return value
+
+
 def _validate_retention_record_id(value: Any, *, field: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{field} must be a UUID string")
@@ -1815,10 +1829,18 @@ def _validate_retention_plan(
     }
     if set(plan) != expected:
         raise ValueError("retention plan has an unsupported field set")
-    if plan["schema_version"] != REPAIR_RETENTION_PLAN_SCHEMA_VERSION:
-        raise ValueError("unsupported Caretaker retention plan schema version")
-    if plan["store_schema_version"] != REPAIR_STORE_SCHEMA_VERSION:
-        raise ValueError("retention plan targets an unsupported store schema version")
+    _validate_retention_schema_version(
+        plan["schema_version"],
+        REPAIR_RETENTION_PLAN_SCHEMA_VERSION,
+        field="retention plan schema_version",
+        unsupported_message="unsupported Caretaker retention plan schema version",
+    )
+    _validate_retention_schema_version(
+        plan["store_schema_version"],
+        REPAIR_STORE_SCHEMA_VERSION,
+        field="retention plan store_schema_version",
+        unsupported_message="retention plan targets an unsupported store schema version",
+    )
     older_than = _validate_retention_timestamp(plan["older_than"], field="retention plan cutoff")
     families = plan["families"]
     if (
@@ -1866,18 +1888,50 @@ def _validate_retention_plan(
             raise ValueError("retention plan contains a duplicate record")
         keys.add(key)
         normalized_candidates.append(normalized)
+    normalized_preserved: list[dict[str, Any]] = []
     for item in preserved:
         if not isinstance(item, Mapping):
             raise ValueError("retention plan preserved record is not a mapping")
-        allowed = {"family", "record_id", "target_id", "created_at", "reason"}
+        allowed = {
+            "family", "record_id", "target_id", "created_at",
+            "payload_sha256", "reason",
+        }
         if not {"family", "record_id", "reason"}.issubset(item) or not set(item) <= allowed:
             raise ValueError("retention plan preserved record has an unsupported field set")
         family = item["family"]
         if not isinstance(family, str) or family not in family_scope:
             raise ValueError("retention plan preserved record has an invalid family")
-        _validate_retention_record_id(item["record_id"], field="retention plan preserved record_id")
-        if not isinstance(item["reason"], str) or not item["reason"].strip():
+        record_id = _validate_retention_record_id(
+            item["record_id"],
+            field="retention plan preserved record_id",
+        )
+        reason = item["reason"]
+        if not isinstance(reason, str) or not reason.strip():
             raise ValueError("retention plan preserved record reason is invalid")
+        normalized_preserved_item = {
+            "family": family,
+            "record_id": record_id,
+            "reason": reason,
+        }
+        if "target_id" in item:
+            target_id = item["target_id"]
+            if target_id is not None and not isinstance(target_id, str):
+                raise ValueError("retention plan preserved record target_id is invalid")
+            normalized_preserved_item["target_id"] = target_id
+        if "created_at" in item:
+            normalized_preserved_item["created_at"] = _validate_retention_timestamp(
+                item["created_at"],
+                field="retention plan preserved record created_at",
+            )
+        if "payload_sha256" in item:
+            payload_sha256 = item["payload_sha256"]
+            if payload_sha256 is not None:
+                payload_sha256 = _validate_digest(
+                    payload_sha256,
+                    field="retention plan preserved record payload_sha256",
+                )
+            normalized_preserved_item["payload_sha256"] = payload_sha256
+        normalized_preserved.append(normalized_preserved_item)
     normalized_plan = {
         "schema_version": REPAIR_RETENTION_PLAN_SCHEMA_VERSION,
         "store_schema_version": REPAIR_STORE_SCHEMA_VERSION,
@@ -1887,7 +1941,7 @@ def _validate_retention_plan(
         "examined_records": examined_records,
         "truncated": plan["truncated"],
         "candidate_records": normalized_candidates,
-        "preserved_records": preserved,
+        "preserved_records": normalized_preserved,
     }
     plan_sha256 = hashlib.sha256(
         _canonical_json_bytes({
@@ -2018,8 +2072,12 @@ def _read_retention_archive(path: Path) -> dict[str, Any]:
         raise ValueError("retention archive footer has an unsupported field set")
     if footer.get("kind") != "retention_archive_footer":
         raise ValueError("retention archive footer is missing")
-    if footer.get("schema_version") != REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION:
-        raise ValueError("retention archive footer is unsupported")
+    _validate_retention_schema_version(
+        footer.get("schema_version"),
+        REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION,
+        field="retention archive footer schema_version",
+        unsupported_message="retention archive footer is unsupported",
+    )
     if isinstance(footer.get("record_count"), bool) or not isinstance(footer.get("record_count"), int):
         raise ValueError("retention archive footer record_count is invalid")
     _validate_digest(footer.get("records_sha256"), field="retention archive records_sha256")
@@ -2059,10 +2117,18 @@ def _validate_retention_archive_header(value: Any) -> tuple[dict[str, Any], list
         raise ValueError("retention archive header is unsupported")
     if value.get("kind") != "retention_archive_header":
         raise ValueError("retention archive header is missing")
-    if value.get("schema_version") != REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION:
-        raise ValueError("retention archive header is unsupported")
-    if value.get("store_schema_version") != REPAIR_STORE_SCHEMA_VERSION:
-        raise ValueError("retention archive header is unsupported")
+    _validate_retention_schema_version(
+        value.get("schema_version"),
+        REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION,
+        field="retention archive header schema_version",
+        unsupported_message="retention archive header is unsupported",
+    )
+    _validate_retention_schema_version(
+        value.get("store_schema_version"),
+        REPAIR_STORE_SCHEMA_VERSION,
+        field="retention archive header store_schema_version",
+        unsupported_message="retention archive header is unsupported",
+    )
     if value.get("format") != _RETENTION_ARCHIVE_FORMAT:
         raise ValueError("retention archive header is unsupported")
     plan_sha256 = _validate_digest(value.get("plan_sha256"), field="retention archive plan_sha256")
@@ -2101,8 +2167,12 @@ def _validate_retention_archive_record(value: Any) -> dict[str, Any]:
         raise ValueError("retention archive record has an unsupported field set")
     if value.get("kind") != "retention_archive_record":
         raise ValueError("retention archive contains an unexpected record")
-    if value.get("schema_version") != REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION:
-        raise ValueError("retention archive record schema is unsupported")
+    _validate_retention_schema_version(
+        value.get("schema_version"),
+        REPAIR_RETENTION_ARCHIVE_SCHEMA_VERSION,
+        field="retention archive record schema_version",
+        unsupported_message="retention archive record schema is unsupported",
+    )
     family = value.get("family")
     if not isinstance(family, str) or family not in SQLiteRepairStore._TABLES:
         raise ValueError("retention archive record family is invalid")

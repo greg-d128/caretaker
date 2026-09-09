@@ -13,6 +13,7 @@ import pytest
 
 from caretaker import RepairRetentionPolicy, SQLiteRepairStore
 from caretaker.policy import PolicyConfigurationError, validate_repair_retention_policy
+from caretaker.store import REPAIR_RETENTION_PLAN_SCHEMA_VERSION, REPAIR_STORE_SCHEMA_VERSION
 
 
 def _insert_record(path, table: str, *, target_id: str | None, payload: dict, created_at: datetime) -> None:
@@ -83,6 +84,34 @@ def test_retention_dry_run_is_bounded_and_validates_scope(tmp_path) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("schema_version", float(REPAIR_RETENTION_PLAN_SCHEMA_VERSION)),
+        ("store_schema_version", float(REPAIR_STORE_SCHEMA_VERSION)),
+        ("schema_version", True),
+        ("store_schema_version", True),
+    ),
+)
+def test_retention_archive_rejects_non_integer_schema_versions(tmp_path, field, value) -> None:
+    store = SQLiteRepairStore(tmp_path / "repair.sqlite")
+    plan = {
+        "schema_version": REPAIR_RETENTION_PLAN_SCHEMA_VERSION,
+        "store_schema_version": REPAIR_STORE_SCHEMA_VERSION,
+        "older_than": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+        "families": ["candidates"],
+        "maximum_records": 1,
+        "examined_records": 0,
+        "truncated": False,
+        "candidate_records": [],
+        "preserved_records": [],
+    }
+    plan[field] = value
+
+    with pytest.raises(ValueError, match="must be an integer"):
+        store.retention_archive(plan, archive_path=tmp_path / "repair.jsonl.gz")
+
+
 def test_retention_archive_is_compressed_idempotent_and_does_not_delete(tmp_path) -> None:
     path = tmp_path / "repair.sqlite"
     store = SQLiteRepairStore(path)
@@ -130,6 +159,34 @@ def test_retention_archive_is_compressed_idempotent_and_does_not_delete(tmp_path
     repeated = store.retention_archive(plan, archive_path=archive_path)
     assert repeated["complete"] is True
     assert repeated["archived_records"] == 1
+
+
+def test_retention_archive_accepts_generated_preserved_records(tmp_path) -> None:
+    path = tmp_path / "repair.sqlite"
+    store = SQLiteRepairStore(path)
+    old = datetime.now(timezone.utc) - timedelta(days=2)
+    _insert_record(
+        path,
+        "attempts",
+        target_id="incident.target",
+        payload={"incident_id": str(uuid4()), "kind": "evidence"},
+        created_at=old,
+    )
+    plan = store.retention_dry_run(
+        older_than=datetime.now(timezone.utc) - timedelta(days=1),
+        families=("attempts",),
+    )
+
+    assert len(plan["preserved_records"]) == 1
+    assert plan["preserved_records"][0]["payload_sha256"]
+    result = store.retention_archive(
+        plan,
+        archive_path=tmp_path / "repair.jsonl.gz",
+    )
+
+    assert result["complete"] is True
+    assert result["archived_records"] == 0
+    assert store.retention_archive_status(tmp_path / "repair.jsonl.gz")["complete"] is True
 
 
 def test_retention_archive_resumes_from_bounded_partial_and_rechecks_rows(tmp_path) -> None:
