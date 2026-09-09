@@ -107,6 +107,8 @@ class IncidentCapsuleIntegrityError(IncidentCapsuleError):
 
 
 def validate_incident_capsule_policy(policy: IncidentCapsulePolicy) -> None:
+    if not isinstance(policy.enabled, bool) or not isinstance(policy.allow_operator_artifacts, bool):
+        raise IncidentCapsuleError("Invalid Incident Capsule policy: boolean fields must be booleans")
     errors: list[str] = []
     for name in (
         "maximum_capsule_bytes",
@@ -117,7 +119,8 @@ def validate_incident_capsule_policy(policy: IncidentCapsulePolicy) -> None:
         "maximum_collection_items",
         "maximum_text_characters",
     ):
-        if getattr(policy, name) <= 0:
+        value = getattr(policy, name)
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             errors.append(f"{name} must be greater than zero")
     if errors:
         raise IncidentCapsuleError("Invalid Incident Capsule policy: " + "; ".join(errors))

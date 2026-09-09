@@ -62,9 +62,9 @@ class ReplayResultStore:
         maximum_bytes: int = MAX_REPLAY_RESULT_BYTES,
         create_directory: bool = True,
     ) -> None:
-        if int(maximum_bytes) <= 0:
-            raise ValueError("maximum_bytes must be greater than zero")
-        self.maximum_bytes = int(maximum_bytes)
+        if isinstance(maximum_bytes, bool) or not isinstance(maximum_bytes, int) or maximum_bytes <= 0:
+            raise ValueError("maximum_bytes must be a positive integer")
+        self.maximum_bytes = maximum_bytes
         self.directory = Path(directory).expanduser().resolve() / "replay-results"
         if create_directory:
             self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -148,7 +148,9 @@ class ReplayResultStore:
         if self._rooted is None:
             raise ReplayExecutionError("replay result directory does not exist")
         try:
-            envelope = _strict_json_loads(self._rooted.read_bytes(path).decode("utf-8"))
+            envelope = _strict_json_loads(
+                self._rooted.read_bytes(path, maximum_bytes=self.maximum_bytes).decode("utf-8")
+            )
         except Exception as exc:
             raise ReplayExecutionError("replay result is not valid JSON") from exc
         if not isinstance(envelope, Mapping):

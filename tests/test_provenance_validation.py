@@ -10,6 +10,7 @@ from caretaker.behavior import BehaviorSnapshotStore, content_hash
 from caretaker.capsule import IncidentCapsuleIntegrityError, IncidentCapsuleStore
 from caretaker.regression import RegressionFixtureIntegrityError, RegressionFixtureStore
 from caretaker.replay import ReplayExecutionError, ReplayResultStore
+from caretaker.logging.policy import RegressionFixturePolicy
 
 
 def test_regression_fixture_schema_and_target_path_are_bound(tmp_path: Path) -> None:
@@ -80,3 +81,10 @@ def test_capsule_and_snapshot_schema_versions_are_verified_after_rehash(tmp_path
     snapshot_path.write_text(json.dumps(snapshot_data))
     with pytest.raises(ValueError, match="schema"):
         behavior_store.load(snapshot["snapshot"]["snapshot_id"])
+
+
+def test_persistence_limits_reject_coercion_and_bound_reads(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="maximum_bytes"):
+        ReplayResultStore(tmp_path / "replay", maximum_bytes=True)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="positive integer"):
+        RegressionFixturePolicy(maximum_fixture_bytes="1024")  # type: ignore[arg-type]

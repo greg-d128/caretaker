@@ -40,15 +40,21 @@ class RegressionFixtureStore:
         self.directory.chmod(0o700)
         self._lock = RLock()
 
+    def _limit(self, name: str, default: int) -> int:
+        value = getattr(self.policy, name, default)
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"regression.{name} must be a positive integer")
+        return value
+
     def _safe_policy(self) -> IncidentCapsulePolicy:
         return IncidentCapsulePolicy(
-            maximum_capsule_bytes=max(1, int(getattr(self.policy, "maximum_fixture_bytes", 128 * 1024))),
-            maximum_artifact_bytes=max(1, int(getattr(self.policy, "maximum_fixture_bytes", 128 * 1024))),
+            maximum_capsule_bytes=self._limit("maximum_fixture_bytes", 128 * 1024),
+            maximum_artifact_bytes=self._limit("maximum_fixture_bytes", 128 * 1024),
             maximum_artifacts=1,
             maximum_communications=1,
-            maximum_depth=max(1, int(getattr(self.policy, "maximum_depth", 6))),
-            maximum_collection_items=max(1, int(getattr(self.policy, "maximum_collection_items", 32))),
-            maximum_text_characters=max(1, int(getattr(self.policy, "maximum_text_characters", 2048))),
+            maximum_depth=self._limit("maximum_depth", 6),
+            maximum_collection_items=self._limit("maximum_collection_items", 32),
+            maximum_text_characters=self._limit("maximum_text_characters", 2048),
         )
 
     @staticmethod
@@ -237,7 +243,7 @@ class RegressionFixtureStore:
             envelope = dict(payload)
             envelope["content_sha256"] = self._payload_hash(payload)
             encoded = canonical_json_bytes(envelope)
-            maximum_bytes = int(getattr(self.policy, "maximum_fixture_bytes", 128 * 1024))
+            maximum_bytes = self._limit("maximum_fixture_bytes", 128 * 1024)
             if len(encoded) > maximum_bytes:
                 return None
         except Exception:
@@ -248,7 +254,7 @@ class RegressionFixtureStore:
         with self._lock:
             target_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
             target_directory.chmod(0o700)
-            maximum_cases = int(getattr(self.policy, "maximum_cases_per_target", 100))
+            maximum_cases = self._limit("maximum_cases_per_target", 100)
             existing = [item for item in target_directory.glob("*.json") if item.is_file() and not item.is_symlink()]
             if len(existing) >= maximum_cases:
                 return None
@@ -293,6 +299,12 @@ class RegressionFixtureStore:
         return tuple(summaries)
 
     def _read(self, path: Path) -> dict[str, Any]:
+        maximum_bytes = self._limit("maximum_fixture_bytes", 128 * 1024)
+        try:
+            if path.stat().st_size > maximum_bytes:
+                raise RegressionFixtureIntegrityError("fixture exceeds the configured byte limit")
+        except FileNotFoundError as exc:
+            raise RegressionFixtureIntegrityError("fixture is unavailable") from exc
         try:
             envelope = json.loads(path.read_text(encoding="utf-8"))
         except Exception as exc:

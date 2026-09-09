@@ -4,7 +4,6 @@ import dataclasses
 import hashlib
 import math
 import json
-import math
 import os
 import stat
 import tomllib
@@ -321,6 +320,20 @@ class RegressionFixturePolicy:
     replay_minimum_isolation: ValidationIsolationLevel = ValidationIsolationLevel.VM
     replay_require_source_match: bool = True
     maximum_source_bytes: int = 256 * 1024
+
+    def __post_init__(self) -> None:
+        for name in ("enabled", "replay_enabled", "replay_require_source_match"):
+            if not isinstance(getattr(self, name), bool):
+                raise ValueError(f"regression.{name} must be a boolean")
+        for name in (
+            "maximum_cases_per_target", "maximum_fixture_bytes", "maximum_depth",
+            "maximum_collection_items", "maximum_text_characters", "maximum_source_bytes",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"regression.{name} must be a positive integer")
+        if not isinstance(self.replay_minimum_isolation, ValidationIsolationLevel):
+            raise ValueError("regression.replay_minimum_isolation is invalid")
 
 
 @dataclass(frozen=True, slots=True)

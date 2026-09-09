@@ -21,6 +21,15 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _strict_json_loads(value: str) -> Any:
+    return json.loads(
+        value,
+        parse_constant=lambda token: (_ for _ in ()).throw(
+            ValueError(f"non-finite JSON constant {token} is not permitted")
+        ),
+    )
+
+
 class SignalDomain(Enum):
     FAILURE = auto()
     BEHAVIOR = auto()
@@ -403,7 +412,7 @@ class SQLiteRuntimeJobStore:
         if value is None:
             return None
         try:
-            parsed = json.loads(value)
+            parsed = _strict_json_loads(value)
         except (TypeError, ValueError) as exc:
             raise RuntimeJobStoreError(f"runtime job {field_name} is invalid JSON") from exc
         if not isinstance(parsed, Mapping):
@@ -446,12 +455,12 @@ class SQLiteRuntimeJobStore:
 
     def save(self, job: RuntimeJob) -> None:
         result = (
-            json.dumps(dict(job.result), default=str, sort_keys=True, separators=(",", ":"))
+            json.dumps(dict(job.result), sort_keys=True, separators=(",", ":"), allow_nan=False)
             if job.result is not None
             else None
         )
         progress = (
-            json.dumps(dict(job.progress), default=str, sort_keys=True, separators=(",", ":"))
+            json.dumps(dict(job.progress), sort_keys=True, separators=(",", ":"), allow_nan=False)
             if job.progress is not None
             else None
         )
@@ -690,7 +699,7 @@ class RuntimeJobRegistry:
         return job
 
     def _update_progress(self, job_id: UUID, progress: Mapping[str, Any]) -> None:
-        encoded = json.dumps(dict(progress), separators=(",", ":")).encode()
+        encoded = json.dumps(dict(progress), separators=(",", ":"), allow_nan=False).encode()
         if len(encoded) > self.policy.maximum_job_result_bytes:
             raise ValueError(
                 "job progress exceeds the configured byte limit "
@@ -745,7 +754,7 @@ class RuntimeJobRegistry:
             context.checkpoint()
             if not isinstance(result, Mapping):
                 raise TypeError("long job operation must return a mapping")
-            encoded = json.dumps(dict(result), default=str, separators=(",", ":")).encode()
+            encoded = json.dumps(dict(result), separators=(",", ":"), allow_nan=False).encode()
             if len(encoded) > self.policy.maximum_job_result_bytes:
                 raise ValueError(
                     "long job result exceeds the configured byte limit "

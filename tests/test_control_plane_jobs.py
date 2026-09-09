@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+import math
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -96,6 +97,22 @@ def test_long_job_result_size_is_fail_closed() -> None:
         )
         _wait_for_state(registry, job.job_id, RuntimeJobState.FAILED)
         assert "exceeds" in (registry.status(job.job_id).error or "")
+    finally:
+        registry.close()
+
+
+def test_long_job_nonfinite_result_is_fail_closed() -> None:
+    registry = RuntimeJobRegistry(
+        interaction_policy=RuntimeInteractionPolicy(maximum_job_result_bytes=1024)
+    )
+    try:
+        job = registry.submit(
+            "nonfinite",
+            client_id="uid:1000",
+            operation=lambda context: {"value": math.nan},
+        )
+        _wait_for_state(registry, job.job_id, RuntimeJobState.FAILED)
+        assert "Out of range" in (registry.status(job.job_id).error or "")
     finally:
         registry.close()
 

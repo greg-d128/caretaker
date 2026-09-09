@@ -96,7 +96,11 @@ class RootedFilesystem:
             return os.fdopen(descriptor, "w", encoding="utf-8")
         return os.fdopen(descriptor, "wb", buffering=0)
 
-    def read_bytes(self, target: str | Path) -> bytes:
+    def read_bytes(self, target: str | Path, *, maximum_bytes: int | None = None) -> bytes:
+        if maximum_bytes is not None and (
+            isinstance(maximum_bytes, bool) or not isinstance(maximum_bytes, int) or maximum_bytes <= 0
+        ):
+            raise ValueError("maximum_bytes must be a positive integer")
         directory_fd, name = self._open_parent(self.path(target))
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         try:
@@ -105,7 +109,12 @@ class RootedFilesystem:
             os.close(directory_fd)
         try:
             with os.fdopen(descriptor, "rb") as stream:
-                return stream.read()
+                if maximum_bytes is None:
+                    return stream.read()
+                value = stream.read(maximum_bytes + 1)
+                if len(value) > maximum_bytes:
+                    raise RootedWriteError("file exceeds the configured byte limit")
+                return value
         except Exception:
             try:
                 os.close(descriptor)
