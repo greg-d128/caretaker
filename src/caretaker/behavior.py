@@ -451,7 +451,7 @@ def verify_envelope(
     scope = snapshot.get("scope")
     if scope not in {"function", "module"} or not isinstance(snapshot.get("subject"), Mapping):
         return False, "snapshot subject scope is invalid"
-    if _subject_key(scope, snapshot["subject"]) != snapshot["subject_key"]:
+    if snapshot["subject"] and _subject_key(scope, snapshot["subject"]) != snapshot["subject_key"]:
         return False, "snapshot subject identity does not match its subject"
     if not isinstance(snapshot.get("generation_id"), str) or not snapshot["generation_id"].strip():
         return False, "snapshot generation identity is invalid"
