@@ -606,6 +606,11 @@ class IncidentCapsuleStore:
             communications = list(payload.get("communications") or ())
             if len(communications) >= active_policy.maximum_communications:
                 raise IncidentCapsuleError("Incident Capsule communication limit has been reached")
+            if content_sha256 is not None and (
+                not isinstance(content_sha256, str)
+                or _CAPSULE_DIGEST.fullmatch(content_sha256) is None
+            ):
+                raise IncidentCapsuleError("communication content hash must be a lowercase SHA-256 digest")
             communications.append({
                 "communication_id": str(uuid4()),
                 "recorded_at": _utcnow().isoformat(),
@@ -776,6 +781,8 @@ class IncidentCapsuleStore:
             raise IncidentCapsuleIntegrityError("capsule previous revision hash is invalid")
         if not isinstance(payload.get("artifacts"), list) or not isinstance(payload.get("communications"), list):
             raise IncidentCapsuleIntegrityError("capsule artifact or communication collections are invalid")
+        for record in payload["communications"]:
+            _validate_communication_record(record, integrity=True)
         if path is not None and path.name != f"{capsule_id}.r{payload['revision']}.json":
             raise IncidentCapsuleIntegrityError("capsule filename does not match capsule identity")
         expected = str(integrity.get("content_sha256") or "")
@@ -884,12 +891,42 @@ def _bounded_communication_records(
         if not isinstance(value, Mapping):
             result.append(bounded_safe_data(value, policy=policy))
             continue
+        _validate_communication_record(value)
         result.append({
-            key: bounded_safe_data(value[key], policy=policy, name=key)
+            key: (
+                str(UUID(str(value[key])))
+                if key == "communication_id"
+                else value[key]
+                if key == "content_sha256"
+                else bounded_safe_data(value[key], policy=policy, name=key)
+            )
             for key in fields
             if key in value
         })
     return result
+
+
+def _validate_communication_record(
+    value: Any,
+    *,
+    integrity: bool = False,
+) -> None:
+    error_type = IncidentCapsuleIntegrityError if integrity else IncidentCapsuleError
+    if not isinstance(value, Mapping):
+        raise error_type("communication record must be an object")
+    communication_id = value.get("communication_id")
+    try:
+        parsed_id = UUID(str(communication_id))
+    except (TypeError, ValueError) as exc:
+        raise error_type("communication identity is invalid") from exc
+    if str(communication_id) != str(parsed_id):
+        raise error_type("communication identity must use canonical UUID text")
+    content_sha256 = value.get("content_sha256")
+    if content_sha256 is not None and (
+        not isinstance(content_sha256, str)
+        or _CAPSULE_DIGEST.fullmatch(content_sha256) is None
+    ):
+        raise error_type("communication content hash must be a lowercase SHA-256 digest")
 
 
 def _bounded_artifact_content(value: Any, policy: IncidentCapsulePolicy) -> Any:

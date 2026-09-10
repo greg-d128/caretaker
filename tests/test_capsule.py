@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -78,6 +78,62 @@ def test_capsule_is_bounded_data_only_and_communications_are_revisioned(tmp_path
     assert store.load(second["capsule"]["capsule_id"], revision=1)["capsule"]["revision"] == 1
     loaded_artifact = store.load_artifact(artifact_result["artifact"]["artifact"]["artifact_id"])
     assert loaded_artifact["artifact"]["artifact_id"] == artifact_result["artifact"]["artifact"]["artifact_id"]
+
+
+def test_communication_history_rejects_bad_hashes_and_preserves_tight_ids(tmp_path: Path) -> None:
+    policy = IncidentCapsulePolicy(maximum_text_characters=8)
+    store = IncidentCapsuleStore(tmp_path, policy=policy)
+    incident_id = uuid4()
+    store.create_placeholder(incident_id, policy=policy)
+
+    for invalid in ("not-a-hash", "A" * 64, 1, True):
+        with pytest.raises(IncidentCapsuleError, match="content hash"):
+            store.record_communication(
+                incident_id,
+                direction="outbound",
+                channel="review",
+                status="drafted",
+                content_sha256=invalid,
+                policy=policy,
+            )
+
+    recorded = store.record_communication(
+        incident_id,
+        direction="outbound",
+        channel="review",
+        status="drafted",
+        content_sha256="c" * 64,
+        policy=policy,
+    )
+    communication_id = recorded["capsule"]["communications"][0]["communication_id"]
+    assert str(UUID(communication_id)) == communication_id
+    assert len(communication_id) == 36
+    assert recorded["capsule"]["communications"][0]["content_sha256"] == "c" * 64
+
+
+def test_capsule_verification_rejects_a_rehashed_malformed_communication_hash(tmp_path: Path) -> None:
+    store = IncidentCapsuleStore(tmp_path)
+    envelope = store.create_placeholder(uuid4())
+    payload = dict(envelope["capsule"])
+    payload["communications"] = [{
+        "communication_id": str(uuid4()),
+        "recorded_at": "2026-01-01T00:00:00+00:00",
+        "direction": "outbound",
+        "channel": "review",
+        "audience_profile_id": None,
+        "status": "drafted",
+        "content_sha256": "bad",
+        "source": "test",
+        "metadata": {},
+    }]
+    tampered = {
+        "capsule": payload,
+        "integrity": {"content_sha256": content_hash(payload)},
+    }
+
+    verified, error = store.verify(tampered)
+    assert verified is False
+    assert "content hash" in (error or "")
 
 
 def test_capsule_tampering_is_detected_and_disabled_policy_fails_closed(tmp_path: Path) -> None:
