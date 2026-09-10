@@ -26,6 +26,7 @@ from .capsule import (
 from .adaptive import lightweight_dependency
 from .provider_security import validate_provider_endpoint
 from .llm import LLMRequestGate, LLMUsagePolicy
+from .validation_primitives import exact_bool, finite_number, integer
 
 
 COMMUNICATION_SCHEMA_VERSION = 1
@@ -131,12 +132,18 @@ class CommunicationPolicyError(ValueError):
 
 def validate_incident_communication_policy(policy: IncidentCommunicationPolicy) -> None:
     errors: list[str] = []
-    if not isinstance(policy.enabled, bool):
-        errors.append("enabled must be a boolean")
-    if not isinstance(policy.llm_tailoring_enabled, bool):
-        errors.append("llm_tailoring_enabled must be a boolean")
-    if policy.maximum_draft_bytes <= 0:
-        errors.append("maximum_draft_bytes must be greater than zero")
+    for value, name in (
+        (policy.enabled, "enabled"),
+        (policy.llm_tailoring_enabled, "llm_tailoring_enabled"),
+    ):
+        try:
+            exact_bool(value, name=name)
+        except ValueError as exc:
+            errors.append(str(exc))
+    try:
+        integer(policy.maximum_draft_bytes, name="maximum_draft_bytes", minimum=1)
+    except ValueError as exc:
+        errors.append(str(exc))
     if not policy.audiences:
         errors.append("at least one communication audience is required")
     profile_ids: set[str] = set()
@@ -148,10 +155,18 @@ def validate_incident_communication_policy(policy: IncidentCommunicationPolicy) 
         profile_ids.add(audience.profile_id)
         if not audience.display_name.strip():
             errors.append(f"audiences[{index}].display_name must not be empty")
-        if audience.maximum_text_characters <= 0:
-            errors.append(f"audiences[{index}].maximum_text_characters must be greater than zero")
-        if audience.maximum_items <= 0:
-            errors.append(f"audiences[{index}].maximum_items must be greater than zero")
+        try:
+            integer(
+                audience.maximum_text_characters,
+                name=f"audiences[{index}].maximum_text_characters",
+                minimum=1,
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+        try:
+            integer(audience.maximum_items, name=f"audiences[{index}].maximum_items", minimum=1)
+        except ValueError as exc:
+            errors.append(str(exc))
         unknown = set(audience.allowed_sections) - COMMUNICATION_SECTIONS
         if unknown:
             errors.append(
@@ -389,8 +404,15 @@ class CommunicationDraftAssistant:
     ) -> None:
         if not str(model).strip():
             raise ValueError("communication tailoring requires a model")
+        try:
+            timeout_seconds = float(
+                finite_number(timeout_seconds, name="communication tailoring timeout")
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("communication tailoring timeout must be a finite number") from exc
         if timeout_seconds <= 0:
             raise ValueError("communication tailoring timeout must be greater than zero")
+        integer(maximum_text_characters, name="communication audience text limit", minimum=1)
         if maximum_text_characters <= 0:
             raise ValueError("communication audience text limit must be greater than zero")
         self.model = str(model).strip()

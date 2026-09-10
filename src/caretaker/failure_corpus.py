@@ -24,6 +24,7 @@ from typing import Any, Mapping
 from uuid import UUID, uuid4
 
 from .validation import MultipassValidationBackend
+from .validation_primitives import finite_number, integer
 
 
 FAILURE_CORPUS_SCHEMA_VERSION = 1
@@ -35,6 +36,10 @@ MAX_OBSERVATION_BYTES = 16_384
 MAX_STORED_OBSERVATION_BYTES = 32_768
 MAX_OUTCOME_REPORT_BYTES = 65_536
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9_.-]{1,127}$")
+
+
+def _bounded_limit(value: object, *, name: str, maximum: int) -> int:
+    return integer(value, name=name, minimum=1, maximum=maximum)
 
 FAILURE_CATEGORIES = frozenset({
     "exception",
@@ -271,8 +276,7 @@ class FailureCorpus:
     @classmethod
     def load(cls, path: str | Path, *, maximum_bytes: int = MAX_CORPUS_BYTES) -> "FailureCorpus":
         """Load one bounded JSON manifest without executing any declared value."""
-        if maximum_bytes <= 0:
-            raise ValueError("maximum_bytes must be greater than zero")
+        _bounded_limit(maximum_bytes, name="maximum_bytes", maximum=MAX_CORPUS_BYTES)
         manifest_path = Path(path)
         if manifest_path.is_symlink() or not manifest_path.is_file():
             raise FailureCorpusError("failure corpus manifest must be a regular file")
@@ -297,7 +301,7 @@ class FailureCorpus:
             raise KeyError(f"unknown failure corpus scenario {scenario_id!r}") from exc
 
     def list_summaries(self, *, category: str | None = None, limit: int = 100) -> tuple[dict[str, Any], ...]:
-        bounded_limit = max(1, min(int(limit), MAX_SCENARIOS))
+        bounded_limit = _bounded_limit(limit, name="limit", maximum=MAX_SCENARIOS)
         return tuple(
             scenario.summary()
             for scenario in self.scenarios
@@ -477,7 +481,7 @@ class FailureCorpusHarness:
         )
 
     def run_all(self, *, category: str | None = None, limit: int = 100) -> tuple[FailureObservation, ...]:
-        bounded_limit = max(1, min(int(limit), MAX_SCENARIOS))
+        bounded_limit = _bounded_limit(limit, name="limit", maximum=MAX_SCENARIOS)
         selected = [
             scenario for scenario in self.corpus.scenarios
             if category is None or scenario.category == category
@@ -524,6 +528,10 @@ class FailureCorpusProcessRunner:
         workspace_root: str | Path | None = None,
         environment: Mapping[str, str] | None = None,
     ) -> None:
+        try:
+            timeout_seconds = float(finite_number(timeout_seconds, name="timeout_seconds"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("timeout_seconds must be a finite number") from exc
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be greater than zero")
         self.corpus = corpus
@@ -650,7 +658,13 @@ class FailureCorpusPodmanRunner:
             raise FailureCorpusError("a Podman executable is required")
         if cgroup_manager not in {"cgroupfs", "systemd"}:
             raise FailureCorpusError("cgroup_manager must be cgroupfs or systemd")
-        if timeout_seconds <= 0 or cpus <= 0 or pids_limit < 1:
+        try:
+            timeout_seconds = float(finite_number(timeout_seconds, name="timeout_seconds"))
+            cpus = float(finite_number(cpus, name="cpus"))
+            integer(pids_limit, name="pids_limit", minimum=1)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("timeout_seconds and cpus must be finite numbers; pids_limit must be an integer") from exc
+        if timeout_seconds <= 0 or cpus <= 0:
             raise ValueError("timeout_seconds, cpus, and pids_limit must be positive")
         self.corpus = corpus
         self.image = image
@@ -804,7 +818,7 @@ class FailureCorpusPodmanRunner:
         return self.harness.run(scenario_id)
 
     def run_all(self, *, category: str | None = None, limit: int = 100) -> tuple[FailureObservation, ...]:
-        bounded_limit = max(1, min(int(limit), MAX_SCENARIOS))
+        bounded_limit = _bounded_limit(limit, name="limit", maximum=MAX_SCENARIOS)
         selected = [
             scenario for scenario in self.corpus.scenarios
             if category is None or scenario.category == category
@@ -831,6 +845,10 @@ class FailureCorpusMultipassRunner(MultipassValidationBackend):
         timeout_seconds: float = 60.0,
         **backend_kwargs: Any,
     ) -> None:
+        try:
+            timeout_seconds = float(finite_number(timeout_seconds, name="timeout_seconds"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("timeout_seconds must be a finite number") from exc
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be greater than zero")
         super().__init__(operation_timeout_seconds=timeout_seconds, **backend_kwargs)
@@ -942,7 +960,7 @@ class FailureCorpusMultipassRunner(MultipassValidationBackend):
                     self._destroy_disposable_clone(instance)
 
     def run_all(self, *, category: str | None = None, limit: int = 100) -> tuple[FailureObservation, ...]:
-        bounded_limit = max(1, min(int(limit), MAX_SCENARIOS))
+        bounded_limit = _bounded_limit(limit, name="limit", maximum=MAX_SCENARIOS)
         selected = [
             scenario for scenario in self.corpus.scenarios
             if category is None or scenario.category == category
@@ -959,8 +977,11 @@ class FailureCorpusObservationStore:
         *,
         maximum_observation_bytes: int = MAX_STORED_OBSERVATION_BYTES,
     ) -> None:
-        if maximum_observation_bytes <= 0:
-            raise ValueError("maximum_observation_bytes must be greater than zero")
+        _bounded_limit(
+            maximum_observation_bytes,
+            name="maximum_observation_bytes",
+            maximum=MAX_STORED_OBSERVATION_BYTES,
+        )
         self.directory = Path(root).expanduser().resolve() / "failure-corpus-observations"
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         try:
@@ -1147,7 +1168,7 @@ class FailureCorpusObservationStore:
         status: str | None = None,
         limit: int = 100,
     ) -> tuple[dict[str, Any], ...]:
-        bounded_limit = max(1, min(int(limit), MAX_SCENARIOS))
+        bounded_limit = _bounded_limit(limit, name="limit", maximum=MAX_SCENARIOS)
         result: list[dict[str, Any]] = []
         for path in sorted(self.directory.glob("*.json")):
             if len(result) >= bounded_limit:
@@ -1190,7 +1211,7 @@ class FailureCorpusObservationStore:
         corpus_filter = _identifier(corpus_id, field="corpus_id") if corpus_id is not None else None
         environment_filter = _text(environment_id, field="environment_id", maximum=128) if environment_id is not None else None
         scenario_filter = _identifier(scenario_id, field="scenario_id") if scenario_id is not None else None
-        bounded_limit = max(1, min(int(limit), MAX_SCENARIOS))
+        bounded_limit = _bounded_limit(limit, name="limit", maximum=MAX_SCENARIOS)
         valid_records: list[dict[str, Any]] = []
         corrupt_records = 0
         paths = sorted(self.directory.glob("*.json"))
