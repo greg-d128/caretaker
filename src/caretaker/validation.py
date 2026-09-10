@@ -32,6 +32,7 @@ from .domain import (
     utcnow,
 )
 from .registry import RepairTarget
+from .validation_primitives import finite_number, integer
 
 
 @dataclass(frozen=True, slots=True)
@@ -838,6 +839,7 @@ def _structured_bind_mount(
     docker: bool = False,
 ) -> str:
     """Encode bind-source paths so commas cannot become mount options."""
+    source = _validated_mount_source(source, require_existing=False)
     encoded_source = str(source).replace("\\", "\\\\").replace(",", "\\,")
     options = f"type=bind,src={encoded_source},dst={destination}"
     if docker:
@@ -845,6 +847,30 @@ def _structured_bind_mount(
     else:
         options += ",ro=true" if read_only else ",rw=true"
     return options
+
+
+def _validated_mount_source(source: str | Path, *, require_existing: bool = True) -> Path:
+    """Require an existing directory with no symlinked path component."""
+    candidate = Path(source).expanduser()
+    if not candidate.is_absolute():
+        candidate = Path(os.path.abspath(candidate))
+    current = Path(candidate.anchor)
+    for component in candidate.parts[1:]:
+        current /= component
+        try:
+            if current.is_symlink():
+                raise ValueError(f"validation mount source cannot contain a symlink: {source}")
+        except OSError as exc:
+            raise ValueError(f"validation mount source is unavailable: {source}") from exc
+    if require_existing and not candidate.is_dir():
+        raise ValueError(f"validation mount source must be an existing directory: {source}")
+    return candidate
+
+
+def _validated_resource_size(value: object, *, name: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[1-9][0-9]*[kKmMgGtT]?", value):
+        raise ValueError(f"{name} must be a positive byte size such as 64m")
+    return value
 
 
 class RootlessPodmanValidationBackend(SubprocessValidationBackend):
@@ -871,23 +897,26 @@ class RootlessPodmanValidationBackend(SubprocessValidationBackend):
         super().__init__(python_executable="python")
         if not image.strip():
             raise ValueError("A pre-provisioned Podman validation image is required")
+        try:
+            cpus = float(finite_number(cpus, name="cpus", minimum=0.0))
+            pids_limit = integer(pids_limit, name="pids_limit", minimum=1)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
         if cpus <= 0:
             raise ValueError("cpus must be > 0")
-        if pids_limit < 1:
-            raise ValueError("pids_limit must be >= 1")
         if cgroup_manager not in {"cgroupfs", "systemd"}:
             raise ValueError("cgroup_manager must be 'cgroupfs' or 'systemd'")
         self.image = image
         self.podman_executable = podman_executable
         self.cgroup_manager = cgroup_manager
-        self.workspace = Path(workspace or os.getcwd()).resolve()
+        self.workspace = _validated_mount_source(workspace or os.getcwd())
         self.additional_read_only_paths = tuple(
-            Path(item).resolve() for item in additional_read_only_paths
+            _validated_mount_source(item) for item in additional_read_only_paths
         )
-        self.memory = memory
-        self.cpus = float(cpus)
-        self.pids_limit = int(pids_limit)
-        self.tmpfs_size = tmpfs_size
+        self.memory = _validated_resource_size(memory, name="memory")
+        self.cpus = cpus
+        self.pids_limit = pids_limit
+        self.tmpfs_size = _validated_resource_size(tmpfs_size, name="tmpfs_size")
         self._availability_details: dict[str, Any] = {}
 
     def capabilities(self) -> ValidationBackendCapabilities:

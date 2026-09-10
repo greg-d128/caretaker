@@ -4,6 +4,8 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from caretaker.domain import ValidationIsolationLevel
 from caretaker.validation import (
     MultipassValidationBackend,
@@ -176,6 +178,33 @@ def test_structured_bind_mount_escapes_comma_in_host_path(tmp_path: Path) -> Non
     replay = RootlessPodmanReplayBackend("caretaker-replay:local")
     replay_command = replay._build_replay_command(workdir)
     assert any("src=" + str(workdir).replace(",", "\\,") in item for item in replay_command)
+
+
+def test_container_validation_rejects_symlinked_mount_sources(tmp_path: Path) -> None:
+    real_workspace = tmp_path / "real-workspace"
+    real_workspace.mkdir()
+    symlink_workspace = tmp_path / "workspace-link"
+    symlink_workspace.symlink_to(real_workspace, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlink"):
+        RootlessPodmanValidationBackend("caretaker-validator:local", workspace=symlink_workspace)
+    with pytest.raises(ValueError, match="symlink"):
+        RootlessPodmanValidationBackend(
+            "caretaker-validator:local",
+            workspace=real_workspace,
+            additional_read_only_paths=(symlink_workspace,),
+        )
+
+
+def test_container_validation_rejects_coercive_resource_limits(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    with pytest.raises(ValueError, match="cpus"):
+        RootlessPodmanValidationBackend("caretaker-validator:local", workspace=workspace, cpus="1")
+    with pytest.raises(ValueError, match="pids_limit"):
+        RootlessPodmanValidationBackend("caretaker-validator:local", workspace=workspace, pids_limit=2.5)
+    with pytest.raises(ValueError, match="memory"):
+        RootlessPodmanValidationBackend("caretaker-validator:local", workspace=workspace, memory=512)
 
 def test_multipass_rejects_host_directory_mounts(monkeypatch) -> None:
     monkeypatch.setattr("caretaker.validation.shutil.which", lambda executable: f"/usr/bin/{executable}")
