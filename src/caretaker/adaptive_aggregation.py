@@ -28,6 +28,7 @@ from .transport import (
     ApplicationLocalQueueTransport,
     ApplicationTransportError,
 )
+from .validation_primitives import finite_number, integer
 
 
 ADAPTIVE_AGGREGATION_SCHEMA_VERSION = 1
@@ -92,6 +93,22 @@ class AdaptiveAggregationError(ValueError):
     """Raised when an adaptive observation batch is malformed or unsafe."""
 
 
+def _list_limit(value: object, *, name: str = "limit", maximum: int = 500) -> int:
+    try:
+        parsed = integer(value, name=name, minimum=1)
+    except ValueError as exc:
+        raise AdaptiveAggregationError(str(exc)) from exc
+    return min(parsed, maximum)
+
+
+def _number(value: object, *, name: str, minimum: float = 0.0, maximum: float | None = None) -> float:
+    try:
+        parsed = finite_number(value, name=name, minimum=minimum, maximum=maximum)
+    except ValueError as exc:
+        raise AdaptiveAggregationError(str(exc)) from exc
+    return float(parsed)
+
+
 class AdaptiveAggregationBackpressureAction(Enum):
     """Policy response when a worker cannot submit its evidence batch."""
 
@@ -113,7 +130,7 @@ class RemoteAdaptiveAggregationStore:
 
     def __init__(self, socket_path: str | Path, *, timeout: float = 5.0) -> None:
         self.socket_path = str(socket_path)
-        self.timeout = float(timeout)
+        self.timeout = _number(timeout, name="adaptive aggregation transport timeout", minimum=0.0)
         if self.timeout <= 0:
             raise ValueError("adaptive aggregation transport timeout must be positive")
 
@@ -250,13 +267,18 @@ class QueueAdaptiveAggregationStore:
             raise ValueError("queue adaptive aggregation drain worker_id is invalid")
         if isinstance(worker_pid, bool) or not isinstance(worker_pid, int) or worker_pid <= 0:
             raise ValueError("queue adaptive aggregation drain worker_pid must be positive")
-        if not 1 <= int(limit) <= APPLICATION_TRANSPORT_MAX_DRAIN_MESSAGES:
+        bounded_limit = _list_limit(
+            limit,
+            name="queue adaptive aggregation drain limit",
+            maximum=APPLICATION_TRANSPORT_MAX_DRAIN_MESSAGES,
+        )
+        if limit > APPLICATION_TRANSPORT_MAX_DRAIN_MESSAGES:
             raise ValueError(
                 "queue adaptive aggregation drain limit must be between 1 and "
                 f"{APPLICATION_TRANSPORT_MAX_DRAIN_MESSAGES}"
             )
         results: list[dict[str, Any]] = []
-        for _ in range(int(limit)):
+        for _ in range(bounded_limit):
             batch = self.receive()
             if batch is None:
                 break
@@ -297,11 +319,15 @@ class AdaptiveObservationBatcher:
         backpressure_incident_callback: Callable[[Mapping[str, Any]], Any] | None = None,
         backpressure_audit_callback: Callable[..., Any] | None = None,
     ) -> None:
-        if not 0 < int(flush_after_observations) <= MAX_BATCH_COUNTER:
+        if isinstance(flush_after_observations, bool) or not isinstance(flush_after_observations, int):
+            raise ValueError("flush_after_observations must be an integer")
+        if not 0 < flush_after_observations <= MAX_BATCH_COUNTER:
             raise ValueError(
                 f"flush_after_observations must be between 1 and {MAX_BATCH_COUNTER}"
             )
-        if float(flush_interval_seconds) < 0:
+        if isinstance(flush_interval_seconds, bool) or not isinstance(flush_interval_seconds, (int, float)):
+            raise ValueError("flush_interval_seconds must be a number")
+        if not math.isfinite(float(flush_interval_seconds)) or flush_interval_seconds < 0:
             raise ValueError("flush_interval_seconds cannot be negative")
         if not isinstance(backpressure_action, AdaptiveAggregationBackpressureAction):
             raise ValueError(
@@ -374,12 +400,9 @@ class AdaptiveObservationBatcher:
                 raise ValueError("event_kind must be exception or timing")
             normalized_duration: float | None = None
             if duration_seconds is not None:
-                if isinstance(duration_seconds, bool):
+                if isinstance(duration_seconds, bool) or not isinstance(duration_seconds, (int, float)):
                     raise ValueError("duration_seconds must be a number")
-                try:
-                    normalized_duration = float(duration_seconds)
-                except (TypeError, ValueError) as exc:
-                    raise ValueError("duration_seconds must be a number") from exc
+                normalized_duration = float(duration_seconds)
                 if not math.isfinite(normalized_duration) or not 0 <= normalized_duration <= MAX_DURATION_SECONDS:
                     raise ValueError(
                         "duration_seconds must be finite and between 0 and "
@@ -396,19 +419,16 @@ class AdaptiveObservationBatcher:
                         f"resource_values exceeds {MAX_RESOURCE_METRICS} metrics"
                     )
                 for raw_name, raw_value in resource_values.items():
-                    name = str(raw_name).strip()
+                    if not isinstance(raw_name, str):
+                        raise ValueError("resource metric names must be strings")
+                    name = raw_name.strip()
                     if not name or len(name) > MAX_BATCH_TEXT:
                         raise ValueError(
                             f"resource metric names must be 1..{MAX_BATCH_TEXT} characters"
                         )
-                    if isinstance(raw_value, bool):
+                    if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
                         raise ValueError(f"resource_values[{name!r}] must be a number")
-                    try:
-                        numeric = float(raw_value)
-                    except (TypeError, ValueError) as exc:
-                        raise ValueError(
-                            f"resource_values[{name!r}] must be a number"
-                        ) from exc
+                    numeric = float(raw_value)
                     if not math.isfinite(numeric) or not 0 <= numeric <= MAX_RESOURCE_VALUE:
                         raise ValueError(
                             f"resource_values[{name!r}] must be finite and between 0 and "
@@ -422,9 +442,9 @@ class AdaptiveObservationBatcher:
             for name, value in increments.items():
                 if name not in _BATCH_COUNTER_NAMES:
                     raise ValueError(f"unknown adaptive aggregation counter: {name}")
-                if isinstance(value, bool) or int(value) < 0:
+                if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                     raise ValueError(f"{name} must be a non-negative integer")
-                if int(value) > MAX_BATCH_COUNTER:
+                if value > MAX_BATCH_COUNTER:
                     raise ValueError(f"{name} exceeds {MAX_BATCH_COUNTER}")
             if self._records >= MAX_BATCH_COUNTER:
                 result = self._flush_locked()
@@ -830,15 +850,12 @@ def extended_aggregation_target_id(
 
 
 def _count(value: Any, *, name: str, maximum: int = MAX_BATCH_COUNTER) -> int:
-    if isinstance(value, bool):
-        raise AdaptiveAggregationError(f"{name} must be an integer")
+    if value is None:
+        return 0
     try:
-        result = int(value or 0)
-    except (TypeError, ValueError) as exc:
-        raise AdaptiveAggregationError(f"{name} must be an integer") from exc
-    if result < 0 or result > maximum:
-        raise AdaptiveAggregationError(f"{name} must be between 0 and {maximum}")
-    return result
+        return integer(value, name=name, minimum=0, maximum=maximum)
+    except ValueError as exc:
+        raise AdaptiveAggregationError(f"{name} must be between 0 and {maximum}") from exc
 
 
 def _timestamp(value: Any, *, name: str) -> str:
@@ -872,12 +889,9 @@ def _duration_samples(value: Any, *, name: str) -> list[float]:
         raise AdaptiveAggregationError(f"{name} exceeds {MAX_DURATION_SAMPLES} entries")
     samples: list[float] = []
     for item in value:
-        if isinstance(item, bool):
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
             raise AdaptiveAggregationError(f"{name}[] must be a number")
-        try:
-            duration = float(item)
-        except (TypeError, ValueError) as exc:
-            raise AdaptiveAggregationError(f"{name}[] must be a number") from exc
+        duration = float(item)
         if not math.isfinite(duration) or not 0 <= duration <= MAX_DURATION_SECONDS:
             raise AdaptiveAggregationError(
                 f"{name}[] must be finite and between 0 and {MAX_DURATION_SECONDS:g}"
@@ -911,16 +925,11 @@ def _resource_samples(value: Any, *, name: str) -> dict[str, list[float]]:
             )
         samples: list[float] = []
         for raw_value in raw_values:
-            if isinstance(raw_value, bool):
+            if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
                 raise AdaptiveAggregationError(
                     f"{name}[{metric!r}][] must be a number"
                 )
-            try:
-                numeric = float(raw_value)
-            except (TypeError, ValueError) as exc:
-                raise AdaptiveAggregationError(
-                    f"{name}[{metric!r}][] must be a number"
-                ) from exc
+            numeric = float(raw_value)
             if not math.isfinite(numeric) or not 0 <= numeric <= MAX_RESOURCE_VALUE:
                 raise AdaptiveAggregationError(
                     f"{name}[{metric!r}][] must be finite and between 0 and "
@@ -2114,15 +2123,15 @@ class SupervisorAdaptiveAggregationStore:
         distribution_minimum_observations: int = DEFAULT_DISTRIBUTION_MINIMUM_OBSERVATIONS,
         audit_event: Callable[..., Any] | None = None,
     ) -> None:
-        if int(maximum_pending) <= 0:
+        if isinstance(maximum_pending, bool) or not isinstance(maximum_pending, int) or maximum_pending <= 0:
             raise ValueError("maximum_pending must be greater than zero")
-        if int(maximum_workers) <= 0:
+        if isinstance(maximum_workers, bool) or not isinstance(maximum_workers, int) or maximum_workers <= 0:
             raise ValueError("maximum_workers must be greater than zero")
-        if int(maximum_retained_events) <= 0:
+        if isinstance(maximum_retained_events, bool) or not isinstance(maximum_retained_events, int) or maximum_retained_events <= 0:
             raise ValueError("maximum_retained_events must be greater than zero")
-        if float(distribution_z_threshold) <= 0:
+        if isinstance(distribution_z_threshold, bool) or not isinstance(distribution_z_threshold, (int, float)) or not math.isfinite(float(distribution_z_threshold)) or distribution_z_threshold <= 0:
             raise ValueError("distribution_z_threshold must be greater than zero")
-        if int(distribution_minimum_observations) <= 1:
+        if isinstance(distribution_minimum_observations, bool) or not isinstance(distribution_minimum_observations, int) or distribution_minimum_observations <= 1:
             raise ValueError("distribution_minimum_observations must be greater than one")
         self.root = Path(root)
         self.pending_directory = self.root / "adaptive" / "aggregation" / "pending"
@@ -2765,7 +2774,7 @@ class SupervisorAdaptiveAggregationStore:
                 normalized_transition = str(UUID(str(transition_id)))
             except (TypeError, ValueError) as exc:
                 raise AdaptiveAggregationError("transition_id must be a UUID") from exc
-        bounded = max(1, min(int(limit), 500))
+        bounded = _list_limit(limit)
         records: list[dict[str, Any]] = []
         for path in sorted(self.policy_ledger_directory.glob("*.json"), reverse=True):
             record = self._load_policy_ledger_record(path)
@@ -3270,7 +3279,7 @@ class SupervisorAdaptiveAggregationStore:
         maximum_batches: int = 100,
     ) -> dict[str, Any]:
         """Merge pending batches using supervisor-owned current context."""
-        if maximum_batches <= 0:
+        if isinstance(maximum_batches, bool) or not isinstance(maximum_batches, int) or maximum_batches <= 0:
             raise ValueError("maximum_batches must be greater than zero")
         merged = 0
         duplicates = 0
@@ -4235,7 +4244,7 @@ class SupervisorAdaptiveAggregationStore:
         proposal_request_id: str | None = None,
         limit: int = 100,
     ) -> tuple[dict[str, Any], ...]:
-        bounded = max(1, min(int(limit), 500))
+        bounded = _list_limit(limit)
         result: list[dict[str, Any]] = []
         for path in sorted(self.repair_handoff_directory.glob("*.json"), reverse=True):
             try:
@@ -5155,7 +5164,7 @@ class SupervisorAdaptiveAggregationStore:
                 normalized_acceptance = str(UUID(str(acceptance_id)))
             except (TypeError, ValueError) as exc:
                 raise AdaptiveAggregationError("acceptance_id must be a UUID") from exc
-        bounded = max(1, min(int(limit), 500))
+        bounded = _list_limit(limit)
         records: list[dict[str, Any]] = []
         for path in sorted(self.policy_installation_directory.glob("*.json"), reverse=True):
             record = self._load_policy_installation_record(path)
@@ -5180,7 +5189,7 @@ class SupervisorAdaptiveAggregationStore:
                 normalized_transition = str(UUID(str(transition_id)))
             except (TypeError, ValueError) as exc:
                 raise AdaptiveAggregationError("transition_id must be a UUID") from exc
-        bounded = max(1, min(int(limit), 500))
+        bounded = _list_limit(limit)
         records: list[dict[str, Any]] = []
         for path in sorted(self.policy_acceptance_directory.glob("*.json"), reverse=True):
             record = self._load_policy_acceptance_record(path)
@@ -5218,7 +5227,7 @@ class SupervisorAdaptiveAggregationStore:
             raise ValueError(
                 "transition context validation requires generation, policy, and authority context"
             )
-        bounded = max(1, min(int(limit), 500))
+        bounded = _list_limit(limit)
         result: list[dict[str, Any]] = []
         for path in sorted(self.transition_directory.glob("*.json")):
             if len(result) >= bounded:
@@ -5481,7 +5490,7 @@ class SupervisorAdaptiveAggregationStore:
         }
 
     def list_aggregates(self, *, limit: int = 100) -> tuple[dict[str, Any], ...]:
-        bounded = max(1, min(int(limit), 500))
+        bounded = _list_limit(limit)
         result: list[dict[str, Any]] = []
         for path in sorted(self.state_directory.glob("*.json"))[:bounded]:
             try:
