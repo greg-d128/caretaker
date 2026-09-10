@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Mapping
 from uuid import UUID, uuid4
 
-from .rooted_io import RootedFilesystem
+from .rooted_io import RootedFilesystem, RootedWriteError
 
 CAPSULE_SCHEMA_VERSION = 1
 ARTIFACT_SCHEMA_VERSION = 1
@@ -311,12 +311,12 @@ class IncidentCapsuleStore:
         candidate_ids: set[UUID] = set()
         for path in self.directory.glob("*.json"):
             try:
-                envelope = json.loads(path.read_text(encoding="utf-8"))
+                envelope = self._read_json(path, maximum_bytes=self.policy.maximum_capsule_bytes)
                 payload = envelope.get("capsule")
                 if not isinstance(payload, Mapping) or UUID(str(payload.get("incident_id"))) != parsed:
                     continue
                 candidate_ids.add(UUID(str(payload["capsule_id"])))
-            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            except (OSError, ValueError, TypeError, json.JSONDecodeError, IncidentCapsuleIntegrityError):
                 continue
 
         latest: dict[str, Any] | None = None
@@ -359,7 +359,7 @@ class IncidentCapsuleStore:
                 raise IncidentCapsuleIntegrityError(
                     f"capsule revision chain is incomplete before revision {expected_revision}"
                 )
-            envelope = json.loads(path.read_text(encoding="utf-8"))
+            envelope = self._read_json(path, maximum_bytes=self.policy.maximum_capsule_bytes)
             self._verify_envelope(envelope, path=path)
             payload = envelope["capsule"]
             if UUID(str(payload.get("capsule_id"))) != parsed or int(payload.get("revision")) != actual_number:
@@ -430,29 +430,40 @@ class IncidentCapsuleStore:
             ),
             reverse=True,
         )
-        return summaries[: max(1, int(limit))]
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        return summaries[:limit]
 
     def load_artifact(self, artifact_id: UUID | str) -> dict[str, Any]:
         """Load and verify a side artifact referenced by a capsule."""
 
         parsed = UUID(str(artifact_id))
         path = self.artifact_directory / f"{parsed}.json"
-        envelope = json.loads(path.read_text(encoding="utf-8"))
+        envelope = self._read_json(path, maximum_bytes=self.policy.maximum_artifact_bytes)
         if not isinstance(envelope, Mapping) or set(envelope) != {"artifact", "integrity"}:
             raise IncidentCapsuleIntegrityError("artifact envelope fields are invalid")
         artifact = envelope.get("artifact")
         integrity = envelope.get("integrity")
         if not isinstance(artifact, Mapping) or not isinstance(integrity, Mapping):
             raise IncidentCapsuleIntegrityError("artifact envelope is missing artifact/integrity objects")
-        if artifact.get("schema_version") != ARTIFACT_SCHEMA_VERSION:
+        if type(artifact.get("schema_version")) is not int or artifact.get("schema_version") != ARTIFACT_SCHEMA_VERSION:
             raise IncidentCapsuleIntegrityError("unsupported Incident Capsule artifact schema version")
         expected = str(integrity.get("content_sha256") or "")
         if _CAPSULE_DIGEST.fullmatch(expected) is None or content_hash(artifact) != expected:
             raise IncidentCapsuleIntegrityError(f"artifact content hash is invalid at {path}")
         if str(artifact.get("artifact_id")) != str(parsed):
             raise IncidentCapsuleIntegrityError(f"artifact identity is invalid at {path}")
-        capsule_id = UUID(str(artifact.get("capsule_id")))
+        try:
+            capsule_id = UUID(str(artifact.get("capsule_id")))
+            incident_id = UUID(str(artifact.get("incident_id")))
+        except (ValueError, TypeError) as exc:
+            raise IncidentCapsuleIntegrityError(f"artifact identity is invalid at {path}") from exc
         capsule = self.load(capsule_id)
+        capsule_payload = capsule["capsule"]
+        if incident_id != UUID(str(capsule_payload.get("incident_id"))):
+            raise IncidentCapsuleIntegrityError("artifact incident identity does not match its capsule")
+        if str(artifact.get("capsule_id")) != str(capsule_payload.get("capsule_id")):
+            raise IncidentCapsuleIntegrityError("artifact capsule identity does not match its capsule")
         references = capsule["capsule"].get("artifacts") or ()
         reference = next(
             (
@@ -464,7 +475,32 @@ class IncidentCapsuleStore:
         )
         if not isinstance(reference, Mapping) or reference.get("content_sha256") != expected:
             raise IncidentCapsuleIntegrityError("artifact is not referenced by the verified capsule revision")
+        expected_reference = {
+            "artifact_id": artifact.get("artifact_id"),
+            "kind": artifact.get("kind"),
+            "created_at": artifact.get("created_at"),
+            "content_sha256": expected,
+            "relative_path": f"artifacts/{parsed}.json",
+            "source": artifact.get("source"),
+            "operator_identity": artifact.get("operator_identity"),
+            "metadata": artifact.get("metadata"),
+        }
+        if any(reference.get(key) != value for key, value in expected_reference.items()):
+            raise IncidentCapsuleIntegrityError("artifact identity does not match its capsule reference")
         return envelope
+
+    def _read_json(self, path: Path, *, maximum_bytes: int) -> dict[str, Any]:
+        try:
+            encoded = self._artifact_rooted.read_bytes(path, maximum_bytes=maximum_bytes) \
+                if path.parent == self.artifact_directory else self._rooted.read_bytes(
+                    path, maximum_bytes=maximum_bytes
+                )
+            value = json.loads(encoded.decode("utf-8"))
+        except (OSError, RootedWriteError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise IncidentCapsuleIntegrityError(f"stored capsule content is invalid at {path}: {exc}") from exc
+        if not isinstance(value, dict):
+            raise IncidentCapsuleIntegrityError(f"stored capsule content must be an object at {path}")
+        return value
 
     def attach_artifact(
         self,
@@ -716,7 +752,7 @@ class IncidentCapsuleStore:
         }
         if set(payload) != required:
             raise IncidentCapsuleIntegrityError("capsule payload fields are invalid")
-        if payload.get("schema_version") != CAPSULE_SCHEMA_VERSION:
+        if type(payload.get("schema_version")) is not int or payload.get("schema_version") != CAPSULE_SCHEMA_VERSION:
             raise IncidentCapsuleIntegrityError("unsupported Incident Capsule schema version")
         try:
             capsule_id = UUID(str(payload.get("capsule_id")))
@@ -814,7 +850,11 @@ def _bounded_artifact_references(
             result.append(bounded_safe_data(value, policy=policy))
             continue
         result.append({
-            key: bounded_safe_data(value[key], policy=policy, name=key)
+            # The relative path is part of the artifact identity.  Truncating
+            # it can make a valid artifact impossible to resolve and verify.
+            key: str(value[key]) if key == "relative_path" else bounded_safe_data(
+                value[key], policy=policy, name=key
+            )
             for key in fields
             if key in value
         })

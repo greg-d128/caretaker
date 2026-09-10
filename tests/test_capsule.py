@@ -12,6 +12,7 @@ from caretaker.capsule import (
     IncidentCapsuleLevel,
     IncidentCapsulePolicy,
     IncidentCapsuleStore,
+    content_hash,
 )
 from caretaker import ExceptionTrigger, RepairEngine, RepairMode, RepairPolicy, repair
 
@@ -123,3 +124,56 @@ def test_repair_incident_creates_capsule_when_store_is_configured(tmp_path: Path
     capsule = store.latest_for_incident(incident_id)
     assert capsule is not None
     assert capsule["capsule"]["incident_id"] == str(incident_id)
+
+
+def test_capsule_and_artifact_loads_reject_symlinks_and_oversized_content(tmp_path: Path) -> None:
+    store = IncidentCapsuleStore(tmp_path)
+    incident_id = uuid4()
+    capsule = store.create_placeholder(incident_id)
+    capsule_path = tmp_path / "incident-capsules" / f"{capsule['capsule']['capsule_id']}.r1.json"
+    capsule_bytes = capsule_path.read_bytes()
+    capsule_path.unlink()
+    capsule_path.symlink_to(tmp_path / "outside-capsule.json")
+    (tmp_path / "outside-capsule.json").write_bytes(capsule_bytes)
+    with pytest.raises(IncidentCapsuleIntegrityError, match="stored capsule content is invalid"):
+        store.load(capsule["capsule"]["capsule_id"])
+
+    artifact_result = store.attach_artifact(
+        incident_id,
+        kind="evidence",
+        content={"value": "small"},
+        source="test",
+    )
+    artifact_id = artifact_result["artifact"]["artifact"]["artifact_id"]
+    artifact_path = tmp_path / "incident-capsules" / "artifacts" / f"{artifact_id}.json"
+    artifact_path.unlink()
+    artifact_path.symlink_to(tmp_path / "outside-artifact.json")
+    (tmp_path / "outside-artifact.json").write_bytes(artifact_result["artifact"]["artifact"].__str__().encode())
+    with pytest.raises(IncidentCapsuleIntegrityError, match="stored capsule content is invalid"):
+        store.load_artifact(artifact_id)
+
+    # A real file is also bounded before JSON parsing, so a valid prefix plus
+    # oversized trailing content cannot be accepted as a stored artifact.
+    artifact_path.unlink()
+    artifact_path.write_bytes(b"{" + b"x" * (store.policy.maximum_artifact_bytes + 1))
+    with pytest.raises(IncidentCapsuleIntegrityError, match="stored capsule content is invalid"):
+        store.load_artifact(artifact_id)
+
+
+def test_artifact_identity_must_match_its_verified_capsule_reference(tmp_path: Path) -> None:
+    store = IncidentCapsuleStore(tmp_path)
+    result = store.attach_artifact(
+        uuid4(),
+        kind="evidence",
+        content={"value": "small"},
+        source="test",
+    )
+    artifact = result["artifact"]
+    artifact_id = artifact["artifact"]["artifact_id"]
+    path = tmp_path / "incident-capsules" / "artifacts" / f"{artifact_id}.json"
+    value = json.loads(path.read_text())
+    value["artifact"]["incident_id"] = str(uuid4())
+    value["integrity"]["content_sha256"] = content_hash(value["artifact"])
+    path.write_text(json.dumps(value))
+    with pytest.raises(IncidentCapsuleIntegrityError, match="incident identity"):
+        store.load_artifact(artifact_id)
