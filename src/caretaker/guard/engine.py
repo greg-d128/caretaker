@@ -53,6 +53,7 @@ from ..behavior import (
     observed_return_category,
     observed_return_shape,
 )
+from ..validation_primitives import integer
 from ..logging.models import LoggingCapability, LoggingMode, RequiredCapabilityFailureAction
 from ..logging.policy import mode_requirements
 from .analytics import (
@@ -96,8 +97,7 @@ _NO_RETURN_OBSERVATION = object()
 
 
 def _tail(items, limit: int):
-    if limit <= 0:
-        return ()
+    limit = integer(limit, name="limit", minimum=1)
     values = tuple(items)
     return values[-limit:]
 
@@ -276,6 +276,7 @@ class GuardEngine(GuardFacade):
             return tuple(sorted(self._targets))
 
     def recent_events(self, target_id: str, *, limit: int = 100) -> tuple[object, ...]:
+        integer(limit, name="limit", minimum=1)
         return tuple(self.store.recent_behavior_events(target_id=target_id, limit=limit))
 
     def sensitive_file_network_sequences(
@@ -288,7 +289,7 @@ class GuardEngine(GuardFacade):
         """Return bounded sensitive-file/outbound-network evidence for a target."""
         if target_id not in self._targets:
             return ()
-        bounded_limit = max(1, min(int(limit), 500))
+        bounded_limit = min(integer(limit, name="limit", minimum=1), 500)
         return correlate_sensitive_file_network_sequences(
             self.recent_events(target_id, limit=bounded_limit),
             maximum=min(bounded_limit, 128),
@@ -300,6 +301,7 @@ class GuardEngine(GuardFacade):
             return _tail(self._deviations_by_target.get(target_id, ()), limit)
 
     def recent_target_inspections(self, target_id: str, *, limit: int = 20) -> tuple[object, ...]:
+        limit = integer(limit, name="limit", minimum=1)
         with self._lock:
             binding = self._targets.get(target_id)
         if binding is None:
@@ -1149,6 +1151,7 @@ class GuardEngine(GuardFacade):
 
     def behavior_collection_backlog(self, *, limit: int = 500) -> dict[str, Any]:
         """Describe current-generation behavior coverage without scheduling work."""
+        bounded_limit = min(integer(limit, name="limit", minimum=1), 500)
         if self.behavior_statistics is None or self.behavior_snapshot_store is None:
             return {
                 "enabled": False,
@@ -1282,7 +1285,7 @@ class GuardEngine(GuardFacade):
                     ),
                 }
             )
-        bounded = items[: max(1, min(int(limit), 500))]
+        bounded = items[:bounded_limit]
         counts: dict[str, int] = {}
         for item in items:
             status = str(item["status"])

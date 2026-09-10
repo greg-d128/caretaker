@@ -336,9 +336,6 @@ def snapshot_payload(
         statistics_schema_version=statistics_schema_version,
         behavior_revision=behavior_revision,
     )
-    supplied_generation_id = capture.get("generation_id")
-    if supplied_generation_id is not None and supplied_generation_id != expected_generation_id:
-        raise ValueError("behavior generation identity does not match its context")
     generation_id = expected_generation_id
     return {
         "schema_version": SCHEMA_VERSION,
@@ -1591,20 +1588,20 @@ class BehaviorCollectionScheduler:
         process_memory_probe: Callable[[], int | None] | None = None,
         clock: Callable[[], datetime] = utcnow,
     ) -> None:
-        if int(maximum_active) <= 0:
-            raise ValueError("maximum_active must be greater than zero")
-        if int(maximum_pending) <= 0:
-            raise ValueError("maximum_pending must be greater than zero")
-        if int(maximum_calls) <= 0:
-            raise ValueError("maximum_calls must be greater than zero")
+        maximum_active = integer(maximum_active, name="maximum_active", minimum=1)
+        maximum_pending = integer(maximum_pending, name="maximum_pending", minimum=1)
+        maximum_calls = integer(maximum_calls, name="maximum_calls", minimum=1)
         for name, value in (
             ("soft_budget_seconds_per_minute", soft_budget_seconds_per_minute),
             ("hard_budget_seconds_per_minute", hard_budget_seconds_per_minute),
         ):
-            if value is not None and (
-                isinstance(value, bool) or not math.isfinite(float(value)) or float(value) <= 0.0
-            ):
-                raise ValueError(f"{name} must be greater than zero when configured")
+            if value is not None:
+                try:
+                    value = finite_number(value, name=name, minimum=0.0)
+                except ValueError as exc:
+                    raise ValueError(f"{name} must be a finite number when configured") from exc
+                if value <= 0.0:
+                    raise ValueError(f"{name} must be greater than zero when configured")
         for name, value in (
             ("soft_budget_calls_per_minute", soft_budget_calls_per_minute),
             ("hard_budget_calls_per_minute", hard_budget_calls_per_minute),
@@ -1650,9 +1647,9 @@ class BehaviorCollectionScheduler:
             self.request_directory.chmod(0o700)
         except OSError:
             pass
-        self.maximum_active = int(maximum_active)
-        self.maximum_pending = int(maximum_pending)
-        self.maximum_calls = int(maximum_calls)
+        self.maximum_active = maximum_active
+        self.maximum_pending = maximum_pending
+        self.maximum_calls = maximum_calls
         self.soft_budget_seconds_per_minute = (
             float(soft_budget_seconds_per_minute)
             if soft_budget_seconds_per_minute is not None
@@ -1742,7 +1739,7 @@ class BehaviorCollectionScheduler:
         each priority tier. The cursor is scheduling metadata only; it cannot
         authorize collection or change a target's policy.
         """
-        bounded_limit = max(0, int(limit))
+        bounded_limit = integer(limit, name="limit", minimum=0)
         if bounded_limit == 0:
             return ()
         normalized = sorted({
@@ -2287,7 +2284,7 @@ class BehaviorCollectionScheduler:
             raise
 
     def list_requests(self, *, limit: int = 100) -> tuple[dict[str, Any], ...]:
-        bounded_limit = max(1, min(int(limit), 500))
+        bounded_limit = min(integer(limit, name="limit", minimum=1), 500)
         with self._lock:
             requests = sorted(self._requests(), key=self._sort_key)
             return tuple(dict(item) for item in requests[:bounded_limit])
