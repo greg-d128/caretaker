@@ -84,6 +84,7 @@ check: test compile ## Run source tests and compilation checks
 release-gate: ## Run the completed lifecycle, IPC, authority, and rollout regression gates
 	PYTHONPATH=src $(BIN)/python -m pytest -q \
 		tests/test_worker_failure_policy.py \
+		tests/test_run_entrypoint.py \
 		tests/test_logging_ipc_supervisor.py \
 		tests/test_baseline_authority.py \
 		tests/test_adaptive_policy_ledger.py \
