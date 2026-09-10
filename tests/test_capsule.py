@@ -160,6 +160,15 @@ def test_capsule_and_artifact_loads_reject_symlinks_and_oversized_content(tmp_pa
         store.load_artifact(artifact_id)
 
 
+def test_capsule_store_rejects_a_symlinked_configured_root(tmp_path: Path) -> None:
+    real_root = tmp_path / "real-root"
+    real_root.mkdir()
+    linked_root = tmp_path / "linked-root"
+    linked_root.symlink_to(real_root, target_is_directory=True)
+
+    with pytest.raises(IncidentCapsuleError, match="root must not be a symlink"):
+        IncidentCapsuleStore(linked_root)
+
 def test_artifact_identity_must_match_its_verified_capsule_reference(tmp_path: Path) -> None:
     store = IncidentCapsuleStore(tmp_path)
     result = store.attach_artifact(

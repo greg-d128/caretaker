@@ -223,7 +223,10 @@ class IncidentCapsuleStore:
         policy: IncidentCapsulePolicy | None = None,
         artifact_signer: Any | None = None,
     ) -> None:
-        self.directory = Path(directory).expanduser().resolve() / "incident-capsules"
+        configured_root = Path(directory).expanduser()
+        if configured_root.exists() and configured_root.is_symlink():
+            raise IncidentCapsuleError("Incident Capsule root must not be a symlink")
+        self.directory = configured_root.resolve() / "incident-capsules"
         self.artifact_directory = self.directory / "artifacts"
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.artifact_directory.mkdir(parents=True, exist_ok=True, mode=0o700)

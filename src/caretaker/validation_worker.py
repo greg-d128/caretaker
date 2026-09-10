@@ -30,9 +30,15 @@ def _install_validation_audit_hook(payload: dict[str, Any], output_path: Path) -
     This is defense in depth inside the same-UID validation process, not an OS
     security sandbox. Strong isolation still requires a container/VM boundary.
     """
-    allow_network = bool(payload.get("allow_network", False))
-    allow_subprocesses = bool(payload.get("allow_subprocesses", False))
-    allow_filesystem_writes = bool(payload.get("allow_filesystem_writes", False))
+    values = {
+        name: payload.get(name, False)
+        for name in ("allow_network", "allow_subprocesses", "allow_filesystem_writes")
+    }
+    if any(not isinstance(value, bool) for value in values.values()):
+        raise ValueError("validation policy resource controls must be booleans")
+    allow_network = values["allow_network"]
+    allow_subprocesses = values["allow_subprocesses"]
+    allow_filesystem_writes = values["allow_filesystem_writes"]
     allowed_output = str(output_path.resolve())
     write_flags = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
 
