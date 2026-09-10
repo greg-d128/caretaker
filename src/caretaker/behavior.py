@@ -34,6 +34,7 @@ from .logging.signing import (
     public_key_from_identity_records,
     verify_identity_record_set,
 )
+from .validation_primitives import exact_bool, finite_number, integer
 
 
 SCHEMA_VERSION = 2
@@ -316,19 +317,29 @@ def snapshot_payload(
     subject_key = str(capture.get("subject_key") or _subject_key(scope, subject))
     code_hash = capture.get("code_hash")
     monitoring_fingerprint = capture.get("monitoring_fingerprint")
-    statistics_schema_version = int(
-        capture.get("statistics_schema_version") or STATISTICS_SCHEMA_VERSION
+    raw_statistics_schema_version = capture.get(
+        "statistics_schema_version", STATISTICS_SCHEMA_VERSION
     )
-    generation_id = str(
-        capture.get("generation_id")
-        or behavior_generation_id(
-            subject_key=subject_key,
-            code_hash=code_hash,
-            monitoring_fingerprint=monitoring_fingerprint,
-            statistics_schema_version=statistics_schema_version,
-            behavior_revision=int(capture.get("behavior_revision") or 0),
-        )
+    statistics_schema_version = integer(
+        raw_statistics_schema_version,
+        name="statistics_schema_version",
+        minimum=1,
     )
+    if statistics_schema_version != STATISTICS_SCHEMA_VERSION:
+        raise ValueError("unsupported behavior statistics schema version")
+    raw_behavior_revision = capture.get("behavior_revision", 0)
+    behavior_revision = integer(raw_behavior_revision, name="behavior_revision", minimum=0)
+    expected_generation_id = behavior_generation_id(
+        subject_key=subject_key,
+        code_hash=code_hash,
+        monitoring_fingerprint=monitoring_fingerprint,
+        statistics_schema_version=statistics_schema_version,
+        behavior_revision=behavior_revision,
+    )
+    supplied_generation_id = capture.get("generation_id")
+    if supplied_generation_id is not None and supplied_generation_id != expected_generation_id:
+        raise ValueError("behavior generation identity does not match its context")
+    generation_id = expected_generation_id
     return {
         "schema_version": SCHEMA_VERSION,
         "snapshot_id": str(uuid4()),
@@ -349,7 +360,7 @@ def snapshot_payload(
         "monitoring_fingerprint": monitoring_fingerprint,
         "monitoring_configuration": dict(capture.get("monitoring_configuration") or {}),
         "statistics_schema_version": statistics_schema_version,
-        "behavior_revision": int(capture.get("behavior_revision") or 0),
+        "behavior_revision": behavior_revision,
         "generation_reason": capture.get("generation_reason"),
         "previous_generation_id": capture.get("previous_generation_id"),
         "seal_reason": capture.get("seal_reason"),
@@ -430,7 +441,7 @@ def verify_envelope(
         return False, "snapshot payload fields are invalid: " + ", ".join(
             sorted((set(snapshot) - required) | (required - set(snapshot)))
         )
-    if snapshot.get("schema_version") != SCHEMA_VERSION:
+    if type(snapshot.get("schema_version")) is not int or snapshot.get("schema_version") != SCHEMA_VERSION:
         return False, "unsupported behavior snapshot schema version"
     try:
         UUID(str(snapshot.get("snapshot_id")))
@@ -440,8 +451,28 @@ def verify_envelope(
         return False, "snapshot creation time is invalid"
     if not isinstance(snapshot.get("subject_key"), str) or not snapshot["subject_key"].strip():
         return False, "snapshot subject identity is missing"
+    scope = snapshot.get("scope")
+    if scope not in {"function", "module"} or not isinstance(snapshot.get("subject"), Mapping):
+        return False, "snapshot subject scope is invalid"
+    if _subject_key(scope, snapshot["subject"]) != snapshot["subject_key"]:
+        return False, "snapshot subject identity does not match its subject"
     if not isinstance(snapshot.get("generation_id"), str) or not snapshot["generation_id"].strip():
         return False, "snapshot generation identity is invalid"
+    statistics_schema_version = snapshot.get("statistics_schema_version")
+    if type(statistics_schema_version) is not int or statistics_schema_version != STATISTICS_SCHEMA_VERSION:
+        return False, "unsupported behavior statistics schema version"
+    behavior_revision = snapshot.get("behavior_revision")
+    if isinstance(behavior_revision, bool) or not isinstance(behavior_revision, int) or behavior_revision < 0:
+        return False, "snapshot behavior revision is invalid"
+    expected_generation = behavior_generation_id(
+        subject_key=snapshot["subject_key"],
+        code_hash=snapshot.get("code_hash"),
+        monitoring_fingerprint=snapshot.get("monitoring_fingerprint"),
+        statistics_schema_version=statistics_schema_version,
+        behavior_revision=behavior_revision,
+    )
+    if snapshot["generation_id"] != expected_generation:
+        return False, "snapshot generation identity does not match its context"
     if snapshot.get("code_hash") is not None and (
         not isinstance(snapshot["code_hash"], str) or _SHA256.fullmatch(snapshot["code_hash"]) is None
     ):
@@ -455,6 +486,8 @@ def verify_envelope(
         return False, "snapshot sequence is invalid"
     if not isinstance(snapshot.get("complete_epoch"), bool) or not isinstance(snapshot.get("children"), list):
         return False, "snapshot provenance fields are invalid"
+    if not isinstance(snapshot.get("monitoring_configuration"), Mapping):
+        return False, "snapshot monitoring configuration is invalid"
     expected = str(integrity.get("content_sha256") or "")
     observed = content_hash(snapshot)
     if _SHA256.fullmatch(expected) is None or observed != expected:
@@ -2427,23 +2460,35 @@ class BehaviorStatisticsRepository:
                 directory.chmod(0o700)
             except OSError:
                 pass
-        self.statistics_target = max(1, int(statistics_target))
-        self.maximum_resources = max(1, int(maximum_resources))
-        self.maximum_return_categories = int(maximum_return_categories)
-        if self.maximum_return_categories <= 0:
-            raise ValueError("maximum_return_categories must be greater than zero")
-        self.maximum_return_shapes = int(maximum_return_shapes)
-        if self.maximum_return_shapes <= 0:
-            raise ValueError("maximum_return_shapes must be greater than zero")
-        self.checkpoint_every_samples = max(1, int(checkpoint_every_samples))
-        self.materialize_after_samples = max(1, int(materialize_after_samples))
-        self.maximum_snapshot_age_seconds = max(0.0, float(maximum_snapshot_age_seconds))
-        self.automatic_materialization = bool(automatic_materialization)
-        self.randomized_epoch_boundaries = bool(randomized_epoch_boundaries)
-        self.randomized_epoch_min_samples = int(randomized_epoch_min_samples)
-        self.randomized_epoch_max_samples = int(randomized_epoch_max_samples)
-        if self.randomized_epoch_min_samples <= 0:
-            raise ValueError("randomized_epoch_min_samples must be greater than zero")
+        self.statistics_target = integer(statistics_target, name="statistics_target", minimum=1)
+        self.maximum_resources = integer(maximum_resources, name="maximum_resources", minimum=1)
+        self.maximum_return_categories = integer(
+            maximum_return_categories, name="maximum_return_categories", minimum=1
+        )
+        self.maximum_return_shapes = integer(
+            maximum_return_shapes, name="maximum_return_shapes", minimum=1
+        )
+        self.checkpoint_every_samples = integer(
+            checkpoint_every_samples, name="checkpoint_every_samples", minimum=1
+        )
+        self.materialize_after_samples = integer(
+            materialize_after_samples, name="materialize_after_samples", minimum=1
+        )
+        self.maximum_snapshot_age_seconds = float(
+            finite_number(maximum_snapshot_age_seconds, name="maximum_snapshot_age_seconds", minimum=0)
+        )
+        self.automatic_materialization = exact_bool(
+            automatic_materialization, name="automatic_materialization"
+        )
+        self.randomized_epoch_boundaries = exact_bool(
+            randomized_epoch_boundaries, name="randomized_epoch_boundaries"
+        )
+        self.randomized_epoch_min_samples = integer(
+            randomized_epoch_min_samples, name="randomized_epoch_min_samples", minimum=1
+        )
+        self.randomized_epoch_max_samples = integer(
+            randomized_epoch_max_samples, name="randomized_epoch_max_samples", minimum=1
+        )
         if self.randomized_epoch_max_samples < self.randomized_epoch_min_samples:
             raise ValueError("randomized_epoch_max_samples must be at least the minimum")
         if randomized_epoch_seed is not None and (
@@ -2607,7 +2652,33 @@ class BehaviorStatisticsRepository:
         try:
             wrapper = json.loads(path.read_text(encoding="utf-8"))
             state = wrapper["state"]
-            if content_hash(state) != wrapper.get("checkpoint_sha256"):
+            if not isinstance(state, Mapping) or content_hash(state) != wrapper.get("checkpoint_sha256"):
+                return None
+            if type(state.get("schema_version")) is not int or state.get("schema_version") != 1:
+                return None
+            if type(state.get("statistics_schema_version")) is not int or state.get("statistics_schema_version") != STATISTICS_SCHEMA_VERSION:
+                return None
+            if state.get("target_id") != target_id:
+                return None
+            subject = state.get("subject")
+            if not isinstance(subject, Mapping) or state.get("subject_key") != f"function:{target_id}":
+                return None
+            if subject.get("target_id") != target_id:
+                return None
+            behavior_revision = state.get("behavior_revision")
+            if isinstance(behavior_revision, bool) or not isinstance(behavior_revision, int) or behavior_revision < 0:
+                return None
+            monitoring_configuration = state.get("monitoring_configuration")
+            if not isinstance(monitoring_configuration, Mapping):
+                return None
+            expected_generation = behavior_generation_id(
+                subject_key=state["subject_key"],
+                code_hash=state.get("code_hash"),
+                monitoring_fingerprint=state.get("monitoring_fingerprint"),
+                statistics_schema_version=state["statistics_schema_version"],
+                behavior_revision=behavior_revision,
+            )
+            if state.get("generation_id") != expected_generation:
                 return None
             self._active[target_id] = state
             return state

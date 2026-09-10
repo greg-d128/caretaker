@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import threading
 from dataclasses import replace
 from pathlib import Path
@@ -9,6 +10,7 @@ from uuid import uuid4
 from caretaker.behavior import (
     BehaviorSnapshotStore,
     BehaviorStatisticsRepository,
+    content_hash,
     observed_return_category,
     observed_return_shape,
 )
@@ -202,6 +204,34 @@ def test_return_categories_are_bounded_and_restart_safe(tmp_path: Path) -> None:
     assert restarted_capture is not None
     assert restarted_capture["profile"]["return_categories"][categories[0]] == 2
     assert restarted_capture["profile"]["return_category_overflow_count"] == 1
+
+
+def test_restart_rejects_foreign_generation_checkpoint_even_when_rehashed(tmp_path: Path) -> None:
+    target_id = "checkpoint.target"
+    configuration = {"sampling": {"every": 1}}
+    repository = BehaviorStatisticsRepository(
+        tmp_path,
+        materialize_after_samples=10_000,
+        checkpoint_every_samples=1,
+        automatic_materialization=False,
+    )
+    repository.observe_event(_completed(target_id, 0.1), monitoring_configuration=configuration)
+    path = repository._active_path(target_id)
+    wrapper = json.loads(path.read_text())
+    wrapper["state"]["generation_id"] = "f" * 64
+    wrapper["checkpoint_sha256"] = content_hash(wrapper["state"])
+    path.write_text(json.dumps(wrapper))
+
+    restarted = BehaviorStatisticsRepository(
+        tmp_path,
+        materialize_after_samples=10_000,
+        checkpoint_every_samples=1,
+        automatic_materialization=False,
+    )
+    restarted.observe_event(_completed(target_id, 0.2), monitoring_configuration=configuration)
+    capture = restarted.current_capture(target_id)
+    assert capture is not None
+    assert capture["profile"]["call_count"] == 1
 
 
 def test_return_shapes_are_bounded_and_restart_safe(tmp_path: Path) -> None:

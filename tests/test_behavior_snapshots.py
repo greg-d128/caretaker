@@ -5,7 +5,7 @@ import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from caretaker.behavior import BehaviorSnapshotStore, compare_snapshots
+from caretaker.behavior import BehaviorSnapshotStore, compare_snapshots, content_hash, verify_envelope
 
 
 def _capture(*, code_hash: str, events: int, destination: str = "api.example:443"):
@@ -75,6 +75,26 @@ def test_snapshot_store_verifies_content_hash_and_compares_across_code_hashes(tm
     ]
     assert comparison["return_novelty"]["state"] == "incomparable"
     assert comparison["return_novelty"]["reason"] == "different-generation"
+
+
+def test_snapshot_verification_rejects_unsupported_schema_and_foreign_generation(tmp_path: Path):
+    store = BehaviorSnapshotStore(tmp_path)
+    envelope = store.create(_capture(code_hash="a" * 64, events=1))
+
+    unsupported = json.loads(json.dumps(envelope))
+    unsupported["snapshot"]["statistics_schema_version"] = 999
+    unsupported["integrity"]["content_sha256"] = content_hash(unsupported["snapshot"])
+    assert verify_envelope(unsupported) == (
+        False,
+        "unsupported behavior statistics schema version",
+    )
+
+    foreign = json.loads(json.dumps(envelope))
+    foreign["snapshot"]["generation_id"] = "f" * 64
+    foreign["integrity"]["content_sha256"] = content_hash(foreign["snapshot"])
+    verified, error = verify_envelope(foreign)
+    assert verified is False
+    assert error == "snapshot generation identity does not match its context"
 
 
 def test_return_novelty_report_is_generation_and_sample_bound(tmp_path: Path):
