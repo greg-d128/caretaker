@@ -730,6 +730,15 @@ def test_record_restart_is_the_only_terminal_worker_reentry_and_rotates_identity
     assert after_restart.state is WorkerState.HEALTHY
 
 
+def test_direct_restart_rejects_non_restartable_worker_role() -> None:
+    registry = WorkerRegistry()
+    worker = registry.register(WorkerKind.SUPERVISOR, 1234)
+    registry.mark_failed(worker.worker_id, error_fingerprint="supervisor-crash")
+
+    with pytest.raises(PermissionError, match="not restartable"):
+        registry.record_restart(worker.worker_id, pid=5678)
+
+
 def test_supervisor_cycle_reconciles_silent_worker_authority_expiry_once() -> None:
     events = []
     registry = WorkerRegistry(audit_event=lambda event_type, **fields: events.append((event_type, fields)))

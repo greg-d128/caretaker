@@ -746,6 +746,8 @@ class WorkerRegistry:
         acceptance_policy: WorkerAcceptancePolicy | None = None,
     ) -> WorkerHealth:
         """Admit a replacement only after packet and failed-worker checks."""
+        if kind not in RESTARTABLE_WORKER_KINDS:
+            raise PermissionError(f"worker role {kind.name} is not restartable")
         if request.worker_kind != kind.name:
             raise PermissionError("worker replacement kind does not match request")
         with self._lock:
@@ -1059,6 +1061,10 @@ class WorkerRegistry:
     def record_restart(self, worker_id: UUID, *, pid: int | None = None) -> WorkerHealth:
         with self._lock:
             current = self._workers[worker_id]
+            if current.worker_kind not in RESTARTABLE_WORKER_KINDS:
+                raise PermissionError(
+                    f"worker role {current.worker_kind.name} is not restartable"
+                )
             updated = replace(
                 current,
                 process_id=current.process_id if pid is None else pid,
