@@ -20,6 +20,7 @@ from uuid import UUID
 
 from .integrity.models import IntegrityIncident, IntegrityVerification
 from .policy import RepairRetentionPolicy, validate_repair_retention_policy
+from .validation_primitives import integer
 
 from .domain import (
     CandidateGeneration,
@@ -283,6 +284,7 @@ def postmortem_store_view(store: RepairStore) -> RepairPostmortemStore:
 
 class InMemoryRepairStore:
     def __init__(self, event_limit: int = 10_000) -> None:
+        event_limit = integer(event_limit, name="event_limit", minimum=1)
         self.policies: dict[UUID, PolicySnapshot] = {}
         self.incidents: dict[UUID, Incident] = {}
         self.episodes: dict[UUID, RepairEpisode] = {}
@@ -367,6 +369,7 @@ class InMemoryRepairStore:
             self.integrity_incidents[record.incident_id] = record
 
     def recent_events(self, target_id: str | None, limit: int = 50) -> tuple[RepairEvent, ...]:
+        limit = integer(limit, name="limit", minimum=1)
         with self._lock:
             events = [
                 event for event in self.events
@@ -1692,13 +1695,14 @@ class SQLiteRepairStore:
     ) -> tuple[Mapping[str, Any], ...]:
         if table not in self._TABLES:
             raise ValueError(f"Unknown Caretaker store table: {table}")
+        limit = integer(limit, name="limit", minimum=1)
         sql = f"SELECT payload FROM {table}"
         parameters: list[Any] = []
         if target_id is not None:
             sql += " WHERE target_id = ?"
             parameters.append(target_id)
         sql += " ORDER BY created_at DESC LIMIT ?"
-        parameters.append(max(0, limit))
+        parameters.append(limit)
         with self._lock, closing(self._connect()) as connection:
             rows = connection.execute(sql, parameters).fetchall()
         return tuple(json.loads(row[0]) for row in reversed(rows))

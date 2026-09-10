@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 
 from .capsule import IncidentCapsulePolicy, bounded_safe_data, canonical_json_bytes
 from .domain import RegisteredCase, RegressionCase
+from .validation_primitives import integer
 
 
 REGRESSION_FIXTURE_SCHEMA_VERSION = 1
@@ -273,7 +274,8 @@ class RegressionFixtureStore:
         if target_id is not None:
             paths = [path for path in paths if path.parent.name == self._target_key(target_id)]
         summaries: list[dict[str, Any]] = []
-        for path in paths[: max(1, min(int(limit), 500))]:
+        bounded_limit = min(integer(limit, name="limit", minimum=1), 500)
+        for path in paths[:bounded_limit]:
             try:
                 envelope = self._read(path)
                 summaries.append({

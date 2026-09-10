@@ -33,6 +33,7 @@ from .validation import (
     _run_worker_command,
 )
 from .rooted_io import RootedFilesystem
+from .validation_primitives import integer
 
 
 class ReplayExecutionError(ValueError):
@@ -192,7 +193,8 @@ class ReplayResultStore:
     def list_summaries(self, *, limit: int = 100) -> tuple[dict[str, Any], ...]:
         """Return bounded metadata without returning full replay output."""
         summaries: list[dict[str, Any]] = []
-        for path in sorted(self.directory.glob("*.json"))[: max(1, min(int(limit), 500))]:
+        bounded_limit = min(integer(limit, name="limit", minimum=1), 500)
+        for path in sorted(self.directory.glob("*.json"))[:bounded_limit]:
             digest = path.stem
             try:
                 envelope = self.load(digest)
@@ -317,7 +319,7 @@ def execute_historical_capsule_replays(
     failed entries are returned as per-fixture evidence instead of preventing
     other historical incidents from being examined.
     """
-    bounded_limit = max(1, min(int(limit), 200))
+    bounded_limit = min(integer(limit, name="limit", minimum=1), 200)
     results: list[dict[str, Any]] = []
     for summary in list(fixture_summaries)[:bounded_limit]:
         if cancel_check is not None:

@@ -19,6 +19,8 @@ import queue
 from typing import Any
 from uuid import UUID, uuid4
 
+from .validation_primitives import integer
+
 
 APPLICATION_TRANSPORT_SCHEMA_VERSION = 1
 APPLICATION_TRANSPORT_MAX_MESSAGE_BYTES = 128 * 1024
@@ -66,13 +68,14 @@ class ApplicationLocalQueueTransport:
             raise TypeError("application transport channel must provide put_nowait")
         if not callable(getattr(channel, "get_nowait", None)):
             raise TypeError("application transport channel must provide get_nowait")
-        if not 1 <= int(maximum_message_bytes) <= APPLICATION_TRANSPORT_MAX_MESSAGE_BYTES:
-            raise ValueError(
-                "maximum_message_bytes must be between 1 and "
-                f"{APPLICATION_TRANSPORT_MAX_MESSAGE_BYTES}"
-            )
+        integer(
+            maximum_message_bytes,
+            name="maximum_message_bytes",
+            minimum=1,
+            maximum=APPLICATION_TRANSPORT_MAX_MESSAGE_BYTES,
+        )
         self.channel = channel
-        self.maximum_message_bytes = int(maximum_message_bytes)
+        self.maximum_message_bytes = maximum_message_bytes
 
     def send(
         self,
@@ -232,13 +235,14 @@ class ApplicationLocalQueueTransport:
         *,
         limit: int = APPLICATION_TRANSPORT_MAX_DRAIN_MESSAGES,
     ) -> tuple[dict[str, Any], ...]:
-        if not 1 <= int(limit) <= APPLICATION_TRANSPORT_MAX_DRAIN_MESSAGES:
-            raise ValueError(
-                "application transport drain limit must be between 1 and "
-                f"{APPLICATION_TRANSPORT_MAX_DRAIN_MESSAGES}"
-            )
+        integer(
+            limit,
+            name="application transport drain limit",
+            minimum=1,
+            maximum=APPLICATION_TRANSPORT_MAX_DRAIN_MESSAGES,
+        )
         messages: list[dict[str, Any]] = []
-        for _ in range(int(limit)):
+        for _ in range(limit):
             message = self.receive()
             if message is None:
                 break
