@@ -2329,12 +2329,29 @@ Before any reserved setting becomes active it must receive runtime semantics, au
 
 ## Caretaker 0.6.5 release gap-closure plan
 
-**Status: Planned from the Crucible and Validator review; not yet implemented.**
+**Status: Implementation complete in the development tree; release evidence and
+independent validation remain release-process work.**
 
-This section is the implementation plan for the 0.6.5 release. It is based on
-the current Caretaker source revision reviewed by Validator and Crucible. The
-reports distinguish current implementation findings from environmental and
-release-process limitations. This plan does the same.
+This section records the 0.6.5 gap-closure work and its evidence. It was based
+on the Caretaker source revision reviewed by Validator and Crucible. The
+implementation findings listed below have been addressed in the development
+tree; the reports distinguish those changes from environmental and
+release-process limitations. This distinction remains important: a passing
+Caretaker suite is not independent validation, and publication signing still
+belongs to the release station.
+
+### Implementation status
+
+| Task | Status | Current evidence |
+| --- | --- | --- |
+| CT-01 through CT-09 | Complete | Focused regression coverage and the full source-tree suite cover the hardened supervisor, retention, filesystem, boundary, provenance, provider, restart, and resource paths. |
+| CT-10 | Complete | The audit registry conformance test compares the runtime registry with `docs/AUDIT_EVENT_REGISTRY.md`, including `GUARD_BASELINE_ACCEPTED`. |
+| CT-11 | Development-tree complete; publication pending | Current-version sdist/wheel parity and metadata checks pass. Release-station signed wheel manifests must still be regenerated and signed for 0.6.5. |
+| CT-12 | Complete as a regression gate | Lifecycle, IPC, authority, rollout, and entrypoint tests remain in the release check; the real `caretaker.run` path is covered by `tests/test_run_entrypoint.py`. |
+
+The independent Validator and Crucible procedures, artifact identity
+requirements, and known external catalog coordination are recorded in
+`docs/INDEPENDENT_VALIDATION.md`.
 
 The release goal is a small hardening and consolidation pass, not an
 architectural rewrite. Preserve the application-scoped authority boundary,
@@ -2372,9 +2389,10 @@ High implementation items below are complete and the following evidence exists:
 **Components:** `src/caretaker/run.py`, `src/caretaker/policy.py`,
 `src/caretaker/logging/policy.py`, runtime supervision tests
 
-**Problem:** The supervisor bootstrap receives an `OperatorLoggingPolicy` but
-dereferences `policy.rollout`. `rollout` belongs to `RepairPolicy`; it should
-not be added to the logging policy merely to make the access succeed.
+**Historical finding:** An earlier supervisor composition path confused the
+operator logging policy with the repair rollout policy. The fix keeps those
+types separate at the composition root; this task is retained as the design
+record and regression contract, not as an outstanding defect.
 
 **Implementation tasks:**
 

@@ -29,6 +29,12 @@
   policy with archive verification, bounded reference scanning, and critical
   audit events. Refresh the machine-readable capability and reserved-setting
   catalogs for the 0.6.5 policy surface.
+- Prove the real `caretaker-run` supervisor entrypoint through readiness,
+  child-policy propagation, normal shutdown, and startup-failure cleanup
+  regression tests.
+- Tighten release evidence and independent-validation handoff documentation so
+  source revisions, artifact hashes, profiles, and environmental skips remain
+  identifiable across Caretaker, Validator, and Crucible runs.
 
 ## 0.6.1
 

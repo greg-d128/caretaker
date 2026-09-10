@@ -3,7 +3,7 @@ Caretaker 0.6.5 development verification status
 
 Status date
 -----------
-2026-09-09
+2026-09-10
 
 Scope and interpretation
 ------------------------
@@ -21,13 +21,14 @@ Commands: make check; make package-check; git diff --check
 
 Observed result
 ---------------
-- 1007 passed;
+- 1031 passed;
 - no unexpected test failures;
 - source, test, example, and script compilation succeeded;
 - the 0.6.5 source distribution and wheel built, passed exact payload parity,
   and passed Twine metadata checks.
 
-The complete run included GnuPG key/signature tests and Unix-domain logging and
+The complete run included GnuPG key/signature tests, the real installed-shape
+supervisor lifecycle regression coverage, and Unix-domain logging and
 control-socket tests. Forgejo CI is configured to run the suite on ordinary Linux
 for CPython 3.11, 3.12, and 3.13; this local review used the additionally
 supported Python 3.14 and supplements rather than replaces the CI matrix.
@@ -70,6 +71,10 @@ Additional checks performed
 - Relative links across root, docs, and example Markdown resolve locally.
 - Current operator guides are checked against retired Lab/Console labels and the
   role-oriented signing commands.
+- The real `caretaker.run` supervisor entrypoint was exercised through a
+  subprocess with an importable probe application and a missing-module startup
+  failure; readiness, child policy propagation, endpoint ownership, and cleanup
+  were asserted in `tests/test_run_entrypoint.py`.
 - `make package-check` passed for the final release artifacts
   `caretaker-0.6.5.tar.gz` and `caretaker-0.6.5-py3-none-any.whl`.
 - `make verify-wheel` intentionally failed closed: the committed signed wheel

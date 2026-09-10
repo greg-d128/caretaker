@@ -1,7 +1,13 @@
 # Caretaker 0.6.5 hardening progress
 
-Updated 2026-09-09. The changes below are pushed to `main`. The final
-repository check passed with 1,029 tests and Python compilation.
+Updated 2026-09-10. The changes below are pushed to `main`. The repository
+check passed with 1,031 tests and Python compilation.
+
+The release-readiness follow-up also proves the real `caretaker.run` process
+boundary: `tests/test_run_entrypoint.py` reaches supervisor readiness, observes
+the expected workers and configured application identity, and verifies endpoint
+cleanup after both normal exit and application-startup failure. The follow-up
+was pushed as `0e62d8f` and `867354a`.
 
 ## Remaining-gap closure
 
@@ -50,3 +56,15 @@ The five issues in the next 0.6.5 hardening goal are closed:
 The remaining external-resource item needs a deployment-specific validator
 contract or independently controlled service; no Caretaker-only change can
 prove resource enforcement inside that caller-owned environment.
+
+## Release-readiness handoff
+
+The stale 0.6.5 roadmap status has been corrected in `docs/FUTURE_WORK.md`.
+Installed command names, supervisor invocation, and cleanup behavior are
+documented in `docs/INTERACTIVE_ISOLATION_TESTING.md`. The exact-artifact
+procedure for independent Validator and Crucible runs is in
+`docs/INDEPENDENT_VALIDATION.md`.
+
+The current Caretaker tree has not been represented as independently certified:
+the sibling validation catalogs still require coordinated refresh to identify
+the 0.6.5 artifacts, and signed wheel manifests remain a release-station task.

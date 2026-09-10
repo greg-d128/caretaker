@@ -474,7 +474,8 @@ sudo -u caretaker-subject \
   --file /etc/caretaker/application.toml
 ```
 
-The exact command names depend on the installed `0.6.5` implementation. Confirm the available commands with:
+The installed 0.6.5 wheel declares the Caretaker command names. Confirm the
+available commands and their policy subcommands with:
 
 ```bash
 /opt/caretaker/venv/bin/caretaker-logging --help
@@ -495,12 +496,6 @@ ls -1 /opt/caretaker/venv/bin \
   | grep '^caretaker'
 ```
 
-Ask each command for help:
-
-```bash
-/opt/caretaker/venv/bin/caretaker --help
-```
-
 ```bash
 /opt/caretaker/venv/bin/caretaker-logging --help
 ```
@@ -513,7 +508,13 @@ Ask each command for help:
 /opt/caretaker/venv/bin/caretaker-integrity --help
 ```
 
-Not every command is necessarily present under these exact names. Use the installed script listing as the source of truth.
+The release also declares `caretaker-run`, `caretaker-console`,
+`caretaker-capsule-explorer`, `caretaker-capsule-replay`,
+`caretaker-capsule-replay-results`, `caretaker-incident-draft`,
+`caretaker-incident-review`, `caretaker-regression-fixtures`,
+`caretaker-failure-corpus-report`, `caretaker-failure-corpus-run`, and
+`caretaker-profile`. The installed script listing is the source of truth for
+the environment under test; there is no generic `caretaker` command.
 
 ## 16. Inspect the installed entry points
 
@@ -651,7 +652,14 @@ sudo -u caretaker-subject \
 
 If the module is installed into the virtual environment, omit `PYTHONPATH`.
 
-Whether `caretaker.run` accepts an arbitrary standalone module in exactly this form depends on the installed `0.6.5` entry-point implementation. Use the same application-entry convention already used by your working Caretaker deployment.
+The `caretaker.run` implementation accepts an importable standalone module in
+this form. The supervisor launches it through `caretaker.bootstrap`, applies
+the configured policy, exposes the control plane, and removes the runtime
+endpoints on both normal exit and application-startup failure. The module must
+be importable through the installed package or the supplied `PYTHONPATH`.
+The source-tree lifecycle proof is `tests/test_run_entrypoint.py`; an
+independent validation run should repeat the same assertions against the
+installed wheel.
 
 ## 21. Expand the interactive namespace carefully
 
