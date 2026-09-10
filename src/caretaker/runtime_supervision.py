@@ -8,6 +8,7 @@ their implementation must not depend on the logging supervisor or runtime.
 from __future__ import annotations
 
 import json
+import math
 import os
 import signal
 import threading
@@ -3141,6 +3142,24 @@ def handle_worker_failure(
     else:
         incident_status = "NOT_CONFIGURED"
     restart_policy = policy
+    configured_enabled = getattr(restart_policy, "enabled", False)
+    configured_limit = getattr(restart_policy, "maximum_restarts", 0)
+    configured_window = getattr(restart_policy, "restart_window_seconds", 300.0)
+    configured_initial_backoff = getattr(restart_policy, "initial_backoff_seconds", 0.5)
+    configured_maximum_backoff = getattr(restart_policy, "maximum_backoff_seconds", 30.0)
+    if not isinstance(configured_enabled, bool):
+        raise ValueError("worker restart enabled flag must be a boolean")
+    if isinstance(configured_limit, bool) or not isinstance(configured_limit, int) or not 0 <= configured_limit <= 1000:
+        raise ValueError("worker restart maximum_restarts must be an integer from 0 through 1000")
+    for name, value in (
+        ("restart_window_seconds", configured_window),
+        ("initial_backoff_seconds", configured_initial_backoff),
+        ("maximum_backoff_seconds", configured_maximum_backoff),
+    ):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+            raise ValueError(f"worker restart {name} must be a finite non-negative number")
+    if configured_maximum_backoff < configured_initial_backoff:
+        raise ValueError("worker restart maximum_backoff_seconds must cover initial backoff")
     role_restartable = worker.worker_kind in RESTARTABLE_WORKER_KINDS
     if not role_restartable:
         restart_result = {
@@ -3149,12 +3168,6 @@ def handle_worker_failure(
         }
     else:
         restart_result = None
-    configured_enabled = getattr(restart_policy, "enabled", False)
-    configured_limit = getattr(restart_policy, "maximum_restarts", 0)
-    if not isinstance(configured_enabled, bool):
-        raise ValueError("worker restart enabled flag must be a boolean")
-    if isinstance(configured_limit, bool) or not isinstance(configured_limit, int) or not 0 <= configured_limit <= 1000:
-        raise ValueError("worker restart maximum_restarts must be an integer from 0 through 1000")
     restart_requested = (
         role_restartable
         and configured_enabled

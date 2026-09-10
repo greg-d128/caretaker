@@ -890,7 +890,10 @@ def load_policy_authority_layer(
             path=str(item["path"]),
             value=item.get("value"),
             target=str(item["target"]) if item.get("target") else None,
-            override_constraints=bool(item.get("override_constraints", False)),
+            override_constraints=exact_bool(
+                item.get("override_constraints", False),
+                name="authority setting override_constraints",
+            ),
             reason=str(item["reason"]) if item.get("reason") else None,
         )
         for item in value.get("settings", ())
@@ -905,10 +908,10 @@ def load_policy_authority_layer(
         for item in value.get("constraints", ())
     )
     layer = PolicyAuthorityLayer(
-        schema_version=int(value.get("schema_version", 1)),
+        schema_version=integer(value.get("schema_version", 1), name="authority schema_version", minimum=1),
         authority_id=str(value["authority_id"]),
         kind=AuthorityKind(str(value["kind"]).lower()),
-        generation=int(value.get("generation", 1)),
+        generation=integer(value.get("generation", 1), name="authority generation", minimum=1),
         created_at=str(value.get("created_at") or utcnow().isoformat()),
         settings=settings,
         constraints=constraints,
@@ -933,7 +936,7 @@ def write_policy_authority_layer(path: str | Path, layer: PolicyAuthorityLayer) 
 def load_authority_stack_config(path: str | Path) -> AuthorityStackConfig:
     source = Path(path).resolve()
     raw = tomllib.loads(source.read_text(encoding="utf-8"))
-    if int(raw.get("schema_version", 1)) != 1:
+    if integer(raw.get("schema_version", 1), name="authority stack schema_version", minimum=1) != 1:
         raise AuthorityPolicyError("Unsupported authority stack schema")
     base = source.parent
     trust = dict(raw.get("trust", {}))
@@ -959,7 +962,10 @@ def load_authority_stack_config(path: str | Path) -> AuthorityStackConfig:
                 root=_resolve_optional(base, layer.get("root")),
                 public_keys=tuple(_resolve_required(base, value) for value in layer.get("public_keys", ())),
                 verification_mode=mode,
-                require_signature=bool(layer.get("require_signature", False)),
+                require_signature=exact_bool(
+                    layer.get("require_signature", False),
+                    name="authority layer require_signature",
+                ),
             )
         )
     duplicate_kinds = [
@@ -1076,6 +1082,10 @@ def verify_authority_layer(
 
 
 def effective_policy_from_snapshot(value: Mapping[str, Any]) -> EffectiveAuthorityPolicy:
+    if not isinstance(value, Mapping):
+        raise AuthorityPolicyError("authority runtime snapshot must be an object")
+    if integer(value.get("schema_version", 1), name="authority snapshot schema_version", minimum=1) != 1:
+        raise AuthorityPolicyError("Unsupported authority runtime snapshot schema")
     layers = tuple(_layer_from_snapshot(item) for item in value.get("layers", ()))
     verifications = tuple(
         AuthorityLayerVerification(
@@ -1119,7 +1129,7 @@ def effective_policy_from_snapshot(value: Mapping[str, Any]) -> EffectiveAuthori
         for item in value.get("violations", ())
     )
     return EffectiveAuthorityPolicy(
-        generation=int(value.get("generation", 0)),
+        generation=integer(value.get("generation", 0), name="authority snapshot generation", minimum=0),
         fingerprint=str(value.get("fingerprint", "unconfigured")),
         layers=layers,
         verifications=verifications,
@@ -1131,10 +1141,10 @@ def effective_policy_from_snapshot(value: Mapping[str, Any]) -> EffectiveAuthori
 
 def _layer_from_snapshot(value: Mapping[str, Any]) -> PolicyAuthorityLayer:
     return PolicyAuthorityLayer(
-        schema_version=int(value.get("schema_version", 1)),
+        schema_version=integer(value.get("schema_version", 1), name="authority layer schema_version", minimum=1),
         authority_id=str(value["authority_id"]),
         kind=AuthorityKind(str(value["kind"])),
-        generation=int(value.get("generation", 1)),
+        generation=integer(value.get("generation", 1), name="authority layer generation", minimum=1),
         created_at=str(value["created_at"]),
         settings=tuple(_setting_from_dict(item) for item in value.get("settings", ())),
         constraints=tuple(
@@ -1315,8 +1325,13 @@ def _coerce_value(current: Any, raw: Any) -> Any:
         text = str(raw)
         try:
             return enum_type[text.upper()]
-        except KeyError:
-            return enum_type(text)
+        except (KeyError, TypeError, ValueError):
+            try:
+                return enum_type(raw)
+            except (KeyError, TypeError, ValueError) as exc:
+                raise AuthorityPolicyError(
+                    f"authority enum setting must be a {enum_type.__name__} value"
+                ) from exc
     if isinstance(current, bool):
         try:
             return exact_bool(raw, name="authority boolean setting")
@@ -1333,7 +1348,9 @@ def _coerce_value(current: Any, raw: Any) -> Any:
         except ValueError as exc:
             raise AuthorityPolicyError(str(exc)) from exc
     if isinstance(current, str):
-        return str(raw)
+        if not isinstance(raw, str):
+            raise AuthorityPolicyError("authority text setting must be a string")
+        return raw
     if current is None:
         return raw
     if isinstance(current, tuple):
@@ -1350,7 +1367,12 @@ def _coerce_value(current: Any, raw: Any) -> Any:
             sample = next(iter(current))
             if isinstance(sample, Enum):
                 enum_type = type(sample)
-                return frozenset(enum_type[str(item).upper()] for item in raw)
+                try:
+                    return frozenset(enum_type[str(item).upper()] for item in raw)
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise AuthorityPolicyError(
+                        f"authority set setting must contain {enum_type.__name__} values"
+                    ) from exc
         return frozenset(raw)
     return raw
 

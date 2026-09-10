@@ -203,7 +203,10 @@ class RolloutRampPolicy:
         object.__setattr__(self, "steps", steps)
 
     def step_for(self, stage: RepairRolloutStage) -> RolloutRampStep | None:
-        stage = RepairRolloutStage(stage)
+        try:
+            stage = RepairRolloutStage(stage)
+        except (TypeError, ValueError) as exc:
+            raise RepairRolloutError(f"invalid rollout stage value: {stage!r}") from exc
         return next((step for step in self.steps if step.stage is stage), None)
 
 
@@ -394,7 +397,10 @@ class RepairRolloutPolicy:
         self,
         stage: RepairRolloutStage,
     ) -> RolloutReadinessRequirements:
-        stage = RepairRolloutStage(stage)
+        try:
+            stage = RepairRolloutStage(stage)
+        except (TypeError, ValueError) as exc:
+            raise RepairRolloutError(f"invalid rollout stage value: {stage!r}") from exc
         for item in self.stage_readiness:
             if item.stage is stage:
                 return item.requirements
@@ -3330,11 +3336,18 @@ def _valid_worker_acknowledgement(
 
 
 def _coerce_rollout_enum(value: Any, enum_type: type[Enum]) -> Any:
+    if isinstance(value, enum_type):
+        return value
     text = str(value)
     try:
         return enum_type(text)
-    except ValueError:
-        return enum_type[text.upper()]
+    except (KeyError, TypeError, ValueError):
+        try:
+            return enum_type[text.upper()]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RepairRolloutError(
+                f"invalid {enum_type.__name__} value: {value!r}"
+            ) from exc
 
 
 def _optional_bool(value: Any) -> bool | None:

@@ -64,6 +64,11 @@ def test_disabled_rollout_cannot_create_records() -> None:
         _proposed(ledger)
 
 
+def test_invalid_rollout_enum_input_raises_bounded_rollout_error() -> None:
+    with pytest.raises(RepairRolloutError, match="invalid rollout stage"):
+        RolloutRampPolicy().step_for("not-a-stage")
+
+
 def test_rollout_milestone_commit_is_idempotent() -> None:
     store = InMemoryRepairStore()
     ledger = RepairRolloutLedger(
