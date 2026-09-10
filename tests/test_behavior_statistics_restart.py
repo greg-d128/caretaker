@@ -405,6 +405,27 @@ def test_pending_epochs_materialize_in_subject_generation_sequence(tmp_path: Pat
     assert summary["profile"]["coverage_call_count"] == 4
 
 
+def test_pending_statistics_with_unsupported_schema_are_not_promoted(tmp_path: Path) -> None:
+    repository = BehaviorStatisticsRepository(
+        tmp_path,
+        materialize_after_samples=1,
+        checkpoint_every_samples=1,
+    )
+    repository.observe_event(
+        _completed("unsupported.pending", 0.1),
+        monitoring_configuration={"sampling": {"every": 1}},
+    )
+    pending_path = next(repository.pending_directory.glob("*.json"))
+    row = json.loads(pending_path.read_text(encoding="utf-8"))
+    row["capture"]["statistics_schema_version"] = 999
+    pending_path.write_text(json.dumps(row), encoding="utf-8")
+
+    store = BehaviorSnapshotStore(tmp_path)
+    assert repository.materialize_pending(store) == ()
+    assert repository.pending_count() == 1
+    assert store.list() == ()
+
+
 def test_randomized_epoch_boundaries_are_bounded_provenance_and_disjoint(tmp_path: Path) -> None:
     repository = BehaviorStatisticsRepository(
         tmp_path,

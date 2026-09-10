@@ -791,7 +791,7 @@ class BehaviorSnapshotStore:
         Grouping precedes the limit so repeated snapshots from a hot generation
         cannot crowd a rare generation out of the operator list.
         """
-        normalized_limit = max(1, int(limit))
+        normalized_limit = integer(limit, name="limit", minimum=1)
         all_rows = self.list()
         cumulative_reasons = {
             "sample-target-reached",
@@ -3200,6 +3200,7 @@ class BehaviorStatisticsRepository:
         deployment_fingerprint: str | None = None,
         maximum: int = 100,
     ) -> tuple[dict[str, Any], ...]:
+        maximum = integer(maximum, name="maximum", minimum=1)
         materialized: list[dict[str, Any]] = []
         def pending_order(path: Path) -> tuple[str, str, str, int, str]:
             try:
@@ -3216,10 +3217,18 @@ class BehaviorStatisticsRepository:
                 return ("~invalid", "", "", 0, path.name)
 
         pending = sorted(self.pending_directory.glob("*.json"), key=pending_order)
-        for path in pending[: max(1, maximum)]:
+        for path in pending[:maximum]:
             try:
                 row = json.loads(path.read_text(encoding="utf-8"))
+                if type(row.get("schema_version")) is not int or row["schema_version"] != 1:
+                    raise ValueError("unsupported behavior pending record schema version")
                 capture = row["capture"]
+                if (
+                    not isinstance(capture, Mapping)
+                    or type(capture.get("statistics_schema_version")) is not int
+                    or capture["statistics_schema_version"] != STATISTICS_SCHEMA_VERSION
+                ):
+                    raise ValueError("unsupported behavior statistics schema version")
                 envelope = store.create(
                     capture,
                     authority_fingerprint=authority_fingerprint,

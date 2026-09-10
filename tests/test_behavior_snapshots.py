@@ -5,6 +5,8 @@ import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from caretaker.behavior import BehaviorSnapshotStore, compare_snapshots, content_hash, verify_envelope
 
 
@@ -536,6 +538,14 @@ def test_summary_limit_allocates_three_generations_per_subject_before_older_rows
         for subject in ("function:lab.alpha", "function:lab.zeta")
     }
     assert counts == {"function:lab.alpha": 3, "function:lab.zeta": 3}
+
+
+@pytest.mark.parametrize("limit", ["6", 6.0, True, 0])
+def test_snapshot_summary_limit_rejects_malformed_values(tmp_path: Path, limit) -> None:
+    store = BehaviorSnapshotStore(tmp_path)
+
+    with pytest.raises(ValueError, match="limit"):
+        store.list_summaries(limit=limit)
 
 
 def test_overlapping_epoch_range_cannot_mask_prior_generation_coverage(tmp_path: Path):
