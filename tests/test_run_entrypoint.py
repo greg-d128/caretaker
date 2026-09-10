@@ -127,7 +127,9 @@ def test_real_run_entrypoint_reaches_supervisor_readiness_and_cleans_endpoints(t
 def test_real_run_entrypoint_cleans_endpoints_after_application_startup_failure(tmp_path: Path) -> None:
     process, data_directory = _start_run(tmp_path, "module_that_does_not_exist")
 
-    assert process.wait(timeout=10) != 0
+    _, stderr = process.communicate(timeout=10)
+    assert process.returncode == 1
+    assert "ImportError: No module named module_that_does_not_exist" in stderr
     assert not (data_directory / "run" / "events.sock").exists()
     assert not (data_directory / "run" / "control.sock").exists()
     assert not (data_directory / "run" / "runtime.sock").exists()
