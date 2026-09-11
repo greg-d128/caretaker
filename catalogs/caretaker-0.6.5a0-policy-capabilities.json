@@ -216,7 +216,7 @@
       "title": "Policy-authorized Repair retention compaction"
     }
   ],
-  "caretaker_version": "0.6.5",
+  "caretaker_version": "0.6.5a0",
   "catalog": "policy-capabilities",
   "policy_semantics_review_generation": 33,
   "policy_surface_version": 12,
