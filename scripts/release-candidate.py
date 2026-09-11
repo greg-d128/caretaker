@@ -8,6 +8,7 @@ and it does not implement Validator's cross-repository equivalence rules.
 from __future__ import annotations
 
 import argparse
+import base64
 import datetime as _datetime
 import hashlib
 import importlib.metadata
@@ -17,6 +18,7 @@ import platform
 import re
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -177,6 +179,35 @@ def _package_artifacts(directory: Path, version: str) -> tuple[Path, Path]:
     return wheel, sdist
 
 
+def _strip_candidate_publication(wheel: Path) -> None:
+    """Remove trusted installed-publication data from an unsigned candidate wheel."""
+    with zipfile.ZipFile(wheel) as archive:
+        members = [(info, archive.read(info.filename)) for info in archive.infolist()]
+    retained = [
+        (info, data)
+        for info, data in members
+        if not info.filename.startswith("caretaker/_publication/")
+        and not info.filename.endswith(".dist-info/RECORD")
+    ]
+    dist_info = next((info.filename.rsplit("/", 1)[0] for info, _ in members if info.filename.endswith(".dist-info/RECORD")), None)
+    if dist_info is None:
+        raise WorkflowError("candidate wheel has no RECORD")
+    record: list[str] = []
+    for info, data in sorted(retained, key=lambda item: item[0].filename):
+        digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode("ascii")
+        record.append(f"{info.filename},sha256={digest},{len(data)}")
+    record.append(f"{dist_info}/RECORD,,")
+    record_info = zipfile.ZipInfo(f"{dist_info}/RECORD")
+    record_info.date_time = (1980, 1, 1, 0, 0, 0)
+    record_info.compress_type = zipfile.ZIP_DEFLATED
+    retained.append((record_info, ("\n".join(record) + "\n").encode("utf-8")))
+    temporary = wheel.with_suffix(".candidate.whl")
+    with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for info, data in sorted(retained, key=lambda item: item[0].filename):
+            archive.writestr(info, data)
+    temporary.replace(wheel)
+
+
 def _artifact_record(path: Path, *, root: Path) -> dict[str, Any]:
     return {
         "path": path.relative_to(root).as_posix() if path.is_relative_to(root) else str(path.resolve()),
@@ -329,6 +360,7 @@ def build_candidate(args: argparse.Namespace) -> int:
     if result.returncode:
         raise WorkflowError(result.stderr.strip() or result.stdout.strip() or "candidate build failed")
     wheel, sdist = _package_artifacts(artifacts, args.package_version)
+    _strip_candidate_publication(wheel)
     parity = _parity(repository, wheel, sdist, args.package_version)
     record: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
