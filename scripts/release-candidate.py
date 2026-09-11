@@ -303,8 +303,10 @@ def build_candidate(args: argparse.Namespace) -> int:
     output = args.output.resolve()
     require_clean(repository)
     if output.exists():
-        raise WorkflowError(f"candidate output must be a new disposable directory: {output}")
-    output.mkdir(parents=True)
+        if not output.is_dir() or any(output.iterdir()):
+            raise WorkflowError(f"candidate output must be a new or empty disposable directory: {output}")
+    else:
+        output.mkdir(parents=True)
     artifacts = output / "artifacts"
     artifacts.mkdir()
     identity = build_identity()
