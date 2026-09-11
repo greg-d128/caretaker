@@ -134,6 +134,21 @@ def test_runtime_exposes_bounded_logging_overhead_status(tmp_path: Path) -> None
     assert 0.0 <= status["queue_utilization"] <= 1.0
 
 
+def test_logging_runtime_keeps_evidence_root_private(tmp_path: Path) -> None:
+    tmp_path.chmod(0o755)
+    data_directory = tmp_path / "caretaker-data"
+    runtime = LoggingRuntime(
+        OperatorLoggingPolicy.application_defaults(
+            directory=str(data_directory), application_id="private-root"
+        ),
+        supervised=True,
+    )
+    try:
+        assert data_directory.stat().st_mode & 0o777 == 0o700
+    finally:
+        runtime.close()
+
+
 def test_event_rotation_binds_attachment_checkpoint_to_signed_manifest(tmp_path):
     checkpoints: list[str] = []
     checkpoint_hash = "a" * 64

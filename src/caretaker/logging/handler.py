@@ -83,6 +83,13 @@ class LoggingRuntime:
         policy = policy_transform(policy) if policy_transform is not None else policy
         validate_operator_logging_policy(policy)
         self.policy = policy
+        # The logging root contains runtime evidence, indexes, and signing
+        # metadata. Keep the boundary private even when it is created before
+        # one of the more specific stores gets a chance to tighten its own
+        # directory permissions.
+        self.root = Path(policy.directory)
+        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.root.chmod(0o700)
         self.snapshot = policy_snapshot(policy, source_path=source_path)
         self.leases = ModeLeaseManager(policy, self.snapshot)
         self.effective = self.leases.effective
