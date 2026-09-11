@@ -26,8 +26,16 @@ from caretaker.failure_corpus import (
 from caretaker.failure_corpus_cli import main as failure_corpus_report_main
 from caretaker.failure_corpus_run_cli import main as failure_corpus_run_main
 from caretaker.capsule import IncidentCapsuleStore
-from examples.failure_corpus.trusted_mappings import build_reviewed_harness
-from examples.failure_corpus import application_laboratory
+
+try:
+    from examples.failure_corpus.trusted_mappings import build_reviewed_harness
+    from examples.failure_corpus import application_laboratory
+except ModuleNotFoundError as exc:
+    if not exc.name or not (
+        exc.name == "examples" or exc.name.startswith("examples.")
+    ):
+        raise
+    pytest.skip("repository failure-corpus fixtures are unavailable", allow_module_level=True)
 
 
 ROOT = Path(__file__).resolve().parents[1]
