@@ -320,7 +320,7 @@ def build_candidate(args: argparse.Namespace) -> int:
     env["CARETAKER_RELEASE_SIGNING"] = "disabled"
     _ensure_no_private_key_material([repository / name for name in _tracked_paths(repository)])
     result = subprocess.run(
-        [sys.executable, "-m", "build", "--no-isolation", "--wheel", "--sdist", "--outdir", str(artifacts)],
+        [sys.executable, "-m", "build", "--wheel", "--sdist", "--outdir", str(artifacts)],
         cwd=repository,
         env=env,
         text=True,
