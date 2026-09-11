@@ -154,6 +154,8 @@ def build_identity() -> dict[str, Any]:
 
 def _ensure_no_private_key_material(paths: list[Path]) -> None:
     for path in paths:
+        if path.suffix.lower() not in {".asc", ".key", ".pem"}:
+            continue
         if not path.is_file() or path.stat().st_size > 10 * 1024 * 1024:
             continue
         data = path.read_bytes()

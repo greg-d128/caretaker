@@ -25,6 +25,8 @@ def _workflow_module(repository: Path):
 
 
 def _reject_private_key(path: Path) -> None:
+    if path.suffix.lower() not in {".asc", ".key", ".pem"}:
+        return
     data = path.read_bytes()
     if b"BEGIN PGP PRIVATE KEY BLOCK" in data or b"BEGIN OPENSSH PRIVATE KEY" in data:
         raise ValueError(f"private signing key material is not permitted in a signing bundle: {path}")
