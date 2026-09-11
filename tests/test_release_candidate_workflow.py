@@ -87,6 +87,18 @@ def test_candidate_output_rejects_stale_distribution_artifacts(tmp_path: Path) -
         workflow._package_artifacts(output, "1.0.0")
 
 
+def test_candidate_wheel_does_not_carry_trusted_publication_bundle(tmp_path: Path) -> None:
+    wheel = tmp_path / "candidate.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("caretaker/__init__.py", b"__version__ = '1.0.0a0'\n")
+        archive.writestr("caretaker/_publication/release-manifest.json", b"trusted\n")
+        archive.writestr("caretaker-1.0.0a0.dist-info/RECORD", b"placeholder\n")
+    workflow._strip_candidate_publication(wheel)
+    with zipfile.ZipFile(wheel) as archive:
+        assert not any(name.startswith("caretaker/_publication/") for name in archive.namelist())
+        assert "caretaker-1.0.0a0.dist-info/RECORD" in archive.namelist()
+
+
 def test_wheel_sdist_and_source_parity_rejects_source_mismatch(tmp_path: Path) -> None:
     source_root, sdist, wheel = _archive_pair(tmp_path)
     result = parity.verify_payloads(sdist_path=sdist, wheel_path=wheel, source_root=source_root, version="1.0.0")
