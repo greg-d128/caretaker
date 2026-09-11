@@ -7,16 +7,24 @@ PUBLICATION_DIR ?= .
 PUBLIC_KEYS ?=
 PUBLIC_KEY_DIR ?= release-keys
 SIGNING_BUNDLE_DIR ?= signing-bundle
+CANDIDATE_OUTPUT_DIR ?= .candidate-output
+CANDIDATE_RECORD ?= $(CANDIDATE_OUTPUT_DIR)/candidate-input.json
+CANDIDATE_FREEZE_RECORD ?= $(CANDIDATE_OUTPUT_DIR)/candidate-freeze.json
+FINALIZATION_RECORD ?= .release-records/finalization.json
+FINAL_DIST_DIR ?= .final-release-output
+FINAL_VERSION ?=
+EQUIVALENCE_RECORD ?=
 # Published Caretaker root identities. Override from an independently trusted
 # source when bootstrapping a checkout: make lab-verified TRUSTED_FINGERPRINTS='...'
 TRUSTED_FINGERPRINTS ?= 1AA1C739DE9A94B146BD324D335D05E357D334C9 F0F117899E20246935B304D86462FCC9E46C954A F4632C96E4D3C93AE0E894564A9B0D2FBA85B411
 WHEEL_MANIFEST_VERSION ?= 1
 TOOLS_PYTHON := $(if $(wildcard $(BIN)/python),$(BIN)/python,$(PYTHON))
 PACKAGE_VERSION ?= $(shell sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml | head -n 1)
+BUILD_OUTPUT_DIR ?= dist
 ROOT_VERSION ?= $(shell $(TOOLS_PYTHON) -c 'import json; print(json.load(open("$(ROOT)"))["root_version"])' 2>/dev/null)
 INTEGRITY := PYTHONPATH=src $(TOOLS_PYTHON) -m caretaker.integrity.cli
 TWINE := $(TOOLS_PYTHON) -m twine
-PACKAGE_FILES = dist/caretaker-$(PACKAGE_VERSION).tar.gz dist/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl
+PACKAGE_FILES = $(BUILD_OUTPUT_DIR)/caretaker-$(PACKAGE_VERSION).tar.gz $(BUILD_OUTPUT_DIR)/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl
 PODMAN_WHEEL = $(wildcard dist/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl)
 PYPI_UPLOAD_URL ?= https://upload.pypi.org/legacy/
 TEST_PYPI_UPLOAD_URL ?= https://test.pypi.org/legacy/
@@ -28,7 +36,7 @@ PODMAN_CGROUP_MANAGER ?= cgroupfs
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup test compile check release-gate wheel podman-image podman-failure-corpus-image podman-verify build package-check artifact-parity verify-wheel publish-testpypi publish-pypi publish-test publish root-check signing-check signing-status signing-bundle release-check release-manifest protected-manifest manifests generate-release-manifest generate-protected-manifest generate-manifests wheel-manifests inspect-integrity sign-check sign-all verify-signature verify-all verify-publication policy-catalogs lab lab-verified lab-console profile clean distclean
+.PHONY: help setup test compile check release-gate wheel podman-image podman-failure-corpus-image podman-verify build package-check package-check-existing artifact-parity artifact-parity-existing verify-wheel publish-testpypi publish-pypi publish-test publish root-check signing-check signing-status signing-bundle release-check release-manifest protected-manifest manifests generate-release-manifest generate-protected-manifest generate-manifests wheel-manifests inspect-integrity sign-check sign-all verify-signature verify-all verify-publication policy-catalogs candidate-build candidate-freeze finalize-release final-version-selection release-final lab lab-verified lab-console profile clean distclean
 
 help: ## Show commands grouped by operator role
 	@printf '%s\n' \
@@ -46,6 +54,10 @@ help: ## Show commands grouped by operator role
 	  '  podman-failure-corpus-image Build the application laboratory image' \
 	  '  podman-verify            Verify rootless Podman and the worker image' '' \
 	  'Release coordinator:' \
+	  '  candidate-build          Build and record a fresh unsigned candidate' \
+	  '  candidate-freeze         Freeze candidate inputs for independent review' \
+	  '  finalize-release         Record Validator equivalence before signing' \
+	  '  release-final            Run final version/build/manifest/signing sequence' \
 	  '  release-check            Check root policy, clean source, and release inputs' \
 	  '  generate-manifests       Generate release and protected manifests' \
 	  '  policy-catalogs          Generate the versioned policy capability catalogs' \
@@ -91,7 +103,7 @@ release-gate: ## Run the completed lifecycle, IPC, authority, and rollout regres
 		tests/test_repair_rollout.py
 
 wheel: ## Build the wheel in dist/
-	$(BIN)/python -m build --wheel
+	$(BIN)/python -m build --wheel --outdir "$(BUILD_OUTPUT_DIR)"
 
 podman-image: wheel ## Build the Caretaker rootless replay worker image
 	@test -n "$(PODMAN_BASE_IMAGE)" || { echo 'PODMAN_BASE_IMAGE must not be empty' >&2; exit 2; }
@@ -120,22 +132,51 @@ podman-failure-corpus-image: ## Build the repository-owned application laborator
 podman-verify: ## Verify rootless Podman and a previously built worker image
 	sh isolated/podman/verify-rootless.sh "$(PODMAN_IMAGE)"
 
-build: ## Build the wheel and source distribution in dist/
-	$(BIN)/python -m build
+build: ## Build the wheel and source distribution in the selected output directory
+	$(BIN)/python -m build --outdir "$(BUILD_OUTPUT_DIR)"
 
 package-check: build artifact-parity ## Validate exactly the current-version wheel and source distribution
-	@test "$(words $(wildcard dist/caretaker-$(PACKAGE_VERSION).tar.gz))" -eq 1 || { echo "Expected exactly one source distribution for version $(PACKAGE_VERSION)" >&2; exit 2; }
-	@test "$(words $(wildcard dist/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl))" -eq 1 || { echo "Expected exactly one wheel for version $(PACKAGE_VERSION)" >&2; exit 2; }
+	@test "$(words $(wildcard $(BUILD_OUTPUT_DIR)/caretaker-$(PACKAGE_VERSION).tar.gz))" -eq 1 || { echo "Expected exactly one source distribution for version $(PACKAGE_VERSION)" >&2; exit 2; }
+	@test "$(words $(wildcard $(BUILD_OUTPUT_DIR)/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl))" -eq 1 || { echo "Expected exactly one wheel for version $(PACKAGE_VERSION)" >&2; exit 2; }
 	$(TWINE) check $(PACKAGE_FILES)
 	@echo "Validated distributions for Caretaker $(PACKAGE_VERSION): $(PACKAGE_FILES)"
 
 artifact-parity: build ## Compare exact source-distribution and wheel payloads
-	@test "$(words $(wildcard dist/caretaker-$(PACKAGE_VERSION).tar.gz))" -eq 1 || { echo "Expected exactly one source distribution for version $(PACKAGE_VERSION)" >&2; exit 2; }
-	@test "$(words $(wildcard dist/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl))" -eq 1 || { echo "Expected exactly one wheel for version $(PACKAGE_VERSION)" >&2; exit 2; }
+	@test "$(words $(wildcard $(BUILD_OUTPUT_DIR)/caretaker-$(PACKAGE_VERSION).tar.gz))" -eq 1 || { echo "Expected exactly one source distribution for version $(PACKAGE_VERSION)" >&2; exit 2; }
+	@test "$(words $(wildcard $(BUILD_OUTPUT_DIR)/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl))" -eq 1 || { echo "Expected exactly one wheel for version $(PACKAGE_VERSION)" >&2; exit 2; }
 	$(TOOLS_PYTHON) scripts/verify-package-parity.py \
-	  --sdist "dist/caretaker-$(PACKAGE_VERSION).tar.gz" \
-	  --wheel "dist/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl" \
+	  --sdist "$(BUILD_OUTPUT_DIR)/caretaker-$(PACKAGE_VERSION).tar.gz" \
+	  --wheel "$(BUILD_OUTPUT_DIR)/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl" \
+	  --source-root . \
 	  --version "$(PACKAGE_VERSION)"
+
+artifact-parity-existing: ## Compare already-built distributions without rebuilding them
+	@test "$(words $(wildcard $(BUILD_OUTPUT_DIR)/caretaker-$(PACKAGE_VERSION).tar.gz))" -eq 1 || { echo "Expected exactly one source distribution for version $(PACKAGE_VERSION)" >&2; exit 2; }
+	@test "$(words $(wildcard $(BUILD_OUTPUT_DIR)/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl))" -eq 1 || { echo "Expected exactly one wheel for version $(PACKAGE_VERSION)" >&2; exit 2; }
+	$(TOOLS_PYTHON) scripts/verify-package-parity.py \
+	  --sdist "$(BUILD_OUTPUT_DIR)/caretaker-$(PACKAGE_VERSION).tar.gz" \
+	  --wheel "$(BUILD_OUTPUT_DIR)/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl" \
+	  --source-root . --version "$(PACKAGE_VERSION)"
+
+package-check-existing: ## Validate already-built distributions without rebuilding them
+	@$(MAKE) --no-print-directory artifact-parity-existing PACKAGE_VERSION="$(PACKAGE_VERSION)" BUILD_OUTPUT_DIR="$(BUILD_OUTPUT_DIR)"
+	$(TWINE) check $(PACKAGE_FILES)
+	@echo "Validated distributions for Caretaker $(PACKAGE_VERSION): $(PACKAGE_FILES)"
+
+candidate-build: ## Build a fresh unsigned candidate into a new disposable directory
+	@test -n "$(CANDIDATE_VERSION)" || { echo "CANDIDATE_VERSION is required (for example: 0.6.5a0)" >&2; exit 2; }
+	$(TOOLS_PYTHON) scripts/release-candidate.py build \
+	  --repository . --output "$(CANDIDATE_OUTPUT_DIR)" \
+	  --package-version "$(CANDIDATE_VERSION)" \
+	  $(if $(CONTRACT_LINE),--contract-line "$(CONTRACT_LINE)",)
+
+candidate-freeze: ## Freeze a candidate record after external review
+	$(TOOLS_PYTHON) scripts/release-candidate.py freeze \
+	  --repository . --candidate "$(CANDIDATE_RECORD)" \
+	  --output "$(CANDIDATE_FREEZE_RECORD)" \
+	  $(if $(VALIDATOR_RESULT),--validator-result "$(VALIDATOR_RESULT)",) \
+	  $(if $(CRUCIBLE_RESULT),--crucible-result "$(CRUCIBLE_RESULT)",) \
+	  $(if $(ARCHITECT_AUDIT),--architect-audit "$(ARCHITECT_AUDIT)",)
 
 publish-testpypi: release-check package-check verify-wheel ## Upload the checked package to TestPyPI
 	@test "$(CONFIRM)" = 1 || { echo "Refusing TestPyPI upload; rerun with CONFIRM=1" >&2; exit 2; }
@@ -172,13 +213,16 @@ signing-check: ## Check signing identity (prompts only for missing KEY_SLOT)
 signing-status: ## Show publication artifacts, signatures, and the next missing step
 	$(TOOLS_PYTHON) scripts/signing-status.py "$(PUBLICATION_DIR)" "$(ROOT)" "$(PUBLIC_KEY_DIR)"
 
-signing-bundle: root-check ## Build a minimal offline signing-station directory
+signing-bundle: root-check ## Build an immutable offline signing-station directory from finalization
+	@test -n "$(FINALIZATION_RECORD)" && test -f "$(FINALIZATION_RECORD)" || { echo "FINALIZATION_RECORD is required and must be finalized before signing-bundle" >&2; exit 2; }
 	$(TOOLS_PYTHON) scripts/create-signing-bundle.py \
 	  --output "$(SIGNING_BUNDLE_DIR)" \
 	  --root "$(ROOT)" \
 	  --release-manifest release-manifest.json \
 	  --protected-manifest protected-manifest.json \
-	  --public-key-dir "$(PUBLIC_KEY_DIR)"
+	  --public-key-dir "$(PUBLIC_KEY_DIR)" \
+	  --finalization-record "$(FINALIZATION_RECORD)" \
+	  $(if $(CANDIDATE_RECORD),--candidate-record "$(CANDIDATE_RECORD)",)
 
 release-check: root-check ## Check clean source and release inputs
 	@test -z "$$(git status --porcelain)" || { echo "Git worktree or index has uncommitted changes" >&2; exit 2; }
@@ -240,6 +284,36 @@ generate-manifests: manifests ## Generate both publication manifests
 policy-catalogs: ## Generate versioned policy capability and reserved-setting catalogs
 	PYTHONPATH=src $(TOOLS_PYTHON) scripts/generate-policy-catalogs.py \
 	  --output-dir catalogs --package-version "$(PACKAGE_VERSION)" --force
+
+final-version-selection: ## Verify the already-selected final package version
+	@test -n "$(FINAL_VERSION)" || { echo "FINAL_VERSION is required" >&2; exit 2; }
+	@test "$(PACKAGE_VERSION)" = "$(FINAL_VERSION)" || { echo "pyproject package version $(PACKAGE_VERSION) does not match FINAL_VERSION $(FINAL_VERSION)" >&2; exit 2; }
+	@echo "Final package version selected: $(FINAL_VERSION)"
+
+finalize-release: ## Record final artifacts and the Validator equivalence handoff
+	@test -n "$(EQUIVALENCE_RECORD)" && test -f "$(EQUIVALENCE_RECORD)" || { echo "EQUIVALENCE_RECORD is required" >&2; exit 2; }
+	$(TOOLS_PYTHON) scripts/release-candidate.py finalize \
+	  --repository . --candidate "$(CANDIDATE_FREEZE_RECORD)" \
+	  --final-version "$(FINAL_VERSION)" --final-dist "$(FINAL_DIST_DIR)" \
+	  --equivalence "$(EQUIVALENCE_RECORD)" --output "$(FINALIZATION_RECORD)" \
+	  --manifest release-manifest.json --manifest protected-manifest.json \
+	  $(if $(wildcard wheel-release-manifest.json),--manifest wheel-release-manifest.json,) \
+	  $(if $(wildcard wheel-protected-manifest.json),--manifest wheel-protected-manifest.json,)
+
+release-final: ## Execute final selection, generation, build, checks, handoff, signing, and verification
+	@test -n "$(RELEASE_MANIFEST_VERSION)" && test -n "$(PROTECTED_MANIFEST_VERSION)" || { echo "RELEASE_MANIFEST_VERSION and PROTECTED_MANIFEST_VERSION are required for deterministic finalization" >&2; exit 2; }
+	@$(MAKE) --no-print-directory final-version-selection FINAL_VERSION="$(FINAL_VERSION)"
+	@$(MAKE) --no-print-directory policy-catalogs PACKAGE_VERSION="$(FINAL_VERSION)"
+	@$(MAKE) --no-print-directory wheel-manifests PACKAGE_VERSION="$(FINAL_VERSION)" FORCE=1
+	@$(MAKE) --no-print-directory build PACKAGE_VERSION="$(FINAL_VERSION)" BUILD_OUTPUT_DIR="$(FINAL_DIST_DIR)"
+	@test -d "$(FINAL_DIST_DIR)"
+	@$(MAKE) --no-print-directory artifact-parity-existing PACKAGE_VERSION="$(FINAL_VERSION)" BUILD_OUTPUT_DIR="$(FINAL_DIST_DIR)"
+	@$(MAKE) --no-print-directory package-check-existing PACKAGE_VERSION="$(FINAL_VERSION)" BUILD_OUTPUT_DIR="$(FINAL_DIST_DIR)"
+	@$(MAKE) --no-print-directory manifests PACKAGE_VERSION="$(FINAL_VERSION)" FORCE=1 RELEASE_MANIFEST_VERSION="$(RELEASE_MANIFEST_VERSION)" PROTECTED_MANIFEST_VERSION="$(PROTECTED_MANIFEST_VERSION)"
+	@$(MAKE) --no-print-directory finalize-release FINAL_VERSION="$(FINAL_VERSION)"
+	@$(MAKE) --no-print-directory signing-bundle FINALIZATION_RECORD="$(FINALIZATION_RECORD)"
+	@$(MAKE) --no-print-directory sign-all PUBLICATION_DIR="$(SIGNING_BUNDLE_DIR)" KEY_SLOT="$(KEY_SLOT)"
+	@$(MAKE) --no-print-directory verify-publication PUBLICATION_DIR="$(SIGNING_BUNDLE_DIR)"
 
 verify-signature: ## Verify detached SIGNATURE over MANIFEST with local GnuPG
 	@test -f "$(MANIFEST)" || { echo "Manifest not found: $(MANIFEST)" >&2; exit 2; }

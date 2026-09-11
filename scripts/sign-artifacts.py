@@ -98,6 +98,31 @@ def signature_valid(home: str, artifact: Path, signature: Path, fingerprint: str
     return False
 
 
+def verify_signing_inputs(directory: Path) -> None:
+    """Reject a signing station whose approved input ledger no longer matches."""
+    ledger_path = directory / "signing-inputs.json"
+    if not ledger_path.is_file():
+        return
+    try:
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        files = ledger["files"]
+        finalization_hash = str(ledger["finalization_sha256"])
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise ValueError(f"invalid signing input ledger: {ledger_path}: {exc}") from exc
+    finalization = directory / "finalization.json"
+    if not finalization.is_file() or hashlib.sha256(finalization.read_bytes()).hexdigest() != finalization_hash:
+        raise ValueError("finalization record changed after signing preparation")
+    if not isinstance(files, dict) or not files:
+        raise ValueError("signing input ledger has no approved files")
+    for name, expected in files.items():
+        path = directory / str(name)
+        if not path.is_file():
+            raise ValueError(f"approved signing input is missing: {name}")
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual != expected:
+            raise ValueError(f"approved signing input changed after signing preparation: {name}")
+
+
 def states(
     directory: Path, slots: dict[str, str], home: str, public_fingerprints: set[str] | None = None
 ) -> dict[str, dict[str, str]]:
@@ -191,6 +216,7 @@ def main() -> int:
     root = args.root if args.root.is_absolute() else args.directory / args.root
     key_dir = args.public_key_dir if args.public_key_dir.is_absolute() else args.directory / args.public_key_dir
     try:
+        verify_signing_inputs(args.directory)
         slots = load_slots(root)
         temporary, public_fingerprints = verification_home(key_dir)
         with temporary as home:

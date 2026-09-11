@@ -410,6 +410,20 @@ current version from `pyproject.toml`, validate both distributions with Twine,
 and run the isolated wheel verification. Twine obtains credentials from its
 normal configuration or environment; no token is stored in the repository.
 
+For a release that requires independent validation, build and freeze the exact
+development subject before selecting the final version:
+
+```bash
+make candidate-build CANDIDATE_VERSION=0.6.5a0 \
+  CANDIDATE_OUTPUT_DIR=/tmp/caretaker-candidate
+make candidate-freeze \
+  CANDIDATE_RECORD=/tmp/caretaker-candidate/candidate-input.json
+```
+
+Candidate output is explicitly unsigned development material. The final
+release sequence records Validator's equivalence handoff before creating the
+offline signing bundle; see [`docs/RELEASE_CANDIDATE_WORKFLOW.md`](docs/RELEASE_CANDIDATE_WORKFLOW.md).
+
 Upload to TestPyPI first:
 
 ```bash

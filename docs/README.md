@@ -45,6 +45,7 @@ Caretaker is active research software. These documents describe current design i
 - `OPENPGP_VERIFICATION.md`
 - `PROBABILISTIC_VERIFICATION.md`
 - `SIGNING_STATION.md`
+- `RELEASE_CANDIDATE_WORKFLOW.md` — candidate freeze, finalization, and signing handoff
 - `THREAT_MODEL.md`
 
 ## Planning and releases

@@ -5,6 +5,9 @@ __pycache__/
 venv/
 build/
 dist/
+.candidate-output/
+.final-release-output/
+.release-records/
 *.egg-info/
 .caretaker/
 caretaker-data/

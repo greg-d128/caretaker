@@ -4,13 +4,19 @@ Release-signing authority and private-key handling remain outside the Caretaker 
 
 ## Short, ordinary workflow
 
+For a new release, complete the release-candidate workflow in
+[`RELEASE_CANDIDATE_WORKFLOW.md`](RELEASE_CANDIDATE_WORKFLOW.md) first. The
+signing station must receive the finalization record and its exact immutable
+bundle; it must not sign a prior candidate after source or artifact changes.
+
 On the coordinator, place the three public certificates under their conventional
 names, generate the manifests, inspect them, and create the minimal station bundle:
 
 ```bash
 make generate-manifests RELEASE_MANIFEST_VERSION=1 PROTECTED_MANIFEST_VERSION=1
 make inspect-integrity
-make signing-bundle PUBLIC_KEY_DIR=release-keys SIGNING_BUNDLE_DIR=station-input
+make signing-bundle PUBLIC_KEY_DIR=release-keys SIGNING_BUNDLE_DIR=station-input \
+  FINALIZATION_RECORD=finalization.json
 ```
 
 Transfer `station-input` to one signing station. After comparing its
@@ -80,6 +86,12 @@ certificate that disagrees with `root.json`, and wheel manifests are `PENDING`
 until generated. `sign-all` keeps valid signatures and atomically replaces a stale
 signature only after the new signature verifies. It displays the artifact
 SHA-256 before signing.
+
+When the bundle contains `signing-inputs.json`, `sign-check` and `sign-all`
+first verify the finalization bytes and every approved manifest and package
+artifact hash. They fail closed on changed or missing inputs. A stale signature
+is therefore evidence that the bundle or artifact set must be regenerated, not
+permission to reuse an earlier candidate.
 
 Run the target separately for keys A, B, and C, preferably in independent signing environments as described below. The Make target is convenience, not a replacement for manifest review or threshold independence.
 

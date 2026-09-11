@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import re
 import tarfile
 import zipfile
@@ -55,28 +56,73 @@ def _wheel_payload(path: Path) -> tuple[str, dict[str, str]]:
     return version, payload
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--sdist", type=Path, required=True)
-    parser.add_argument("--wheel", type=Path, required=True)
-    parser.add_argument("--version", required=True)
-    args = parser.parse_args()
-    sdist_version, sdist = _sdist_payload(args.sdist)
-    wheel_version, wheel = _wheel_payload(args.wheel)
-    if sdist_version != args.version or wheel_version != args.version:
-        raise SystemExit(
-            f"package metadata version mismatch: expected {args.version}, "
+def _source_payload(root: Path) -> dict[str, str]:
+    payload: dict[str, str] = {}
+    source = root / "src" / "caretaker"
+    if not source.is_dir():
+        raise ValueError(f"source root has no src/caretaker directory: {root}")
+    for path in sorted(source.rglob("*")):
+        if path.is_file() and path.suffix == ".py":
+            payload[f"caretaker/{path.relative_to(source).as_posix()}"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    profiles = root / "profiles"
+    if profiles.is_dir():
+        for path in sorted(profiles.rglob("*")):
+            if path.is_file():
+                payload[f"caretaker/profiles/{path.relative_to(profiles).as_posix()}"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return payload
+
+
+def verify_payloads(
+    *, sdist_path: Path, wheel_path: Path, source_root: Path | None, version: str
+) -> dict[str, object]:
+    sdist_version, sdist = _sdist_payload(sdist_path)
+    wheel_version, wheel = _wheel_payload(wheel_path)
+    source = _source_payload(source_root) if source_root is not None else None
+    if sdist_version != version or wheel_version != version:
+        raise ValueError(
+            f"package metadata version mismatch: expected {version}, "
             f"sdist={sdist_version}, wheel={wheel_version}"
         )
     if sdist != wheel:
         missing = sorted(set(sdist) - set(wheel))
         extra = sorted(set(wheel) - set(sdist))
         changed = sorted(name for name in set(sdist) & set(wheel) if sdist[name] != wheel[name])
-        raise SystemExit(
+        raise ValueError(
             "source/wheel payload mismatch: "
             f"missing={missing}, extra={extra}, changed={changed}"
         )
-    print(f"Verified exact source/wheel payload parity for Caretaker {args.version}: {len(sdist)} members")
+    if source is not None and source != wheel:
+        missing = sorted(set(source) - set(wheel))
+        extra = sorted(set(wheel) - set(source))
+        changed = sorted(name for name in set(source) & set(wheel) if source[name] != wheel[name])
+        raise ValueError(
+            "source/package payload mismatch: "
+            f"missing={missing}, extra={extra}, changed={changed}"
+        )
+    return {"version": version, "source": source, "sdist": sdist, "wheel": wheel}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--sdist", type=Path, required=True)
+    parser.add_argument("--wheel", type=Path, required=True)
+    parser.add_argument("--source-root", type=Path)
+    parser.add_argument("--version", required=True)
+    parser.add_argument("--json", action="store_true", dest="json_output")
+    args = parser.parse_args()
+    try:
+        result = verify_payloads(
+            sdist_path=args.sdist,
+            wheel_path=args.wheel,
+            source_root=args.source_root,
+            version=args.version,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    if args.json_output:
+        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+    else:
+        print(f"Verified exact source/wheel/source payload parity for Caretaker {args.version}: {len(result['wheel'])} members")
     return 0
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 
@@ -25,6 +26,11 @@ class build_py(_build_py):
         profiles = package / "profiles"
         publication = package / "_publication"
         shutil.copytree(ROOT / "profiles", profiles, dirs_exist_ok=True)
+        if os.environ.get("CARETAKER_RELEASE_SIGNING") == "disabled":
+            # Development candidates deliberately have no installed
+            # publication bundle. They remain unsigned development artifacts
+            # and must not pass installed release-integrity verification.
+            return
         required = [
             ROOT / "root.json",
             *(ROOT / f"root.json.key-{slot}.asc" for slot in SLOTS),

@@ -5,8 +5,29 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
+import json
 import shutil
+import sys
 from pathlib import Path
+
+
+def _workflow_module(repository: Path):
+    spec = importlib.util.spec_from_file_location(
+        "caretaker_release_candidate", repository / "scripts" / "release-candidate.py"
+    )
+    if spec is None or spec.loader is None:
+        raise ValueError("cannot load release-candidate workflow")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _reject_private_key(path: Path) -> None:
+    data = path.read_bytes()
+    if b"BEGIN PGP PRIVATE KEY BLOCK" in data or b"BEGIN OPENSSH PRIVATE KEY" in data:
+        raise ValueError(f"private signing key material is not permitted in a signing bundle: {path}")
 
 
 def main() -> int:
@@ -16,6 +37,8 @@ def main() -> int:
     parser.add_argument("--release-manifest", type=Path, required=True)
     parser.add_argument("--protected-manifest", type=Path, required=True)
     parser.add_argument("--public-key-dir", type=Path, required=True)
+    parser.add_argument("--finalization-record", type=Path)
+    parser.add_argument("--candidate-record", type=Path)
     args = parser.parse_args()
 
     repository = Path(__file__).resolve().parents[1]
@@ -34,6 +57,33 @@ def main() -> int:
         Path("signing-status.py"): repository / "scripts/signing-status.py",
         Path("Makefile"): repository / "scripts/signing-station.Makefile",
     }
+    finalization = None
+    if args.finalization_record:
+        workflow = _workflow_module(repository)
+        finalization = workflow.load_record(args.finalization_record.resolve(), workflow.FINALIZATION_KIND)
+        workflow.validate_finalization(repository, finalization)
+        expected = {
+            args.release_manifest.resolve(): "release-manifest.json",
+            args.protected_manifest.resolve(): "protected-manifest.json",
+        }
+        for source, name in expected.items():
+            recorded = finalization.get("publication", {}).get(name)
+            if not isinstance(recorded, dict) or Path(str(recorded.get("path", ""))).resolve() != source:
+                parser.error(f"finalization record does not approve {source}")
+            if workflow.sha256_file(source) != recorded.get("sha256"):
+                parser.error(f"manifest changed after finalization: {source}")
+        inputs[Path("finalization.json")] = args.finalization_record.resolve()
+        if args.candidate_record:
+            candidate = workflow.load_record(args.candidate_record.resolve())
+            if candidate.get("candidate_id") != finalization.get("candidate_id"):
+                parser.error("candidate record does not match finalization")
+            inputs[Path("candidate-input.json")] = args.candidate_record.resolve()
+        for name in ("wheel", "sdist"):
+            entry = finalization["artifacts"][name]
+            source = Path(str(entry["path"])).resolve()
+            if not source.is_file() or workflow.sha256_file(source) != entry.get("sha256"):
+                parser.error(f"final {name} changed or is missing: {source}")
+            inputs[Path("artifacts") / source.name] = source
     for name in ("wheel-release-manifest.json", "wheel-protected-manifest.json"):
         source = repository / name
         if source.is_file():
@@ -53,6 +103,7 @@ def main() -> int:
 
     args.output.mkdir(parents=True, mode=0o700)
     for name, source in inputs.items():
+        _reject_private_key(source)
         destination = args.output / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, destination)
@@ -71,9 +122,31 @@ def main() -> int:
         "Use this station's own slot. Never copy a private key into this directory.\n",
         encoding="utf-8",
     )
+    if finalization is not None:
+        (args.output / "signing-inputs.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "record_type": "caretaker-signing-inputs",
+                    "candidate_id": finalization["candidate_id"],
+                    "finalization_sha256": hashlib.sha256(args.output.joinpath("finalization.json").read_bytes()).hexdigest(),
+                    "files": {
+                        str(path.relative_to(args.output)): hashlib.sha256(path.read_bytes()).hexdigest()
+                        for path in sorted(args.output.rglob("*"))
+                        if path.is_file() and path.name not in {"README.txt", "SHA256SUMS", "signing-inputs.json"}
+                    },
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
     readme.chmod(0o600)
 
     inventory_paths = [args.output / name for name in inputs]
+    if finalization is not None:
+        inventory_paths.extend([args.output / "finalization.json", args.output / "candidate-input.json", args.output / "signing-inputs.json"] if args.candidate_record else [args.output / "finalization.json", args.output / "signing-inputs.json"])
     inventory_paths.append(readme)
     inventory = []
     for path in sorted(inventory_paths, key=lambda item: str(item.relative_to(args.output))):
