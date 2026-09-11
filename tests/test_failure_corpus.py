@@ -7,6 +7,10 @@ from pathlib import Path
 
 import pytest
 
+
+pytestmark = pytest.mark.repository
+
+
 from caretaker.failure_corpus import (
     FailureCorpus,
     FailureCorpusError,
