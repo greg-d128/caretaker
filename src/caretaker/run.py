@@ -4794,8 +4794,13 @@ def main(argv: list[str] | None = None) -> int:
                         restart_worker=restart_system_collector,
                         disable_component=disable_system_collector,
                     )
-                    system_failure_handled = True
                     if failure_result.get("action") == "RESTARTED":
+                        # A replacement can fail before the next health tick.
+                        # Keep the failure gate open so that an immediate
+                        # replacement failure is observed and counted toward
+                        # restart exhaustion instead of leaving the worker in
+                        # STARTING indefinitely.
+                        system_failure_handled = False
                         runtime.event(
                             logger_name="caretaker.watchdog",
                             severity=30,
@@ -4815,6 +4820,7 @@ def main(argv: list[str] | None = None) -> int:
                         failure_result.get("action") == WorkerFailureAction.STOP_APPLICATION.name
                         and not application_stop_requested
                     ):
+                        system_failure_handled = True
                         application_stop_requested = True
                         shutdown = failure_result.get("action_result")
                         runtime.event(
@@ -4828,6 +4834,8 @@ def main(argv: list[str] | None = None) -> int:
                                 "shutdown": shutdown,
                             },
                         )
+                    else:
+                        system_failure_handled = True
 
     health_thread = threading.Thread(target=health_loop, name="caretaker-health-monitor", daemon=True)
     health_thread.start()
