@@ -273,7 +273,7 @@ profile: ## Open the Textual Caretaker Profile Editor
 verify-wheel: wheel ## Install and test the wheel in a temporary virtual environment
 	@tmp="$$(mktemp -d)"; \
 	trap 'rm -rf "$$tmp"' EXIT; \
-	wheel_pattern="dist/caretaker-$(PACKAGE_VERSION)*-py3-none-any.whl"; \
+	wheel_pattern="dist/caretaker-$(PACKAGE_VERSION)-py3-none-any.whl"; \
 	set -- $$wheel_pattern; \
 	test "$$#" -eq 1 && test -f "$$1" || { echo "Expected exactly one current-version wheel: $$wheel_pattern" >&2; exit 1; }; \
 	wheel="$$1"; \
