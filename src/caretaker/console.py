@@ -1412,6 +1412,10 @@ class CaretakerConsoleApp(App):
         yield Footer()
 
     async def on_mount(self) -> None:
+        # App-level Mount can be dispatched before every composed descendant
+        # has been mounted. Yield once so Textual can flush that mount batch
+        # before the initial refresh queries the dashboard widgets.
+        await asyncio.sleep(0)
         await self.refresh_all()
         self.set_interval(1.0, self.refresh_status)
 
