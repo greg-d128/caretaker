@@ -101,9 +101,11 @@ def main() -> int:
     if missing:
         parser.error("required signing input(s) missing: " + ", ".join(missing))
     if args.output.exists():
-        parser.error(f"output already exists; review and remove or rename it first: {args.output}")
-
-    args.output.mkdir(parents=True, mode=0o700)
+        if not args.output.is_dir() or any(args.output.iterdir()):
+            parser.error(f"output already exists and is not empty; review and remove or rename it first: {args.output}")
+        args.output.chmod(0o700)
+    else:
+        args.output.mkdir(parents=True, mode=0o700)
     for name, source in inputs.items():
         _reject_private_key(source)
         destination = args.output / name
