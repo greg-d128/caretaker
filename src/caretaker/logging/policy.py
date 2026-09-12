@@ -23,6 +23,7 @@ from ..communications import (
 from ..domain import ValidationIsolationLevel
 from ..llm import LLMUsagePolicy
 from ..control_plane import RuntimeInteractionPolicy
+from ..provider_security import OllamaEndpointPolicy, endpoint_policy_from_mapping
 from .models import (
     AnchorFailureAction,
     AttachmentOverloadAction,
@@ -366,6 +367,7 @@ class OperatorLoggingPolicy:
     # through the supervised runtime. Feature-specific enablement remains
     # separate; this only limits usage once a feature is enabled.
     llm_usage: LLMUsagePolicy = field(default_factory=LLMUsagePolicy)
+    ollama: OllamaEndpointPolicy = field(default_factory=OllamaEndpointPolicy)
     regression: RegressionFixturePolicy = field(default_factory=RegressionFixturePolicy)
     signing: RuntimeSigningPolicy = field(default_factory=RuntimeSigningPolicy)
     audit: AuditStreamPolicy = field(default_factory=AuditStreamPolicy)
@@ -390,6 +392,8 @@ def validate_operator_logging_policy(policy: OperatorLoggingPolicy) -> None:
     """Validate that accepted logging policy has executable semantics."""
 
     errors: list[str] = list(declared_primitive_errors(policy, prefix="logging"))
+    if not isinstance(policy.ollama, OllamaEndpointPolicy):
+        errors.append("ollama must be an OllamaEndpointPolicy")
     if errors:
         raise LoggingPolicyConfigurationError(
             "Invalid operator logging policy:\n- " + "\n- ".join(errors)
@@ -776,6 +780,27 @@ def load_operator_policy(path: str | Path) -> tuple[OperatorLoggingPolicy, Loggi
     communication_data = dict(log.get("communications", {}))
     control_plane_data = dict(log.get("control_plane", {}))
     llm_usage_data = dict(log.get("llm_usage", {}))
+    ollama_data = dict(log.get("ollama", {}))
+    for key in (
+        "endpoint_mode", "ollama_endpoint_mode", "endpoint", "ollama_endpoint", "insecure_tls", "accept_remote_risk",
+        "ca_bundle", "ollama_ca_bundle", "spki_pins", "ollama_spki_pins",
+        "certificate_pins", "client_cert", "ollama_client_cert", "client_key",
+        "ollama_client_key", "attestation", "ollama_attestation",
+        "attestation_public_key", "ollama_attestation_public_key",
+        "expected_deployment_id", "clock_skew_seconds",
+    ):
+        if key in log and key not in ollama_data:
+            ollama_data[key] = log[key]
+    if "ollama_endpoint_mode" in ollama_data and "endpoint_mode" not in ollama_data and "mode" not in ollama_data:
+        ollama_data["endpoint_mode"] = ollama_data.pop("ollama_endpoint_mode")
+    for source, target in (
+        ("ollama_ca_bundle", "ca_bundle"), ("ollama_spki_pins", "spki_pins"),
+        ("ollama_client_cert", "client_cert"), ("ollama_client_key", "client_key"),
+        ("ollama_attestation", "attestation"),
+        ("ollama_attestation_public_key", "attestation_public_key"),
+    ):
+        if source in ollama_data and target not in ollama_data:
+            ollama_data[target] = ollama_data.pop(source)
     regression_data = dict(log.get("regression", {}))
     if "replay_minimum_isolation" in regression_data:
         regression_data["replay_minimum_isolation"] = _enum(
@@ -797,6 +822,11 @@ def load_operator_policy(path: str | Path) -> tuple[OperatorLoggingPolicy, Loggi
     configured_directory = Path(str(log.get("directory", "./caretaker-data"))).expanduser()
     if not configured_directory.is_absolute():
         configured_directory = path.parent / configured_directory
+
+    for key in ("ca_bundle", "client_cert", "client_key", "attestation", "attestation_public_key"):
+        value = ollama_data.get(key)
+        if isinstance(value, str) and value and not Path(value).expanduser().is_absolute():
+            ollama_data[key] = str(path.parent / value)
 
     policy = OperatorLoggingPolicy(
         enabled=(
@@ -868,6 +898,7 @@ def load_operator_policy(path: str | Path) -> tuple[OperatorLoggingPolicy, Loggi
         ),
         control_plane=RuntimeInteractionPolicy(**control_plane_data),
         llm_usage=LLMUsagePolicy(**llm_usage_data),
+        ollama=endpoint_policy_from_mapping(ollama_data),
         regression=RegressionFixturePolicy(**regression_data),
         signing=RuntimeSigningPolicy(**{
             **signing_data,

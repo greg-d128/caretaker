@@ -19,8 +19,10 @@ from .capsule import (
 )
 from .provider_security import (
     MAX_PROVIDER_RESPONSE_BYTES,
+    OllamaEndpointPolicy,
     ProviderResponseError,
     provider_json_response,
+    resolve_endpoint_policy,
     validate_provider_endpoint,
 )
 from .llm import LLMRequestGate, LLMUsageLimitError, LLMUsagePolicy
@@ -36,8 +38,10 @@ class IncidentCapsuleAssistant:
         self,
         *,
         model: str,
-        endpoint: str = "http://127.0.0.1:11434/api/generate",
+        endpoint: str | None = None,
         timeout_seconds: float = 120.0,
+        endpoint_policy: OllamaEndpointPolicy | None = None,
+        allow_remote_endpoint: bool | None = None,
         policy: IncidentCapsulePolicy | None = None,
         usage_policy: LLMUsagePolicy | None = None,
         usage_gate: LLMRequestGate | None = None,
@@ -45,7 +49,13 @@ class IncidentCapsuleAssistant:
         if not str(model).strip():
             raise ValueError("Incident Capsule assistance requires a model")
         self.model = str(model).strip()
-        self.endpoint = validate_provider_endpoint(endpoint, allow_remote_endpoint=False)
+        self.endpoint_policy = resolve_endpoint_policy(
+            endpoint_policy, allow_remote_endpoint=allow_remote_endpoint
+        )
+        self.endpoint = validate_provider_endpoint(
+            endpoint or self.endpoint_policy.endpoint or "http://127.0.0.1:11434/api/generate",
+            endpoint_policy=self.endpoint_policy,
+        )
         self.timeout_seconds = timeout_seconds
         self.policy = policy or IncidentCapsulePolicy(
             maximum_text_characters=4096,
@@ -53,6 +63,11 @@ class IncidentCapsuleAssistant:
             maximum_depth=6,
         )
         self._usage_gate = usage_gate or LLMRequestGate(usage_policy)
+        self._endpoint_security_status = self.endpoint_policy.status(self.endpoint)
+
+    @property
+    def endpoint_security_status(self) -> dict[str, Any]:
+        return dict(self._endpoint_security_status)
 
     def assist(
         self,
@@ -86,6 +101,7 @@ class IncidentCapsuleAssistant:
             "assessment": bounded_result,
             "advisory_only": True,
             "capsule_mutated": False,
+            "endpoint_security_status": self.endpoint_security_status,
         }
 
     def _context(
@@ -167,9 +183,12 @@ class IncidentCapsuleAssistant:
         try:
             outer, _raw = provider_json_response(
                 request,
-                allow_remote_endpoint=False,
+                endpoint_policy=self.endpoint_policy,
                 timeout_seconds=self.timeout_seconds,
                 maximum_bytes=MAX_PROVIDER_RESPONSE_BYTES,
+                expected_model=self.model,
+                expected_provider_purpose="capsule_assistance",
+                security_status=self._endpoint_security_status,
             )
         except ProviderResponseError as exc:
             raise RuntimeError(f"Ollama Incident Capsule assistance failed: {exc}") from exc
@@ -213,7 +232,9 @@ def assist_capsules(
     *,
     query: str,
     model: str,
-    endpoint: str = "http://127.0.0.1:11434/api/generate",
+    endpoint: str | None = None,
+    endpoint_policy: OllamaEndpointPolicy | None = None,
+    allow_remote_endpoint: bool | None = None,
     timeline_provider: Callable[[UUID], Iterable[Mapping[str, Any]]] | None = None,
     usage_policy: LLMUsagePolicy | None = None,
     usage_gate: LLMRequestGate | None = None,
@@ -224,6 +245,8 @@ def assist_capsules(
     assistant = IncidentCapsuleAssistant(
         model=model,
         endpoint=endpoint,
+        endpoint_policy=endpoint_policy,
+        allow_remote_endpoint=allow_remote_endpoint,
         usage_policy=usage_policy,
         usage_gate=usage_gate,
     )

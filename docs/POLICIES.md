@@ -17,11 +17,14 @@ authority.
 
 `IncidentCommunicationPolicy.llm_tailoring_enabled` defaults to `false`.
 When explicitly enabled, the non-interactive incident-draft command may send
-the already bounded and redacted draft projection to a loopback Ollama
-endpoint for language suggestions. The canonical draft remains the source of
-truth; model output is separate advisory evidence and cannot authorize
-delivery, change policy, modify a capsule, approve Repair, or satisfy
-validation. Remote provider endpoints remain rejected by the built-in client.
+the already bounded and redacted draft projection to an Ollama endpoint for
+language suggestions. All Ollama consumers use the shared
+`OllamaEndpointPolicy`; its default `local_only` mode accepts loopback only.
+Remote modes, warnings, TLS, attestation, and the deprecated compatibility
+flag are documented in [`OLLAMA_ENDPOINT_SECURITY.md`](OLLAMA_ENDPOINT_SECURITY.md).
+The canonical draft remains the source of truth; model output is separate
+advisory evidence and cannot authorize delivery, change policy, modify a
+capsule, approve Repair, or satisfy validation.
 
 Caretaker accepts a policy setting only when the running release can honor its semantics. See [`POLICY_SEMANTICS.md`](POLICY_SEMANTICS.md) for the policy-truthfulness rules, reviewed policy-surface fingerprint, and explicitly reserved settings.
 

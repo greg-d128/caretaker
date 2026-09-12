@@ -1,0 +1,7 @@
+[logging.ollama]
+endpoint_mode = "remote_attested"
+endpoint = "https://ollama.example.internal/api/generate"
+ca_bundle = "/etc/caretaker/ollama-ca.pem"
+attestation = "/etc/caretaker/ollama-attestation.json"
+attestation_public_key = "/etc/caretaker/ollama-attestation-ed25519.pub"
+expected_deployment_id = "deployment-identifier"

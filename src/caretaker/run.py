@@ -70,6 +70,7 @@ from .logging.ipc import (
     unix_socket_exists,
 )
 from .logging.policy import OperatorLoggingPolicy, load_operator_policy
+from .provider_security import endpoint_policy_from_mapping, validate_provider_endpoint
 from .policy import RepairPolicy
 from .logging.segments import read_segment
 from .regression import RegressionFixtureStore
@@ -2028,6 +2029,29 @@ def main(argv: list[str] | None = None) -> int:
 
     def control_handler(request, credentials):
         command = request.get("command")
+        def ollama_policy_for_request() -> Any:
+            requested = request.get("endpoint_security")
+            configured = runtime.active_policy.ollama
+            if requested is None:
+                return configured
+            if not isinstance(requested, dict):
+                raise ValueError("endpoint_security must be an object")
+            requested_policy = endpoint_policy_from_mapping(requested)
+            if requested_policy != configured:
+                raise PermissionError(
+                    "Ollama endpoint security must match the supervisor policy; configure logging.ollama"
+                )
+            return configured
+        if command == "ollama-security-status":
+            endpoint = (
+                request.get("endpoint")
+                or runtime.active_policy.ollama.endpoint
+                or "http://127.0.0.1:11434/api/generate"
+            )
+            normalized_endpoint = validate_provider_endpoint(
+                str(endpoint), endpoint_policy=runtime.active_policy.ollama
+            )
+            return {"ok": True, "endpoint_security": runtime.active_policy.ollama.status(normalized_endpoint)}
         if command == "job-status":
             job = runtime_jobs.status(str(request.get("job_id") or ""))
             return {"ok": True, "job": job.public_dict()}
@@ -3538,8 +3562,10 @@ def main(argv: list[str] | None = None) -> int:
                     model=model,
                     endpoint=str(
                         request.get("endpoint")
+                        or runtime.active_policy.ollama.endpoint
                         or "http://127.0.0.1:11434/api/generate"
                     ),
+                    endpoint_policy=ollama_policy_for_request(),
                     usage_policy=runtime.active_policy.llm_usage,
                     usage_gate=runtime_llm_gate,
                     timeline_provider=lambda incident_id: capsule_timeline(
@@ -3598,7 +3624,8 @@ def main(argv: list[str] | None = None) -> int:
                     raise ValueError("incident-communication-draft tailor_model must be non-empty text")
                 raw_tailor_endpoint = request.get(
                     "tailor_endpoint",
-                    "http://127.0.0.1:11434/api/generate",
+                    runtime.active_policy.ollama.endpoint
+                    or "http://127.0.0.1:11434/api/generate",
                 )
                 if not isinstance(raw_tailor_endpoint, str) or not raw_tailor_endpoint.strip():
                     raise ValueError("incident-communication-draft tailor_endpoint must be non-empty text")
@@ -3609,6 +3636,7 @@ def main(argv: list[str] | None = None) -> int:
                         policy=runtime.active_policy.communications,
                         model=raw_tailor_model,
                         endpoint=raw_tailor_endpoint,
+                        endpoint_policy=ollama_policy_for_request(),
                         usage_policy=runtime.active_policy.llm_usage,
                         usage_gate=runtime_llm_gate,
                     ),
@@ -4078,6 +4106,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("behavior-assess-history requires an Ollama model")
             analyst = OllamaBehaviorSnapshotAnalyst(
                 model,
+                endpoint_policy=ollama_policy_for_request(),
                 usage_policy=runtime.active_policy.llm_usage,
                 usage_gate=runtime_llm_gate,
             )
@@ -4101,6 +4130,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("behavior-assess requires an Ollama model")
             analyst = OllamaBehaviorSnapshotAnalyst(
                 model,
+                endpoint_policy=ollama_policy_for_request(),
                 usage_policy=runtime.active_policy.llm_usage,
                 usage_gate=runtime_llm_gate,
             )
@@ -4184,7 +4214,12 @@ def main(argv: list[str] | None = None) -> int:
             if model:
                 provider = OllamaRootCauseProvider(
                     model=model,
-                    endpoint=str(request.get("endpoint") or "http://127.0.0.1:11434/api/generate"),
+                    endpoint=str(
+                        request.get("endpoint")
+                        or runtime.active_policy.ollama.endpoint
+                        or "http://127.0.0.1:11434/api/generate"
+                    ),
+                    endpoint_policy=ollama_policy_for_request(),
                     usage_policy=runtime.active_policy.llm_usage,
                     usage_gate=runtime_llm_gate,
                 )
@@ -4204,6 +4239,10 @@ def main(argv: list[str] | None = None) -> int:
                 "ok": True,
                 **authority.effective.snapshot_dict(),
                 "runtime_matches_supervisor": runtime_policy_match,
+                "ollama_endpoint_security": runtime.active_policy.ollama.status(
+                    runtime.active_policy.ollama.endpoint
+                    or "http://127.0.0.1:11434/api/generate"
+                ),
             }
 
         if command == "authority-lease-acquire-signed":

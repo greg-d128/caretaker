@@ -367,6 +367,16 @@ caretaker-logging interrogate \
 
 Add `--ollama-model <model>` to request an advisory structured assessment. The LLM receives bounded, redacted evidence summaries rather than the complete raw corpus. It may rank anomalies, propose hypotheses, comment on reports, and recommend additional evidence. Final root-cause determination remains with the administrator. Automatic Repair may deploy eligible fixes only when the operator has explicitly enabled standing self-repair authority.
 
+All Ollama integrations share an explicit endpoint security policy. The default
+`local_only` mode accepts loopback endpoints only. Use
+`remote_unverified` only with `accept_remote_risk=true`; production deployments
+should use `remote_server_verified` (HTTPS plus system/custom CA) or
+`remote_attested` (the same protections plus a signed operator attestation).
+See [`docs/OLLAMA_ENDPOINT_SECURITY.md`](docs/OLLAMA_ENDPOINT_SECURITY.md) for
+configuration, CLI flags, pin rotation, mTLS, and migration from the deprecated
+`allow_remote_endpoint` flag. Model output remains advisory and cannot grant
+authority or bypass deterministic gates.
+
 ## Installation
 
 ```bash

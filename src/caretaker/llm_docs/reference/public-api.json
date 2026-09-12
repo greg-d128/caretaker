@@ -15,7 +15,7 @@
     "AdaptiveAggregationPolicy", "AdaptiveObservationBatcher", "BehaviorBaseline", "BehaviorAssessment", "OllamaBehaviorAssessmentProvider",
     "LLMRequestGate", "LLMUsagePolicy", "RuntimeJobStore", "SQLiteRepairStore", "RepairRolloutPolicy", "RepairRolloutCoordinator",
     "IsolatedReplayCoordinator", "RootlessPodmanReplayBackend", "IntegrityVerifier", "bootstrap_integrity",
-    "OperatorLoggingPolicy", "SystemCollectionPolicy"
+    "OperatorLoggingPolicy", "SystemCollectionPolicy", "OllamaEndpointMode", "OllamaEndpointPolicy", "OllamaEndpointSecurityMode"
   ],
   "compatibility_surface": [
     "CaretakerApplicationSupervisor", "ApplicationWorkerLifecycle"

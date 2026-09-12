@@ -1,0 +1,8 @@
+[logging.ollama]
+endpoint_mode = "remote_server_verified"
+endpoint = "https://ollama.example.internal/api/generate"
+ca_bundle = "/etc/caretaker/ollama-ca.pem"
+# Keep both pins during certificate/SPKI rotation.
+spki_pins = ["sha256:<new-pin>", "sha256:<old-pin>"]
+# client_cert = "/etc/caretaker/client.crt"
+# client_key = "/etc/caretaker/client.key"

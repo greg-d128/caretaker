@@ -24,7 +24,12 @@ from .capsule import (
     content_hash,
 )
 from .adaptive import lightweight_dependency
-from .provider_security import validate_provider_endpoint
+from .provider_security import (
+    OllamaEndpointPolicy,
+    provider_json_response,
+    resolve_endpoint_policy,
+    validate_provider_endpoint,
+)
 from .llm import LLMRequestGate, LLMUsagePolicy
 from .validation_primitives import exact_bool, finite_number, integer
 
@@ -396,8 +401,10 @@ class CommunicationDraftAssistant:
         self,
         *,
         model: str,
-        endpoint: str = "http://127.0.0.1:11434/api/generate",
+        endpoint: str | None = None,
         timeout_seconds: float = 120.0,
+        endpoint_policy: OllamaEndpointPolicy | None = None,
+        allow_remote_endpoint: bool | None = None,
         maximum_text_characters: int,
         usage_policy: LLMUsagePolicy | None = None,
         usage_gate: LLMRequestGate | None = None,
@@ -416,10 +423,21 @@ class CommunicationDraftAssistant:
         if maximum_text_characters <= 0:
             raise ValueError("communication audience text limit must be greater than zero")
         self.model = str(model).strip()
-        self.endpoint = validate_provider_endpoint(endpoint, allow_remote_endpoint=False)
+        self.endpoint_policy = resolve_endpoint_policy(
+            endpoint_policy, allow_remote_endpoint=allow_remote_endpoint
+        )
+        self.endpoint = validate_provider_endpoint(
+            endpoint or self.endpoint_policy.endpoint or "http://127.0.0.1:11434/api/generate",
+            endpoint_policy=self.endpoint_policy,
+        )
         self.timeout_seconds = timeout_seconds
         self.maximum_text_characters = maximum_text_characters
         self._usage_gate = usage_gate or LLMRequestGate(usage_policy)
+        self._endpoint_security_status = self.endpoint_policy.status(self.endpoint)
+
+    @property
+    def endpoint_security_status(self) -> dict[str, Any]:
+        return dict(self._endpoint_security_status)
 
     def tailor(self, draft: Mapping[str, Any]) -> dict[str, Any]:
         context = self._context(draft)
@@ -428,8 +446,11 @@ class CommunicationDraftAssistant:
         if len(response_text.encode("utf-8")) > COMMUNICATION_TAILORING_MAX_RESPONSE_BYTES:
             raise CommunicationPolicyError("communication tailoring response exceeds its size limit")
         try:
-            parsed = json.loads(response_text)
-        except json.JSONDecodeError as exc:
+            parsed = json.loads(
+                response_text,
+                parse_constant=lambda token: (_ for _ in ()).throw(ValueError(token)),
+            )
+        except (json.JSONDecodeError, ValueError) as exc:
             raise CommunicationPolicyError(
                 "communication tailoring returned non-JSON output"
             ) from exc
@@ -474,6 +495,7 @@ class CommunicationDraftAssistant:
             "advisory_only": True,
             "draft_mutated": False,
             "delivery_authorized": False,
+            "endpoint_security_status": self.endpoint_security_status,
         }
 
     def _context(self, draft: Mapping[str, Any]) -> dict[str, Any]:
@@ -522,19 +544,18 @@ class CommunicationDraftAssistant:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-                raw = response.read(COMMUNICATION_TAILORING_MAX_RESPONSE_BYTES + 1)
-        except urllib.error.URLError as exc:
+            outer, _raw = provider_json_response(
+                request,
+                endpoint_policy=self.endpoint_policy,
+                timeout_seconds=self.timeout_seconds,
+                maximum_bytes=COMMUNICATION_TAILORING_MAX_RESPONSE_BYTES,
+                expected_model=self.model,
+                expected_provider_purpose="communications_tailoring",
+                security_status=self._endpoint_security_status,
+            )
+        except Exception as exc:
             raise CommunicationPolicyError(
-                f"Ollama communication tailoring failed: {exc}"
-            ) from exc
-        if len(raw) > COMMUNICATION_TAILORING_MAX_RESPONSE_BYTES:
-            raise CommunicationPolicyError("Ollama communication tailoring response is too large")
-        try:
-            outer = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise CommunicationPolicyError(
-                "Ollama communication tailoring response was invalid JSON"
+                f"Ollama communication tailoring failed: {type(exc).__name__}"
             ) from exc
         content = outer.get("response") if isinstance(outer, Mapping) else None
         if not isinstance(content, str):
@@ -549,8 +570,10 @@ def tailor_communication_draft(
     *,
     policy: IncidentCommunicationPolicy,
     model: str,
-    endpoint: str = "http://127.0.0.1:11434/api/generate",
+    endpoint: str | None = None,
     timeout_seconds: float = 120.0,
+    endpoint_policy: OllamaEndpointPolicy | None = None,
+    allow_remote_endpoint: bool | None = None,
     usage_policy: LLMUsagePolicy | None = None,
     usage_gate: LLMRequestGate | None = None,
 ) -> dict[str, Any]:
@@ -578,6 +601,8 @@ def tailor_communication_draft(
         model=model,
         endpoint=endpoint,
         timeout_seconds=timeout_seconds,
+        endpoint_policy=endpoint_policy,
+        allow_remote_endpoint=allow_remote_endpoint,
         maximum_text_characters=audience.maximum_text_characters,
         usage_policy=usage_policy,
         usage_gate=usage_gate,

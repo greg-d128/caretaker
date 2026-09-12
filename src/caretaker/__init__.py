@@ -244,6 +244,13 @@ from .policy import (
 from .postmortem import ExceptionHookManager, PostMortemRecorder
 from .transport import ApplicationLocalQueueTransport, ApplicationTransportError
 from .provider import CandidateProposal, OllamaRepairProvider, StaticRepairProvider
+from .provider_security import (
+    OllamaEndpointMode,
+    OllamaEndpointPolicy,
+    OllamaEndpointSecurityMode,
+    ProviderResponseError,
+    endpoint_policy_from_mapping,
+)
 from .repair_recovery import (
     ComparisonWorkerAssignment,
     ComparisonWorkerComparisonReport,
@@ -678,6 +685,11 @@ __all__ = [
     "ObservationPolicy",
     "observe_only",
     "OllamaRepairProvider",
+    "OllamaEndpointMode",
+    "OllamaEndpointPolicy",
+    "OllamaEndpointSecurityMode",
+    "ProviderResponseError",
+    "endpoint_policy_from_mapping",
     "OutputValidationTrigger",
     "PostMortemRecorder",
     "RegisteredCase",

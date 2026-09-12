@@ -1,0 +1,4 @@
+# Default: only loopback Ollama endpoints are accepted.
+[logging.ollama]
+endpoint_mode = "local_only"
+endpoint = "http://127.0.0.1:11434/api/generate"

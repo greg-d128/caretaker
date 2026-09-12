@@ -43,6 +43,9 @@ surface:
   population comparison, and transition verification;
 - Guard, runtime inspection, baselines, candidate assessment, and the bounded
   LLM assessment/provider interfaces;
+- `OllamaEndpointMode`, `OllamaEndpointPolicy`, and
+  `OllamaEndpointSecurityMode` for explicit, shared endpoint transport policy
+  across all Ollama integrations;
 - incident-capsule assistance, `LLMRequestGate`, `LLMUsagePolicy`, and
   communication-draft policy helpers;
 - `RuntimeJobStore`, `RuntimeJobStoreError`, and `SQLiteRuntimeJobStore` for

@@ -1,0 +1,6 @@
+# Explicit testing-only risk acceptance. HTTP is allowed only in this mode.
+[logging.ollama]
+endpoint_mode = "remote_unverified"
+endpoint = "http://ollama.internal:11434/api/generate"
+accept_remote_risk = true
+# insecure_tls = true  # stronger warning; never enable implicitly

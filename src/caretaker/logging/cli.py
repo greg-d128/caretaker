@@ -12,6 +12,7 @@ from .interrogation import InterrogationRequest, LogInterrogator, OllamaRootCaus
 from .ipc import control_request
 from .models import BaselineKey, BaselineState
 from .policy import load_operator_policy, reconcile_policy
+from ..provider_security import endpoint_policy_from_mapping
 from .segments import read_segment
 
 
@@ -55,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
 
     control = sub.add_parser("control")
     control.add_argument("socket")
-    control.add_argument("action", choices=("status", "health", "policy-effective", "mode-acquire", "mode-release"))
+    control.add_argument("action", choices=("status", "health", "policy-effective", "ollama-security-status", "mode-acquire", "mode-release"))
     control.add_argument("--mode")
     control.add_argument("--lease-id")
     control.add_argument("--reason", default="operator request")
@@ -95,7 +96,17 @@ def main(argv: list[str] | None = None) -> int:
     interrogate.add_argument("--target", action="append", default=[])
     interrogate.add_argument("--objective")
     interrogate.add_argument("--ollama-model")
-    interrogate.add_argument("--ollama-endpoint", default="http://127.0.0.1:11434/api/generate")
+    interrogate.add_argument("--ollama-endpoint", help="Ollama generate endpoint (defaults to policy or loopback)")
+    interrogate.add_argument("--ollama-endpoint-mode", choices=("local_only", "remote_unverified", "remote_server_verified", "remote_attested"))
+    interrogate.add_argument("--ollama-ca-bundle")
+    interrogate.add_argument("--ollama-spki-pin", action="append", default=[])
+    interrogate.add_argument("--ollama-certificate-pin", action="append", default=[])
+    interrogate.add_argument("--ollama-client-cert")
+    interrogate.add_argument("--ollama-client-key")
+    interrogate.add_argument("--ollama-attestation")
+    interrogate.add_argument("--ollama-attestation-public-key")
+    interrogate.add_argument("--accept-remote-risk", action="store_true")
+    interrogate.add_argument("--insecure-tls", action="store_true")
 
     args = parser.parse_args(argv)
     if args.command == "policy":
@@ -170,8 +181,24 @@ def main(argv: list[str] | None = None) -> int:
         )
         interrogator = LogInterrogator()
         bundle = interrogator.build_bundle(request, records_in)
+        policy_values = {
+            "mode": args.ollama_endpoint_mode,
+            "ca_bundle": args.ollama_ca_bundle,
+            "spki_pins": args.ollama_spki_pin,
+            "certificate_pins": args.ollama_certificate_pin,
+            "client_cert": args.ollama_client_cert,
+            "client_key": args.ollama_client_key,
+            "attestation": args.ollama_attestation,
+            "attestation_public_key": args.ollama_attestation_public_key,
+            "accept_remote_risk": args.accept_remote_risk,
+            "insecure_tls": args.insecure_tls,
+        }
+        explicit_security = any(value not in (None, [], False) for value in policy_values.values())
+        endpoint_policy = endpoint_policy_from_mapping(
+            {key: value for key, value in policy_values.items() if value not in (None, [], False)}
+        ) if args.ollama_model and explicit_security else None
         assessment = (
-            OllamaRootCauseProvider(model=args.ollama_model, endpoint=args.ollama_endpoint).assess(bundle)
+            OllamaRootCauseProvider(model=args.ollama_model, endpoint=args.ollama_endpoint, endpoint_policy=endpoint_policy).assess(bundle)
             if args.ollama_model else interrogator.deterministic_assessment(bundle)
         )
         print(json.dumps({"evidence": vars_like(bundle), "assessment": vars_like(assessment)}, indent=2, default=str))

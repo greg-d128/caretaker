@@ -22,6 +22,7 @@ This rule is separate from policy authority. Authority answers **who may request
 - operator logging policy and bindings;
 - system collection policy;
 - lightweight adaptive instrumentation policy.
+- shared Ollama endpoint security policy.
 
 The logging policy includes the run-bound, output-only audit-stream settings;
 those settings are reviewed as configuration semantics. External delivery is

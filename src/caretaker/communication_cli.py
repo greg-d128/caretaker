@@ -13,6 +13,7 @@ from .communications import generate_communication_draft, tailor_communication_d
 from .console import discover_control_socket
 from .logging.ipc import control_request
 from .logging.policy import OperatorLoggingPolicy, load_operator_policy
+from .provider_security import endpoint_policy_from_mapping
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -43,13 +44,40 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--tailor-endpoint",
-        default="http://127.0.0.1:11434/api/generate",
-        help="local Ollama generate endpoint used for advisory tailoring",
+        default=None,
+        help="Ollama generate endpoint (defaults to policy or loopback)",
     )
+    parser.add_argument("--ollama-endpoint-mode", choices=("local_only", "remote_unverified", "remote_server_verified", "remote_attested"))
+    parser.add_argument("--ollama-ca-bundle")
+    parser.add_argument("--ollama-spki-pin", action="append", default=[])
+    parser.add_argument("--ollama-certificate-pin", action="append", default=[])
+    parser.add_argument("--ollama-client-cert")
+    parser.add_argument("--ollama-client-key")
+    parser.add_argument("--ollama-attestation")
+    parser.add_argument("--ollama-attestation-public-key")
+    parser.add_argument("--accept-remote-risk", action="store_true")
+    parser.add_argument("--insecure-tls", action="store_true")
     parser.add_argument("--output", type=Path, help="write JSON to a new mode-0600 file")
     args = parser.parse_args(argv)
 
     data_directory = args.data_directory.expanduser().resolve()
+    endpoint_values = {
+        "mode": args.ollama_endpoint_mode,
+        "ca_bundle": args.ollama_ca_bundle,
+        "spki_pins": args.ollama_spki_pin,
+        "certificate_pins": args.ollama_certificate_pin,
+        "client_cert": args.ollama_client_cert,
+        "client_key": args.ollama_client_key,
+        "attestation": args.ollama_attestation,
+        "attestation_public_key": args.ollama_attestation_public_key,
+        "accept_remote_risk": args.accept_remote_risk,
+        "insecure_tls": args.insecure_tls,
+    }
+    explicit_security = any(value not in (None, [], False) for value in endpoint_values.values())
+    endpoint_security = {
+        key: value for key, value in endpoint_values.items() if value not in (None, [], False)
+    }
+    endpoint_policy = endpoint_policy_from_mapping(endpoint_security) if explicit_security else None
     socket_path = args.socket.expanduser().resolve() if args.socket else discover_control_socket(data_directory)
     if socket_path is not None:
         request = {
@@ -63,7 +91,10 @@ def main(argv: list[str] | None = None) -> int:
             request["incident_id"] = args.incident_id
         if args.tailor_model:
             request["tailor_model"] = args.tailor_model
-            request["tailor_endpoint"] = args.tailor_endpoint
+            if args.tailor_endpoint:
+                request["tailor_endpoint"] = args.tailor_endpoint
+            if explicit_security:
+                request["endpoint_security"] = endpoint_security
         result = control_request(socket_path, request, timeout=30.0)
     else:
         if args.policy:
@@ -94,6 +125,7 @@ def main(argv: list[str] | None = None) -> int:
                     policy=policy.communications,
                     model=args.tailor_model,
                     endpoint=args.tailor_endpoint,
+                    endpoint_policy=endpoint_policy or policy.ollama,
                 ),
             }
         result = {

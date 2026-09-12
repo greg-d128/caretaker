@@ -556,10 +556,13 @@ volumes:
   ollama-models:
 ```
 
-Configure `OllamaRepairProvider`, `OllamaBehaviorAssessmentProvider`, or `OllamaRootCauseProvider` to use the private service endpoint and set `allow_remote_endpoint=True` explicitly:
+Configure every Ollama provider with the same explicit
+`OllamaEndpointPolicy(mode="remote_unverified", accept_remote_risk=True)` when
+using the private HTTP service. Prefer an HTTPS reverse proxy and
+`remote_server_verified` for production:
 
 ```text
-http://ollama:11434
+http://ollama:11434  # permitted only by explicit remote_unverified policy
 ```
 
 Additional rules:

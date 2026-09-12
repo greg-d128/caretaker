@@ -10,7 +10,10 @@ from typing import Any, Protocol, Sequence
 
 from .provider_security import (
     MAX_PROVIDER_RESPONSE_BYTES,
+    OllamaEndpointMode,
+    OllamaEndpointPolicy,
     provider_json_response,
+    resolve_endpoint_policy,
     validate_provider_endpoint,
 )
 from .llm import LLMRequestGate, LLMUsagePolicy
@@ -121,21 +124,30 @@ class OllamaRepairProvider:
         self,
         model: str,
         *,
-        base_url: str = "http://localhost:11434",
+        base_url: str | None = None,
         timeout_seconds: float = 300.0,
         keep_alive: str | int = "30m",
-        allow_remote_endpoint: bool = False,
+        endpoint_policy: OllamaEndpointPolicy | None = None,
+        allow_remote_endpoint: bool | None = None,
         usage_policy: LLMUsagePolicy | None = None,
         usage_gate: LLMRequestGate | None = None,
     ) -> None:
         self.model_name = model
-        self.allow_remote_endpoint = allow_remote_endpoint
+        self.endpoint_policy = resolve_endpoint_policy(
+            endpoint_policy, allow_remote_endpoint=allow_remote_endpoint
+        )
         self.base_url = validate_provider_endpoint(
-            base_url, allow_remote_endpoint=allow_remote_endpoint
+            base_url or self.endpoint_policy.endpoint or "http://localhost:11434",
+            endpoint_policy=self.endpoint_policy,
         )
         self.timeout_seconds = timeout_seconds
         self.keep_alive = keep_alive
         self._usage_gate = usage_gate or LLMRequestGate(usage_policy)
+        self._endpoint_security_status = self.endpoint_policy.status(self.base_url)
+
+    @property
+    def endpoint_security_status(self) -> dict[str, Any]:
+        return dict(self._endpoint_security_status)
 
     def generate(self, request: RepairRequest) -> CandidateBatch:
         prompt = _repair_prompt(request)
@@ -209,9 +221,12 @@ class OllamaRepairProvider:
         )
         payload, _content = provider_json_response(
             request,
-            allow_remote_endpoint=self.allow_remote_endpoint,
+            endpoint_policy=self.endpoint_policy,
             timeout_seconds=self.timeout_seconds,
             maximum_bytes=MAX_PROVIDER_RESPONSE_BYTES,
+            expected_model=self.model_name,
+            expected_provider_purpose="repair",
+            security_status=self._endpoint_security_status,
         )
         return payload
 

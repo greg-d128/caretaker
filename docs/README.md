@@ -21,6 +21,8 @@ Caretaker is active research software. These documents describe current design i
 - `PROFILES.md` — named/versioned profiles, policy-surface coverage, comparison, pinning, and the Profile Editor 
 - `POLICY_SEMANTICS.md` — executable policy support, reserved settings, and semantic surface review
 - `ISOLATED_EXECUTION.md` — deployment and validation-backend isolation guidance
+- `OLLAMA_ENDPOINT_SECURITY.md` — shared Ollama endpoint modes, TLS, attestation, and migration
+- `DOWNSTREAM_OLLAMA_ENDPOINT_CONTRACT.md` — concise Validator and Crucible contract notes
 
 ## Shared runtime and Guard
 

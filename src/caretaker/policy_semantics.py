@@ -19,15 +19,16 @@ from . import adaptive as adaptive_policy
 from . import communications as communication_policy
 from . import control_plane as control_plane_policy
 from . import llm as llm_policy
+from . import provider_security as provider_security_policy
 from . import policy as repair_policy
 from .guard import policy as guard_policy
 from .logging import policy as logging_policy
 from .system import policy as system_policy
 
 
-POLICY_SEMANTICS_REVIEW_GENERATION = 34
+POLICY_SEMANTICS_REVIEW_GENERATION = 35
 # Updated only after the policy truthfulness suite reviews every changed field.
-REVIEWED_POLICY_SURFACE_HASH = "aad18e87d1bfc335ea4fdc061c1cef64519b70d5fea91192b9e64ab0d1fee5e6"
+REVIEWED_POLICY_SURFACE_HASH = "b729c9c2febcb44b5a2b5aad82c0035a8aa17fbf262ac11ba102052b4ab4b1cf"
 
 
 RESERVED_SETTINGS: dict[str, str] = {
@@ -92,6 +93,7 @@ def policy_surface_schema() -> tuple[str, ...]:
         ("logging.communications", communication_policy, False),
         ("logging.control_plane", control_plane_policy, True),
         ("logging.llm_usage", llm_policy, True),
+        ("logging.ollama", provider_security_policy, False),
         ("system", system_policy, False),
         ("lightweight", adaptive_policy, True),
     )

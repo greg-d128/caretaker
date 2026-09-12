@@ -616,8 +616,11 @@ recent time window, and includes recent Guard deviations when available.
 
 With no model selected, Caretaker performs built-in analysis without AI. If
 the operator explicitly supplies an Ollama model, the supervisor sends the
-bounded evidence bundle to the loopback Ollama endpoint through
-`OllamaRootCauseProvider`. Remote endpoints remain disallowed by default.
+bounded evidence bundle through `OllamaRootCauseProvider` using the active
+`logging.ollama` endpoint policy. The default is loopback-only; configured
+remote modes and their warnings are described in
+[`OLLAMA_ENDPOINT_SECURITY.md`](OLLAMA_ENDPOINT_SECURITY.md). A control
+request cannot weaken the supervisor's active policy.
 
 The resulting assessment is advisory evidence. It cannot approve a repair,
 override candidate validation, or bypass Integrity policy.

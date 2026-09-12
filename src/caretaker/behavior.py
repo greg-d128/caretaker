@@ -23,7 +23,13 @@ from uuid import UUID, uuid4
 
 from .domain import ValueSnapshot
 from .llm import LLMRequestGate, LLMUsagePolicy
-from .provider_security import MAX_PROVIDER_RESPONSE_BYTES, provider_json_response, validate_provider_endpoint
+from .provider_security import (
+    MAX_PROVIDER_RESPONSE_BYTES,
+    OllamaEndpointPolicy,
+    provider_json_response,
+    resolve_endpoint_policy,
+    validate_provider_endpoint,
+)
 from .logging.models import RuntimeRecordIntegrityMode, RuntimeSignedArtifact
 from .logging.signing import (
     RuntimeArtifactSigningService,
@@ -3768,19 +3774,28 @@ class OllamaBehaviorSnapshotAnalyst:
         self,
         model: str,
         *,
-        endpoint: str = "http://127.0.0.1:11434/api/generate",
+        endpoint: str | None = None,
         timeout_seconds: float = 180.0,
-        allow_remote_endpoint: bool = False,
+        endpoint_policy: OllamaEndpointPolicy | None = None,
+        allow_remote_endpoint: bool | None = None,
         usage_policy: LLMUsagePolicy | None = None,
         usage_gate: LLMRequestGate | None = None,
     ) -> None:
         self.model = model
-        self.allow_remote_endpoint = allow_remote_endpoint
+        self.endpoint_policy = resolve_endpoint_policy(
+            endpoint_policy, allow_remote_endpoint=allow_remote_endpoint
+        )
         self.endpoint = validate_provider_endpoint(
-            endpoint, allow_remote_endpoint=allow_remote_endpoint
+            endpoint or self.endpoint_policy.endpoint or "http://127.0.0.1:11434/api/generate",
+            endpoint_policy=self.endpoint_policy
         )
         self.timeout_seconds = timeout_seconds
         self._usage_gate = usage_gate or LLMRequestGate(usage_policy)
+        self._endpoint_security_status = self.endpoint_policy.status(self.endpoint)
+
+    @property
+    def endpoint_security_status(self) -> dict[str, Any]:
+        return dict(self._endpoint_security_status)
 
     def assess(self, comparison: Mapping[str, Any], *, objective: str | None = None) -> dict[str, Any]:
         return self._assess_evidence(
@@ -3844,9 +3859,12 @@ class OllamaBehaviorSnapshotAnalyst:
             with self._usage_gate.request():
                 outer, _raw = provider_json_response(
                     request,
-                    allow_remote_endpoint=self.allow_remote_endpoint,
+                    endpoint_policy=self.endpoint_policy,
                     timeout_seconds=self.timeout_seconds,
                     maximum_bytes=MAX_PROVIDER_RESPONSE_BYTES,
+                    expected_model=self.model,
+                    expected_provider_purpose="behavior_snapshot",
+                    security_status=self._endpoint_security_status,
                 )
         except urllib.error.URLError as exc:
             raise RuntimeError(f"Ollama behavior snapshot assessment failed: {exc}") from exc
