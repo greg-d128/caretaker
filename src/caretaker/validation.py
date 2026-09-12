@@ -276,7 +276,12 @@ class ValidationBackendRegistry:
             raise ValueError("at least one validation backend is required")
         self.backends = tuple(backends)
 
-    def select(self, minimum: ValidationIsolationLevel) -> ValidationBackend:
+    def select(
+        self,
+        minimum: ValidationIsolationLevel,
+        *,
+        require_resource_control: bool = False,
+    ) -> ValidationBackend:
         ordered = sorted(
             self.backends,
             key=lambda item: int(item.capabilities().isolation_level),
@@ -287,8 +292,13 @@ class ValidationBackendRegistry:
         ]
         for item in sufficient:
             available, _reason = item.available()
-            if available:
+            capabilities = item.capabilities()
+            if available and (not require_resource_control or capabilities.resource_control):
                 return item
+        if require_resource_control:
+            for item in sufficient:
+                if item.capabilities().resource_control:
+                    return item
         if sufficient:
             return sufficient[0]
         # No configured backend can satisfy the policy. Use the strongest one so
@@ -359,7 +369,7 @@ class SubprocessValidationBackend:
             separate_kernel=False,
             rootless=None,
             network_control=False,
-            resource_control=True,
+            resource_control=False,
             ephemeral_workspace=True,
             details={"python_executable": self.python_executable},
         )
@@ -383,6 +393,11 @@ class SubprocessValidationBackend:
             f"Validation backend {capabilities.name!r} cannot satisfy required isolation "
             f"{required.name}: {reason}"
         )
+        if target.policy.validation.require_resource_control:
+            summary = (
+                f"Validation backend {capabilities.name!r} cannot satisfy required resource "
+                f"control: {reason}"
+            )
         check = ValidationCheckResult(
             kind=ValidationCheckKind.STATIC_POLICY,
             outcome=CheckOutcome.FAILED,
@@ -393,6 +408,8 @@ class SubprocessValidationBackend:
                 "backend": capabilities.name,
                 "backend_isolation": capabilities.isolation_level.name,
                 "required_isolation": required.name,
+                "resource_control": capabilities.resource_control,
+                "resource_control_required": target.policy.validation.require_resource_control,
                 "unavailable_action": action.name,
             },
         )
@@ -471,6 +488,16 @@ class SubprocessValidationBackend:
                 ),
                 assessment=assessment,
             )
+        if target.policy.validation.require_resource_control and not capabilities.resource_control:
+            return self._backend_unavailable_report(
+                candidate,
+                target,
+                reason=(
+                    "the configured environment did not verify external enforcement of "
+                    "the requested memory, CPU, and process limits"
+                ),
+                assessment=assessment,
+            )
         registered_cases = (
             target.registered_cases + tuple(regression_cases)
             if target.policy.validation.run_registered_tests
@@ -497,6 +524,7 @@ class SubprocessValidationBackend:
             "authority_policy_generation": candidate.authority_policy_generation,
             "authority_policy_fingerprint": candidate.authority_policy_fingerprint,
             "requested_isolation": target.policy.validation.minimum_isolation.name,
+            "required_resource_control": target.policy.validation.require_resource_control,
             "backend_name": capabilities.name,
             "mandatory_checks": sorted(kind.name for kind in _FUNCTION_VALIDATION_CHECKS),
         }
@@ -873,6 +901,71 @@ def _validated_resource_size(value: object, *, name: str) -> str:
     return value
 
 
+def _resource_size_bytes(value: str) -> int:
+    match = re.fullmatch(r"([1-9][0-9]*)([kKmMgGtT]?)", value)
+    if match is None:
+        raise ValueError("invalid resource size")
+    multiplier = {
+        "": 1,
+        "k": 1024,
+        "K": 1024,
+        "m": 1024**2,
+        "M": 1024**2,
+        "g": 1024**3,
+        "G": 1024**3,
+        "t": 1024**4,
+        "T": 1024**4,
+    }[match.group(2)]
+    return int(match.group(1)) * multiplier
+
+
+_RESOURCE_CONTROL_PROBE = (
+    "import json; from pathlib import Path; root=Path('/sys/fs/cgroup'); "
+    "print(json.dumps({name:(root/name).read_text().strip() for name in ('memory.max','cpu.max','pids.max')}))"
+)
+
+
+def _verify_cgroup_resource_limits(
+    command: list[str],
+    *,
+    memory: str,
+    cpus: float,
+    pids_limit: int,
+) -> tuple[bool, str | None]:
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+            close_fds=True,
+        )
+    except Exception as exc:
+        return False, f"resource-control probe failed: {exc}"
+    if result.returncode != 0:
+        return False, f"resource-control probe failed: {(result.stderr or '')[-500:]}"
+    try:
+        payload = json.loads((result.stdout or "").strip().splitlines()[-1])
+        memory_max = int(payload["memory.max"])
+        cpu_quota, cpu_period = (int(item) for item in str(payload["cpu.max"]).split())
+        pids_max = int(payload["pids.max"])
+    except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        return False, f"resource-control probe returned invalid cgroup data: {exc}"
+    expected_memory = _resource_size_bytes(memory)
+    expected_pids = int(pids_limit)
+    expected_cpu = float(cpus)
+    if memory_max != expected_memory:
+        return False, "runtime did not externally enforce the requested memory limit"
+    if pids_max != expected_pids:
+        return False, "runtime did not externally enforce the requested process limit"
+    if cpu_period <= 0 or cpu_quota <= 0 or not math.isclose(
+        cpu_quota / cpu_period, expected_cpu, rel_tol=0.01, abs_tol=0.01
+    ):
+        return False, "runtime did not externally enforce the requested CPU limit"
+    return True, None
+
+
 class RootlessPodmanValidationBackend(SubprocessValidationBackend):
     """Run a validation worker in a constrained rootless Podman container.
 
@@ -935,7 +1028,7 @@ class RootlessPodmanValidationBackend(SubprocessValidationBackend):
             separate_kernel=False,
             rootless=True,
             network_control=True,
-            resource_control=True,
+            resource_control=bool(self._availability_details.get("resource_control_verified")),
             ephemeral_workspace=True,
             details=details,
         )
@@ -992,16 +1085,44 @@ class RootlessPodmanValidationBackend(SubprocessValidationBackend):
         if digest.returncode == 0 and digest.stdout.strip():
             self._availability_details["image_digest"] = digest.stdout.strip()
         self._availability_details["rootless_verified"] = True
+        verified, reason = _verify_cgroup_resource_limits(
+            self._resource_probe_command(),
+            memory=self.memory,
+            cpus=self.cpus,
+            pids_limit=self.pids_limit,
+        )
+        self._availability_details["resource_control_verified"] = verified
+        if reason:
+            self._availability_details["resource_control_unavailable_reason"] = reason
         return True, None
 
+    def _resource_probe_command(self) -> list[str]:
+        return [
+            self.podman_executable,
+            f"--cgroup-manager={self.cgroup_manager}",
+            "run",
+            "--rm",
+            "--pull=never",
+            "--network=none",
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            f"--pids-limit={self.pids_limit}",
+            f"--memory={self.memory}",
+            f"--cpus={self.cpus:g}",
+            "--userns=keep-id",
+            self.image,
+            "python",
+            "-c",
+            _RESOURCE_CONTROL_PROBE,
+        ]
+
     def _build_command(self, host_workdir: Path) -> list[str]:
-        source_root = Path(__file__).resolve().parents[1]
         mounts: list[tuple[Path, str, bool]] = [
             (host_workdir, "/work", False),
-            (source_root, "/opt/caretaker-src", True),
         ]
-        python_paths = ["/opt/caretaker-src"]
-        if self.workspace != source_root:
+        python_paths: list[str] = []
+        if self.workspace != Path(host_workdir):
             mounts.append((self.workspace, "/workspace", True))
             python_paths.append("/workspace")
         for index, path in enumerate(self.additional_read_only_paths):
@@ -1124,7 +1245,7 @@ class RootlessDockerValidationBackend(RootlessPodmanValidationBackend):
             separate_kernel=False,
             rootless=True,
             network_control=True,
-            resource_control=True,
+            resource_control=bool(self._availability_details.get("resource_control_verified")),
             ephemeral_workspace=True,
             details=details,
         )
@@ -1192,16 +1313,44 @@ class RootlessDockerValidationBackend(RootlessPodmanValidationBackend):
             if isinstance(digests, list) and digests:
                 self._availability_details["image_digest"] = str(digests[0])
         self._availability_details["rootless_verified"] = True
+        verified, reason = _verify_cgroup_resource_limits(
+            self._resource_probe_command(),
+            memory=self.memory,
+            cpus=self.cpus,
+            pids_limit=self.pids_limit,
+        )
+        self._availability_details["resource_control_verified"] = verified
+        if reason:
+            self._availability_details["resource_control_unavailable_reason"] = reason
         return True, None
 
+    def _resource_probe_command(self) -> list[str]:
+        return [
+            self.docker_executable,
+            "run",
+            "--rm",
+            "--pull=never",
+            "--network=none",
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            f"--pids-limit={self.pids_limit}",
+            f"--memory={self.memory}",
+            f"--cpus={self.cpus:g}",
+            "--user",
+            f"{os.getuid()}:{os.getgid()}",
+            self.image,
+            "python",
+            "-c",
+            _RESOURCE_CONTROL_PROBE,
+        ]
+
     def _build_command(self, host_workdir: Path) -> list[str]:
-        source_root = Path(__file__).resolve().parents[1]
         mounts: list[tuple[Path, str, bool]] = [
             (host_workdir, "/work", False),
-            (source_root, "/opt/caretaker-src", True),
         ]
-        python_paths = ["/opt/caretaker-src"]
-        if self.workspace != source_root:
+        python_paths: list[str] = []
+        if self.workspace != Path(host_workdir):
             mounts.append((self.workspace, "/workspace", True))
             python_paths.append("/workspace")
         for index, path in enumerate(self.additional_read_only_paths):
@@ -1379,7 +1528,7 @@ class MultipassValidationBackend(SubprocessValidationBackend):
             separate_kernel=True,
             rootless=None,
             network_control=self.require_network_isolation,
-            resource_control=True,
+            resource_control=False,
             ephemeral_workspace=(
                 self.disposable_clone
                 or (self.clean_snapshot is not None and self.restore_before_validation)
@@ -1406,9 +1555,12 @@ class MultipassValidationBackend(SubprocessValidationBackend):
         executable = shutil.which(self.multipass_executable)
         if executable is None and not Path(self.multipass_executable).is_file():
             return False, f"Multipass executable {self.multipass_executable!r} was not found"
-        info = self._host_command(
-            [self.multipass_executable, "info", "--format", "json", self.instance_name]
-        )
+        try:
+            info = self._host_command(
+                [self.multipass_executable, "info", "--format", "json", self.instance_name]
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return False, f"Multipass information query failed: {exc}"
         if info.returncode != 0:
             return False, f"Multipass validator instance {self.instance_name!r} is unavailable: {info.stderr[-1000:]}"
         try:
@@ -1434,13 +1586,16 @@ class MultipassValidationBackend(SubprocessValidationBackend):
             if not ready:
                 return False, reason
         if self.clean_snapshot and self.restore_before_validation and not self.disposable_clone:
-            snapshot = self._host_command(
-                [
-                    self.multipass_executable,
-                    "info",
-                    f"{self.instance_name}.{self.clean_snapshot}",
-                ]
-            )
+            try:
+                snapshot = self._host_command(
+                    [
+                        self.multipass_executable,
+                        "info",
+                        f"{self.instance_name}.{self.clean_snapshot}",
+                    ]
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                return False, f"Multipass snapshot availability query failed: {exc}"
             if snapshot.returncode != 0:
                 return False, (
                     f"Required Multipass snapshot {self.instance_name}.{self.clean_snapshot} is unavailable"

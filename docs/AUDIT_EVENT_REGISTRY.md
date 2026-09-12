@@ -108,7 +108,7 @@ All event types share these redaction rules:
 | Event type | Minimum priority | Required paths | Example event-specific fields |
 | --- | --- | --- | --- |
 | `AUDIT_STREAM_STARTED` | `CRITICAL` | `policy.policy_id`, `policy.fingerprint`, `details.hash_chain` | `{"hash_chain": true}` |
-| `AUDIT_STREAM_ROTATED` | `IMPORTANT` | — | `{"segment_id": "segment-42", "content_sha256": "sha256:..."}` |
+| `AUDIT_STREAM_ROTATED` | `IMPORTANT` | `details.manifest_sha256` | `{"segment_id": "segment-00000000000000000000", "content_sha256": "sha256:...", "manifest_sha256": "sha256:..."}` |
 | `AUDIT_DELIVERY_STATUS` | `IMPORTANT` | — | `{"sink_id": "local-file", "state": "ACTIVE", "external_delivery": false, "acknowledgement_required": false}` |
 | `AUDIT_DELIVERY_KEY_LIFECYCLE` | `CRITICAL` | `scope.key_id`, `outcome.state` | `{"key_id": "audit-2026-01", "state": "KEY_REVOKED", "authority_granted": false}` |
 | `AUDIT_DATA_LOSS` | `CRITICAL` | — | `{"category": "ordinary_metrics", "count": 1, "reason": "sampling_policy"}` |

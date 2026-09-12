@@ -36,7 +36,7 @@ control. Its default is disabled for least-friction startup. When enabled,
 workers batch bounded counters for supervisor-owned merging; it does not grant
 promotion, Repair, or policy-changing authority.
 
-The fingerprint includes field path, declared type, and default. `REVIEWED_POLICY_SURFACE_HASH` is updated only as part of an explicit policy-semantics review. The test suite fails if the dataclass surface changes without that review.
+The fingerprint includes field path, declared type, and default. `REVIEWED_POLICY_SURFACE_HASH` is updated only as part of an explicit policy-semantics review. The test suite fails if the dataclass surface changes without that review. `ValidationPolicy.require_resource_control` is the explicit request for externally enforced validation resource limits; it is not satisfied by merely passing runtime flags.
 
 This fingerprint is a **development/conformance guardrail**, not a deployment signature or authority fingerprint. Signed policy/profile provenance remains the responsibility of the policy-authority and profile systems.
 

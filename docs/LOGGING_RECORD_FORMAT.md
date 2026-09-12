@@ -205,7 +205,11 @@ cannot authorize a policy or runtime action. The event hash chain continues
 across the file boundary, while the manifest's file hashes protect the
 closed-segment contents. If a crash occurs during the rename/manifest update
 boundary, the writer fails closed on restart rather than guessing which file
-is authoritative.
+is authoritative. Every rotation event also binds the manifest state that
+existed when that segment was closed. A changed manifest therefore fails both
+offline verification and writer restart; signed audit events or an authenticated
+external sink are still required for protection against an attacker who can
+replace both the stream and its manifest.
 
 The external sink is write-only from Caretaker's perspective. Incoming records,
 alerts, or suggested actions are untrusted input and cannot be routed back into

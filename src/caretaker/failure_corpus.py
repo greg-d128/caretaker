@@ -748,6 +748,7 @@ class FailureCorpusPodmanRunner:
             f"--cgroup-manager={self.cgroup_manager}",
             "run",
             "--rm",
+            "--pull=never",
             "--network=none",
             "--read-only",
             "--cap-drop=ALL",

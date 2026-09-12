@@ -786,7 +786,7 @@ class SQLiteRepairStore:
         id_field = self._TABLES[table]
         record_id = str(getattr(record, id_field))
         created_at = _record_time(record).isoformat()
-        payload = json.dumps(_jsonable(record), sort_keys=True, separators=(",", ":"))
+        payload = _strict_json_dumps(record)
         statement = "INSERT" if append else "INSERT OR REPLACE"
         with self._lock, closing(self._connect()) as connection:
             connection.execute(
@@ -817,7 +817,7 @@ class SQLiteRepairStore:
         self._write("events", record, target_id=record.target_id, append=True)
 
     def record_observation(self, record: ObservationRecord) -> None:
-        payload = json.dumps(_jsonable(record), sort_keys=True, separators=(",", ":"))
+        payload = _strict_json_dumps(record)
         with self._lock, closing(self._connect()) as connection:
             existing = connection.execute(
                 "SELECT payload FROM observations WHERE record_id = ?",
@@ -916,12 +916,10 @@ class SQLiteRepairStore:
         Existing matching records make retries no-ops; conflicting evidence
         fails before any write is committed.
         """
-        rollout_payload = json.dumps(_jsonable(record), sort_keys=True, separators=(",", ":"))
-        transition_payload = json.dumps(
-            _jsonable(transition), sort_keys=True, separators=(",", ":")
-        )
+        rollout_payload = _strict_json_dumps(record)
+        transition_payload = _strict_json_dumps(transition)
         event_payload = (
-            json.dumps(_jsonable(event), sort_keys=True, separators=(",", ":"))
+            _strict_json_dumps(event)
             if event is not None
             else None
         )
@@ -991,7 +989,7 @@ class SQLiteRepairStore:
         return tuple(self.query_records("repair_rollout_transitions", limit=10000))
 
     def record_rollout_execution(self, record: RolloutExecutionObservation) -> None:
-        payload = json.dumps(_jsonable(record), sort_keys=True, separators=(",", ":"))
+        payload = _strict_json_dumps(record)
         with self._lock, closing(self._connect()) as connection:
             existing = connection.execute(
                 "SELECT payload FROM repair_rollout_executions WHERE record_id = ?",
@@ -1020,7 +1018,7 @@ class SQLiteRepairStore:
     def record_rollout_worker_acknowledgement(
         self, record: RolloutWorkerAcknowledgement
     ) -> None:
-        payload = json.dumps(_jsonable(record), sort_keys=True, separators=(",", ":"))
+        payload = _strict_json_dumps(record)
         with self._lock, closing(self._connect()) as connection:
             existing = connection.execute(
                 "SELECT payload FROM repair_rollout_worker_acknowledgements WHERE record_id = ?",
@@ -1053,7 +1051,7 @@ class SQLiteRepairStore:
     def record_rollout_application_route(
         self, record: RolloutApplicationRouteAssignment
     ) -> None:
-        payload = json.dumps(_jsonable(record), sort_keys=True, separators=(",", ":"))
+        payload = _strict_json_dumps(record)
         with self._lock, closing(self._connect()) as connection:
             existing = connection.execute(
                 "SELECT payload FROM repair_rollout_application_routes WHERE record_id = ?",
@@ -1090,7 +1088,7 @@ class SQLiteRepairStore:
         return tuple(self.query_records("recovery_records", limit=10000))
 
     def record_recovery_lifecycle_mark(self, record: RepairRecoveryLifecycleMark) -> None:
-        payload = json.dumps(_jsonable(record), sort_keys=True, separators=(",", ":"))
+        payload = _strict_json_dumps(record)
         with self._lock, closing(self._connect()) as connection:
             existing = connection.execute(
                 "SELECT payload FROM recovery_lifecycle_marks WHERE record_id = ?",
@@ -1724,6 +1722,15 @@ def _canonical_json_bytes(value: Any) -> bytes:
         ensure_ascii=False,
         allow_nan=False,
     ).encode("utf-8")
+
+
+def _strict_json_dumps(value: Any) -> str:
+    return json.dumps(
+        _jsonable(value),
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
 
 
 def _strict_json_loads(value: str | bytes) -> Any:

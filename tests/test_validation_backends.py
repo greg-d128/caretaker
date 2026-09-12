@@ -56,6 +56,7 @@ def test_process_backend_advertises_process_isolation() -> None:
     assert capabilities.name == "process"
     assert capabilities.isolation_level is ValidationIsolationLevel.PROCESS
     assert capabilities.separate_kernel is False
+    assert capabilities.resource_control is False
     assert backend.available() == (True, None)
     assert ProcessValidationBackend is SubprocessValidationBackend
 
@@ -65,6 +66,32 @@ def test_default_validation_policy_uses_least_friction_process_isolation() -> No
 
     assert policy.minimum_isolation is ValidationIsolationLevel.PROCESS
     assert policy.isolate_validation is True
+
+
+def test_resource_control_requirement_is_reported_when_process_backend_cannot_provide_it() -> None:
+    policy = RepairPolicy.automatic(
+        triggers=(ExceptionTrigger(),),
+        state=StatePolicy(snapshot_arguments=True, restore_before_retry=True),
+        retry=RetryPolicy(max_attempts=1, safety=ReplaySafety.PURE),
+        observation=ObservationPolicy(
+            initial_successful_executions=1,
+            long_term_successful_executions=1,
+            long_term_minimum_duration_seconds=0,
+        ),
+        validation=ValidationPolicy(require_resource_control=True),
+    )
+    engine = RepairEngine(provider=StaticRepairProvider([_candidate()]))
+    wrapped = repair(policy=policy, engine=engine)(broken_divide)
+
+    with pytest.raises(ZeroDivisionError):
+        wrapped(10.0, 0)
+
+    attempts = tuple(engine.store.all_attempts())
+    assert attempts
+    assert any(
+        "resource control" in item.lower()
+        for item in attempts[-1].score_card.disqualifications
+    )
 
 
 def test_required_vm_never_silently_downgrades_to_process() -> None:

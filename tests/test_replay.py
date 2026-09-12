@@ -44,6 +44,33 @@ def _store(tmp_path: Path) -> tuple[RegressionFixtureStore, str]:
     return store, envelope["fixture_id"]
 
 
+def test_historical_replay_applies_limit_before_consuming_fixture_iterable(tmp_path: Path) -> None:
+    consumed = 0
+
+    def summaries():
+        nonlocal consumed
+        for index in range(2):
+            consumed += 1
+            yield {
+                "fixture_id": f"fixture-{index}",
+                "integrity_verified": False,
+                "error": "fixture rejected",
+            }
+        raise AssertionError("replay consumed beyond its input bound")
+
+    result = execute_historical_capsule_replays(
+        None,
+        None,
+        summaries(),
+        entrypoint="charge",
+        source=SOURCE,
+        limit=2,
+    )
+
+    assert consumed == 2
+    assert len(result["results"]) == 2
+
+
 class FakeVMReplayBackend:
     def __init__(self) -> None:
         self.requests = []

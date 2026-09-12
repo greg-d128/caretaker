@@ -120,6 +120,7 @@ class ValidationPolicy:
     run_generated_tests: bool = False
     isolate_validation: bool = True
     minimum_isolation: ValidationIsolationLevel = ValidationIsolationLevel.PROCESS
+    require_resource_control: bool = False
     backend_unavailable_action: ValidationBackendUnavailableAction = (
         ValidationBackendUnavailableAction.FAIL_REPAIR
     )
@@ -698,6 +699,7 @@ def _human_readable(policy: RepairPolicy) -> str:
             f"  profile: {policy.validation.profile_id}",
             f"  isolated: {policy.validation.isolate_validation}",
             f"  minimum isolation: {policy.validation.minimum_isolation.name}",
+            f"  resource control required: {policy.validation.require_resource_control}",
             f"  backend unavailable: {policy.validation.backend_unavailable_action.name}",
             f"  result authentication required: {policy.validation.require_result_authentication}",
             f"  registered tests: {policy.validation.run_registered_tests}",

@@ -2196,7 +2196,8 @@ class RepairEngine:
         self.store.record_attempt(attempt)
         self._attempt_cache[attempt.attempt_id] = attempt
         validation_backend = self.validation_registry.select(
-            target.policy.validation.minimum_isolation
+            target.policy.validation.minimum_isolation,
+            require_resource_control=target.policy.validation.require_resource_control,
         )
         validation_capabilities = validation_backend.capabilities()
         with self._activity_lock:

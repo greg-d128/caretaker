@@ -422,6 +422,47 @@ def test_audit_stream_verifier_reports_malformed_segment_manifest(tmp_path: Path
     assert any("manifest schema" in error for error in report["errors"])
 
 
+def test_audit_stream_rejects_tampered_segment_manifest_binding(tmp_path: Path) -> None:
+    policy = AuditStreamPolicy(maximum_segment_bytes=4096)
+    writer = AuditStreamWriter(policy, directory=tmp_path, run_id=uuid4(), process_start_id=uuid4())
+    for _ in range(12):
+        writer.emit("INCIDENT_CAPTURED")
+    writer.close()
+    manifest_path = tmp_path / "caretaker_audit.log.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["segments"][0]["closed_at"] = "2099-01-01T00:00:00+00:00"
+    manifest_path.write_text(json.dumps(manifest) + "\n")
+
+    report = verify_audit_stream(tmp_path / "caretaker_audit.log")
+    assert report["valid"] is False
+    assert any("manifest binding" in error for error in report["errors"])
+    with pytest.raises(AuditStreamError, match="manifest binding"):
+        AuditStreamWriter(policy, directory=tmp_path, run_id=uuid4(), process_start_id=uuid4())
+
+
+def test_audit_stream_verifier_rejects_missing_registered_event_fields(tmp_path: Path) -> None:
+    writer = _writer(tmp_path)
+    writer.emit(
+        "POLICY_APPLIED",
+        policy={"policy_id": "policy-1", "fingerprint": "sha256:policy-1"},
+        outcome={"state": "APPLIED"},
+        priority=EvidencePriority.CRITICAL,
+    )
+    writer.close()
+    path = tmp_path / "caretaker_audit.log"
+    event = json.loads(path.read_text())
+    event["policy"] = {}
+    body = {key: value for key, value in event.items() if key != "integrity"}
+    event["integrity"]["content_sha256"] = hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    path.write_text(json.dumps(event, sort_keys=True) + "\n")
+
+    report = verify_audit_stream(path)
+    assert report["valid"] is False
+    assert any("POLICY_APPLIED is missing required fields" in error for error in report["errors"])
+
+
 def test_audit_writer_redacts_event_values_before_hashing(tmp_path: Path) -> None:
     writer = AuditStreamWriter(
         AuditStreamPolicy(),

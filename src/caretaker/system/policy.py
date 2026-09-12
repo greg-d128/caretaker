@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Callable, Mapping
@@ -35,6 +37,9 @@ class SystemSourceDefinition:
     enabled: bool = True
 
 
+_SAFE_SOURCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
+
 @dataclass(frozen=True, slots=True)
 class ProcessSelector:
     include_application_root: bool = True
@@ -63,9 +68,15 @@ class SystemOutputPolicy:
 
     def __post_init__(self) -> None:
         from pathlib import Path
-
+        if (
+            not isinstance(self.file_extension, str)
+            or not re.fullmatch(r"\.[A-Za-z0-9_-]{1,16}", self.file_extension)
+        ):
+            raise ValueError("system output file_extension must be a safe suffix")
         object.__setattr__(
-            self, "directory", str(Path(self.directory).expanduser().resolve())
+            self,
+            "directory",
+            os.path.abspath(str(Path(self.directory).expanduser())),
         )
 
 
@@ -245,6 +256,26 @@ def validate_system_policy(policy: SystemCollectionPolicy) -> None:
         finite_number(policy.interval_seconds, name="system.interval_seconds", minimum=0.0)
     except ValueError as exc:
         errors.append(str(exc))
+    sources = tuple(policy.host_sources) + tuple(policy.process_sources)
+    invalid_ids = [
+        source.source_id
+        for source in sources
+        if not isinstance(source.source_id, str)
+        or _SAFE_SOURCE_ID.fullmatch(source.source_id) is None
+    ]
+    if invalid_ids:
+        errors.append(
+            "source IDs must be safe single path components (letters, digits, _, ., -): "
+            + ", ".join(repr(item) for item in invalid_ids[:8])
+        )
+    duplicates = sorted({
+        item
+        for group in (policy.host_sources, policy.process_sources)
+        for item in {source.source_id for source in group if isinstance(source.source_id, str)}
+        if sum(source.source_id == item for source in group) > 1
+    })
+    if duplicates:
+        errors.append("source IDs must be unique: " + ", ".join(duplicates[:8]))
     if errors:
         raise SystemPolicyConfigurationError("Invalid system collection policy:\n- " + "\n- ".join(errors))
     if policy.interval_seconds <= 0:

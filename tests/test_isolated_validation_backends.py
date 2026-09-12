@@ -47,6 +47,57 @@ def test_rootless_podman_requires_rootless_and_local_image(monkeypatch, tmp_path
     assert capabilities.details["image_digest"] == "sha256:trusted-image"
 
 
+def test_rootless_podman_advertises_resource_control_only_after_probe(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("caretaker.validation.shutil.which", lambda executable: f"/usr/bin/{executable}")
+
+    def fake_run(command, **kwargs):
+        if command[1:3] == ["info", "--format"]:
+            return completed(command, stdout=json.dumps({"host": {"security": {"rootless": True}}}))
+        if command[1:3] == ["image", "exists"]:
+            return completed(command)
+        if command[1:3] == ["image", "inspect"]:
+            return completed(command, stdout="sha256:trusted-image\n")
+        if command[2:3] == ["run"]:
+            return completed(
+                command,
+                stdout=json.dumps({
+                    "memory.max": str(512 * 1024 * 1024),
+                    "cpu.max": "100000 100000",
+                    "pids.max": "64",
+                }) + "\n",
+            )
+        raise AssertionError(command)
+
+    monkeypatch.setattr("caretaker.validation.subprocess.run", fake_run)
+    backend = RootlessPodmanValidationBackend("caretaker-validator:local", workspace=tmp_path)
+
+    assert backend.available() == (True, None)
+    assert backend.capabilities().resource_control is True
+
+
+def test_rootless_podman_does_not_advertise_unenforced_resource_control(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("caretaker.validation.shutil.which", lambda executable: f"/usr/bin/{executable}")
+
+    def fake_run(command, **kwargs):
+        if command[1:3] == ["info", "--format"]:
+            return completed(command, stdout=json.dumps({"host": {"security": {"rootless": True}}}))
+        if command[1:3] == ["image", "exists"]:
+            return completed(command)
+        if command[1:3] == ["image", "inspect"]:
+            return completed(command, stdout="sha256:trusted-image\n")
+        if command[2:3] == ["run"]:
+            return completed(command, stdout=json.dumps({
+                "memory.max": "max", "cpu.max": "max", "pids.max": "max",
+            }) + "\n")
+        raise AssertionError(command)
+
+    monkeypatch.setattr("caretaker.validation.subprocess.run", fake_run)
+    backend = RootlessPodmanValidationBackend("caretaker-validator:local", workspace=tmp_path)
+
+    assert backend.available() == (True, None)
+    assert backend.capabilities().resource_control is False
+
+
 def test_rootless_podman_rejects_rootful_runtime(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("caretaker.validation.shutil.which", lambda executable: f"/usr/bin/{executable}")
     monkeypatch.setattr(
@@ -234,6 +285,20 @@ def test_multipass_rejects_host_directory_mounts(monkeypatch) -> None:
 
     assert available is False
     assert "host-directory mounts" in reason
+
+
+def test_multipass_availability_converts_permission_errors_to_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr("caretaker.validation.shutil.which", lambda executable: f"/usr/bin/{executable}")
+    backend = MultipassValidationBackend(require_network_isolation=False)
+
+    def denied(*args, **kwargs):
+        raise PermissionError("multipass socket denied")
+
+    monkeypatch.setattr(backend, "_host_command", denied)
+    available, reason = backend.available()
+
+    assert available is False
+    assert "information query failed" in reason.lower()
 
 
 def test_multipass_availability_verifies_guest_and_network_marker(monkeypatch) -> None:

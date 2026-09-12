@@ -87,6 +87,15 @@ A repair policy can require the VM tier independently of which backend objects a
 ValidationPolicy(minimum_isolation=ValidationIsolationLevel.VM)
 ```
 
+Resource limits are a separate capability requirement. Use
+`ValidationPolicy(require_resource_control=True)` when the validation policy
+requires externally enforced CPU, memory, and process limits. Caretaker accepts
+that capability only after a container runtime probe reads the limits from the
+worker's cgroup. PROCESS, EXTERNAL, and Multipass backends do not advertise
+resource control. If the selected environment cannot prove the requested
+capability, validation produces an explicit unavailable-resource-control report
+and does not run the candidate.
+
 If only PROCESS or CONTAINER validation is available, `backend_unavailable_action` determines whether the candidate fails, remains proposal-only, or enters explicit operator review. Required isolation is non-overridable: approval may retain a proposal for review but cannot activate the candidate without validation at the requested tier. Select `FAIL_REPAIR` when missing isolation should also avoid creating a pending review item.
 
 Validation worker IPC uses a versioned JSON envelope and an explicit data-only
@@ -99,7 +108,7 @@ untrusted validators. The EXTERNAL adapter can require an authenticated result
 envelope with a pinned validator identity; remote transport provisioning,
 attestation, and replay semantics remain deployment-specific.
 
-`RootlessPodmanValidationBackend` requires a locally present image and verified rootless Podman. It does not pull images automatically. The validation container uses no network, a read-only root filesystem, dropped Linux capabilities, `no-new-privileges`, bounded PID/CPU/memory settings, a private writable request/result directory, and read-only source inputs.
+`RootlessPodmanValidationBackend` requires a locally present image and verified rootless Podman. It does not pull images automatically. The validation container uses no network, a read-only root filesystem, dropped Linux capabilities, `no-new-privileges`, configured PID/CPU/memory settings, a private writable request/result directory, and read-only application inputs. The host Caretaker checkout is never mounted into the worker; the image must contain the reviewed Caretaker wheel. Resource-control capability is reported only when the worker cgroup probe confirms the requested limits.
 
 `MultipassValidationBackend` requires a pre-provisioned validator guest and refuses instances with host-directory mounts. Request/result artifacts move with `multipass transfer`. In normal mode Caretaker can restore a configured clean snapshot before each validation. `disposable_clone=True` instead clones a stopped clean template for one validation and purges the clone afterward.
 

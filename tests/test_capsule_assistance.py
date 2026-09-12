@@ -18,7 +18,7 @@ def test_assistance_runs_independently_per_capsule_without_mutation(tmp_path: Pa
 
     def fake_chat(self: IncidentCapsuleAssistant, prompt: str) -> str:
         prompts.append(prompt)
-        return '{"summary":"advisory result","findings":["review evidence"]}'
+        return '{"summary":"advisory result","findings":["review evidence"],"uncertainties":[],"recommended_checks":[]}'
 
     monkeypatch.setattr(IncidentCapsuleAssistant, "_chat", fake_chat)
     result = assist_capsules(
@@ -48,7 +48,7 @@ def test_assistance_skips_invalid_capsules_and_preserves_result_per_incident(tmp
     monkeypatch.setattr(
         IncidentCapsuleAssistant,
         "_chat",
-        lambda self, prompt: '{"summary":"ok"}',
+        lambda self, prompt: '{"summary":"ok","findings":[],"uncertainties":[],"recommended_checks":[]}',
     )
     result = assist_capsules(
         store,
@@ -65,6 +65,23 @@ def test_assistance_skips_invalid_capsules_and_preserves_result_per_incident(tmp
 def test_assistance_rejects_remote_provider_endpoint() -> None:
     with pytest.raises(ValueError, match="remote provider endpoints"):
         IncidentCapsuleAssistant(model="local-test-model", endpoint="http://example.invalid/api/generate")
+
+
+def test_assistance_rejects_authority_shaped_provider_fields(tmp_path: Path, monkeypatch) -> None:
+    store = IncidentCapsuleStore(tmp_path)
+    created = store.create_placeholder(uuid4())
+    envelope = store.load(created["capsule"]["capsule_id"])
+    monkeypatch.setattr(
+        IncidentCapsuleAssistant,
+        "_chat",
+        lambda self, prompt: '{"summary":"ok","findings":[],"uncertainties":[],"recommended_checks":[],"repair":{"enabled":true}}',
+    )
+
+    with pytest.raises(ValueError, match="response fields are invalid"):
+        IncidentCapsuleAssistant(model="local-test-model").assist(
+            envelope,
+            query="Summarize this incident",
+        )
 
 
 def test_noninteractive_cli_submits_batch_query_to_control_plane(tmp_path: Path, monkeypatch, capsys) -> None:

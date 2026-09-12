@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
 from caretaker.system import (
     ProcessSelector,
     SystemCollectionPolicy,
@@ -10,6 +12,7 @@ from caretaker.system import (
     SystemOutputPolicy,
     SystemSourceDefinition,
 )
+from caretaker.system.policy import SystemPolicyConfigurationError
 
 
 def test_system_collector_uses_shared_cycle_timestamp_and_separate_output(tmp_path):
@@ -56,3 +59,27 @@ def test_command_line_capture_is_opt_in(tmp_path) -> None:
     collector = SystemDataCollector(policy, application_pid=__import__("os").getpid())
     identity = next(item for item in collector.select_processes() if item.pid == __import__("os").getpid())
     assert identity.command_summary == "<not captured>"
+
+
+def test_system_collection_rejects_hostile_source_ids(tmp_path) -> None:
+    policy = SystemCollectionPolicy(
+        host_sources=(SystemSourceDefinition("../../escape", "/proc/meminfo"),),
+        process_sources=(),
+        output=SystemOutputPolicy(directory=str(tmp_path / "system")),
+    )
+    with pytest.raises(SystemPolicyConfigurationError, match="safe single path components"):
+        SystemDataCollector(policy, application_pid=os.getpid())
+
+
+def test_system_collection_rejects_symlinked_output_root(tmp_path) -> None:
+    real_root = tmp_path / "real-system"
+    real_root.mkdir()
+    output_link = tmp_path / "system-link"
+    output_link.symlink_to(real_root, target_is_directory=True)
+    policy = SystemCollectionPolicy(
+        host_sources=(),
+        process_sources=(),
+        output=SystemOutputPolicy(directory=str(output_link)),
+    )
+    with pytest.raises(ValueError, match="symlink"):
+        SystemDataCollector(policy, application_pid=os.getpid())

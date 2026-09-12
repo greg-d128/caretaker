@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
@@ -18,7 +17,12 @@ from .capsule import (
     canonical_json_bytes,
     content_hash,
 )
-from .provider_security import validate_provider_endpoint
+from .provider_security import (
+    MAX_PROVIDER_RESPONSE_BYTES,
+    ProviderResponseError,
+    provider_json_response,
+    validate_provider_endpoint,
+)
 from .llm import LLMRequestGate, LLMUsageLimitError, LLMUsagePolicy
 
 
@@ -71,10 +75,7 @@ class IncidentCapsuleAssistant:
         )
         with self._usage_gate.request():
             response_text = self._chat(self._prompt(context))
-        try:
-            parsed = json.loads(response_text)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError("Ollama Incident Capsule assistance returned non-JSON output") from exc
+        parsed = _parse_assistance_response(response_text)
         bounded_result = bounded_safe_data(parsed, policy=self.policy)
         return {
             "provider": self.provider_name,
@@ -164,14 +165,46 @@ class IncidentCapsuleAssistant:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-                outer = json.loads(response.read().decode("utf-8"))
-        except urllib.error.URLError as exc:
+            outer, _raw = provider_json_response(
+                request,
+                allow_remote_endpoint=False,
+                timeout_seconds=self.timeout_seconds,
+                maximum_bytes=MAX_PROVIDER_RESPONSE_BYTES,
+            )
+        except ProviderResponseError as exc:
             raise RuntimeError(f"Ollama Incident Capsule assistance failed: {exc}") from exc
+        if outer.get("model") is not None and outer.get("model") != self.model:
+            raise ValueError(
+                "Incident Capsule assistance response model does not match the requested model"
+            )
         content = outer.get("response") if isinstance(outer, Mapping) else None
         if not isinstance(content, str):
             raise RuntimeError("Ollama Incident Capsule assistance response had no JSON content")
         return content
+
+
+def _parse_assistance_response(content: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(
+            content,
+            parse_constant=lambda token: (_ for _ in ()).throw(ValueError(token)),
+        )
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ValueError("Incident Capsule assistance response was not strict JSON") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("Incident Capsule assistance response must be a JSON object")
+    allowed = {"summary", "findings", "uncertainties", "recommended_checks"}
+    if set(parsed) != allowed:
+        raise ValueError("Incident Capsule assistance response fields are invalid")
+    if not isinstance(parsed["summary"], str):
+        raise ValueError("Incident Capsule assistance summary is invalid")
+    for field in sorted(allowed - {"summary"}):
+        value = parsed[field]
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise ValueError(
+                f"Incident Capsule assistance {field} must be a list of strings"
+            )
+    return parsed
 
 
 def assist_capsules(

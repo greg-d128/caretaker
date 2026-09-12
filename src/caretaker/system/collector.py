@@ -5,6 +5,7 @@ import hashlib
 import os
 import re
 import shutil
+import stat
 import threading
 import time
 from dataclasses import dataclass, field
@@ -71,11 +72,11 @@ class SystemCollectionCycle:
 
 
 class RotatingSystemStream:
-    def __init__(self, path: Path, policy: SystemCollectionPolicy) -> None:
+    def __init__(self, path: Path, policy: SystemCollectionPolicy, *, rooted: RootedFilesystem) -> None:
         self.base_path = path
         self.policy = policy
-        self.base_path.parent.mkdir(parents=True, exist_ok=True)
-        self._rooted = RootedFilesystem(self.base_path.parent)
+        self._rooted = rooted
+        self._rooted.path(self.base_path)
         self._lock = threading.RLock()
         self._sequence = 0
         self._open()
@@ -118,7 +119,7 @@ class RotatingSystemStream:
             ):
                 compressed = self.path.with_suffix(self.path.suffix + ".gz")
                 compressed_payload = gzip.compress(
-                    self.path.read_bytes(),
+                    self._rooted.read_bytes(self.path),
                     compresslevel=self.policy.compression.level,
                 )
                 self._rooted.atomic_write(compressed, compressed_payload)
@@ -126,7 +127,15 @@ class RotatingSystemStream:
             return self.path
 
     def _retention(self) -> None:
-        paths = sorted(self.base_path.parent.glob(f"{self.base_path.stem}-*{self.base_path.suffix}*"), key=lambda item: item.stat().st_mtime)
+        paths = []
+        for path in self.base_path.parent.glob(f"{self.base_path.stem}-*{self.base_path.suffix}*"):
+            try:
+                if stat.S_ISLNK(path.lstat().st_mode):
+                    continue
+                paths.append(path)
+            except OSError:
+                continue
+        paths.sort(key=lambda item: item.lstat().st_mtime)
         age_days = self.policy.retention.maximum_age_days
         if age_days is not None:
             cutoff = time.time() - age_days * 86400
@@ -167,7 +176,9 @@ class SystemDataCollector:
         self.policy = policy
         self.application_pid = application_pid
         self.output_root = Path(policy.output.directory)
+        _reject_symlinked_path_components(self.output_root)
         self.output_root.mkdir(parents=True, exist_ok=True)
+        self._rooted = RootedFilesystem(self.output_root)
         self._streams: dict[str, RotatingSystemStream] = {}
         self._process_start_ids: dict[tuple[int, int], UUID] = {}
         self._statuses: dict[str, SystemSourceStatus] = {}
@@ -361,8 +372,19 @@ class SystemDataCollector:
             key = f"host:{source.source_id}"
         path = directory / f"{source.source_id}{self.policy.output.file_extension}"
         if key not in self._streams:
-            self._streams[key] = RotatingSystemStream(path, self.policy)
+            self._streams[key] = RotatingSystemStream(path, self.policy, rooted=self._rooted)
         return key, path
+
+
+def _reject_symlinked_path_components(path: Path) -> None:
+    current = Path(path.anchor)
+    for component in path.parts[1:]:
+        current /= component
+        try:
+            if current.is_symlink():
+                raise ValueError(f"system evidence output path cannot contain a symlink: {path}")
+        except OSError as exc:
+            raise ValueError(f"system evidence output path is unavailable: {path}") from exc
 
 
 def _proc_processes() -> dict[int, dict[str, object]]:

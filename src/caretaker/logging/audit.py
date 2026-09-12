@@ -75,6 +75,7 @@ AUDIT_EVENT_REGISTRY: Mapping[str, Mapping[str, Any]] = MappingProxyType({
     "AUDIT_STREAM_ROTATED": _event_definition(
         description="The local audit stream or its segment was rotated.",
         minimum_priority=EvidencePriority.IMPORTANT,
+        required_fields=("details.manifest_sha256",),
         example={"segment_id": "segment-42", "content_sha256": "sha256:..."},
     ),
     "AUDIT_DELIVERY_STATUS": _event_definition(
@@ -483,6 +484,86 @@ def _has_field(envelope: Mapping[str, Any], path: str) -> bool:
             return False
         value = value[component]
     return True
+
+
+def _audit_record_contract_errors(event: Mapping[str, Any]) -> tuple[str, ...]:
+    errors: list[str] = []
+    if isinstance(event.get("schema_version"), bool) or event.get("schema_version") != AUDIT_SCHEMA_VERSION:
+        errors.append("unsupported audit record schema")
+    event_type = event.get("event_type")
+    if not isinstance(event_type, str) or _EVENT_TYPE.fullmatch(event_type) is None:
+        errors.append("audit record event_type is invalid")
+    if isinstance(event.get("event_version"), bool) or event.get("event_version") != 1:
+        errors.append("unsupported audit record event version")
+    for field_name in ("event_id", "process_start_id", "run_id"):
+        try:
+            UUID(str(event.get(field_name) or ""))
+        except (TypeError, ValueError):
+            errors.append(f"audit record {field_name} is invalid")
+    if not isinstance(event.get("occurred_at"), str) or not event["occurred_at"].strip():
+        errors.append("audit record occurred_at is invalid")
+    monotonic_ns = event.get("monotonic_ns")
+    if isinstance(monotonic_ns, bool) or not isinstance(monotonic_ns, int) or monotonic_ns < 0:
+        errors.append("audit record monotonic_ns is invalid")
+    if not isinstance(event.get("priority"), str) or event["priority"] not in EvidencePriority.__members__:
+        errors.append("audit record priority is invalid")
+    for field_name in ("actor", "scope", "policy", "outcome", "details", "integrity"):
+        if not isinstance(event.get(field_name), Mapping):
+            errors.append(f"audit record {field_name} must be an object")
+    if isinstance(event_type, str):
+        definition = audit_event_definition(event_type)
+        if definition is not None:
+            for field in definition["required_fields"]:
+                if not _has_field(event, field):
+                    errors.append(f"{event_type} is missing required fields: {field}")
+    return tuple(errors)
+
+
+def _manifest_digest(
+    stream_path: Path,
+    *,
+    hash_chain: bool,
+    segments: list[Mapping[str, Any]],
+) -> str:
+    previous = segments[-1]["content_sha256"] if segments else None
+    value = {
+        "schema_version": AUDIT_SEGMENT_MANIFEST_SCHEMA_VERSION,
+        "stream_file": stream_path.name,
+        "active_file": stream_path.name,
+        "hash_chain": bool(hash_chain),
+        "active_previous_segment_hash": previous,
+        "segments": [dict(item) for item in segments],
+    }
+    return hashlib.sha256(_canonical(value) + b"\n").hexdigest()
+
+
+def _validate_manifest_binding(
+    event: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    stream_path: Path,
+) -> None:
+    if event.get("event_type") != "AUDIT_STREAM_ROTATED":
+        return
+    details = event.get("details")
+    if not isinstance(details, Mapping):
+        raise AuditStreamError("audit rotation event details are invalid")
+    segment_id = details.get("segment_id")
+    if not isinstance(segment_id, str) or re.fullmatch(r"segment-\d{20}", segment_id) is None:
+        raise AuditStreamError("audit rotation event segment identity is invalid")
+    try:
+        index = int(segment_id.removeprefix("segment-"))
+    except ValueError as exc:
+        raise AuditStreamError("audit rotation event segment identity is invalid") from exc
+    segments = manifest.get("segments")
+    if not isinstance(segments, list) or index < 0 or index >= len(segments):
+        raise AuditStreamError("audit rotation event references an unavailable manifest segment")
+    expected = _manifest_digest(
+        stream_path,
+        hash_chain=bool(manifest["hash_chain"]),
+        segments=[item for item in segments[: index + 1] if isinstance(item, Mapping)],
+    )
+    if details.get("manifest_sha256") != expected:
+        raise AuditStreamError("audit rotation event manifest binding does not match")
 
 
 class AuditStreamError(RuntimeError):
@@ -1404,11 +1485,17 @@ def verify_audit_stream(
     manifest_path = _audit_manifest_path(stream_path)
     source_paths: list[tuple[str, Path, Mapping[str, Any] | None]] = []
     manifest: dict[str, Any] | None = None
+    manifest_digest: str | None = None
     if manifest_path.exists():
         try:
             manifest = _read_audit_manifest(manifest_path, stream_path)
         except AuditStreamError as exc:
             errors.append(str(exc))
+            return report
+        try:
+            manifest_digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+        except OSError as exc:
+            errors.append(f"audit segment manifest cannot be read: {exc}")
             return report
         if manifest["hash_chain"] is not hash_chain:
             errors.append("audit segment manifest hash-chain mode does not match policy")
@@ -1483,6 +1570,18 @@ def verify_audit_stream(
                     errors.append(f"{location}: audit record is not an object")
                     hash_failures += 1
                     continue
+                contract_errors = _audit_record_contract_errors(event)
+                if contract_errors:
+                    errors.extend(f"{location}: {error}" for error in contract_errors)
+                    hash_failures += len(contract_errors)
+                    continue
+                if manifest is not None and manifest_digest is not None:
+                    try:
+                        _validate_manifest_binding(event, manifest, stream_path)
+                    except AuditStreamError as exc:
+                        errors.append(f"{location}: {exc}")
+                        hash_failures += 1
+                        continue
                 sequence = event.get("stream_sequence")
                 if not isinstance(sequence, int) or sequence != previous_sequence + 1:
                     errors.append(f"{location}: audit stream sequence is not contiguous")
@@ -1897,6 +1996,7 @@ class AuditStreamWriter:
         previous_sequence: int,
         previous_hash: str | None,
         allow_incomplete_tail: bool,
+        manifest: Mapping[str, Any] | None = None,
     ) -> tuple[int, int, str | None, int | None, int]:
         """Validate one audit file and return its recovery boundary."""
         last_valid_offset = 0
@@ -1922,7 +2022,12 @@ class AuditStreamWriter:
                     raise AuditStreamError(
                         f"Malformed complete audit record at byte {line_start}"
                     ) from exc
-                self._validate_existing(event, last_sequence, last_hash)
+                self._validate_existing(
+                    event,
+                    last_sequence,
+                    last_hash,
+                    manifest=manifest,
+                )
                 sequence = int(event["stream_sequence"])
                 if first_sequence is None:
                     first_sequence = sequence
@@ -2048,6 +2153,11 @@ class AuditStreamWriter:
                     "last_sequence": descriptor["last_sequence"],
                     "record_count": descriptor["record_count"],
                     "manifest_file": self.manifest_path.name,
+                    "manifest_sha256": _manifest_digest(
+                        self.path,
+                        hash_chain=bool(self.policy.hash_chain),
+                        segments=self._segment_descriptors,
+                    ),
                     "authority_granted": False,
                 },
                 priority=EvidencePriority.IMPORTANT,
@@ -2090,6 +2200,7 @@ class AuditStreamWriter:
                     previous_sequence=previous_sequence,
                     previous_hash=previous_hash,
                     allow_incomplete_tail=False,
+                    manifest=manifest,
                 )
                 if (
                     first != descriptor["first_sequence"]
@@ -2121,6 +2232,7 @@ class AuditStreamWriter:
             previous_sequence=self._sequence,
             previous_hash=self._previous_hash,
             allow_incomplete_tail=True,
+            manifest=manifest if self.manifest_path.exists() else None,
         )
         file_size = self.path.stat().st_size
         if last_valid_offset != file_size:
@@ -2143,9 +2255,15 @@ class AuditStreamWriter:
         event: Any,
         previous_sequence: int,
         previous_hash: str | None,
+        manifest: Mapping[str, Any] | None = None,
     ) -> None:
         if not isinstance(event, Mapping):
             raise AuditStreamError("Audit record is not an object")
+        contract_errors = _audit_record_contract_errors(event)
+        if contract_errors:
+            raise AuditStreamError("; ".join(contract_errors))
+        if manifest is not None:
+            _validate_manifest_binding(event, manifest, self.path)
         sequence = event.get("stream_sequence")
         if not isinstance(sequence, int) or sequence != previous_sequence + 1:
             raise AuditStreamError("Audit stream sequence is not contiguous")

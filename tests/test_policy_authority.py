@@ -25,6 +25,28 @@ from caretaker.logging.models import RepairAuthority
 from caretaker.policy import RepairPolicy
 
 
+def test_authority_snapshot_rejects_string_override_and_boolean_settings() -> None:
+    from caretaker.authority import _setting_from_dict
+
+    with pytest.raises(AuthorityPolicyError, match="must be a boolean"):
+        _setting_from_dict({
+            "path": "repair.enabled",
+            "value": False,
+            "override_constraints": "false",
+        })
+    supervisor = PolicyAuthoritySupervisor(
+        layers=(
+            _layer(
+                "application",
+                AuthorityKind.APPLICATION,
+                settings=(PolicySetting("repair.enabled", "false"),),
+            ),
+        )
+    )
+    with pytest.raises(AuthorityPolicyError, match="boolean"):
+        supervisor.effective.apply_dataclass(RepairPolicy(), prefix="repair")
+
+
 def _layer(
     authority_id: str,
     kind: AuthorityKind,

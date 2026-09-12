@@ -13,6 +13,7 @@ import json
 import os
 import re
 import tempfile
+from itertools import islice
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -321,7 +322,7 @@ def execute_historical_capsule_replays(
     """
     bounded_limit = min(integer(limit, name="limit", minimum=1), 200)
     results: list[dict[str, Any]] = []
-    for summary in list(fixture_summaries)[:bounded_limit]:
+    for summary in islice(fixture_summaries, bounded_limit):
         if cancel_check is not None:
             cancel_check()
         fixture_id = str(summary.get("fixture_id") or "")
@@ -568,6 +569,7 @@ class RootlessPodmanReplayBackend(RootlessPodmanValidationBackend):
             f"--cgroup-manager={self.cgroup_manager}",
             "run",
             "--rm",
+            "--pull=never",
             "--network=none",
             "--read-only",
             "--cap-drop=ALL",

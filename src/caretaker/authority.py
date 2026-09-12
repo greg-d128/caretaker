@@ -1413,11 +1413,18 @@ def _setting_dict(item: PolicySetting) -> dict[str, Any]:
 
 
 def _setting_from_dict(item: Mapping[str, Any]) -> PolicySetting:
+    try:
+        override_constraints = exact_bool(
+            item.get("override_constraints", False),
+            name="authority setting override_constraints",
+        )
+    except ValueError as exc:
+        raise AuthorityPolicyError(str(exc)) from exc
     return PolicySetting(
         path=str(item["path"]),
         value=item.get("value"),
         target=item.get("target"),
-        override_constraints=bool(item.get("override_constraints", False)),
+        override_constraints=override_constraints,
         reason=item.get("reason"),
     )
 

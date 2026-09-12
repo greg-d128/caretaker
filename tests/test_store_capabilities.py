@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from math import nan
+from uuid import uuid4
+
 import pytest
 
 from caretaker import (
@@ -45,3 +50,16 @@ def test_store_views_expose_only_their_declared_capability(tmp_path, store_kind:
         worker_recovery.record_policy
     with pytest.raises(AttributeError):
         postmortem.record_observation
+
+
+def test_sqlite_durable_records_reject_non_finite_json(tmp_path) -> None:
+    @dataclass(frozen=True)
+    class EvidenceRecord:
+        internal_incident_id: object
+        occurred_at: object
+        evidence: float
+
+    store = SQLiteRepairStore(tmp_path / "repair.sqlite3")
+    record = EvidenceRecord(uuid4(), datetime.now(timezone.utc), nan)
+    with pytest.raises(ValueError, match="Out of range float values"):
+        store._write("internal_incidents", record, target_id=None)
