@@ -323,6 +323,62 @@ def validate_policy(policy: RepairPolicy) -> None:
         raise PolicyConfigurationError("policy must be a RepairPolicy")
     errors: list[str] = []
 
+    # Nested policy objects are part of the public construction surface.  Do
+    # this check before reading their fields so malformed input fails with a
+    # stable configuration error instead of an AttributeError (or, worse,
+    # being partially accepted by a supervisor bootstrap path).
+    nested_policy_types = {
+        "state": StatePolicy,
+        "retry": RetryPolicy,
+        "validation": ValidationPolicy,
+        "observation": ObservationPolicy,
+        "selection": CandidateSelectionPolicy,
+        "scoring": ScoringPolicy,
+        "activation": ActivationPolicy,
+        "context": ContextPolicy,
+        "limits": RepairLimits,
+        "stability": StabilityPolicy,
+        "integrity": IntegrityRepairPolicy,
+        "retention": RepairRetentionPolicy,
+        "recovery": RepairRecoveryPolicy,
+        "rollout": RepairRolloutPolicy,
+        "logging": LoggingBinding,
+        "guard": GuardBinding,
+        "candidate_guard": CandidateGuardPolicy,
+    }
+    for name, expected in nested_policy_types.items():
+        if not isinstance(getattr(policy, name), expected):
+            errors.append(f"{name} must be a {expected.__name__}")
+    if errors:
+        raise PolicyConfigurationError("Invalid Caretaker policy:\n- " + "\n- ".join(errors))
+
+    enum_policy_fields = (
+        ("mode", RepairMode, policy.mode),
+        ("authority", RepairAuthority, policy.authority),
+        ("state.strategy", SnapshotStrategy, policy.state.strategy),
+        ("retry.safety", ReplaySafety, policy.retry.safety),
+        ("validation.minimum_isolation", ValidationIsolationLevel, policy.validation.minimum_isolation),
+        ("validation.backend_unavailable_action", ValidationBackendUnavailableAction, policy.validation.backend_unavailable_action),
+        ("selection.mode", CandidateSelectionMode, policy.selection.mode),
+        ("observation.differential_execution.mode", DifferentialExecutionMode, policy.observation.differential_execution.mode),
+    )
+    for name, expected, value in enum_policy_fields:
+        if not isinstance(value, expected):
+            errors.append(f"{name} must be a {expected.__name__}")
+    for index, trigger in enumerate(policy.triggers):
+        if not isinstance(trigger, (ExceptionTrigger, TimeoutTrigger, OutputValidationTrigger)):
+            errors.append(f"triggers[{index}] is not a supported trigger")
+        elif isinstance(trigger, TimeoutTrigger) and not isinstance(trigger.mode, TimeoutMode):
+            errors.append(f"triggers[{index}].mode must be a TimeoutMode")
+        elif isinstance(trigger, OutputValidationTrigger) and not isinstance(
+            trigger.on_validator_error, ValidatorErrorBehavior
+        ):
+            errors.append(
+                f"triggers[{index}].on_validator_error must be a ValidatorErrorBehavior"
+            )
+    if errors:
+        raise PolicyConfigurationError("Invalid Caretaker policy:\n- " + "\n- ".join(errors))
+
     def check(name: str, validator, value: Any) -> None:
         try:
             validator(value, name=name)

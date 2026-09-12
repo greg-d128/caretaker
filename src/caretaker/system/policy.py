@@ -148,10 +148,14 @@ def _source_selection(
             continue
         if not isinstance(item, Mapping):
             raise TypeError("system source entries must be strings or tables")
-        source_id = str(item.get("source_id") or item.get("id") or "source")
-        path_template = str(item.get("path_template") or item.get("path"))
-        if not path_template or path_template == "None":
+        raw_source_id = item.get("source_id", item.get("id", "source"))
+        if not isinstance(raw_source_id, str) or not raw_source_id.strip():
+            raise TypeError("system source source_id must be a non-empty string")
+        source_id = raw_source_id.strip()
+        raw_path_template = item.get("path_template", item.get("path"))
+        if not isinstance(raw_path_template, str) or not raw_path_template:
             raise ValueError(f"system source {source_id!r} requires path_template")
+        path_template = raw_path_template
         resolved.append(SystemSourceDefinition(
             source_id=source_id,
             path_template=path_template,

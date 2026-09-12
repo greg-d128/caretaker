@@ -306,6 +306,13 @@ class WorkerRegistry:
         audit_event: Callable[..., Any] | None = None,
         authority_verifier: Callable[..., Any] | None = None,
     ) -> None:
+        if (
+            isinstance(heartbeat_timeout_seconds, bool)
+            or not isinstance(heartbeat_timeout_seconds, (int, float))
+            or not math.isfinite(float(heartbeat_timeout_seconds))
+            or heartbeat_timeout_seconds <= 0
+        ):
+            raise ValueError("heartbeat_timeout_seconds must be a finite positive number")
         self.heartbeat_timeout_seconds = heartbeat_timeout_seconds
         self.acceptance_store = acceptance_store
         self.audit_event = audit_event
@@ -332,6 +339,10 @@ class WorkerRegistry:
             self.audit_event(event_type, **fields)
 
     def register(self, kind: WorkerKind, pid: int) -> WorkerHealth:
+        if not isinstance(kind, WorkerKind):
+            raise ValueError("worker kind must be a WorkerKind")
+        if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+            raise ValueError("worker pid must be a positive integer")
         now = datetime.now(timezone.utc)
         health = WorkerHealth(
             worker_id=uuid4(), worker_kind=kind, process_id=pid,

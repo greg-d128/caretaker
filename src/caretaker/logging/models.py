@@ -571,6 +571,24 @@ class WorkerHealth:
     # It is diagnostic evidence, never authority or a recovery instruction.
     diagnostic_context: Mapping[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.worker_kind, WorkerKind):
+            raise ValueError("worker_kind must be a WorkerKind")
+        if isinstance(self.process_id, bool) or not isinstance(self.process_id, int) or self.process_id <= 0:
+            raise ValueError("process_id must be a positive integer")
+        for name in ("queue_depth", "restart_count", "acceptance_successful_executions", "acceptance_failed_executions"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
+        if self.last_completed_sequence is not None and (
+            isinstance(self.last_completed_sequence, bool)
+            or not isinstance(self.last_completed_sequence, int)
+            or self.last_completed_sequence < 0
+        ):
+            raise ValueError("last_completed_sequence must be a non-negative integer or None")
+        if not isinstance(self.diagnostic_context, Mapping):
+            raise ValueError("diagnostic_context must be a mapping")
+
 
 @dataclass(frozen=True, slots=True)
 class ActiveWork:

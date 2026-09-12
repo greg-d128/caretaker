@@ -639,7 +639,7 @@ class SocketLogServer:
                 response = {"ok": True, "reference": _jsonable_reference(reference)}
             except Exception as exc:
                 response = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-        encoded = b"R" + json.dumps(response, default=str).encode()
+        encoded = b"R" + json.dumps(response, default=str, allow_nan=False).encode()
         if self._stream:
             connection.sendall(len(encoded).to_bytes(4, "big") + encoded)
         else:
@@ -812,7 +812,10 @@ class ControlSocketServer:
                 response = self.handler(request, credentials)
             except Exception as exc:
                 response = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-            _send_control_payload(connection, json.dumps(response, default=str).encode())
+            _send_control_payload(
+                connection,
+                json.dumps(response, default=str, allow_nan=False).encode(),
+            )
         except OSError:
             # A timed-out or disconnected control client must not affect the
             # listener or other in-flight requests.

@@ -859,12 +859,15 @@ def _bounded_artifact_references(
         if not isinstance(value, Mapping):
             result.append(bounded_safe_data(value, policy=policy))
             continue
+        # Every field below participates in artifact-reference verification.
+        # Applying the ordinary capsule text bound here can turn a valid
+        # reference into a different reference.  Artifact content and the
+        # enclosing capsule remain bounded independently by their write
+        # limits; identity fields must remain lossless.
         result.append({
-            # The relative path is part of the artifact identity.  Truncating
-            # it can make a valid artifact impossible to resolve and verify.
-            key: str(value[key]) if key == "relative_path" else bounded_safe_data(
-                value[key], policy=policy, name=key
-            )
+            key: value[key]
+            if key != "metadata"
+            else bounded_safe_data(value[key], policy=policy, name=key)
             for key in fields
             if key in value
         })

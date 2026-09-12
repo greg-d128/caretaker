@@ -739,7 +739,13 @@ class RemoteIncidentCapture:
 
 def json_bytes(value: Any) -> bytes:
     import json
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+        allow_nan=False,
+    ).encode()
 
 
 _default_runtime: LoggingRuntime | None = None

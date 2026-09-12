@@ -62,7 +62,13 @@ class TLVLogCodec:
         self.maximum_record_bytes = maximum_record_bytes
 
     def encode(self, envelope: LogEnvelope, *, extra_fields: Iterable[tuple[int, int, bytes]] = ()) -> bytes:
-        payload = json.dumps(asdict(envelope), default=_json_default, sort_keys=True, separators=(",", ":")).encode()
+        payload = json.dumps(
+            asdict(envelope),
+            default=_json_default,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode()
         body = _tlv(TAG_WRITER_VERSION, 1, envelope.writer_version.encode())
         body += _tlv(TAG_RECORD_JSON, envelope.schema_version, payload)
         for tag, version, data in extra_fields:

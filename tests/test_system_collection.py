@@ -83,3 +83,13 @@ def test_system_collection_rejects_symlinked_output_root(tmp_path) -> None:
     )
     with pytest.raises(ValueError, match="symlink"):
         SystemDataCollector(policy, application_pid=os.getpid())
+
+
+def test_system_collection_rejects_non_text_source_fields(tmp_path) -> None:
+    with pytest.raises(TypeError, match="source_id"):
+        from caretaker.system.policy import _source_selection
+        _source_selection(
+            [{"source_id": 7, "path_template": "/proc/meminfo"}],
+            (),
+            per_process=False,
+        )

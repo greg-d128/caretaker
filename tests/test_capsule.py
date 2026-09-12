@@ -80,6 +80,24 @@ def test_capsule_is_bounded_data_only_and_communications_are_revisioned(tmp_path
     assert loaded_artifact["artifact"]["artifact_id"] == artifact_result["artifact"]["artifact"]["artifact_id"]
 
 
+def test_capsule_artifact_identity_is_not_truncated_by_text_bound(tmp_path: Path) -> None:
+    policy = IncidentCapsulePolicy(maximum_text_characters=4)
+    store = IncidentCapsuleStore(tmp_path, policy=policy)
+    incident_id = uuid4()
+    result = store.attach_artifact(
+        incident_id,
+        kind="kind",
+        content={"value": "ok"},
+        source="src",
+        metadata={"key": "value"},
+        policy=policy,
+    )
+    reference = result["capsule"]["capsule"]["artifacts"][0]
+    assert len(reference["relative_path"]) > policy.maximum_text_characters
+    assert store.load_artifact(reference["artifact_id"])["artifact"]["kind"] == "kind"
+    assert store.verify(result["capsule"]) == (True, None)
+
+
 def test_communication_history_rejects_bad_hashes_and_preserves_tight_ids(tmp_path: Path) -> None:
     policy = IncidentCapsulePolicy(maximum_text_characters=8)
     store = IncidentCapsuleStore(tmp_path, policy=policy)

@@ -392,8 +392,16 @@ def validate_operator_logging_policy(policy: OperatorLoggingPolicy) -> None:
     """Validate that accepted logging policy has executable semantics."""
 
     errors: list[str] = list(declared_primitive_errors(policy, prefix="logging"))
-    if not isinstance(policy.ollama, OllamaEndpointPolicy):
-        errors.append("ollama must be an OllamaEndpointPolicy")
+    if not isinstance(policy, OperatorLoggingPolicy):
+        raise LoggingPolicyConfigurationError("policy must be an OperatorLoggingPolicy")
+    defaults = OperatorLoggingPolicy()
+    for field in dataclasses.fields(policy):
+        default_value = getattr(defaults, field.name)
+        actual_value = getattr(policy, field.name)
+        if dataclasses.is_dataclass(default_value) and not isinstance(
+            actual_value, type(default_value)
+        ):
+            errors.append(f"logging.{field.name} must be a {type(default_value).__name__}")
     if errors:
         raise LoggingPolicyConfigurationError(
             "Invalid operator logging policy:\n- " + "\n- ".join(errors)

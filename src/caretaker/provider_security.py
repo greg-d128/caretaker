@@ -7,6 +7,7 @@ import hashlib
 import ipaddress
 import json
 import logging
+import math
 import os
 import ssl
 import urllib.error
@@ -421,7 +422,10 @@ def _load_attestation(value: str | Path | Mapping[str, Any] | None) -> dict[str,
     if value is None:
         raise ProviderResponseError("Ollama attestation is not configured")
     try:
-        loaded = json.loads(Path(value).read_text(encoding="utf-8"))
+        loaded = json.loads(
+            Path(value).read_text(encoding="utf-8"),
+            parse_constant=lambda token: (_ for _ in ()).throw(ValueError(token)),
+        )
     except (OSError, json.JSONDecodeError) as exc:
         raise ProviderResponseError("Ollama attestation could not be read") from exc
     if not isinstance(loaded, dict):
@@ -464,7 +468,13 @@ def _verify_attestation_signature(assertion: Mapping[str, Any], public_key: str 
     try:
         signature = base64.b64decode(signature_value, validate=True)
         payload = {key: value for key, value in assertion.items() if key != "signature"}
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        encoded = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
         _load_public_key(public_key).verify(signature, encoded)
     except Exception as exc:
         raise ProviderResponseError("Ollama attestation signature is invalid") from exc
@@ -494,6 +504,13 @@ def provider_json_response(
     policy = resolve_endpoint_policy(endpoint_policy, allow_remote_endpoint=allow_remote_endpoint)
     if isinstance(maximum_bytes, bool) or not isinstance(maximum_bytes, int) or maximum_bytes <= 0:
         raise ValueError("maximum_bytes must be a positive integer")
+    if (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, (int, float))
+        or not math.isfinite(float(timeout_seconds))
+        or timeout_seconds <= 0
+    ):
+        raise ValueError("timeout_seconds must be a finite positive number")
     endpoint = validate_provider_endpoint(request.full_url, endpoint_policy=policy)
     parsed = urlparse(endpoint)
     origin = (parsed.scheme, (parsed.hostname or "").lower(), parsed.port)

@@ -70,6 +70,18 @@ def test_supervisor_lifecycle_emits_start_and_stop_audit_events() -> None:
     )
 
 
+def test_worker_registry_rejects_invalid_role_pid_and_timeout() -> None:
+    from caretaker.runtime_supervision import WorkerRegistry
+
+    with pytest.raises(ValueError, match="heartbeat_timeout_seconds"):
+        WorkerRegistry(heartbeat_timeout_seconds=float("nan"))
+    registry = WorkerRegistry()
+    with pytest.raises(ValueError, match="worker kind"):
+        registry.register("repair", 1234)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="positive integer"):
+        registry.register(WorkerKind.REPAIR_ANALYZER, 0)
+
+
 def test_worker_failure_records_incident_and_uses_callback_owned_restart() -> None:
     runtime = FakeRuntime()
     supervisor = CaretakerApplicationSupervisor(runtime)

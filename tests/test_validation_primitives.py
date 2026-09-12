@@ -9,6 +9,7 @@ from caretaker.authority import PolicyAuthoritySupervisor
 from caretaker.control_plane import RuntimeInteractionPolicy
 from caretaker.logging.policy import load_operator_policy
 from caretaker.policy import PolicyConfigurationError, RepairPolicy, RetryPolicy, validate_policy
+from caretaker.repair_rollout import RepairRolloutPolicy
 from caretaker.system.policy import load_system_policy
 
 
@@ -23,6 +24,15 @@ from caretaker.system.policy import load_system_policy
 def test_repair_policy_rejects_non_finite_or_wrong_boundary_values(policy) -> None:
     with pytest.raises(PolicyConfigurationError):
         validate_policy(policy)
+
+
+def test_repair_policy_requires_typed_rollout_and_enum_surfaces() -> None:
+    with pytest.raises(PolicyConfigurationError, match="rollout must be"):
+        validate_policy(RepairPolicy(rollout="enabled"))  # type: ignore[arg-type]
+    with pytest.raises(PolicyConfigurationError, match="mode must be a RepairMode"):
+        validate_policy(RepairPolicy(mode="automatic"))  # type: ignore[arg-type]
+
+    validate_policy(RepairPolicy(rollout=RepairRolloutPolicy()))
 
 
 def test_runtime_interaction_policy_rejects_non_finite_job_duration() -> None:

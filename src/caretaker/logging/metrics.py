@@ -697,7 +697,13 @@ class MonitoringStreamWriter:
     def _render(self, record: Mapping[str, Any]) -> str:
         dialect = self.policy.dialect
         if dialect is MonitoringDialect.JSON_LINES:
-            return json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+            return json.dumps(
+                record,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            )
         if dialect is MonitoringDialect.DATADOG:
             tags = {
                 "application_id": record["application_id"],
@@ -731,6 +737,7 @@ class MonitoringStreamWriter:
                 sort_keys=True,
                 separators=(",", ":"),
                 ensure_ascii=True,
+                allow_nan=False,
             )
         if dialect is MonitoringDialect.NEW_RELIC:
             attributes = {
@@ -752,6 +759,7 @@ class MonitoringStreamWriter:
                 sort_keys=True,
                 separators=(",", ":"),
                 ensure_ascii=True,
+                allow_nan=False,
             )
         raise MonitoringStreamError("monitoring dialect is unsupported")
 

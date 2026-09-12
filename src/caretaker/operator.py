@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 import os
 import threading
 import traceback
@@ -66,6 +67,10 @@ def _jsonable(value: Any) -> Any:
         return str(value)
     if isinstance(value, datetime):
         return value.isoformat()
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("Out of range float values: non-finite numeric evidence is not permitted")
+        return value
     if isinstance(value, dict):
         return {str(key): _jsonable(item) for key, item in value.items()}
     if isinstance(value, (tuple, list, set, frozenset)):

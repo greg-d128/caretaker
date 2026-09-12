@@ -5,6 +5,7 @@ import dataclasses
 import gzip
 import hashlib
 import json
+import math
 import os
 import re
 import sqlite3
@@ -2296,7 +2297,11 @@ def _jsonable(value: Any) -> Any:
         return {str(key): _jsonable(item) for key, item in value.items()}
     if isinstance(value, (tuple, list, set, frozenset, deque)):
         return [_jsonable(item) for item in value]
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("Out of range float values: non-finite numeric evidence is not permitted")
+        return value
+    if value is None or isinstance(value, (str, int, bool)):
         return value
     return {"type": f"{type(value).__module__}.{type(value).__qualname__}", "repr": _safe_repr(value)}
 
