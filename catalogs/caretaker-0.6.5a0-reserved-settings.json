@@ -1,9 +1,9 @@
 {
   "caretaker_version": "0.6.5a0",
   "catalog": "reserved-policy-settings",
-  "policy_semantics_review_generation": 33,
+  "policy_semantics_review_generation": 35,
   "policy_surface_version": 12,
-  "reviewed_policy_surface_hash": "5cef8a4f943b52647d9952d01ba411c60420847a6aff4aaa66cb0e00d6236b2b",
+  "reviewed_policy_surface_hash": "b729c9c2febcb44b5a2b5aad82c0035a8aa17fbf262ac11ba102052b4ab4b1cf",
   "schema_version": 1,
   "settings": {
     "guard.collectors.environment_reads": "environment-read audit attribution is not implemented",
