@@ -446,7 +446,8 @@ make candidate-freeze \
 
 Candidate output is explicitly unsigned development material. The final
 release sequence records Validator's equivalence handoff before creating the
-offline signing bundle; see [`docs/RELEASE_CANDIDATE_WORKFLOW.md`](docs/RELEASE_CANDIDATE_WORKFLOW.md).
+offline signing bundle; see [`docs/RELEASE_CANDIDATE_WORKFLOW.md`](docs/RELEASE_CANDIDATE_WORKFLOW.md)
+and the named acceptance criteria in [`docs/CARETAKER_GATES.md`](docs/CARETAKER_GATES.md).
 
 Upload to TestPyPI first:
 
