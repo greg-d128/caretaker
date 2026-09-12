@@ -1,7 +1,7 @@
 # Caretaker 0.6.5 hardening progress
 
-Updated 2026-09-10. The changes below are pushed to `main`. The repository
-check passed with 1,031 tests and Python compilation.
+Updated 2026-09-12 for candidate revision `412a149`. The repository check
+passed with 1,072 tests and Python compilation on `release/0.6.5a0`.
 
 The release-readiness follow-up also proves the real `caretaker.run` process
 boundary: `tests/test_run_entrypoint.py` reaches supervisor readiness, observes
@@ -56,6 +56,28 @@ The five issues in the next 0.6.5 hardening goal are closed:
 The remaining external-resource item needs a deployment-specific validator
 contract or independently controlled service; no Caretaker-only change can
 prove resource enforcement inside that caller-owned environment.
+
+## Development campaign finding closure
+
+The following findings were rechecked against `412a149` before the candidate
+freeze:
+
+| Finding | Caretaker result |
+| --- | --- |
+| Supervisor bootstrap could not use `RepairPolicy.rollout` | The rollout surface is present and supervisor bootstrap tests pass. Policy validation now rejects a missing or wrongly typed rollout component before bootstrap can partially proceed. |
+| Non-finite post-mortem evidence | Rejected by both durable-store and emergency JSON conversion paths. |
+| Invalid worker roles, PIDs, restart limits, and heartbeat timeouts | Rejected at worker-health construction, registry admission, and restart-policy validation. Supervisor remains explicitly non-restartable. |
+| Hostile system source IDs and output-root symlinks | Safe source IDs, typed source fields, rooted writes, and symlink checks remain fail-closed. |
+| Invalid policy input types | Nested public policy components and key enum surfaces are type-checked before semantic field access. |
+| Provider malformed data, non-finite JSON, oversized responses, redirects, and model mismatches | Shared Ollama transport keeps strict JSON, bounded reads, timeout validation, same-origin redirect checks, TLS/attestation checks, and model checks. |
+| Capsule artifact references truncated by text bounds | Artifact identity fields, including paths, remain lossless; payload and capsule byte limits still apply. |
+| Durable job summaries/progress containing NaN | Runtime job persistence and related record, IPC, metrics, and handler JSON writers use strict JSON serialization. |
+| Rootless resource-control enforcement | Not passed in this environment: Podman is rootless with cgroup v2 visible, but the required local `localhost/caretaker-replay-base:0.6.5a0` image is not provisioned, so `make podman-verify` fails before the claim can be made. |
+
+This closure records Caretaker-side evidence only. Validator and Crucible must
+rerun their downstream checks against the frozen candidate and may retain a
+separate finding where their environment or contract requires a stronger
+claim.
 
 ## Release-readiness handoff
 
