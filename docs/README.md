@@ -5,6 +5,8 @@ Caretaker is active research software. These documents describe current design i
 ## Start here
 
 - `../README.md` — installation, supervised startup, and examples
+- `LLM_DOCS_AUTHORING.md` — the installed `caretaker-docs` bundle and authoring rules
+
 - `../ARCHITECTURE.md` — complete application-scoped architecture
 - `LOGGING_ARCHITECTURE.md` — logging fast path, storage, and multiprocess model
 - `LOGGING_POLICY.md` — operator authority, mode requirements, leases, and reload

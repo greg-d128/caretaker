@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "package_version": "0.6.5a0",
+  "contract_line": "caretaker-0.6.5",
+  "selection_command": "caretaker-run --profile PROFILE APPLICATION_MODULE",
+  "profiles": [
+    {"name":"observe-only","file":"caretaker-observe-only-v1.json","production":true,"summary":"Conservative monitoring, evidence, behavior analysis, and diagnosis without repair proposals or activation."},
+    {"name":"balanced","file":"caretaker-balanced-v1.json","production":true,"summary":"General production profile with policy-bound Repair and operator-oriented controls."},
+    {"name":"high-assurance","file":"caretaker-high-assurance-v1.json","production":true,"summary":"Strict profile requiring operator-approved activation, stronger validation isolation, and external runtime signing facilities."},
+    {"name":"sandbox","file":"caretaker-sandbox-v2.json","production":false,"summary":"Unsigned, non-production laboratory profile for demonstrations."}
+  ],
+  "selection_rules": [
+    "Profile signatures prove provenance; the deployment parent fingerprint proves exact selection.",
+    "Production selection verifies packaged signatures under the protected role.",
+    "Use independent trusted fingerprints when initial trust must not rely on embedded convenience values.",
+    "--profile and --authority-stack are mutually exclusive."
+  ],
+  "canonical_sources": ["docs/PROFILES.md", "profiles/README.md"]
+}

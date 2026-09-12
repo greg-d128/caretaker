@@ -44,6 +44,15 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"caretaker.llm_docs" = [
+  "*.json",
+  "*.md",
+  "global/*.md",
+  "tasks/*.md",
+  "reference/*.json",
+]
+
 [tool.pytest.ini_options]
 addopts = "-ra"
 testpaths = ["tests"]
@@ -66,3 +75,4 @@ caretaker-regression-fixtures = "caretaker.regression_cli:main"
 caretaker-failure-corpus-report = "caretaker.failure_corpus_cli:main"
 caretaker-failure-corpus-run = "caretaker.failure_corpus_run_cli:main"
 caretaker-profile = "caretaker.profile_cli:main"
+caretaker-docs = "caretaker.llm_docs_cli:main"

@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "package_version": "0.6.5a0",
+  "contract_line": "caretaker-0.6.5",
+  "source_rule": "The package-root __all__ is the compatibility inventory; names not in it are not supported root APIs.",
+  "stable_integration": [
+    "caretaker", "repair", "repair_and_retry", "repair_on_exception", "repair_on_invalid_output", "repair_on_soft_timeout", "repair_on_timeout",
+    "configure_default_engine", "get_default_engine", "configure_logging", "configure_from_operator_policy", "get_logger",
+    "RepairEngine", "RepairResolution", "ResolutionKind", "RepairPolicy", "IncidentCapsule", "IncidentCapsuleStore",
+    "IncidentCapsulePolicy", "CommunicationRecord", "OperationContext", "ProvenanceEnvelope", "ApplicationRuntimeSupervisor",
+    "ApplicationLocalQueueTransport", "ApplicationTransportError", "lightweight", "GuardEngine", "GuardPolicy", "RuntimeInspector",
+    "SQLiteRuntimeJobStore"
+  ],
+  "advanced_application_capabilities": [
+    "AdaptiveAggregationPolicy", "AdaptiveObservationBatcher", "BehaviorBaseline", "BehaviorAssessment", "OllamaBehaviorAssessmentProvider",
+    "LLMRequestGate", "LLMUsagePolicy", "RuntimeJobStore", "SQLiteRepairStore", "RepairRolloutPolicy", "RepairRolloutCoordinator",
+    "IsolatedReplayCoordinator", "RootlessPodmanReplayBackend", "IntegrityVerifier", "bootstrap_integrity",
+    "OperatorLoggingPolicy", "SystemCollectionPolicy"
+  ],
+  "compatibility_surface": [
+    "CaretakerApplicationSupervisor", "ApplicationWorkerLifecycle"
+  ],
+  "not_root_api": "Private helpers, module-local constants, and names absent from caretaker.__all__ may change without compatibility guarantees."
+}

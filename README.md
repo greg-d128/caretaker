@@ -373,6 +373,20 @@ Add `--ollama-model <model>` to request an advisory structured assessment. The L
 python -m pip install caretaker-0.6.5a0-py3-none-any.whl
 ```
 
+The installed wheel includes a small offline documentation bundle for
+programmers and coding LLMs. Discover focused cards without reading the whole
+repository:
+
+```bash
+caretaker-docs list
+caretaker-docs show tasks.logging-quickstart
+caretaker-docs index --json
+```
+
+The bundle supplements the canonical documentation; its contract line is
+separate from the concrete package version. See
+[`docs/LLM_DOCS_AUTHORING.md`](docs/LLM_DOCS_AUTHORING.md) for maintenance.
+
 Ephemeral Ed25519 signing requires the optional cryptography backend:
 
 ```bash

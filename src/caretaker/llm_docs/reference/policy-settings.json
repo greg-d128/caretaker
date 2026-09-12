@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "package_version": "0.6.5a0",
+  "contract_line": "caretaker-0.6.5",
+  "rule": "A setting is supported only when this release validates and honors its semantics; reserved settings are rejected or inactive.",
+  "repair_policy_sections": {
+    "triggers": "ExceptionTrigger, TimeoutTrigger, or OutputValidationTrigger",
+    "state": ["capture_arguments", "capture_failure_locals", "capture_instance_state", "snapshot_arguments", "snapshot_instance", "snapshot_globals", "strategy", "detect_mutations", "include_diff_in_incident", "restore_for_validation", "restore_before_retry", "restore_live_environment", "restore_external_side_effects", "max_snapshot_bytes", "max_diff_entries"],
+    "retry": ["max_attempts", "safety", "require_successful_state_restore", "retry_original_exception_only", "backoff_seconds"],
+    "validation": ["profile_id", "require_ast_parse", "require_compilation", "preserve_name", "preserve_signature", "preserve_callable_kind", "run_registered_tests", "replay_failed_call", "run_generated_tests", "isolate_validation", "minimum_isolation", "require_resource_control", "backend_unavailable_action", "validation_timeout_seconds", "allow_imports", "allow_network", "allow_subprocesses", "allow_filesystem_writes", "accepted_artifact_kinds", "require_result_authentication"],
+    "context": ["include_source", "include_traceback", "include_state_diff", "previous_calls", "previous_incidents", "maximum_log_records", "maximum_context_characters", "send_argument_values", "send_local_values"],
+    "activation": ["activate_in_memory", "rollback_on_retry_failure"],
+    "limits": ["maximum_repair_depth", "maximum_candidates_per_incident", "maximum_repairs_per_target", "cooldown_seconds", "structural_review_after_repairs"],
+    "stability": ["detect_oscillation", "oscillation_window_versions", "oscillation_window_incidents", "prevent_reactivation_of_failed_version", "require_regression_replay_before_reactivation"],
+    "authority": ["mode", "authority", "enabled"]
+  },
+  "guard_binding": ["enabled", "observe_network", "observe_filesystem", "observe_subprocesses", "observe_imports", "baseline_name", "include_guard_context_in_repair", "validate_candidate_behavior", "monitor_during_probation", "deviation_action"],
+  "important_semantics": [
+    "RepairPolicy() retains operator approval by default.",
+    "ValidationPolicy.minimum_isolation is a hard minimum.",
+    "ValidationPolicy.require_resource_control is accepted only when the selected capability can be implemented and externally enforced.",
+    "LLM assessments and Guard evidence do not grant authority.",
+    "previous_incidents above zero is reserved because durable incident-history retrieval is not implemented."
+  ],
+  "canonical_sources": ["docs/POLICIES.md", "docs/POLICY_SEMANTICS.md"]
+}

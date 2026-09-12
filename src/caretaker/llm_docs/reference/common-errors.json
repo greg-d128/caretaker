@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "package_version": "0.6.5a0",
+  "contract_line": "caretaker-0.6.5",
+  "errors": [
+    {"symptom":"Unknown or unsupported policy setting","meaning":"The release cannot honor the requested semantic or value.","action":"Read the policy-semantics documentation; remove or explicitly revise the setting and test its runtime meaning."},
+    {"symptom":"Validation backend unavailable","meaning":"No selected backend meets minimum_isolation or resource-control requirements.","action":"Provision the required capability or use the configured unavailable action; do not treat approval as a substitute for required isolation."},
+    {"symptom":"Profile signature or coverage failure","meaning":"Profile provenance, selection, or reviewed policy-surface coverage is not acceptable.","action":"Check fingerprints, signatures, lineage, tested version, and coverage. Do not silently select another profile."},
+    {"symptom":"Integrity verification not configured","meaning":"No independent trust bootstrap was supplied.","action":"Obtain trusted primary fingerprints independently and run the documented verification command."},
+    {"symptom":"Application module cannot be imported","meaning":"The supervised runner cannot load the target application.","action":"Check module name, working directory, dependencies, and the exact startup output."},
+    {"symptom":"Control socket unavailable or path error","meaning":"The application or supervisor is not ready, or the configured path/permissions are unsuitable.","action":"Check data-directory ownership, readiness, cleanup, and the documented socket mapping."},
+    {"symptom":"Provider or LLM result rejected","meaning":"Provider output is advisory and did not satisfy the public response contract or policy.","action":"Retain the evidence, inspect the validation result, and continue without granting authority."},
+    {"symptom":"Unsigned development artifact","meaning":"The alpha artifact is a test subject, not a trusted release.","action":"Record its exact revision and hashes and keep release eligibility false until the signed workflow completes."}
+  ]
+}

@@ -12,6 +12,7 @@ recursive-include scripts *.py *.sh
 prune tests
 recursive-include profiles *.json *.toml *.md *.asc
 recursive-include catalogs *.json *.md
+recursive-include src/caretaker/llm_docs *.json *.md
 recursive-include release-keys *.asc
 include root.json root.json.key-*.asc
 include wheel-release-manifest.json wheel-release-manifest.json.key-*.asc
