@@ -13,6 +13,9 @@ from caretaker.llm_docs import CONTRACT_LINE, SCHEMA_VERSION, entry_path, load_i
 from caretaker.llm_docs_cli import main
 
 
+pytestmark = pytest.mark.repository
+
+
 ROOT = Path(__file__).parents[1]
 CORPUS = ROOT / "src" / "caretaker" / "llm_docs"
 STATUSES = {
@@ -129,7 +132,6 @@ def test_representative_examples_use_supported_commands_and_public_imports() -> 
     assert "from caretaker.logging import" in cards
 
 
-@pytest.mark.repository
 def test_wheel_installs_llm_corpus_and_cli_without_source_path(tmp_path: Path) -> None:
     output = tmp_path / "wheel"
     output.mkdir()
