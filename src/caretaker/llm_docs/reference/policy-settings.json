@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "package_version": "0.6.5a0",
+  "package_version": "0.6.5",
   "contract_line": "caretaker-0.6.5",
   "rule": "A setting is supported only when this release validates and honors its semantics; reserved settings are rejected or inactive.",
   "repair_policy_sections": {

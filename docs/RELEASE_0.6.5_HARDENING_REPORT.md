@@ -1,7 +1,8 @@
 # Caretaker 0.6.5 hardening progress
 
-Updated 2026-09-12 for candidate revision `412a149`. The repository check
-passed with 1,072 tests and Python compilation on `release/0.6.5a0`.
+Updated 2026-09-13 for final-version preparation on the Caretaker 0.6.5
+release branch. The repository check passed with 1,072 tests and Python
+compilation before the final-version metadata transition.
 
 The release-readiness follow-up also proves the real `caretaker.run` process
 boundary: `tests/test_run_entrypoint.py` reaches supervisor readiness, observes
@@ -72,7 +73,7 @@ freeze:
 | Provider malformed data, non-finite JSON, oversized responses, redirects, and model mismatches | Shared Ollama transport keeps strict JSON, bounded reads, timeout validation, same-origin redirect checks, TLS/attestation checks, and model checks. |
 | Capsule artifact references truncated by text bounds | Artifact identity fields, including paths, remain lossless; payload and capsule byte limits still apply. |
 | Durable job summaries/progress containing NaN | Runtime job persistence and related record, IPC, metrics, and handler JSON writers use strict JSON serialization. |
-| Rootless resource-control enforcement | Not passed in this environment: Podman is rootless with cgroup v2 visible, but the required local `localhost/caretaker-replay-base:0.6.5a0` image is not provisioned, so `make podman-verify` fails before the claim can be made. |
+| Rootless resource-control enforcement | Environment-dependent: the local `localhost/caretaker-replay-base:0.6.5` image is provisioned and `make podman-verify` passes, but the Caretaker probe reports `resource_control=False` because the rootless environment exposes unlimited (`max`) cgroup values without delegated enforcement. |
 
 This closure records Caretaker-side evidence only. Validator and Crucible must
 rerun their downstream checks against the frozen candidate and may retain a
@@ -88,5 +89,6 @@ procedure for independent Validator and Crucible runs is in
 `docs/INDEPENDENT_VALIDATION.md`.
 
 The current Caretaker tree has not been represented as independently certified:
-the sibling validation catalogs still require coordinated refresh to identify
-the 0.6.5 artifacts, and signed wheel manifests remain a release-station task.
+the final 0.6.5 artifacts are being prepared for signing and signed wheel
+manifests remain a release-station task. Validator and Crucible must identify
+the exact final artifacts in their handoff records before publication.

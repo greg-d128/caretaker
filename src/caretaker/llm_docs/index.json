@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "product": "Caretaker",
-  "package_version": "0.6.5a0",
+  "package_version": "0.6.5",
   "contract_line": "caretaker-0.6.5",
   "entries": [
     {"id":"start-here","path":"start-here.md","kind":"start","title":"Start here","keywords":["overview","discovery","scope"],"audience":["programmer","coding-llm"],"prerequisites":[],"status":"implemented","token_estimate":530,"related":["global.scope-and-limitations","tasks.logging-quickstart","tasks.supervised-startup"],"canonical_sources":["README.md","docs/README.md"]},

@@ -1,10 +1,10 @@
-# Caretaker 0.6.5a0
+# Caretaker 0.6.5
 
 Caretaker is a Python 3.11+ research framework for application-scoped logging, behavioral analysis, guarded self-repair, and publicly verifiable code integrity.
 
 Caretaker is active research software. Its documented behavior describes current design goals and tested behavior, not a warranty or guarantee of availability, correctness, containment, recovery, or security. It is being developed toward useful operational workflows, but operators must independently validate it for their environment and retain external recovery and verification paths.
 
-Version 0.6.5a0 combines lightweight adaptive instrumentation with persistent behavioral statistics, signed behavior snapshots, restartable Guard baselines, capability-based validation isolation, and stricter authority-role binding. Logging can still be deployed independently and remains the evidence foundation for Guard and Repair.
+Version 0.6.5 combines lightweight adaptive instrumentation with persistent behavioral statistics, signed behavior snapshots, restartable Guard baselines, capability-based validation isolation, and stricter authority-role binding. Logging can still be deployed independently and remains the evidence foundation for Guard and Repair.
 
 ## Subsystems
 
@@ -380,7 +380,7 @@ authority or bypass deterministic gates.
 ## Installation
 
 ```bash
-python -m pip install caretaker-0.6.5a0-py3-none-any.whl
+python -m pip install caretaker-0.6.5-py3-none-any.whl
 ```
 
 The installed wheel includes a small offline documentation bundle for

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "package_version": "0.6.5a0",
+  "package_version": "0.6.5",
   "contract_line": "caretaker-0.6.5",
   "selection_command": "caretaker-run --profile PROFILE APPLICATION_MODULE",
   "profiles": [

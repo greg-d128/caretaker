@@ -15,7 +15,7 @@ Experimental.
 
 ## Supported package versions
 
-Caretaker `0.6.5a0`, contract line `caretaker-0.6.5`.
+Caretaker `0.6.5`, contract line `caretaker-0.6.5`.
 
 ## Use when
 

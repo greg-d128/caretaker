@@ -14,7 +14,7 @@ Implemented; remote modes are environment-dependent.
 
 ## Supported package versions
 
-Caretaker 0.6.5a0 on contract line `caretaker-0.6.5`.
+Caretaker 0.6.5 on contract line `caretaker-0.6.5`.
 
 ## Use when
 

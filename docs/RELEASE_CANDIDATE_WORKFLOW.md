@@ -76,3 +76,31 @@ Detached signatures continue to apply to the approved root, manifests,
 profiles, and installed-layout publication material. Caretaker runtime code
 does not load private keys or sign its own source. Unsigned development output
 must remain labelled development evidence and is never a trusted release.
+
+## Final-version preparation
+
+For the 0.6.5 final-version transition, update the committed package metadata
+and version-facing documentation first, then verify the selected version:
+
+```bash
+make final-version-selection FINAL_VERSION=0.6.5
+make policy-catalogs PACKAGE_VERSION=0.6.5
+make wheel-manifests PACKAGE_VERSION=0.6.5 FORCE=1
+```
+
+Build the unsigned final-version distributions into a new directory outside
+`dist/`, then run exact payload parity and package checks:
+
+```bash
+make build PACKAGE_VERSION=0.6.5 BUILD_OUTPUT_DIR=/tmp/caretaker-0.6.5-final
+make artifact-parity-existing PACKAGE_VERSION=0.6.5 \
+  BUILD_OUTPUT_DIR=/tmp/caretaker-0.6.5-final
+make package-check-existing PACKAGE_VERSION=0.6.5 \
+  BUILD_OUTPUT_DIR=/tmp/caretaker-0.6.5-final
+```
+
+This preparation produces reviewable unsigned artifacts. Root publication
+manifests, finalization, the signing bundle, detached signatures, and
+publication verification remain subsequent controlled release steps. The
+development candidate examples above intentionally retain the `0.6.5a0`
+version used for independent pre-final testing.

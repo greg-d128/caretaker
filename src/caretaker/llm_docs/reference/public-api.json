@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "package_version": "0.6.5a0",
+  "package_version": "0.6.5",
   "contract_line": "caretaker-0.6.5",
   "source_rule": "The package-root __all__ is the compatibility inventory; names not in it are not supported root APIs.",
   "stable_integration": [

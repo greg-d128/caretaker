@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "package_version": "0.6.5a0",
+  "package_version": "0.6.5",
   "contract_line": "caretaker-0.6.5",
   "errors": [
     {"symptom":"Unknown or unsupported policy setting","meaning":"The release cannot honor the requested semantic or value.","action":"Read the policy-semantics documentation; remove or explicitly revise the setting and test its runtime meaning."},

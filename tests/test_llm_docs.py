@@ -92,14 +92,14 @@ def test_documented_public_api_names_match_package_inventory() -> None:
 def test_docs_cli_list_show_index_path_and_rejects_bad_ids(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["list"]) == 0
     listed = capsys.readouterr().out
-    assert "0.6.5a0" in listed
+    assert "0.6.5" in listed
     assert "caretaker-0.6.5" in listed
     assert "tasks.logging-quickstart" in listed
 
     assert main(["show", "tasks.logging-quickstart"]) == 0
     shown = capsys.readouterr().out
     assert "# Start with application logging" in shown
-    assert "Package: 0.6.5a0" in shown
+    assert "Package: 0.6.5" in shown
 
     assert main(["index", "--json"]) == 0
     indexed = json.loads(capsys.readouterr().out)
