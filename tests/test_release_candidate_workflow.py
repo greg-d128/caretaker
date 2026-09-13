@@ -17,6 +17,9 @@ pytestmark = pytest.mark.repository
 
 ROOT = Path(__file__).resolve().parents[1]
 
+if not (ROOT / "scripts").is_dir():
+    pytest.skip("repository release scripts are unavailable", allow_module_level=True)
+
 
 def _load(name: str, filename: str):
     spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / filename)
